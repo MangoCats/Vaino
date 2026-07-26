@@ -3,6 +3,7 @@ import asyncio
 import logging
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response, Query
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -112,8 +113,16 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
             logger.error(f"WebSocket error: {e}")
             manager.disconnect(websocket)
 
-    # Serve static Web UI files
+    # Serve static Web UI files & favicon
     web_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
+    favicon_path = os.path.join(web_dir, "favicon.svg")
+
+    @app.get("/favicon.ico")
+    def get_favicon():
+        if os.path.exists(favicon_path):
+            return FileResponse(favicon_path, media_type="image/svg+xml")
+        raise HTTPException(status_code=404, detail="Favicon not found")
+
     if os.path.exists(web_dir):
         app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
 
