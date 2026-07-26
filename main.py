@@ -57,11 +57,17 @@ def main():
     # 1. Initialize Database
     db = Database(db_path=db_path)
 
-    # 2. Run Fast Incremental Library Scanner
+    # 2. Run Fast Incremental Library Scanner & MusicBrainz Resolver
     scanner = MediaScanner(db=db, music_dir=music_dir)
     if os.path.exists(music_dir):
         total, updated, skipped = scanner.scan_directory(force_full=args.rescan)
         logger.info(f"Library ready: {total} total tracks ({skipped} unchanged, {updated} updated).")
+
+        # Run background MusicBrainz ID resolution thread
+        from src.db.resolver import MusicBrainzResolver
+        resolver = MusicBrainzResolver(db=db)
+        import threading
+        threading.Thread(target=resolver.resolve_all_unlinked, kwargs={"limit": 10000}, daemon=True).start()
     else:
         logger.warning(f"Music directory '{music_dir}' does not exist!")
 

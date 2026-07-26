@@ -30,6 +30,10 @@ class Database:
                 conn.execute("ALTER TABLE tracks ADD COLUMN file_mtime REAL DEFAULT 0")
             if "file_size" not in columns:
                 conn.execute("ALTER TABLE tracks ADD COLUMN file_size INTEGER DEFAULT 0")
+            if "musicbrainz_track_id" not in columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN musicbrainz_track_id TEXT")
+            if "musicbrainz_album_id" not in columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN musicbrainz_album_id TEXT")
             conn.commit()
         finally:
             conn.close()
