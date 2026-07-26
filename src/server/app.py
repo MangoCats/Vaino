@@ -21,7 +21,6 @@ class VolumePayload(BaseModel):
 def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -> FastAPI:
     app = FastAPI(title="Vaino Audio Engine & Server", version="0.1.0")
     manager = ConnectionManager()
-    loop = asyncio.get_event_loop()
 
     app.add_middleware(
         CORSMiddleware,
@@ -33,7 +32,11 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
 
     def on_audio_state_change():
         status = audio_engine.get_status()
-        asyncio.run_coroutine_threadsafe(manager.broadcast({"type": "STATUS_UPDATE", "data": status}), loop)
+        try:
+            loop = asyncio.get_running_loop()
+            asyncio.run_coroutine_threadsafe(manager.broadcast({"type": "STATUS_UPDATE", "data": status}), loop)
+        except RuntimeError:
+            pass
 
     audio_engine.on_state_change = on_audio_state_change
 
