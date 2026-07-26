@@ -227,5 +227,18 @@ class TestClosedLoopServer(unittest.TestCase):
                 self.assertEqual(t["artist"], "Eagles")
             logger.info(f"VERIFIED GET /api/v1/library/tracks?artist=Eagles -> Returned {len(tracks)} tracks strictly by Eagles.")
 
+    def test_11_http_letter_prefix_filtering(self):
+        url = f"{self.base_url}/api/v1/library/tracks?letter=H"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            tracks = data["tracks"]
+            self.assertGreater(len(tracks), 0)
+            for t in tracks:
+                title_or_artist_starts = t["title"].startswith("H") or t["artist"].startswith("H")
+                self.assertTrue(title_or_artist_starts, f"Track {t['title']} by {t['artist']} does not start with H")
+            logger.info(f"VERIFIED GET /api/v1/library/tracks?letter=H -> Returned {len(tracks)} prefix matched tracks.")
+
 if __name__ == "__main__":
     unittest.main()

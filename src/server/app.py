@@ -106,19 +106,19 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
         return audio_engine.get_status()
 
     @app.get("/api/v1/library/tracks")
-    def list_tracks(limit: int = 100, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None):
-        tracks = db.get_all_tracks(limit=limit, offset=offset, query=query, artist=artist, album=album)
-        total = db.get_total_track_count(query=query, artist=artist, album=album)
+    def list_tracks(limit: int = 100, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None, letter: Optional[str] = None):
+        tracks = db.get_all_tracks(limit=limit, offset=offset, query=query, artist=artist, album=album, letter=letter)
+        total = db.get_total_track_count(query=query, artist=artist, album=album, letter=letter)
         return {"tracks": tracks, "total": total, "limit": limit, "offset": offset}
 
     @app.get("/api/v1/library/artists")
-    def list_artists(limit: int = 200, query: Optional[str] = None):
-        artists = db.get_all_artists(limit=limit, query=query)
+    def list_artists(limit: int = 200, query: Optional[str] = None, letter: Optional[str] = None):
+        artists = db.get_all_artists(limit=limit, query=query, letter=letter)
         return {"artists": artists, "total": len(artists)}
 
     @app.get("/api/v1/library/albums")
-    def list_albums(limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None):
-        albums = db.get_all_albums(limit=limit, query=query, artist=artist)
+    def list_albums(limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None):
+        albums = db.get_all_albums(limit=limit, query=query, artist=artist, letter=letter)
         return {"albums": albums, "total": len(albums)}
 
     @app.get("/api/v1/library/albums/{album_name}/tracks")

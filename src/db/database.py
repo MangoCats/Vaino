@@ -108,7 +108,7 @@ class Database:
         finally:
             conn.close()
 
-    def get_all_tracks(self, limit: int = 500, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_all_tracks(self, limit: int = 500, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = self.get_connection()
         try:
             where_clauses = []
@@ -119,6 +119,13 @@ class Database:
             if album:
                 where_clauses.append("album = ?")
                 params.append(album)
+            if letter:
+                if letter == "#":
+                    where_clauses.append("(title GLOB '[0-9]*' OR artist GLOB '[0-9]*')")
+                else:
+                    l = f"{letter}%"
+                    where_clauses.append("(title LIKE ? OR artist LIKE ?)")
+                    params.extend([l, l])
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ?)")
@@ -146,38 +153,41 @@ class Database:
         finally:
             conn.close()
 
-    def get_all_artists(self, limit: int = 200, query: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020A] Returns distinct artists with album count, track count, and sample cover art track ID."""
+    def get_all_artists(self, limit: int = 200, query: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """[REQ-UI-020E] Returns distinct artists starting with selected letter or matching query."""
         conn = self.get_connection()
         try:
+            where_clauses = []
+            params = []
+            if letter:
+                if letter == "#":
+                    where_clauses.append("artist GLOB '[0-9]*'")
+                else:
+                    where_clauses.append("artist LIKE ?")
+                    params.append(f"{letter}%")
             if query:
                 q = f"%{query}%"
-                sql = """
-                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
-                       COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
-                FROM tracks
-                WHERE artist LIKE ? OR album LIKE ?
-                GROUP BY artist
-                ORDER BY artist ASC
-                LIMIT ?
-                """
-                cursor = conn.execute(sql, (q, q, limit))
-            else:
-                sql = """
-                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
-                       COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
-                FROM tracks
-                GROUP BY artist
-                ORDER BY artist ASC
-                LIMIT ?
-                """
-                cursor = conn.execute(sql, (limit,))
+                where_clauses.append("(artist LIKE ? OR album LIKE ?)")
+                params.extend([q, q])
+
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"""
+            SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
+                   COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
+            FROM tracks
+            {where_str}
+            GROUP BY artist
+            ORDER BY artist ASC
+            LIMIT ?
+            """
+            params.append(limit)
+            cursor = conn.execute(sql, tuple(params))
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
 
-    def get_all_albums(self, limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020A] Returns distinct albums with artist, year, track count, and sample cover art track ID."""
+    def get_all_albums(self, limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """[REQ-UI-020E] Returns distinct albums starting with selected letter or matching artist/query."""
         conn = self.get_connection()
         try:
             params = []
@@ -185,6 +195,13 @@ class Database:
             if artist:
                 where_clauses.append("artist = ?")
                 params.append(artist)
+            if letter:
+                if letter == "#":
+                    where_clauses.append("(album GLOB '[0-9]*' OR artist GLOB '[0-9]*')")
+                else:
+                    l = f"{letter}%"
+                    where_clauses.append("(album LIKE ? OR artist LIKE ?)")
+                    params.extend([l, l])
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(album LIKE ? OR artist LIKE ?)")
@@ -228,7 +245,7 @@ class Database:
         finally:
             conn.close()
 
-    def get_total_track_count(self, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None) -> int:
+    def get_total_track_count(self, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None, letter: Optional[str] = None) -> int:
         conn = self.get_connection()
         try:
             where_clauses = []
@@ -239,6 +256,13 @@ class Database:
             if album:
                 where_clauses.append("album = ?")
                 params.append(album)
+            if letter:
+                if letter == "#":
+                    where_clauses.append("(title GLOB '[0-9]*' OR artist GLOB '[0-9]*')")
+                else:
+                    l = f"{letter}%"
+                    where_clauses.append("(title LIKE ? OR artist LIKE ?)")
+                    params.extend([l, l])
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ?)")

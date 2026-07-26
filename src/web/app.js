@@ -136,10 +136,6 @@ async function fetchLibrary(page = 1) {
 
     currentPage = page;
     const offset = (currentPage - 1) * pageSize;
-    let queryParam = currentQuery;
-    if (currentLetter) {
-        queryParam = currentLetter;
-    }
 
     try {
         let url = `/api/v1/library/tracks?limit=${pageSize}&offset=${offset}`;
@@ -149,8 +145,11 @@ async function fetchLibrary(page = 1) {
         if (currentAlbumFilter) {
             url += `&album=${encodeURIComponent(currentAlbumFilter)}`;
         }
-        if (queryParam) {
-            url += `&query=${encodeURIComponent(queryParam)}`;
+        if (currentLetter) {
+            url += `&letter=${encodeURIComponent(currentLetter)}`;
+        }
+        if (currentQuery) {
+            url += `&query=${encodeURIComponent(currentQuery)}`;
         }
         const res = await fetch(url);
         const data = await res.json();
@@ -166,7 +165,7 @@ async function fetchLibrary(page = 1) {
     }
 }
 
-// Fetch & Render Artists Grid [REQ-UI-020A]
+// Fetch & Render Artists Grid [REQ-UI-020A, REQ-UI-020E]
 async function fetchArtists() {
     const grid = document.getElementById('artists-grid');
     if (!grid) return;
@@ -174,9 +173,11 @@ async function fetchArtists() {
 
     try {
         let url = `/api/v1/library/artists?limit=200`;
-        const queryParam = currentLetter || currentQuery;
-        if (queryParam) {
-            url += `&query=${encodeURIComponent(queryParam)}`;
+        if (currentLetter) {
+            url += `&letter=${encodeURIComponent(currentLetter)}`;
+        }
+        if (currentQuery) {
+            url += `&query=${encodeURIComponent(currentQuery)}`;
         }
         const res = await fetch(url);
         const data = await res.json();
@@ -204,7 +205,7 @@ async function fetchArtists() {
     }
 }
 
-// Fetch & Render Albums Grid [REQ-UI-020A, REQ-UI-020D]
+// Fetch & Render Albums Grid [REQ-UI-020A, REQ-UI-020D, REQ-UI-020E]
 async function fetchAlbums(artistFilter = null) {
     const grid = document.getElementById('albums-grid');
     if (!grid) return;
@@ -216,11 +217,12 @@ async function fetchAlbums(artistFilter = null) {
         let url = `/api/v1/library/albums?limit=200`;
         if (activeArtist) {
             url += `&artist=${encodeURIComponent(activeArtist)}`;
-        } else {
-            const queryParam = currentLetter || currentQuery;
-            if (queryParam) {
-                url += `&query=${encodeURIComponent(queryParam)}`;
-            }
+        }
+        if (currentLetter) {
+            url += `&letter=${encodeURIComponent(currentLetter)}`;
+        }
+        if (currentQuery) {
+            url += `&query=${encodeURIComponent(currentQuery)}`;
         }
         const res = await fetch(url);
         const data = await res.json();
