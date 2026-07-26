@@ -56,6 +56,7 @@ This document defines the formal system requirements for **Vaino**, establishing
   - If the artist has exactly $1$ album in the library, automatically bypass the single-item album screen and navigate directly to that album's sorted tracklist.
 - **`[REQ-UI-020D]` Breadcrumb Filter Navigation & View Reduction**: Selecting an artist MUST filter album tiles to show ONLY albums by that artist. Selecting an album MUST reduce the display to a list of ONLY tracks on that particular album. Active filters MUST be indicated with a 1-click removable breadcrumb tag (`[ 🎙️ Artist: Eagles ✖ ]`).
 - **`[REQ-UI-020E]` A–Z Letter Prefix Filter**: The A–Z navigation bar MUST filter items by prefix matching (`LIKE 'E%'` for letters `A-Z`, or `GLOB '[0-9]*'` for `#`), filtering artists by artist name in Artists View, albums by album title in Albums View, and tracks by track title/artist in Tracks View. Selecting `ALL` clears the letter prefix filter.
+- **`[REQ-UI-020F]` Alpha Filter Stacking & Auto-Reset**: Selecting a letter while filtered by artist MUST stack to show ONLY albums/tracks by that artist starting with that letter. Selecting an artist or album card MUST automatically reset the alpha filter to `ALL` upon opening the target view, while allowing subsequent letter selection within that subset.
 
 ### 2.3 Program Director & Selection Algorithm
 - **`[REQ-PD-010]` Candidate Scoring Function**: The next song selection engine MUST evaluate candidate tracks $k$ using a composite scoring formula:

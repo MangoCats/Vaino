@@ -127,11 +127,18 @@ class Database:
                 params.append(album)
             if letter:
                 if letter == "#":
-                    where_clauses.append("(title GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
+                    if album or artist:
+                        where_clauses.append("title GLOB '[0-9]*'")
+                    else:
+                        where_clauses.append("(title GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
                 else:
                     l = f"{letter}%"
-                    where_clauses.append("(title LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
-                    params.extend([l, l, l])
+                    if album or artist:
+                        where_clauses.append("title LIKE ?")
+                        params.append(l)
+                    else:
+                        where_clauses.append("(title LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
+                        params.extend([l, l, l])
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR artist_sort_name LIKE ?)")
@@ -194,7 +201,7 @@ class Database:
             conn.close()
 
     def get_all_albums(self, limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020E] Returns distinct albums starting with selected letter or matching artist/query."""
+        """[REQ-UI-020E, REQ-UI-020F] Returns distinct albums starting with selected letter stacked with artist/query."""
         conn = self.get_connection()
         try:
             params = []
@@ -204,11 +211,18 @@ class Database:
                 params.append(artist)
             if letter:
                 if letter == "#":
-                    where_clauses.append("(album GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
+                    if artist:
+                        where_clauses.append("album GLOB '[0-9]*'")
+                    else:
+                        where_clauses.append("(album GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
                 else:
                     l = f"{letter}%"
-                    where_clauses.append("(album LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
-                    params.extend([l, l, l])
+                    if artist:
+                        where_clauses.append("album LIKE ?")
+                        params.append(l)
+                    else:
+                        where_clauses.append("(album LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
+                        params.extend([l, l, l])
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(album LIKE ? OR artist LIKE ? OR artist_sort_name LIKE ?)")

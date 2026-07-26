@@ -285,10 +285,16 @@ function renderAlbumsGrid(albums, artistFilter = null) {
     `).join('');
 }
 
-// Drill-down from Album card to sorted Tracklist [REQ-UI-020B, REQ-UI-020D]
+// Drill-down from Album card to sorted Tracklist [REQ-UI-020B, REQ-UI-020D, REQ-UI-020F]
 async function openAlbumTracklist(albumName, artistName) {
     currentAlbumFilter = albumName;
     if (artistName) currentArtistFilter = artistName;
+    
+    currentLetter = '';
+    document.querySelectorAll('.letter-btn').forEach(b => b.classList.remove('active'));
+    const allLetterBtn = document.querySelector('.letter-btn[data-letter=""]');
+    if (allLetterBtn) allLetterBtn.classList.add('active');
+
     switchView('tracks');
     try {
         let url = `/api/v1/library/albums/${encodeURIComponent(albumName)}/tracks`;
