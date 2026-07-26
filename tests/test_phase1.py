@@ -30,8 +30,8 @@ class TestVainoPhase1(unittest.TestCase):
     def test_media_scanner(self):
         if os.path.exists(self.music_dir):
             scanner = MediaScanner(db=self.db, music_dir=self.music_dir)
-            count = scanner.scan_directory()
-            self.assertGreater(count, 0)
+            total, updated, skipped = scanner.scan_directory()
+            self.assertGreater(total, 0)
             tracks = self.db.get_all_tracks(limit=10)
             self.assertGreater(len(tracks), 0)
             self.assertIn("Hotel", tracks[0]["title"])

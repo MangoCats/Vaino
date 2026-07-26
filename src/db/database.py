@@ -1,6 +1,6 @@
 import sqlite3
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 class Database:
     def __init__(self, db_path: str = "vaino.db"):
@@ -20,7 +20,23 @@ class Database:
         conn = self.get_connection()
         try:
             conn.executescript(schema_sql)
+            # Migration check for existing databases
+            cursor = conn.execute("PRAGMA table_info(tracks)")
+            columns = [row["name"] for row in cursor.fetchall()]
+            if "file_mtime" not in columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN file_mtime REAL DEFAULT 0")
+            if "file_size" not in columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN file_size INTEGER DEFAULT 0")
             conn.commit()
+        finally:
+            conn.close()
+
+    def get_existing_file_map(self) -> Dict[str, Tuple[float, int]]:
+        """Returns {file_path: (file_mtime, file_size)} for fast incremental scanning."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.execute("SELECT file_path, file_mtime, file_size FROM tracks")
+            return {row["file_path"]: (row["file_mtime"] or 0.0, row["file_size"] or 0) for row in cursor.fetchall()}
         finally:
             conn.close()
 
@@ -29,11 +45,11 @@ class Database:
         INSERT INTO tracks (
             id, file_path, file_format, title, artist, album,
             year, track_number, duration_ms, start_offset_ms,
-            end_offset_ms, has_cover_art
+            end_offset_ms, has_cover_art, file_mtime, file_size
         ) VALUES (
             :id, :file_path, :file_format, :title, :artist, :album,
             :year, :track_number, :duration_ms, :start_offset_ms,
-            :end_offset_ms, :has_cover_art
+            :end_offset_ms, :has_cover_art, :file_mtime, :file_size
         ) ON CONFLICT(file_path) DO UPDATE SET
             title=excluded.title,
             artist=excluded.artist,
@@ -41,11 +57,23 @@ class Database:
             year=excluded.year,
             track_number=excluded.track_number,
             duration_ms=excluded.duration_ms,
-            has_cover_art=excluded.has_cover_art;
+            has_cover_art=excluded.has_cover_art,
+            file_mtime=excluded.file_mtime,
+            file_size=excluded.file_size;
         """
         conn = self.get_connection()
         try:
             conn.execute(sql, track_data)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_tracks_by_paths(self, file_paths: List[str]):
+        if not file_paths:
+            return
+        conn = self.get_connection()
+        try:
+            conn.executemany("DELETE FROM tracks WHERE file_path = ?", [(p,) for p in file_paths])
             conn.commit()
         finally:
             conn.close()

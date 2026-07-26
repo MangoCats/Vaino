@@ -1,10 +1,9 @@
 import os
+import time
 import hashlib
 import logging
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Set
 import mutagen
-from mutagen.id3 import ID3, APIC
-from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
 from .database import Database
 
@@ -25,29 +24,28 @@ class MediaScanner:
     def find_folder_art(self, file_path: str) -> Optional[str]:
         folder = os.path.dirname(file_path)
         art_names = ["cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "front.png", "Hotelcalifornia.jpg"]
-        for name in os.listdir(folder):
-            if name.lower() in [n.lower() for n in art_names]:
-                return os.path.join(folder, name)
-            if name.lower().endswith((".jpg", ".png", ".jpeg")):
-                return os.path.join(folder, name)
+        try:
+            for name in os.listdir(folder):
+                if name.lower() in [n.lower() for n in art_names]:
+                    return os.path.join(folder, name)
+                if name.lower().endswith((".jpg", ".png", ".jpeg")):
+                    return os.path.join(folder, name)
+        except Exception:
+            pass
         return None
 
     def extract_cover_art_bytes(self, file_path: str) -> Optional[Tuple[bytes, str]]:
-        """Returns (image_bytes, mime_type) if found embedded or in folder."""
         try:
             audio = mutagen.File(file_path)
             if audio is not None:
-                # MP3 embedded ID3 APIC
                 if hasattr(audio, "tags") and audio.tags is not None:
                     for key in audio.tags.keys():
                         if key.startswith("APIC:"):
                             apic = audio.tags[key]
                             return apic.data, apic.mime
-                # FLAC embedded pictures
                 if hasattr(audio, "pictures") and audio.pictures:
                     pic = audio.pictures[0]
                     return pic.data, pic.mime
-                # MP4 / M4A embedded covers
                 if isinstance(audio, MP4) and "covr" in audio.tags:
                     covers = audio.tags["covr"]
                     if covers:
@@ -57,7 +55,6 @@ class MediaScanner:
         except Exception as e:
             logger.debug(f"Error checking embedded art for {file_path}: {e}")
 
-        # Fallback to folder art
         folder_art_path = self.find_folder_art(file_path)
         if folder_art_path and os.path.exists(folder_art_path):
             try:
@@ -70,12 +67,14 @@ class MediaScanner:
 
         return None
 
-    def parse_track_metadata(self, file_path: str) -> Dict[str, Any]:
+    def parse_track_metadata(self, file_path: str, stat_info: Optional[os.stat_result] = None) -> Dict[str, Any]:
         ext = os.path.splitext(file_path)[1].lower()
         track_id = self.generate_track_id(file_path)
         has_art = self.extract_cover_art_bytes(file_path) is not None
 
-        # Fallback defaults based on filename & directory
+        if stat_info is None:
+            stat_info = os.stat(file_path)
+
         filename = os.path.splitext(os.path.basename(file_path))[0]
         parent_folder = os.path.basename(os.path.dirname(file_path))
 
@@ -94,7 +93,6 @@ class MediaScanner:
 
                 tags = audio.tags
                 if tags:
-                    # Common EasyID3 / Tag keys
                     title_tag = tags.get("title") or tags.get("TIT2")
                     artist_tag = tags.get("artist") or tags.get("TPE1")
                     album_tag = tags.get("album") or tags.get("TALB")
@@ -133,24 +131,59 @@ class MediaScanner:
             "duration_ms": duration_ms,
             "start_offset_ms": 0,
             "end_offset_ms": None,
-            "has_cover_art": 1 if has_art else 0
+            "has_cover_art": 1 if has_art else 0,
+            "file_mtime": stat_info.st_mtime,
+            "file_size": stat_info.st_size
         }
 
-    def scan_directory(self) -> int:
+    def scan_directory(self, force_full: bool = False) -> Tuple[int, int, int]:
+        """
+        Fast Incremental Directory Scanner.
+        Returns: (total_indexed, new_or_updated_count, skipped_unchanged_count)
+        """
+        start_time = time.time()
         logger.info(f"Scanning music library at: {self.music_dir}")
-        scanned_count = 0
+
+        existing_file_map = {} if force_full else self.db.get_existing_file_map()
+        seen_on_disk: Set[str] = set()
+
+        new_updated_count = 0
+        skipped_count = 0
+
         for root, _, files in os.walk(self.music_dir):
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
                 if ext in SUPPORTED_EXTENSIONS:
-                    full_path = os.path.join(root, file)
+                    full_path = os.path.abspath(os.path.join(root, file))
+                    seen_on_disk.add(full_path)
+
                     try:
-                        data = self.parse_track_metadata(full_path)
+                        stat_info = os.stat(full_path)
+                        # Fast check against cached mtime & size
+                        if full_path in existing_file_map:
+                            cached_mtime, cached_size = existing_file_map[full_path]
+                            if abs(cached_mtime - stat_info.st_mtime) < 0.01 and cached_size == stat_info.st_size:
+                                skipped_count += 1
+                                continue
+
+                        # File is new or modified
+                        data = self.parse_track_metadata(full_path, stat_info)
                         self.db.upsert_track(data)
-                        scanned_count += 1
-                        if scanned_count % 50 == 0:
-                            logger.info(f"Indexed {scanned_count} tracks...")
+                        new_updated_count += 1
+                        if new_updated_count % 50 == 0:
+                            logger.info(f"Updated {new_updated_count} files...")
                     except Exception as e:
                         logger.error(f"Failed scanning file {full_path}: {e}")
-        logger.info(f"Scan complete. Total tracks indexed: {scanned_count}")
-        return scanned_count
+
+        # Clean up deleted files from DB
+        deleted_paths = [p for p in existing_file_map.keys() if p not in seen_on_disk]
+        if deleted_paths:
+            self.db.delete_tracks_by_paths(deleted_paths)
+            logger.info(f"Removed {len(deleted_paths)} missing files from database.")
+
+        elapsed = time.time() - start_time
+        total_tracks = self.db.get_total_track_count()
+        logger.info(
+            f"Scan finished in {elapsed:.2f}s! Total: {total_tracks} (Updated: {new_updated_count}, Unchanged: {skipped_count})"
+        )
+        return total_tracks, new_updated_count, skipped_count

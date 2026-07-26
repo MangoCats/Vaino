@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--host", type=str, help="Server host IP")
     parser.add_argument("--port", type=int, help="Server HTTP port")
     parser.add_argument("--scan-only", action="store_true", help="Only scan music library and exit")
+    parser.add_argument("--rescan", action="store_true", help="Force a full rescan of all audio file metadata")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -56,11 +57,11 @@ def main():
     # 1. Initialize Database
     db = Database(db_path=db_path)
 
-    # 2. Run Library Scanner
+    # 2. Run Fast Incremental Library Scanner
     scanner = MediaScanner(db=db, music_dir=music_dir)
     if os.path.exists(music_dir):
-        track_count = scanner.scan_directory()
-        logger.info(f"Library ready with {track_count} tracks.")
+        total, updated, skipped = scanner.scan_directory(force_full=args.rescan)
+        logger.info(f"Library ready: {total} total tracks ({skipped} unchanged, {updated} updated).")
     else:
         logger.warning(f"Music directory '{music_dir}' does not exist!")
 

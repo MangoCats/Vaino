@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     start_offset_ms INTEGER DEFAULT 0,
     end_offset_ms INTEGER DEFAULT NULL,
     has_cover_art BOOLEAN DEFAULT 0,
+    file_mtime REAL DEFAULT 0,
+    file_size INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
