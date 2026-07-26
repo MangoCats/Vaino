@@ -55,8 +55,8 @@ KNOWN_SINGLE_GROUPS = {
 
 def split_artists(artist_str: str) -> List[Tuple[str, str]]:
     """
-    [REQ-MB-020E] Decomposes combined artist strings into individual (artist_name, artist_sort_name) tuples.
-    Handles 'feat.', 'ft.', 'featuring', 'with', 'vs.', and '/' separators while preserving canonical bands.
+    [REQ-MB-020E, REQ-UI-020G] Decomposes combined artist strings into individual (artist_name, artist_sort_name) tuples.
+    Handles 'feat.', 'ft.', 'featuring', 'with', 'vs.', '/', '&', and 'and' separators while preserving canonical groups.
     """
     if not artist_str or not str(artist_str).strip():
         return [("Unknown Artist", "Unknown Artist")]
@@ -66,7 +66,7 @@ def split_artists(artist_str: str) -> List[Tuple[str, str]]:
         return [(raw, compute_artist_sort_name(raw))]
 
     import re
-    pattern = r'\s+(?:feat\.?|ft\.?|featuring|with|vs\.?|\/)\s+'
+    pattern = r'\s+(?:feat\.?|ft\.?|featuring|with|vs\.?|\/|\&|and)\s+'
     parts = re.split(pattern, raw, flags=re.IGNORECASE)
 
     results = []
@@ -74,7 +74,7 @@ def split_artists(artist_str: str) -> List[Tuple[str, str]]:
         cleaned = p.strip()
         if not cleaned:
             continue
-        sub_parts = [sp.strip() for sp in cleaned.split('/') if sp.strip()]
+        sub_parts = [sp.strip() for sp in re.split(r'[\/\&]', cleaned) if sp.strip()]
         for sp in sub_parts:
             sub_sub = re.split(r'\s+feat\.?\s+', sp, flags=re.IGNORECASE)
             for sss in sub_sub:
