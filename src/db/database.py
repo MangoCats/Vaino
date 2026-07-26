@@ -49,6 +49,20 @@ class Database:
     def upsert_tracks_batch(self, tracks_data: List[Dict[str, Any]]):
         if not tracks_data:
             return
+        
+        # Ensure all required named parameter bindings exist in each dict
+        sanitized = []
+        for t in tracks_data:
+            d = dict(t)
+            d.setdefault("year", None)
+            d.setdefault("track_number", None)
+            d.setdefault("start_offset_ms", 0)
+            d.setdefault("end_offset_ms", None)
+            d.setdefault("has_cover_art", 0)
+            d.setdefault("file_mtime", 0.0)
+            d.setdefault("file_size", 0)
+            sanitized.append(d)
+
         sql = """
         INSERT INTO tracks (
             id, file_path, file_format, title, artist, album,
@@ -72,7 +86,7 @@ class Database:
         conn = self.get_connection()
         try:
             conn.execute("PRAGMA synchronous = NORMAL")
-            conn.executemany(sql, tracks_data)
+            conn.executemany(sql, sanitized)
             conn.commit()
         finally:
             conn.close()
@@ -157,6 +171,16 @@ class Database:
         """
         data = dict(desc)
         data["track_id"] = track_id
+        data.setdefault("energy", 0.5)
+        data.setdefault("valence", 0.5)
+        data.setdefault("danceability", 0.5)
+        data.setdefault("acousticness", 0.5)
+        data.setdefault("instrumentalness", 0.5)
+        data.setdefault("speechiness", 0.1)
+        data.setdefault("tempo_bpm", 120.0)
+        data.setdefault("key_signature", "C Major")
+        data.setdefault("loudness_lufs", -14.0)
+
         conn = self.get_connection()
         try:
             conn.execute(sql, data)

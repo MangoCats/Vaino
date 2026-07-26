@@ -55,11 +55,13 @@ class AudioEngine:
                 self.current_track = self.queue.pop(0)
 
     def _replenish_queue_if_needed(self):
-        """Auto-replenishes queue from database if queue length falls below 3."""
+        """[REQ-PD-010] Auto-replenishes queue from database using Program Director intelligence."""
         if len(self.queue) < 3 and self.db:
+            from .selector import ProgramDirector
+            director = ProgramDirector(self.db)
+            
             all_tracks = self.db.get_all_tracks(limit=100)
             if all_tracks:
-                # Simple rotation for Phase 2; Phase 5 adds Program Director intelligence
                 existing_ids = {t["id"] for t in self.queue}
                 if self.current_track:
                     existing_ids.add(self.current_track["id"])
@@ -68,10 +70,12 @@ class AudioEngine:
                 if not candidates:
                     candidates = all_tracks
                 
-                for candidate in candidates[:5]:
-                    if candidate["id"] not in existing_ids:
-                        self.queue.append(candidate)
-                        existing_ids.add(candidate["id"])
+                next_track = director.select_next_track(
+                    current_track=self.current_track,
+                    candidate_pool=candidates
+                )
+                if next_track and next_track["id"] not in existing_ids:
+                    self.queue.append(next_track)
 
     def _audio_callback(self, outdata: np.ndarray, frames: int, time_info, status):
         if status:
