@@ -214,5 +214,18 @@ class TestClosedLoopServer(unittest.TestCase):
             self.assertEqual(track_nums, sorted(track_nums))
             logger.info(f"VERIFIED GET /api/v1/library/albums/Hotel California/tracks -> Loaded {len(tracks)} sorted tracks.")
 
+    def test_10_http_tracks_filtered_by_artist_and_album(self):
+        artist_name = urllib.parse.quote("Eagles")
+        url = f"{self.base_url}/api/v1/library/tracks?artist={artist_name}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            tracks = data["tracks"]
+            self.assertGreater(len(tracks), 0)
+            for t in tracks:
+                self.assertEqual(t["artist"], "Eagles")
+            logger.info(f"VERIFIED GET /api/v1/library/tracks?artist=Eagles -> Returned {len(tracks)} tracks strictly by Eagles.")
+
 if __name__ == "__main__":
     unittest.main()

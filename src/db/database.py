@@ -108,25 +108,31 @@ class Database:
         finally:
             conn.close()
 
-    def get_all_tracks(self, limit: int = 500, offset: int = 0, query: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_all_tracks(self, limit: int = 500, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = self.get_connection()
         try:
+            where_clauses = []
+            params = []
+            if artist:
+                where_clauses.append("artist = ?")
+                params.append(artist)
+            if album:
+                where_clauses.append("album = ?")
+                params.append(album)
             if query:
                 q = f"%{query}%"
-                sql = """
-                SELECT * FROM tracks 
-                WHERE title LIKE ? OR artist LIKE ? OR album LIKE ?
-                ORDER BY artist, album, track_number, title
-                LIMIT ? OFFSET ?
-                """
-                cursor = conn.execute(sql, (q, q, q, limit, offset))
-            else:
-                sql = """
-                SELECT * FROM tracks 
-                ORDER BY artist, album, track_number, title
-                LIMIT ? OFFSET ?
-                """
-                cursor = conn.execute(sql, (limit, offset))
+                where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ?)")
+                params.extend([q, q, q])
+
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"""
+            SELECT * FROM tracks 
+            {where_str}
+            ORDER BY artist, album, CASE WHEN track_number IS NULL OR track_number = 0 THEN 999 ELSE track_number END ASC, title
+            LIMIT ? OFFSET ?
+            """
+            params.extend([limit, offset])
+            cursor = conn.execute(sql, tuple(params))
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
@@ -222,14 +228,25 @@ class Database:
         finally:
             conn.close()
 
-    def get_total_track_count(self, query: Optional[str] = None) -> int:
+    def get_total_track_count(self, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None) -> int:
         conn = self.get_connection()
         try:
+            where_clauses = []
+            params = []
+            if artist:
+                where_clauses.append("artist = ?")
+                params.append(artist)
+            if album:
+                where_clauses.append("album = ?")
+                params.append(album)
             if query:
                 q = f"%{query}%"
-                cursor = conn.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title LIKE ? OR artist LIKE ? OR album LIKE ?", (q, q, q))
-            else:
-                cursor = conn.execute("SELECT COUNT(*) as cnt FROM tracks")
+                where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ?)")
+                params.extend([q, q, q])
+
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"SELECT COUNT(*) as cnt FROM tracks {where_str}"
+            cursor = conn.execute(sql, tuple(params))
             row = cursor.fetchone()
             return row["cnt"] if row else 0
         finally:

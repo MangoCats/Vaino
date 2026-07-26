@@ -126,11 +126,13 @@ let pageSize = 100;
 let totalTracks = 0;
 let currentQuery = '';
 let currentLetter = '';
+let currentArtistFilter = '';
+let currentAlbumFilter = '';
 
 // Fetch & Render Library Tracks
 async function fetchLibrary(page = 1) {
-    if (currentView === 'artists') return fetchArtists();
-    if (currentView === 'albums') return fetchAlbums();
+    if (currentView === 'artists' && !currentArtistFilter && !currentAlbumFilter) return fetchArtists();
+    if (currentView === 'albums' && !currentArtistFilter && !currentAlbumFilter) return fetchAlbums();
 
     currentPage = page;
     const offset = (currentPage - 1) * pageSize;
@@ -141,6 +143,12 @@ async function fetchLibrary(page = 1) {
 
     try {
         let url = `/api/v1/library/tracks?limit=${pageSize}&offset=${offset}`;
+        if (currentArtistFilter) {
+            url += `&artist=${encodeURIComponent(currentArtistFilter)}`;
+        }
+        if (currentAlbumFilter) {
+            url += `&album=${encodeURIComponent(currentAlbumFilter)}`;
+        }
         if (queryParam) {
             url += `&query=${encodeURIComponent(queryParam)}`;
         }
@@ -223,6 +231,7 @@ async function fetchAlbums(artistFilter = null) {
 
 // Drill-down from Artist card to their Albums [REQ-UI-020C, REQ-UI-020D]
 async function browseArtistAlbums(artistName) {
+    currentArtistFilter = artistName;
     try {
         const url = `/api/v1/library/albums?artist=${encodeURIComponent(artistName)}`;
         const res = await fetch(url);
@@ -269,6 +278,8 @@ function renderAlbumsGrid(albums, artistFilter = null) {
 
 // Drill-down from Album card to sorted Tracklist [REQ-UI-020B, REQ-UI-020D]
 async function openAlbumTracklist(albumName, artistName) {
+    currentAlbumFilter = albumName;
+    if (artistName) currentArtistFilter = artistName;
     switchView('tracks');
     try {
         let url = `/api/v1/library/albums/${encodeURIComponent(albumName)}/tracks`;
@@ -301,6 +312,18 @@ function setBreadcrumbFilter(type, value) {
 }
 
 function clearBreadcrumbFilter() {
+    currentArtistFilter = '';
+    currentAlbumFilter = '';
+    currentQuery = '';
+    currentLetter = '';
+
+    const searchInput = document.getElementById('library-search');
+    if (searchInput) searchInput.value = '';
+
+    document.querySelectorAll('.letter-btn').forEach(b => b.classList.remove('active'));
+    const allLetterBtn = document.querySelector('.letter-btn[data-letter=""]');
+    if (allLetterBtn) allLetterBtn.classList.add('active');
+
     const bar = document.getElementById('filter-breadcrumb-bar');
     if (bar) bar.style.display = 'none';
 
