@@ -50,6 +50,9 @@ This document defines the formal system requirements for **Vaino**, establishing
 ### 2.3 User Interface & Hierarchical Navigation
 - **`[REQ-UI-020A]` Hierarchical Navigation Views**: The web interface MUST provide dedicated human-friendly navigation views: Browse by Artist, Browse by Album, and Album Tracklist View.
 - **`[REQ-UI-020B]` Album Track Number Ordering**: Within an Album view, available tracks MUST be sorted strictly by `track_number`. Album cover art MUST be displayed prominently in album and tracklist views.
+- **`[REQ-UI-020C]` Smart Artist Drilldown & Auto-Bypass**: When selecting an Artist:
+  - If the artist has $\ge 2$ albums in the library, display a subset album selection screen containing only that artist's albums.
+  - If the artist has exactly $1$ album in the library, automatically bypass the single-item album screen and navigate directly to that album's sorted tracklist.
 
 ### 2.3 Program Director & Selection Algorithm
 - **`[REQ-PD-010]` Candidate Scoring Function**: The next song selection engine MUST evaluate candidate tracks $k$ using a composite scoring formula:

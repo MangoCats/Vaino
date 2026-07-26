@@ -214,34 +214,56 @@ async function fetchAlbums(artistFilter = null) {
         }
         const res = await fetch(url);
         const data = await res.json();
-        const albums = data.albums || [];
-
-        const countBadge = document.getElementById('library-count-badge');
-        if (countBadge) countBadge.textContent = `${albums.length} albums`;
-
-        if (albums.length === 0) {
-            grid.innerHTML = `<div class="loading-cell">No albums found.</div>`;
-            return;
-        }
-
-        grid.innerHTML = albums.map(al => `
-            <div class="nav-card" onclick="openAlbumTracklist('${escapeHtml(al.album)}', '${escapeHtml(al.artist)}')">
-                <img src="/api/v1/art/${al.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>💿</text></svg>'">
-                <div class="nav-card-title">${escapeHtml(al.album)}</div>
-                <div class="nav-card-subtitle">${escapeHtml(al.artist)} ${al.year ? '(' + al.year + ')' : ''}</div>
-                <span class="nav-card-badge">${al.track_count} Tracks ▶</span>
-            </div>
-        `).join('');
+        renderAlbumsGrid(data.albums || [], artistFilter);
     } catch (e) {
         console.error('Error fetching albums:', e);
         grid.innerHTML = `<div class="loading-cell">Failed loading albums.</div>`;
     }
 }
 
-// Drill-down from Artist card to their Albums
-function browseArtistAlbums(artistName) {
-    switchView('albums');
-    fetchAlbums(artistName);
+// Drill-down from Artist card to their Albums [REQ-UI-020C]
+async function browseArtistAlbums(artistName) {
+    try {
+        const url = `/api/v1/library/albums?artist=${encodeURIComponent(artistName)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const albums = data.albums || [];
+
+        if (albums.length === 1) {
+            // Single album: direct navigation to that album's sorted tracklist!
+            openAlbumTracklist(albums[0].album, artistName);
+        } else {
+            // Multiple albums: show subset album selection screen
+            switchView('albums');
+            renderAlbumsGrid(albums, artistName);
+        }
+    } catch (e) {
+        console.error('Error browsing artist albums:', e);
+    }
+}
+
+function renderAlbumsGrid(albums, artistFilter = null) {
+    const grid = document.getElementById('albums-grid');
+    if (!grid) return;
+
+    const countBadge = document.getElementById('library-count-badge');
+    if (countBadge) {
+        countBadge.textContent = artistFilter ? `${artistFilter} (${albums.length} albums)` : `${albums.length} albums`;
+    }
+
+    if (albums.length === 0) {
+        grid.innerHTML = `<div class="loading-cell">No albums found.</div>`;
+        return;
+    }
+
+    grid.innerHTML = albums.map(al => `
+        <div class="nav-card" onclick="openAlbumTracklist('${escapeHtml(al.album)}', '${escapeHtml(al.artist)}')">
+            <img src="/api/v1/art/${al.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>💿</text></svg>'">
+            <div class="nav-card-title">${escapeHtml(al.album)}</div>
+            <div class="nav-card-subtitle">${escapeHtml(al.artist)} ${al.year ? '(' + al.year + ')' : ''}</div>
+            <span class="nav-card-badge">${al.track_count} Tracks ▶</span>
+        </div>
+    `).join('');
 }
 
 // Drill-down from Album card to sorted Tracklist [REQ-UI-020B]
