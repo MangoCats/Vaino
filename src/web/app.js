@@ -204,16 +204,18 @@ async function fetchArtists() {
     }
 }
 
-// Fetch & Render Albums Grid [REQ-UI-020A]
+// Fetch & Render Albums Grid [REQ-UI-020A, REQ-UI-020D]
 async function fetchAlbums(artistFilter = null) {
     const grid = document.getElementById('albums-grid');
     if (!grid) return;
     grid.innerHTML = `<div class="loading-cell">Loading albums...</div>`;
 
+    const activeArtist = artistFilter || currentArtistFilter;
+
     try {
         let url = `/api/v1/library/albums?limit=200`;
-        if (artistFilter) {
-            url += `&artist=${encodeURIComponent(artistFilter)}`;
+        if (activeArtist) {
+            url += `&artist=${encodeURIComponent(activeArtist)}`;
         } else {
             const queryParam = currentLetter || currentQuery;
             if (queryParam) {
@@ -222,7 +224,7 @@ async function fetchAlbums(artistFilter = null) {
         }
         const res = await fetch(url);
         const data = await res.json();
-        renderAlbumsGrid(data.albums || [], artistFilter);
+        renderAlbumsGrid(data.albums || [], activeArtist);
     } catch (e) {
         console.error('Error fetching albums:', e);
         grid.innerHTML = `<div class="loading-cell">Failed loading albums.</div>`;
@@ -345,7 +347,7 @@ function switchView(targetView) {
 
     if (targetView === 'tracks') fetchLibrary(1);
     else if (targetView === 'artists') fetchArtists();
-    else if (targetView === 'albums') fetchAlbums();
+    else if (targetView === 'albums') fetchAlbums(currentArtistFilter);
 }
 
 function renderLibrary(tracks, offset = 0) {
