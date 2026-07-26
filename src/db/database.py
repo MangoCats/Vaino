@@ -133,10 +133,14 @@ class Database:
         finally:
             conn.close()
 
-    def get_total_track_count(self) -> int:
+    def get_total_track_count(self, query: Optional[str] = None) -> int:
         conn = self.get_connection()
         try:
-            cursor = conn.execute("SELECT COUNT(*) as cnt FROM tracks")
+            if query:
+                q = f"%{query}%"
+                cursor = conn.execute("SELECT COUNT(*) as cnt FROM tracks WHERE title LIKE ? OR artist LIKE ? OR album LIKE ?", (q, q, q))
+            else:
+                cursor = conn.execute("SELECT COUNT(*) as cnt FROM tracks")
             row = cursor.fetchone()
             return row["cnt"] if row else 0
         finally:

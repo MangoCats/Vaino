@@ -108,7 +108,7 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
     @app.get("/api/v1/library/tracks")
     def list_tracks(limit: int = 100, offset: int = 0, query: Optional[str] = None):
         tracks = db.get_all_tracks(limit=limit, offset=offset, query=query)
-        total = db.get_total_track_count()
+        total = db.get_total_track_count(query=query)
         return {"tracks": tracks, "total": total, "limit": limit, "offset": offset}
 
     @app.get("/api/v1/art/{track_id}")

@@ -119,21 +119,42 @@ function updateUI(status) {
     }
 }
 
+// Library Pagination & Filter State
+let currentPage = 1;
+let pageSize = 100;
+let totalTracks = 0;
+let currentQuery = '';
+let currentLetter = '';
+
 // Fetch & Render Library Tracks
-async function fetchLibrary(query = '') {
+async function fetchLibrary(page = 1) {
+    currentPage = page;
+    const offset = (currentPage - 1) * pageSize;
+    let queryParam = currentQuery;
+    if (currentLetter) {
+        queryParam = currentLetter;
+    }
+
     try {
-        const url = query ? `/api/v1/library/tracks?query=${encodeURIComponent(query)}` : '/api/v1/library/tracks';
+        let url = `/api/v1/library/tracks?limit=${pageSize}&offset=${offset}`;
+        if (queryParam) {
+            url += `&query=${encodeURIComponent(queryParam)}`;
+        }
         const res = await fetch(url);
         const data = await res.json();
+        
         tracksList = data.tracks;
-        renderLibrary(tracksList);
+        totalTracks = data.total || 0;
+        
+        renderLibrary(tracksList, offset);
+        updatePaginationControls();
     } catch (e) {
         console.error('Error fetching library:', e);
         libraryTbody.innerHTML = `<tr><td colspan="6" class="loading-cell">Failed loading library tracks.</td></tr>`;
     }
 }
 
-function renderLibrary(tracks) {
+function renderLibrary(tracks, offset = 0) {
     if (!tracks || tracks.length === 0) {
         libraryTbody.innerHTML = `<tr><td colspan="6" class="loading-cell">No tracks found in library.</td></tr>`;
         return;
@@ -141,7 +162,7 @@ function renderLibrary(tracks) {
 
     libraryTbody.innerHTML = tracks.map((t, idx) => `
         <tr onclick="playTrack('${t.id}')">
-            <td>${idx + 1}</td>
+            <td>${offset + idx + 1}</td>
             <td><strong>${escapeHtml(t.title)}</strong></td>
             <td>${escapeHtml(t.artist)}</td>
             <td>${escapeHtml(t.album || '-')}</td>
@@ -149,6 +170,25 @@ function renderLibrary(tracks) {
             <td><button class="btn-play-track" onclick="event.stopPropagation(); playTrack('${t.id}')">▶ Play</button></td>
         </tr>
     `).join('');
+}
+
+function updatePaginationControls() {
+    const countBadge = document.getElementById('library-count-badge');
+    const paginationInfo = document.getElementById('pagination-info');
+    const pageIndicator = document.getElementById('page-indicator');
+    const btnPrev = document.getElementById('btn-prev-page');
+    const btnNext = document.getElementById('btn-next-page');
+
+    const totalPages = Math.max(1, Math.ceil(totalTracks / pageSize));
+    const startItem = totalTracks === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+    const endItem = Math.min(totalTracks, currentPage * pageSize);
+
+    if (countBadge) countBadge.textContent = `${totalTracks.toLocaleString()} tracks`;
+    if (paginationInfo) paginationInfo.textContent = `Showing ${startItem.toLocaleString()}–${endItem.toLocaleString()} of ${totalTracks.toLocaleString()} tracks`;
+    if (pageIndicator) pageIndicator.textContent = `Page ${currentPage} of ${totalPages}`;
+
+    if (btnPrev) btnPrev.disabled = (currentPage <= 1);
+    if (btnNext) btnNext.disabled = (currentPage >= totalPages);
 }
 
 function escapeHtml(str) {
@@ -187,9 +227,51 @@ volumeSlider.addEventListener('input', (e) => {
     }
 });
 
+let searchTimeout;
 librarySearch.addEventListener('input', (e) => {
-    fetchLibrary(e.target.value);
+    clearTimeout(searchTimeout);
+    currentQuery = e.target.value;
+    searchTimeout = setTimeout(() => {
+        fetchLibrary(1);
+    }, 250);
 });
+
+// Pagination Button Listeners
+const btnPrev = document.getElementById('btn-prev-page');
+const btnNext = document.getElementById('btn-next-page');
+const pageSizeSelect = document.getElementById('page-size-select');
+
+if (btnPrev) {
+    btnPrev.addEventListener('click', () => {
+        if (currentPage > 1) fetchLibrary(currentPage - 1);
+    });
+}
+
+if (btnNext) {
+    btnNext.addEventListener('click', () => {
+        fetchLibrary(currentPage + 1);
+    });
+}
+
+if (pageSizeSelect) {
+    pageSizeSelect.addEventListener('change', (e) => {
+        pageSize = parseInt(e.target.value);
+        fetchLibrary(1);
+    });
+}
+
+// Letter Bar Navigation Listener
+const letterNavBar = document.getElementById('letter-nav-bar');
+if (letterNavBar) {
+    letterNavBar.addEventListener('click', (e) => {
+        if (e.target.classList.contains('letter-btn')) {
+            document.querySelectorAll('.letter-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            currentLetter = e.target.getAttribute('data-letter') || '';
+            fetchLibrary(1);
+        }
+    });
+}
 
 // Initialize Clock Widget
 function startClock() {
