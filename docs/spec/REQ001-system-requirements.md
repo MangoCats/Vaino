@@ -36,13 +36,15 @@ This document defines the formal system requirements for **Vaino**, establishing
 ### 2.1 Audio Engine & Pipeline
 - **`[REQ-AUD-010]` Audio Format Decoding**: The audio decoder MUST decode single-track audio files and long capture files in MP3, FLAC, WAV, Vorbis OGG, and M4A formats into 32-bit floating-point PCM audio arrays normalized between `-1.0` and `+1.0`.
 - **`[REQ-AUD-020]` Passage Trimming**: Given a track record with `start_offset_ms` $t_{start}$ and `end_offset_ms` $t_{end}$, the playback engine MUST begin audio decoding at $t_{start}$ and emit a track transition event at $t_{end}$.
+- **`[REQ-AUD-030]` DAO Multi-Song Passage Slicing**: The system MUST detect continuous Disc-At-Once (DAO) album capture files, query MusicBrainz for official release tracklists, and generate bounded passage records in `vaino.db`. Playing a passage track MUST stream ONLY its designated sub-section ($t_{\text{start}}$ to $t_{\text{end}}$), never the full continuous album file.
 - **`[REQ-AUD-040]` Crossfade Mixing Math**: When transitioning between Track $A$ and Track $B$ over a crossfade window $T_x$ seconds:
   $$\text{Out}(t) = \text{Track}_A(t) \cdot (1 - \alpha(t)) + \text{Track}_B(t) \cdot \alpha(t)$$
   where $\alpha(t) \in [0.0, 1.0]$ is governed by the configured ramp curve profile (`LINEAR`, `EXPONENTIAL`, or `S_CURVE`).
 
 ### 2.2 Metadata & MusicBrainz Identifier Database
 - **`[REQ-MB-010]` Chromaprint Fingerprinting**: The catalog scanner MUST compute a Chromaprint fingerprint from a 120-second PCM slice of each audio track/passage using `libchromaprint` or `fpcalc`.
-- **`[REQ-MB-020]` MusicBrainz ID Linkage**: The scanner MUST query AcoustID and MusicBrainz APIs to populate `recording_mbid`, `release_mbid`, `artist_mbid`, and `release_group_mbid` into the local `tracks` database table.
+- **`[REQ-MB-020A]` MusicBrainz ID Linkage**: The scanner MUST query AcoustID and MusicBrainz APIs to populate `recording_mbid` and `release_mbid` into the local `tracks` database table.
+- **`[REQ-MB-020B]` MBID Trust Hierarchy**: The system MUST treat AcoustID fingerprint-verified MBIDs in `vaino.db` as the authoritative source of truth, overriding raw embedded MP3 tags.
 
 ### 2.3 Program Director & Selection Algorithm
 - **`[REQ-PD-010]` Candidate Scoring Function**: The next song selection engine MUST evaluate candidate tracks $k$ using a composite scoring formula:
