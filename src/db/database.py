@@ -19,7 +19,10 @@ class Database:
         
         conn = self.get_connection()
         try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
             conn.executescript(schema_sql)
+            
             # Migration check for existing databases
             cursor = conn.execute("PRAGMA table_info(tracks)")
             columns = [row["name"] for row in cursor.fetchall()]
@@ -41,6 +44,11 @@ class Database:
             conn.close()
 
     def upsert_track(self, track_data: Dict[str, Any]):
+        self.upsert_tracks_batch([track_data])
+
+    def upsert_tracks_batch(self, tracks_data: List[Dict[str, Any]]):
+        if not tracks_data:
+            return
         sql = """
         INSERT INTO tracks (
             id, file_path, file_format, title, artist, album,
@@ -63,7 +71,8 @@ class Database:
         """
         conn = self.get_connection()
         try:
-            conn.execute(sql, track_data)
+            conn.execute("PRAGMA synchronous = NORMAL")
+            conn.executemany(sql, tracks_data)
             conn.commit()
         finally:
             conn.close()

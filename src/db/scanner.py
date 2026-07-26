@@ -2,7 +2,8 @@ import os
 import time
 import hashlib
 import logging
-from typing import Optional, Dict, Any, Tuple, Set
+from typing import Optional, Dict, Any, Tuple, Set, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import mutagen
 from mutagen.mp4 import MP4, MP4Cover
 from .database import Database
@@ -16,6 +17,7 @@ class MediaScanner:
     def __init__(self, db: Database, music_dir: str):
         self.db = db
         self.music_dir = os.path.abspath(music_dir)
+        self._folder_art_cache: Dict[str, Optional[str]] = {}
 
     def generate_track_id(self, file_path: str) -> str:
         rel_path = os.path.relpath(file_path, self.music_dir)
@@ -23,16 +25,23 @@ class MediaScanner:
 
     def find_folder_art(self, file_path: str) -> Optional[str]:
         folder = os.path.dirname(file_path)
+        if folder in self._folder_art_cache:
+            return self._folder_art_cache[folder]
+
         art_names = ["cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "front.png", "Hotelcalifornia.jpg"]
+        found_art = None
         try:
             for name in os.listdir(folder):
                 if name.lower() in [n.lower() for n in art_names]:
-                    return os.path.join(folder, name)
-                if name.lower().endswith((".jpg", ".png", ".jpeg")):
-                    return os.path.join(folder, name)
+                    found_art = os.path.join(folder, name)
+                    break
+                if not found_art and name.lower().endswith((".jpg", ".png", ".jpeg")):
+                    found_art = os.path.join(folder, name)
         except Exception:
             pass
-        return None
+
+        self._folder_art_cache[folder] = found_art
+        return found_art
 
     def extract_cover_art_bytes(self, file_path: str) -> Optional[Tuple[bytes, str]]:
         try:
@@ -67,13 +76,33 @@ class MediaScanner:
 
         return None
 
+    def check_has_art(self, file_path: str) -> bool:
+        """Fast check if artwork exists without loading full image bytes."""
+        folder_art = self.find_folder_art(file_path)
+        if folder_art:
+            return True
+        try:
+            audio = mutagen.File(file_path)
+            if audio is not None:
+                if hasattr(audio, "tags") and audio.tags is not None:
+                    for key in audio.tags.keys():
+                        if key.startswith("APIC:"):
+                            return True
+                if hasattr(audio, "pictures") and audio.pictures:
+                    return True
+                if isinstance(audio, MP4) and "covr" in audio.tags and audio.tags["covr"]:
+                    return True
+        except Exception:
+            pass
+        return False
+
     def parse_track_metadata(self, file_path: str, stat_info: Optional[os.stat_result] = None) -> Dict[str, Any]:
         ext = os.path.splitext(file_path)[1].lower()
         track_id = self.generate_track_id(file_path)
-        has_art = self.extract_cover_art_bytes(file_path) is not None
-
         if stat_info is None:
             stat_info = os.stat(file_path)
+
+        has_art = self.check_has_art(file_path)
 
         filename = os.path.splitext(os.path.basename(file_path))[0]
         parent_folder = os.path.basename(os.path.dirname(file_path))
@@ -136,20 +165,21 @@ class MediaScanner:
             "file_size": stat_info.st_size
         }
 
-    def scan_directory(self, force_full: bool = False) -> Tuple[int, int, int]:
+    def scan_directory(self, force_full: bool = False, max_workers: int = 16) -> Tuple[int, int, int]:
         """
-        Fast Incremental Directory Scanner.
+        High-Performance Parallel Multi-Threaded & Incremental Directory Scanner.
         Returns: (total_indexed, new_or_updated_count, skipped_unchanged_count)
         """
         start_time = time.time()
-        logger.info(f"Scanning music library at: {self.music_dir}")
+        logger.info(f"Scanning music library at: {self.music_dir} (Parallel workers: {max_workers})")
 
         existing_file_map = {} if force_full else self.db.get_existing_file_map()
         seen_on_disk: Set[str] = set()
 
-        new_updated_count = 0
+        files_to_parse: List[Tuple[str, os.stat_result]] = []
         skipped_count = 0
 
+        # Phase 1: Fast filesystem traversal & mtime diff check
         for root, _, files in os.walk(self.music_dir):
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
@@ -159,23 +189,48 @@ class MediaScanner:
 
                     try:
                         stat_info = os.stat(full_path)
-                        # Fast check against cached mtime & size
                         if full_path in existing_file_map:
                             cached_mtime, cached_size = existing_file_map[full_path]
                             if abs(cached_mtime - stat_info.st_mtime) < 0.01 and cached_size == stat_info.st_size:
                                 skipped_count += 1
                                 continue
 
-                        # File is new or modified
-                        data = self.parse_track_metadata(full_path, stat_info)
-                        self.db.upsert_track(data)
-                        new_updated_count += 1
-                        if new_updated_count % 50 == 0:
-                            logger.info(f"Updated {new_updated_count} files...")
+                        files_to_parse.append((full_path, stat_info))
                     except Exception as e:
-                        logger.error(f"Failed scanning file {full_path}: {e}")
+                        logger.error(f"Stat error for {full_path}: {e}")
 
-        # Clean up deleted files from DB
+        new_updated_count = len(files_to_parse)
+        logger.info(f"Filesystem scan complete: {len(seen_on_disk)} files found. {new_updated_count} files require metadata parsing ({skipped_count} cached).")
+
+        # Phase 2: Parallel Multi-Threaded Metadata Parsing & Batch DB Upsert
+        if files_to_parse:
+            batch: List[Dict[str, Any]] = []
+            processed = 0
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_file = {
+                    executor.submit(self.parse_track_metadata, path, stat_info): path
+                    for path, stat_info in files_to_parse
+                }
+
+                for future in as_completed(future_to_file):
+                    try:
+                        data = future.result()
+                        batch.append(data)
+                        processed += 1
+
+                        if len(batch) >= 500:
+                            self.db.upsert_tracks_batch(batch)
+                            batch.clear()
+                            logger.info(f"Parsed & indexed {processed}/{new_updated_count} files...")
+                    except Exception as e:
+                        path = future_to_file[future]
+                        logger.error(f"Error parsing metadata for {path}: {e}")
+
+            if batch:
+                self.db.upsert_tracks_batch(batch)
+
+        # Phase 3: Clean up deleted files from DB
         deleted_paths = [p for p in existing_file_map.keys() if p not in seen_on_disk]
         if deleted_paths:
             self.db.delete_tracks_by_paths(deleted_paths)
@@ -183,7 +238,8 @@ class MediaScanner:
 
         elapsed = time.time() - start_time
         total_tracks = self.db.get_total_track_count()
+        rate = (new_updated_count / elapsed) if elapsed > 0 and new_updated_count > 0 else 0
         logger.info(
-            f"Scan finished in {elapsed:.2f}s! Total: {total_tracks} (Updated: {new_updated_count}, Unchanged: {skipped_count})"
+            f"Scan finished in {elapsed:.2f}s! ({rate:.1f} files/sec) Total: {total_tracks} (Parsed/Updated: {new_updated_count}, Unchanged: {skipped_count})"
         )
         return total_tracks, new_updated_count, skipped_count
