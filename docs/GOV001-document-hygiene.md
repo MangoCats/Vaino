@@ -21,6 +21,9 @@ To ensure that both human contributors and AI coding assistants can quickly insp
 3. **Direct Markdown Hyperlinks**:
    - All references to other documents MUST use standard GitHub Markdown file links with explicit relative paths (e.g., `[SPEC001: Audio Engine](SPEC001-audio-engine.md)`).
 
+4. **Synchronous Specification & Test Maintenance Rule (`[GOV-DOC-020]`)**:
+   - Whenever an interactive conversation or prompt results in new code creation, architectural refinement, or settled design decisions, the corresponding formal requirements/specifications (`docs/spec/`) and automated test suites (`tests/`) MUST be updated synchronously within the same conversation turn.
+
 ---
 
 ## 2. Identifier Taxonomy Standard
