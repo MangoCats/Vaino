@@ -54,6 +54,13 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - 🚀 **[Phase 1 Implementation Plan & Deliverables](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/phase1-plan.md)** — Concrete architecture, module specifications, deliverables, and acceptance criteria for Phase 1.
 - 💰 **[Subscription & Technology Cost Breakdown](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/cost-estimate.md)** — Cost analysis for MusicBrainz, AcoustID, Essentia, and offline operations ($0/month).
 
+### 📜 Formal Specification Hierarchy (`docs/spec/`)
+- 📋 **[REQ001: System Requirements & Verification Matrix](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/spec/REQ001-system-requirements.md)** — Enumerated requirements (`[REQ-AUD-010]`, `[REQ-PD-010]`, `[REQ-HW-010]`) with unit testing & acceptance criteria.
+- 🎵 **[SPEC001: Audio Engine & Pipeline Specification](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/spec/SPEC001-audio-engine.md)** — Rust/Python trait contracts, dual-buffer crossfade state machine, and ramp curve equations.
+- 🗄️ **[SPEC002: Database Schema & IPC Protocol Specification](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/spec/SPEC002-data-schema-and-ipc.md)** — Relational DDL, WebSocket event schemas, and multi-user sync contracts.
+- 🧙‍♂️ **[SPEC003: Program Director Selection Engine Specification](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/spec/SPEC003-program-director-intelligence.md)** — Candidate scoring math, time-of-day curves, acoustic feature distance, and anti-repetition decay formulas.
+- 🦀 **[SPEC004: Rust Migration & Cross-Compilation Guide](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/spec/SPEC004-rust-migration-guide.md)** — 1-to-1 Python-to-Rust module mapping matrix, `<30MB` RAM allocation budget, and RPi Zero 2W ARM64 build target.
+
 ---
 
 ## 🛠️ Technology Stack Strategy

@@ -1,0 +1,62 @@
+# REQ001: System Requirements & Verification Matrix
+
+**Authoritative Specification — Tier 1**
+
+This document defines the formal system requirements for **Vaino**, establishing unique requirement IDs, quantitative constraints, acceptance criteria, and verification test methods for both the Python reference implementation and the Rust production migration.
+
+---
+
+## 1. Requirement Enumeration & Mapping
+
+| Requirement ID | Domain | Summary | Verification Method |
+| :--- | :--- | :--- | :--- |
+| **`[REQ-SYS-010]`** | System | Standalone continuous radio playback server with local sound output | Automated Closed-Loop Test |
+| **`[REQ-SYS-020]`** | Architecture | Strict co-located audio output (server location = audio output location) | System Integration Test |
+| **`[REQ-AUD-010]`** | Audio Engine | Gapless PCM streaming from MP3, FLAC, WAV, OGG, and M4A files | Unit & Integration Test |
+| **`[REQ-AUD-020]`** | Audio Engine | Passage trimming via `start_offset_ms` and `end_offset_ms` timestamp bounds | Audio Engine Unit Test |
+| **`[REQ-AUD-030]`** | Audio Engine | On-the-fly Disc-At-Once (DAO) album capture slicing | Unit Test |
+| **`[REQ-AUD-040]`** | Audio Engine | Dual-buffer crossfader with Linear, Exponential, and S-Curve ramp profiles | PCM Buffer Unit Test |
+| **`[REQ-AUD-050]`** | Audio Engine | Dynamic Master Volume scaling (0–100%) without clipping | PCM Buffer Unit Test |
+| **`[REQ-DB-010]`** | Database | SQLite embedded database with WAL mode and transaction batching | DB Benchmark Test |
+| **`[REQ-DB-020]`** | Database | Fast incremental scanning using `file_mtime` and `file_size` (<0.1s re-scan) | Benchmark Test |
+| **`[REQ-MB-010]`** | Metadata | Chromaprint (`fpcalc`) audio fingerprinting & AcoustID lookup | API Integration Test |
+| **`[REQ-MB-020]`** | Metadata | Automated local MusicBrainz identifier database construction (`recording_mbid`) | DB Schema Test |
+| **`[REQ-FE-010]`** | Feature Extract | Essentia acoustic feature extraction (LUFS loudness, BPM, key, valence, energy) | Unit Test |
+| **`[REQ-PD-010]`** | Selection | Autonomous context-aware playlist selection ("Singing Sorcerer") | Recommendation Test |
+| **`[REQ-PD-020]`** | Selection | Anti-repetition cooldown penalty enforcement for recent tracks/artists | Algorithm Test |
+| **`[REQ-UI-010]`** | Interface | Embedded HTTP REST API & WebSocket real-time state broadcast (<100ms sync) | WebSocket Test |
+| **`[REQ-UI-020]`** | Interface | Quick Control SPA & Fullscreen Wall Art Mode with album art and clock | E2E Browser Test |
+| **`[REQ-HW-010]`** | Embedded Target | Raspberry Pi Zero 2W target with <30MB RAM footprint & <1s instant boot | HW Resource Test |
+| **`[REQ-HW-020]`** | Storage | Fault-tolerant 3-partition storage architecture (Immutable OS, RO Media, RW DB) | Power Interruption Test |
+
+---
+
+## 2. Detailed Functional Requirements
+
+### 2.1 Audio Engine & Pipeline
+- **`[REQ-AUD-010]` Audio Format Decoding**: The audio decoder MUST decode single-track audio files and long capture files in MP3, FLAC, WAV, Vorbis OGG, and M4A formats into 32-bit floating-point PCM audio arrays normalized between `-1.0` and `+1.0`.
+- **`[REQ-AUD-020]` Passage Trimming**: Given a track record with `start_offset_ms` $t_{start}$ and `end_offset_ms` $t_{end}$, the playback engine MUST begin audio decoding at $t_{start}$ and emit a track transition event at $t_{end}$.
+- **`[REQ-AUD-040]` Crossfade Mixing Math**: When transitioning between Track $A$ and Track $B$ over a crossfade window $T_x$ seconds:
+  $$\text{Out}(t) = \text{Track}_A(t) \cdot (1 - \alpha(t)) + \text{Track}_B(t) \cdot \alpha(t)$$
+  where $\alpha(t) \in [0.0, 1.0]$ is governed by the configured ramp curve profile (`LINEAR`, `EXPONENTIAL`, or `S_CURVE`).
+
+### 2.2 Metadata & MusicBrainz Identifier Database
+- **`[REQ-MB-010]` Chromaprint Fingerprinting**: The catalog scanner MUST compute a Chromaprint fingerprint from a 120-second PCM slice of each audio track/passage using `libchromaprint` or `fpcalc`.
+- **`[REQ-MB-020]` MusicBrainz ID Linkage**: The scanner MUST query AcoustID and MusicBrainz APIs to populate `recording_mbid`, `release_mbid`, `artist_mbid`, and `release_group_mbid` into the local `tracks` database table.
+
+### 2.3 Program Director & Selection Algorithm
+- **`[REQ-PD-010]` Candidate Scoring Function**: The next song selection engine MUST evaluate candidate tracks $k$ using a composite scoring formula:
+  $$S(k) = w_{\text{flow}} \cdot S_{\text{flow}}(k) + w_{\text{time}} \cdot S_{\text{time}}(k) + w_{\text{pref}} \cdot S_{\text{pref}}(k) - P_{\text{repeat}}(k)$$
+  where $S_{\text{flow}}$ measures acoustic distance to the current track, $S_{\text{time}}$ measures time-of-day energy match, and $P_{\text{repeat}}$ penalizes recent plays.
+
+---
+
+## 3. Non-Functional & Performance Constraints
+
+### 3.1 Hardware Resource Constraints (Raspberry Pi Zero 2W)
+- **`[REQ-HW-010A]` Maximum Memory Footprint**: The production Rust runtime (Phase 6) MUST NOT consume more than **30.0 MB** of RSS RAM during continuous playback.
+- **`[REQ-HW-010B]` Boot Readiness Priority**: Track 1 audio playback MUST begin within **1.0 second** of core daemon startup. HTTP/WebSocket management services MUST initialize asynchronously without delaying audio playback.
+
+### 3.2 Real-Time WebSocket Synchronization
+- **`[REQ-UI-010A]` Broadcast Latency**: All connected WebSocket clients MUST receive state broadcast updates within **100 milliseconds** of a state change event (Play, Pause, Skip, Volume, Track Change).
+- **`[REQ-UI-010B]` Multi-User Skip Throttling**: The server MUST enforce a minimum **5.0-second throttle window** between user skip commands across all connected web clients.
