@@ -42,5 +42,21 @@ class TestVainoPhase2(unittest.TestCase):
             expected_frames = int(10.0 * sr)
             self.assertAlmostEqual(len(samples), expected_frames, delta=sr * 0.1)
 
+    def test_unicode_pua_path_in_memory_decoding(self):
+        """[REQ-AUD-020] Test Python open(rb) in-memory fallback for Unicode/PUA file path decoding"""
+        music_file = r"C:\Users\Mango Cat\Music\Various Artists\I Am Sam Music From and Inspired by the Motion Picture\13 - We Can Work It Out.mp3"
+        if os.path.exists(music_file):
+            track = {
+                "file_path": music_file,
+                "title": "We Can Work It Out",
+                "start_offset_ms": 0,
+                "end_offset_ms": None
+            }
+            engine = AudioEngine()
+            samples, sr, ch = engine._load_audio_file(track)
+            self.assertGreater(len(samples), 0)
+            self.assertEqual(sr, 44100)
+            self.assertEqual(ch, 2)
+
 if __name__ == "__main__":
     unittest.main()

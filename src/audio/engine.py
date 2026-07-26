@@ -131,7 +131,20 @@ class AudioEngine:
         """
         file_path = track["file_path"]
         logger.info(f"Loading track: {track.get('title')} ({file_path})")
-        decoded = miniaudio.decode_file(file_path)
+
+        decoded = None
+        try:
+            decoded = miniaudio.decode_file(file_path)
+        except Exception as e:
+            logger.warning(f"miniaudio.decode_file failed for '{file_path}' ({e}). Retrying via Python open(rb) in-memory buffer...")
+            try:
+                with open(file_path, "rb") as fp:
+                    file_bytes = fp.read()
+                decoded = miniaudio.decode(file_bytes)
+            except Exception as ex:
+                logger.error(f"In-memory decoding also failed for '{file_path}': {ex}")
+                raise ex
+
         sample_rate = decoded.sample_rate
         channels = decoded.nchannels
 
