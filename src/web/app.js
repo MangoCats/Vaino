@@ -119,7 +119,8 @@ function updateUI(status) {
     }
 }
 
-// Library Pagination & Filter State
+// Library Pagination & View State
+let currentView = 'tracks'; // 'tracks', 'artists', 'albums'
 let currentPage = 1;
 let pageSize = 100;
 let totalTracks = 0;
@@ -128,6 +129,9 @@ let currentLetter = '';
 
 // Fetch & Render Library Tracks
 async function fetchLibrary(page = 1) {
+    if (currentView === 'artists') return fetchArtists();
+    if (currentView === 'albums') return fetchAlbums();
+
     currentPage = page;
     const offset = (currentPage - 1) * pageSize;
     let queryParam = currentQuery;
@@ -152,6 +156,129 @@ async function fetchLibrary(page = 1) {
         console.error('Error fetching library:', e);
         libraryTbody.innerHTML = `<tr><td colspan="6" class="loading-cell">Failed loading library tracks.</td></tr>`;
     }
+}
+
+// Fetch & Render Artists Grid [REQ-UI-020A]
+async function fetchArtists() {
+    const grid = document.getElementById('artists-grid');
+    if (!grid) return;
+    grid.innerHTML = `<div class="loading-cell">Loading artists...</div>`;
+
+    try {
+        let url = `/api/v1/library/artists?limit=200`;
+        const queryParam = currentLetter || currentQuery;
+        if (queryParam) {
+            url += `&query=${encodeURIComponent(queryParam)}`;
+        }
+        const res = await fetch(url);
+        const data = await res.json();
+        const artists = data.artists || [];
+
+        const countBadge = document.getElementById('library-count-badge');
+        if (countBadge) countBadge.textContent = `${artists.length} artists`;
+
+        if (artists.length === 0) {
+            grid.innerHTML = `<div class="loading-cell">No artists found.</div>`;
+            return;
+        }
+
+        grid.innerHTML = artists.map(a => `
+            <div class="nav-card" onclick="browseArtistAlbums('${escapeHtml(a.artist)}')">
+                <img src="/api/v1/art/${a.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>🎙️</text></svg>'">
+                <div class="nav-card-title">${escapeHtml(a.artist)}</div>
+                <div class="nav-card-subtitle">${a.album_count} Albums • ${a.track_count} Tracks</div>
+                <span class="nav-card-badge">View Albums ▶</span>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('Error fetching artists:', e);
+        grid.innerHTML = `<div class="loading-cell">Failed loading artists.</div>`;
+    }
+}
+
+// Fetch & Render Albums Grid [REQ-UI-020A]
+async function fetchAlbums(artistFilter = null) {
+    const grid = document.getElementById('albums-grid');
+    if (!grid) return;
+    grid.innerHTML = `<div class="loading-cell">Loading albums...</div>`;
+
+    try {
+        let url = `/api/v1/library/albums?limit=200`;
+        if (artistFilter) {
+            url += `&artist=${encodeURIComponent(artistFilter)}`;
+        } else {
+            const queryParam = currentLetter || currentQuery;
+            if (queryParam) {
+                url += `&query=${encodeURIComponent(queryParam)}`;
+            }
+        }
+        const res = await fetch(url);
+        const data = await res.json();
+        const albums = data.albums || [];
+
+        const countBadge = document.getElementById('library-count-badge');
+        if (countBadge) countBadge.textContent = `${albums.length} albums`;
+
+        if (albums.length === 0) {
+            grid.innerHTML = `<div class="loading-cell">No albums found.</div>`;
+            return;
+        }
+
+        grid.innerHTML = albums.map(al => `
+            <div class="nav-card" onclick="openAlbumTracklist('${escapeHtml(al.album)}', '${escapeHtml(al.artist)}')">
+                <img src="/api/v1/art/${al.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>💿</text></svg>'">
+                <div class="nav-card-title">${escapeHtml(al.album)}</div>
+                <div class="nav-card-subtitle">${escapeHtml(al.artist)} ${al.year ? '(' + al.year + ')' : ''}</div>
+                <span class="nav-card-badge">${al.track_count} Tracks ▶</span>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('Error fetching albums:', e);
+        grid.innerHTML = `<div class="loading-cell">Failed loading albums.</div>`;
+    }
+}
+
+// Drill-down from Artist card to their Albums
+function browseArtistAlbums(artistName) {
+    switchView('albums');
+    fetchAlbums(artistName);
+}
+
+// Drill-down from Album card to sorted Tracklist [REQ-UI-020B]
+async function openAlbumTracklist(albumName, artistName) {
+    switchView('tracks');
+    try {
+        let url = `/api/v1/library/albums/${encodeURIComponent(albumName)}/tracks`;
+        if (artistName) url += `?artist=${encodeURIComponent(artistName)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        
+        tracksList = data.tracks || [];
+        totalTracks = tracksList.length;
+        renderLibrary(tracksList, 0);
+        updatePaginationControls();
+
+        const countBadge = document.getElementById('library-count-badge');
+        if (countBadge) countBadge.textContent = `${albumName} (${totalTracks} tracks)`;
+    } catch (e) {
+        console.error('Error fetching album tracklist:', e);
+    }
+}
+
+// View Tab Switcher
+function switchView(targetView) {
+    currentView = targetView;
+    document.querySelectorAll('.view-tab').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-view') === targetView);
+    });
+
+    document.querySelectorAll('.view-content-block').forEach(el => el.style.display = 'none');
+    const targetBlock = document.getElementById(`view-container-${targetView}`);
+    if (targetBlock) targetBlock.style.display = 'block';
+
+    if (targetView === 'tracks') fetchLibrary(1);
+    else if (targetView === 'artists') fetchArtists();
+    else if (targetView === 'albums') fetchAlbums();
 }
 
 function renderLibrary(tracks, offset = 0) {
@@ -257,6 +384,17 @@ if (pageSizeSelect) {
     pageSizeSelect.addEventListener('change', (e) => {
         pageSize = parseInt(e.target.value);
         fetchLibrary(1);
+    });
+}
+
+// View Tabs Navigation Listener [REQ-UI-020A]
+const viewTabs = document.getElementById('view-tabs');
+if (viewTabs) {
+    viewTabs.addEventListener('click', (e) => {
+        if (e.target.classList.contains('view-tab')) {
+            const targetView = e.target.getAttribute('data-view');
+            if (targetView) switchView(targetView);
+        }
     });
 }
 

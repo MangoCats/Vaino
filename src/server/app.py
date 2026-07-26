@@ -111,6 +111,21 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
         total = db.get_total_track_count(query=query)
         return {"tracks": tracks, "total": total, "limit": limit, "offset": offset}
 
+    @app.get("/api/v1/library/artists")
+    def list_artists(limit: int = 200, query: Optional[str] = None):
+        artists = db.get_all_artists(limit=limit, query=query)
+        return {"artists": artists, "total": len(artists)}
+
+    @app.get("/api/v1/library/albums")
+    def list_albums(limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None):
+        albums = db.get_all_albums(limit=limit, query=query, artist=artist)
+        return {"albums": albums, "total": len(albums)}
+
+    @app.get("/api/v1/library/albums/{album_name}/tracks")
+    def list_album_tracks(album_name: str, artist: Optional[str] = None):
+        tracks = db.get_album_tracks(album_name=album_name, artist_name=artist)
+        return {"album": album_name, "artist": artist, "tracks": tracks, "total": len(tracks)}
+
     @app.get("/api/v1/art/{track_id}")
     def get_cover_art(track_id: str):
         track = db.get_track_by_id(track_id)

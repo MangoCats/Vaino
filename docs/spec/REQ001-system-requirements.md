@@ -45,6 +45,11 @@ This document defines the formal system requirements for **Vaino**, establishing
 - **`[REQ-MB-010]` Chromaprint Fingerprinting**: The catalog scanner MUST compute a Chromaprint fingerprint from a 120-second PCM slice of each audio track/passage using `libchromaprint` or `fpcalc`.
 - **`[REQ-MB-020A]` MusicBrainz ID Linkage**: The scanner MUST query AcoustID and MusicBrainz APIs to populate `recording_mbid` and `release_mbid` into the local `tracks` database table.
 - **`[REQ-MB-020B]` MBID Trust Hierarchy**: The system MUST treat AcoustID fingerprint-verified MBIDs in `vaino.db` as the authoritative source of truth, overriding raw embedded MP3 tags.
+- **`[REQ-MB-020C]` MusicBrainz Metadata Caching**: The system MUST query MusicBrainz details for resolved MBIDs, caching canonical artist name, album name, track number, and album cover art in `vaino.db`.
+
+### 2.3 User Interface & Hierarchical Navigation
+- **`[REQ-UI-020A]` Hierarchical Navigation Views**: The web interface MUST provide dedicated human-friendly navigation views: Browse by Artist, Browse by Album, and Album Tracklist View.
+- **`[REQ-UI-020B]` Album Track Number Ordering**: Within an Album view, available tracks MUST be sorted strictly by `track_number`. Album cover art MUST be displayed prominently in album and tracklist views.
 
 ### 2.3 Program Director & Selection Algorithm
 - **`[REQ-PD-010]` Candidate Scoring Function**: The next song selection engine MUST evaluate candidate tracks $k$ using a composite scoring formula:

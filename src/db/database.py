@@ -140,6 +140,85 @@ class Database:
         finally:
             conn.close()
 
+    def get_all_artists(self, limit: int = 200, query: Optional[str] = None) -> List[Dict[str, Any]]:
+        """[REQ-UI-020A] Returns distinct artists with album count, track count, and sample cover art track ID."""
+        conn = self.get_connection()
+        try:
+            if query:
+                q = f"%{query}%"
+                sql = """
+                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count, MIN(id) as sample_track_id
+                FROM tracks
+                WHERE artist LIKE ? OR album LIKE ?
+                GROUP BY artist
+                ORDER BY artist ASC
+                LIMIT ?
+                """
+                cursor = conn.execute(sql, (q, q, limit))
+            else:
+                sql = """
+                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count, MIN(id) as sample_track_id
+                FROM tracks
+                GROUP BY artist
+                ORDER BY artist ASC
+                LIMIT ?
+                """
+                cursor = conn.execute(sql, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def get_all_albums(self, limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None) -> List[Dict[str, Any]]:
+        """[REQ-UI-020A] Returns distinct albums with artist, year, track count, and sample cover art track ID."""
+        conn = self.get_connection()
+        try:
+            params = []
+            where_clauses = []
+            if artist:
+                where_clauses.append("artist = ?")
+                params.append(artist)
+            if query:
+                q = f"%{query}%"
+                where_clauses.append("(album LIKE ? OR artist LIKE ?)")
+                params.extend([q, q])
+
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"""
+            SELECT album, artist, MIN(year) as year, COUNT(*) as track_count, MIN(id) as sample_track_id
+            FROM tracks
+            {where_str}
+            GROUP BY album, artist
+            ORDER BY artist ASC, album ASC
+            LIMIT ?
+            """
+            params.append(limit)
+            cursor = conn.execute(sql, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def get_album_tracks(self, album_name: str, artist_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """[REQ-UI-020B] Returns all tracks in an album sorted strictly by track_number."""
+        conn = self.get_connection()
+        try:
+            if artist_name:
+                sql = """
+                SELECT * FROM tracks
+                WHERE album = ? AND artist = ?
+                ORDER BY CASE WHEN track_number IS NULL OR track_number = 0 THEN 999 ELSE track_number END ASC, title ASC
+                """
+                cursor = conn.execute(sql, (album_name, artist_name))
+            else:
+                sql = """
+                SELECT * FROM tracks
+                WHERE album = ?
+                ORDER BY CASE WHEN track_number IS NULL OR track_number = 0 THEN 999 ELSE track_number END ASC, title ASC
+                """
+                cursor = conn.execute(sql, (album_name,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
     def get_total_track_count(self, query: Optional[str] = None) -> int:
         conn = self.get_connection()
         try:

@@ -83,6 +83,14 @@
                         <h3>📚 Music Library</h3>
                         <span class="library-count-badge" id="library-count-badge">0 tracks</span>
                     </div>
+
+                    <!-- Hierarchical View Navigation Tabs [REQ-UI-020A] -->
+                    <div class="view-tabs" id="view-tabs">
+                        <button class="view-tab active" data-view="tracks">🎵 Tracks</button>
+                        <button class="view-tab" data-view="artists">🎙️ Artists</button>
+                        <button class="view-tab" data-view="albums">💿 Albums</button>
+                    </div>
+
                     <div class="search-box">
                         <input type="text" id="library-search" placeholder="Search tracks, artists, albums...">
                     </div>
@@ -119,40 +127,57 @@
                     <button class="letter-btn" data-letter="Z">Z</button>
                 </div>
 
-                <div class="library-table-wrapper">
-                    <table class="library-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Title</th>
-                                <th>Artist</th>
-                                <th>Album</th>
-                                <th>Duration</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody id="library-tbody">
-                            <tr>
-                                <td colspan="6" class="loading-cell">Loading library tracks...</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <!-- Tracks Table View Container -->
+                <div id="view-container-tracks" class="view-content-block">
+                    <div class="library-table-wrapper">
+                        <table class="library-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Title</th>
+                                    <th>Artist</th>
+                                    <th>Album</th>
+                                    <th>Duration</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="library-tbody">
+                                <tr>
+                                    <td colspan="6" class="loading-cell">Loading library tracks...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination Footer Bar -->
+                    <div class="pagination-bar">
+                        <div class="pagination-info" id="pagination-info">Showing 0-0 of 0 tracks</div>
+                        <div class="pagination-controls">
+                            <label for="page-size-select">Per page:</label>
+                            <select id="page-size-select" class="page-size-select">
+                                <option value="50">50</option>
+                                <option value="100" selected>100</option>
+                                <option value="250">250</option>
+                                <option value="500">500</option>
+                            </select>
+                            <button id="btn-prev-page" class="btn-page" disabled>◀ Prev</button>
+                            <span id="page-indicator" class="page-indicator">Page 1</span>
+                            <button id="btn-next-page" class="btn-page">Next ▶</button>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Pagination Footer Bar -->
-                <div class="pagination-bar">
-                    <div class="pagination-info" id="pagination-info">Showing 0-0 of 0 tracks</div>
-                    <div class="pagination-controls">
-                        <label for="page-size-select">Per page:</label>
-                        <select id="page-size-select" class="page-size-select">
-                            <option value="50">50</option>
-                            <option value="100" selected>100</option>
-                            <option value="250">250</option>
-                            <option value="500">500</option>
-                        </select>
-                        <button id="btn-prev-page" class="btn-page" disabled>◀ Prev</button>
-                        <span id="page-indicator" class="page-indicator">Page 1</span>
-                        <button id="btn-next-page" class="btn-page">Next ▶</button>
+                <!-- Artists Grid View Container -->
+                <div id="view-container-artists" class="view-content-block" style="display: none;">
+                    <div class="grid-cards-container" id="artists-grid">
+                        <div class="loading-cell">Loading artists...</div>
+                    </div>
+                </div>
+
+                <!-- Albums Grid View Container -->
+                <div id="view-container-albums" class="view-content-block" style="display: none;">
+                    <div class="grid-cards-container" id="albums-grid">
+                        <div class="loading-cell">Loading albums...</div>
                     </div>
                 </div>
             </section>
