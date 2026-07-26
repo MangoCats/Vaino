@@ -52,6 +52,7 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - ⚙️ **[Tech Stack & Microservices Investigation](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/tech-stack-investigation.md)** — Microservice partitioning model, technology stack comparisons (Rust, Go, Python, Hybrid), AcoustID/Chromaprint, and Essentia acoustic feature extraction strategy.
 - 🗺️ **[End-to-End Development Roadmap](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/roadmap.md)** — Phased 7-stage roadmap from basic web-controlled player to full autonomous station engine.
 - 🚀 **[Phase 1 Implementation Plan & Deliverables](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/phase1-plan.md)** — Concrete architecture, module specifications, deliverables, and acceptance criteria for Phase 1.
+- 💰 **[Subscription & Technology Cost Breakdown](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/cost-estimate.md)** — Cost analysis for MusicBrainz, AcoustID, Essentia, and offline operations ($0/month).
 
 ---
 
