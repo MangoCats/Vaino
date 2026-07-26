@@ -129,15 +129,18 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
     @app.get("/api/v1/art/{track_id}")
     def get_cover_art(track_id: str):
         track = db.get_track_by_id(track_id)
-        if not track:
-            raise HTTPException(status_code=404, detail="Track not found")
-        
-        art_result = scanner.extract_cover_art_bytes(track["file_path"])
-        if not art_result:
-            raise HTTPException(status_code=404, detail="No cover art found")
+        if track:
+            art_result = scanner.extract_cover_art_bytes(track["file_path"])
+            if art_result:
+                image_bytes, mime_type = art_result
+                return Response(content=image_bytes, media_type=mime_type)
 
-        image_bytes, mime_type = art_result
-        return Response(content=image_bytes, media_type=mime_type)
+        # Fallback SVG placeholder graphic
+        svg_placeholder = """<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+            <rect width="300" height="300" fill="#1e2230"/>
+            <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#4a5568" font-size="48">🎵</text>
+        </svg>"""
+        return Response(content=svg_placeholder.encode("utf-8"), media_type="image/svg+xml")
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

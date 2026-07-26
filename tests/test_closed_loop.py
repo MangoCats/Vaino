@@ -179,5 +179,40 @@ class TestClosedLoopServer(unittest.TestCase):
 
         asyncio.run(test_ws())
 
+    def test_07_http_artists_endpoint(self):
+        url = f"{self.base_url}/api/v1/library/artists"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            self.assertIn("artists", data)
+            self.assertGreater(data["total"], 0)
+            logger.info(f"VERIFIED GET /api/v1/library/artists -> Loaded {data['total']} artists.")
+
+    def test_08_http_albums_endpoint(self):
+        url = f"{self.base_url}/api/v1/library/albums"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            self.assertIn("albums", data)
+            self.assertGreater(data["total"], 0)
+            logger.info(f"VERIFIED GET /api/v1/library/albums -> Loaded {data['total']} albums.")
+
+    def test_09_http_album_tracks_endpoint(self):
+        album_name = urllib.parse.quote("Hotel California")
+        url = f"{self.base_url}/api/v1/library/albums/{album_name}/tracks"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            self.assertIn("tracks", data)
+            tracks = data["tracks"]
+            self.assertGreater(len(tracks), 0)
+            # Verify track_number ordering
+            track_nums = [t.get("track_number") for t in tracks if t.get("track_number") is not None]
+            self.assertEqual(track_nums, sorted(track_nums))
+            logger.info(f"VERIFIED GET /api/v1/library/albums/Hotel California/tracks -> Loaded {len(tracks)} sorted tracks.")
+
 if __name__ == "__main__":
     unittest.main()

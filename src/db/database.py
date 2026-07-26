@@ -147,7 +147,8 @@ class Database:
             if query:
                 q = f"%{query}%"
                 sql = """
-                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count, MIN(id) as sample_track_id
+                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
+                       COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
                 FROM tracks
                 WHERE artist LIKE ? OR album LIKE ?
                 GROUP BY artist
@@ -157,7 +158,8 @@ class Database:
                 cursor = conn.execute(sql, (q, q, limit))
             else:
                 sql = """
-                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count, MIN(id) as sample_track_id
+                SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
+                       COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
                 FROM tracks
                 GROUP BY artist
                 ORDER BY artist ASC
@@ -184,7 +186,8 @@ class Database:
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
-            SELECT album, artist, MIN(year) as year, COUNT(*) as track_count, MIN(id) as sample_track_id
+            SELECT album, artist, MIN(year) as year, COUNT(*) as track_count,
+                   COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
             FROM tracks
             {where_str}
             GROUP BY album, artist
