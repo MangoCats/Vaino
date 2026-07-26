@@ -240,5 +240,19 @@ class TestClosedLoopServer(unittest.TestCase):
                 self.assertTrue(title_or_artist_starts, f"Track {t['title']} by {t['artist']} does not start with H")
             logger.info(f"VERIFIED GET /api/v1/library/tracks?letter=H -> Returned {len(tracks)} prefix matched tracks.")
 
+    def test_12_regression_artist_drilldown_with_letter_filter(self):
+        """[REGRESSION TEST] Verifies that drilling down into an artist (e.g. Eagles) returns albums even if letter filter is passed."""
+        artist_name = urllib.parse.quote("Eagles")
+        url = f"{self.base_url}/api/v1/library/albums?artist={artist_name}&letter=E"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            albums = data["albums"]
+            self.assertGreater(len(albums), 0, "Drilling down into artist albums returned 0 albums when letter parameter was passed")
+            for al in albums:
+                self.assertEqual(al["artist"], "Eagles")
+            logger.info(f"VERIFIED REGRESSION test_12 -> GET /api/v1/library/albums?artist=Eagles&letter=E returned {len(albums)} albums.")
+
 if __name__ == "__main__":
     unittest.main()

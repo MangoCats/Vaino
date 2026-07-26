@@ -236,6 +236,11 @@ async function fetchAlbums(artistFilter = null) {
 // Drill-down from Artist card to their Albums [REQ-UI-020C, REQ-UI-020D]
 async function browseArtistAlbums(artistName) {
     currentArtistFilter = artistName;
+    currentLetter = '';
+    document.querySelectorAll('.letter-btn').forEach(b => b.classList.remove('active'));
+    const allLetterBtn = document.querySelector('.letter-btn[data-letter=""]');
+    if (allLetterBtn) allLetterBtn.classList.add('active');
+
     try {
         const url = `/api/v1/library/albums?artist=${encodeURIComponent(artistName)}`;
         const res = await fetch(url);

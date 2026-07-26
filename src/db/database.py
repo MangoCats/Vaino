@@ -127,15 +127,15 @@ class Database:
                 params.append(album)
             if letter:
                 if letter == "#":
-                    where_clauses.append("(title GLOB '[0-9]*' OR artist GLOB '[0-9]*')")
+                    where_clauses.append("(title GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
                 else:
                     l = f"{letter}%"
-                    where_clauses.append("(title LIKE ? OR artist LIKE ?)")
-                    params.extend([l, l])
+                    where_clauses.append("(title LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
+                    params.extend([l, l, l])
             if query:
                 q = f"%{query}%"
-                where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ?)")
-                params.extend([q, q, q])
+                where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR artist_sort_name LIKE ?)")
+                params.extend([q, q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
@@ -204,15 +204,15 @@ class Database:
                 params.append(artist)
             if letter:
                 if letter == "#":
-                    where_clauses.append("(album GLOB '[0-9]*' OR artist GLOB '[0-9]*')")
+                    where_clauses.append("(album GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
                 else:
                     l = f"{letter}%"
-                    where_clauses.append("(album LIKE ? OR artist LIKE ?)")
-                    params.extend([l, l])
+                    where_clauses.append("(album LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
+                    params.extend([l, l, l])
             if query:
                 q = f"%{query}%"
-                where_clauses.append("(album LIKE ? OR artist LIKE ?)")
-                params.extend([q, q])
+                where_clauses.append("(album LIKE ? OR artist LIKE ? OR artist_sort_name LIKE ?)")
+                params.extend([q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
