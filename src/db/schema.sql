@@ -44,5 +44,16 @@ CREATE TABLE IF NOT EXISTS play_history (
 CREATE INDEX IF NOT EXISTS idx_tracks_file_path ON tracks(file_path);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
+
+CREATE TABLE IF NOT EXISTS track_artists (
+    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    artist_name TEXT NOT NULL,
+    artist_sort_name TEXT NOT NULL,
+    artist_mbid TEXT,
+    PRIMARY KEY (track_id, artist_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_name);
+CREATE INDEX IF NOT EXISTS idx_track_artists_sort ON track_artists(artist_sort_name);
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_history_played_at ON play_history(played_at);

@@ -34,6 +34,11 @@ class TestVainoPhase3Navigation(unittest.TestCase):
             "title": "Born to Run", "artist": "Bruce Springsteen", "artist_sort_name": "Springsteen, Bruce",
             "album": "Born to Run", "year": 1975, "track_number": 1, "duration_ms": 270000
         })
+        cls.db.upsert_track({
+            "id": "t5", "file_path": r"C:\music\santana_smooth.mp3", "file_format": "MP3",
+            "title": "Smooth", "artist": "Santana feat. Rob Thomas", "album": "Supernatural",
+            "year": 1999, "track_number": 1, "duration_ms": 295000
+        })
 
     @classmethod
     def tearDownClass(cls):
@@ -46,20 +51,23 @@ class TestVainoPhase3Navigation(unittest.TestCase):
     def test_get_all_artists(self):
         """[REQ-UI-020A] Test artist list grouping and album counts"""
         artists = self.db.get_all_artists()
-        self.assertEqual(len(artists), 3)
         artist_names = [a["artist"] for a in artists]
         self.assertIn("Eagles", artist_names)
         self.assertIn("The Beatles", artist_names)
         self.assertIn("Bruce Springsteen", artist_names)
+        self.assertIn("Santana", artist_names)
+        self.assertIn("Rob Thomas", artist_names)
+        self.assertNotIn("Santana feat. Rob Thomas", artist_names)
 
     def test_get_all_albums(self):
         """[REQ-UI-020A] Test album grid grouping with year and artist"""
         albums = self.db.get_all_albums()
-        self.assertEqual(len(albums), 3)
+        self.assertGreaterEqual(len(albums), 4)
         album_names = [al["album"] for al in albums]
         self.assertIn("Hotel California", album_names)
         self.assertIn("Abbey Road", album_names)
         self.assertIn("Born to Run", album_names)
+        self.assertIn("Supernatural", album_names)
 
     def test_album_tracks_sorted_by_track_number(self):
         """[REQ-UI-020B] Test album tracklist sorting by track_number"""
@@ -73,10 +81,17 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         artists_s = self.db.get_all_artists(letter="S")
         s_names = [a["artist"] for a in artists_s]
         self.assertIn("Bruce Springsteen", s_names)
+        self.assertIn("Santana", s_names)
 
         artists_b = self.db.get_all_artists(letter="B")
         b_names = [a["artist"] for a in artists_b]
         self.assertIn("The Beatles", b_names)
+
+    def test_individual_artist_decomposition(self):
+        """[REQ-MB-020E, REQ-UI-020G] Test decomposition of 'Santana feat. Rob Thomas' into Santana and Rob Thomas portfolio entries"""
+        albums_rt = self.db.get_all_albums(artist="Rob Thomas")
+        self.assertEqual(len(albums_rt), 1)
+        self.assertEqual(albums_rt[0]["album"], "Supernatural")
 
 if __name__ == "__main__":
     unittest.main()

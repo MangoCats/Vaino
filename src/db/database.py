@@ -100,6 +100,26 @@ class Database:
         try:
             conn.execute("PRAGMA synchronous = NORMAL")
             conn.executemany(sql, sanitized)
+            
+            # Decompose and insert track_artists junction entries [REQ-MB-020E]
+            from .scanner import split_artists
+            artist_rows = []
+            track_ids = [t["id"] for t in sanitized]
+            for t in sanitized:
+                track_id = t["id"]
+                raw_artist = t.get("artist", "")
+                individual_artists = split_artists(raw_artist)
+                for a_name, a_sort in individual_artists:
+                    artist_rows.append((track_id, a_name, a_sort))
+
+            if track_ids:
+                placeholders = ",".join("?" for _ in track_ids)
+                conn.execute(f"DELETE FROM track_artists WHERE track_id IN ({placeholders})", track_ids)
+            if artist_rows:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO track_artists (track_id, artist_name, artist_sort_name) VALUES (?, ?, ?)",
+                    artist_rows
+                )
             conn.commit()
         finally:
             conn.close()
@@ -119,36 +139,39 @@ class Database:
         try:
             where_clauses = []
             params = []
+            join_clause = ""
             if artist:
-                where_clauses.append("artist = ?")
-                params.append(artist)
+                join_clause = "JOIN track_artists ta ON t.id = ta.track_id"
+                where_clauses.append("(ta.artist_name = ? OR t.artist = ?)")
+                params.extend([artist, artist])
             if album:
-                where_clauses.append("album = ?")
+                where_clauses.append("t.album = ?")
                 params.append(album)
             if letter:
                 if letter == "#":
                     if album or artist:
-                        where_clauses.append("title GLOB '[0-9]*'")
+                        where_clauses.append("t.title GLOB '[0-9]*'")
                     else:
-                        where_clauses.append("(title GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
+                        where_clauses.append("(t.title GLOB '[0-9]*' OR t.artist GLOB '[0-9]*' OR COALESCE(t.artist_sort_name, t.artist) GLOB '[0-9]*')")
                 else:
                     l = f"{letter}%"
                     if album or artist:
-                        where_clauses.append("title LIKE ?")
+                        where_clauses.append("t.title LIKE ?")
                         params.append(l)
                     else:
-                        where_clauses.append("(title LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
+                        where_clauses.append("(t.title LIKE ? OR t.artist LIKE ? OR COALESCE(t.artist_sort_name, t.artist) LIKE ?)")
                         params.extend([l, l, l])
             if query:
                 q = f"%{query}%"
-                where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR artist_sort_name LIKE ?)")
+                where_clauses.append("(t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.artist_sort_name LIKE ?)")
                 params.extend([q, q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
-            SELECT * FROM tracks 
+            SELECT DISTINCT t.* FROM tracks t
+            {join_clause}
             {where_str}
-            ORDER BY artist, album, CASE WHEN track_number IS NULL OR track_number = 0 THEN 999 ELSE track_number END ASC, title
+            ORDER BY t.artist, t.album, CASE WHEN t.track_number IS NULL OR t.track_number = 0 THEN 999 ELSE t.track_number END ASC, t.title
             LIMIT ? OFFSET ?
             """
             params.extend([limit, offset])
@@ -167,31 +190,34 @@ class Database:
             conn.close()
 
     def get_all_artists(self, limit: int = 200, query: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-MB-020D, REQ-UI-020E] Returns distinct artists matched by MusicBrainz artist_sort_name prefix key."""
+        """[REQ-MB-020E, REQ-UI-020G] Returns distinct individual artists from track_artists junction table."""
         conn = self.get_connection()
         try:
             where_clauses = []
             params = []
             if letter:
                 if letter == "#":
-                    where_clauses.append("COALESCE(artist_sort_name, artist) GLOB '[0-9]*'")
+                    where_clauses.append("ta.artist_sort_name GLOB '[0-9]*'")
                 else:
-                    where_clauses.append("COALESCE(artist_sort_name, artist) LIKE ?")
+                    where_clauses.append("ta.artist_sort_name LIKE ?")
                     params.append(f"{letter}%")
             if query:
                 q = f"%{query}%"
-                where_clauses.append("(artist LIKE ? OR album LIKE ? OR artist_sort_name LIKE ?)")
+                where_clauses.append("(ta.artist_name LIKE ? OR t.album LIKE ? OR ta.artist_sort_name LIKE ?)")
                 params.extend([q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
-            SELECT artist, MIN(COALESCE(artist_sort_name, artist)) as artist_sort_name,
-                   COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
-                   COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
-            FROM tracks
+            SELECT ta.artist_name as artist,
+                   MIN(ta.artist_sort_name) as artist_sort_name,
+                   COUNT(DISTINCT t.album) as album_count,
+                   COUNT(DISTINCT t.id) as track_count,
+                   COALESCE(MAX(CASE WHEN t.has_cover_art = 1 THEN t.id END), MIN(t.id)) as sample_track_id
+            FROM track_artists ta
+            JOIN tracks t ON ta.track_id = t.id
             {where_str}
-            GROUP BY artist
-            ORDER BY MIN(COALESCE(artist_sort_name, artist)) ASC
+            GROUP BY ta.artist_name
+            ORDER BY MIN(ta.artist_sort_name) ASC
             LIMIT ?
             """
             params.append(limit)
@@ -201,41 +227,44 @@ class Database:
             conn.close()
 
     def get_all_albums(self, limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020E, REQ-UI-020F] Returns distinct albums starting with selected letter stacked with artist/query."""
+        """[REQ-UI-020G] Returns distinct albums an artist appears on (as main, featured, or guest artist)."""
         conn = self.get_connection()
         try:
             params = []
             where_clauses = []
+            join_clause = ""
             if artist:
-                where_clauses.append("artist = ?")
-                params.append(artist)
+                join_clause = "JOIN track_artists ta ON t.id = ta.track_id"
+                where_clauses.append("(ta.artist_name = ? OR t.artist = ?)")
+                params.extend([artist, artist])
             if letter:
                 if letter == "#":
                     if artist:
-                        where_clauses.append("album GLOB '[0-9]*'")
+                        where_clauses.append("t.album GLOB '[0-9]*'")
                     else:
-                        where_clauses.append("(album GLOB '[0-9]*' OR artist GLOB '[0-9]*' OR COALESCE(artist_sort_name, artist) GLOB '[0-9]*')")
+                        where_clauses.append("(t.album GLOB '[0-9]*' OR t.artist GLOB '[0-9]*' OR COALESCE(t.artist_sort_name, t.artist) GLOB '[0-9]*')")
                 else:
                     l = f"{letter}%"
                     if artist:
-                        where_clauses.append("album LIKE ?")
+                        where_clauses.append("t.album LIKE ?")
                         params.append(l)
                     else:
-                        where_clauses.append("(album LIKE ? OR artist LIKE ? OR COALESCE(artist_sort_name, artist) LIKE ?)")
+                        where_clauses.append("(t.album LIKE ? OR t.artist LIKE ? OR COALESCE(t.artist_sort_name, t.artist) LIKE ?)")
                         params.extend([l, l, l])
             if query:
                 q = f"%{query}%"
-                where_clauses.append("(album LIKE ? OR artist LIKE ? OR artist_sort_name LIKE ?)")
+                where_clauses.append("(t.album LIKE ? OR t.artist LIKE ? OR t.artist_sort_name LIKE ?)")
                 params.extend([q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
-            SELECT album, artist, MIN(year) as year, COUNT(*) as track_count,
-                   COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
-            FROM tracks
+            SELECT DISTINCT t.album, t.artist, MIN(t.year) as year, COUNT(DISTINCT t.id) as track_count,
+                   COALESCE(MAX(CASE WHEN t.has_cover_art = 1 THEN t.id END), MIN(t.id)) as sample_track_id
+            FROM tracks t
+            {join_clause}
             {where_str}
-            GROUP BY album, artist
-            ORDER BY artist ASC, album ASC
+            GROUP BY t.album, t.artist
+            ORDER BY t.artist ASC, t.album ASC
             LIMIT ?
             """
             params.append(limit)

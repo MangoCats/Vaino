@@ -47,6 +47,8 @@ This document defines the formal system requirements for **Vaino**, establishing
 - **`[REQ-MB-020B]` MBID Trust Hierarchy**: The system MUST treat AcoustID fingerprint-verified MBIDs in `vaino.db` as the authoritative source of truth, overriding raw embedded MP3 tags.
 - **`[REQ-MB-020C]` MusicBrainz Metadata Caching**: The system MUST query MusicBrainz details for resolved MBIDs, caching canonical artist name, album name, track number, and album cover art in `vaino.db`.
 - **`[REQ-MB-020D]` MusicBrainz Artist Sort Name Keying**: The system MUST store canonical MusicBrainz `artist_sort_name` (e.g., `Springsteen, Bruce`, `Beatles, The`, `Eagles, The`) in `vaino.db` and use it as the key for Alpha-Artist letter bar filtering (`[REQ-UI-020E]`), while maintaining standard human-friendly artist display names (`Bruce Springsteen`, `The Beatles`) in the UI.
+- **`[REQ-MB-020E]` Individual Artist Decomposition**: The scanner MUST decompose multi-artist strings (e.g. `Santana feat. Rob Thomas`, `B.B. King / Eric Clapton`) into individual canonical artist records stored in the `track_artists` relational junction table.
+- **`[REQ-UI-020G]` Individual Artist Portfolio Browsing**: In Artists View, the system MUST list each artist individually rather than cluttering the view with combined strings. Selecting an artist (whether primary, featured, or guest) MUST display all albums on which that artist appears on at least one track.
 
 ### 2.3 User Interface & Hierarchical Navigation
 - **`[REQ-UI-020A]` Hierarchical Navigation Views**: The web interface MUST provide dedicated human-friendly navigation views: Browse by Artist, Browse by Album, and Album Tracklist View.

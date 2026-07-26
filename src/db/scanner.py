@@ -23,24 +23,68 @@ def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str
 
     artist_str = str(artist).strip()
 
-    # Already formatted with comma (e.g. 'Springsteen, Bruce' or 'Eagles, The')
     if "," in artist_str:
         return artist_str
 
-    # Strip leading 'The ' -> 'Eagles, The'
     if artist_str.lower().startswith("the "):
         return f"{artist_str[4:]}, The"
     
-    # Strip leading 'A ' -> 'Tribe Called Quest, A'
     if artist_str.lower().startswith("a "):
         return f"{artist_str[2:]}, A"
 
-    # Flip 2-word personal names 'Bruce Springsteen' -> 'Springsteen, Bruce'
     parts = artist_str.split()
     if len(parts) == 2 and not any(p.endswith(".") for p in parts):
         return f"{parts[1]}, {parts[0]}"
 
     return artist_str
+
+KNOWN_SINGLE_GROUPS = {
+    "earth, wind & fire", "earth wind & fire",
+    "sam the sham & the pharaohs", "sam the sham and the pharaohs",
+    "emerson, lake & palmer", "emerson lake & palmer",
+    "crosby, stills, nash & young", "crosby, stills & nash",
+    "sly & the family stone", "sly and the family stone",
+    "the mamas & the papas", "kurtis blow", "hall & oates", "daryl hall & john oates",
+    "katrina and the waves", "huey lewis & the news", "huey lewis and the news",
+    "hootie & the blowfish", "hootie and the blowfish", "kc & the sunshine band",
+    "gladys knight & the pips", "mott the hoople", "spartak", "iron & wine",
+    "ziggy marley & the melody makers", "bob marley & the wailers",
+    "tom petty and the heartbreakers", "tom petty & the heartbreakers",
+    "joan jett & the blackhearts", "joan jett and the blackhearts"
+}
+
+def split_artists(artist_str: str) -> List[Tuple[str, str]]:
+    """
+    [REQ-MB-020E] Decomposes combined artist strings into individual (artist_name, artist_sort_name) tuples.
+    Handles 'feat.', 'ft.', 'featuring', 'with', 'vs.', and '/' separators while preserving canonical bands.
+    """
+    if not artist_str or not str(artist_str).strip():
+        return [("Unknown Artist", "Unknown Artist")]
+
+    raw = str(artist_str).strip()
+    if raw.lower() in KNOWN_SINGLE_GROUPS:
+        return [(raw, compute_artist_sort_name(raw))]
+
+    import re
+    pattern = r'\s+(?:feat\.?|ft\.?|featuring|with|vs\.?|\/)\s+'
+    parts = re.split(pattern, raw, flags=re.IGNORECASE)
+
+    results = []
+    for p in parts:
+        cleaned = p.strip()
+        if not cleaned:
+            continue
+        sub_parts = [sp.strip() for sp in cleaned.split('/') if sp.strip()]
+        for sp in sub_parts:
+            sub_sub = re.split(r'\s+feat\.?\s+', sp, flags=re.IGNORECASE)
+            for sss in sub_sub:
+                name = sss.strip()
+                if name:
+                    sort_name = compute_artist_sort_name(name)
+                    if (name, sort_name) not in results:
+                        results.append((name, sort_name))
+
+    return results if results else [(raw, compute_artist_sort_name(raw))]
 
 class MediaScanner:
     def __init__(self, db: Database, music_dir: str):
