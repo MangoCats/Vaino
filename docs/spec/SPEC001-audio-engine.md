@@ -6,7 +6,7 @@ This document specifies the internal data structures, trait interfaces, state ma
 
 ---
 
-## 1. Interface Trait Contracts (Rust / Python Specs)
+## 1. Interface Trait Contracts `[SPEC-AUD-010]` (Rust / Python Specs)
 
 ### 1.1 `AudioDecoder` Trait
 ```rust
@@ -52,7 +52,7 @@ pub trait Crossfader: Send + Sync {
 
 ---
 
-## 2. Mathematical Ramp Profile Models
+## 2. Mathematical Ramp Profile Models `[SPEC-AUD-040]`
 
 During crossfading or track fade-in/out, the gain $\alpha(t) \in [0.0, 1.0]$ at normalized time $t \in [0.0, 1.0]$ is computed using one of three mathematical curves:
 

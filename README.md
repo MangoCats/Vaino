@@ -45,6 +45,7 @@ Vaino is a fresh project and the spiritual successor to the abandoned `McRhythm`
 
 Detailed architectural and design specifications are organized in the [`docs/`](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs) folder:
 
+- 📋 **[GOV001: Document Hygiene & Governance Standard](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/GOV001-document-hygiene.md)** — Repository governance rules, unique identifier taxonomy (`REQ`, `SPEC`, `UT`, `ENT`), modularity principles, and master search index.
 - 🏛️ **[System Architecture & Audio Pipeline](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/architecture.md)** — Core components, audio pipeline, trimming, crossfading, and audio locality rules.
 - ⚡ **[Embedded Hardware & Storage Resilience](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/embedded-hardware.md)** — Raspberry Pi Zero 2W spec, fast-boot sequence, and 3-partition layout.
 - 🎨 **[User Interface & Control Model](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/user-interface.md)** — Web server interface, Quick Control, and Wall Art / Kiosk mode specifications.
