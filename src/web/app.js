@@ -191,8 +191,38 @@ librarySearch.addEventListener('input', (e) => {
     fetchLibrary(e.target.value);
 });
 
+// Initialize Clock Widget
+function startClock() {
+    const clockEl = document.getElementById('clock-widget');
+    if (!clockEl) return;
+    function updateClock() {
+        const now = new Date();
+        clockEl.textContent = now.toLocaleTimeString();
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+}
+
+// Kiosk / Wall Art Mode Toggle
+const kioskBtn = document.getElementById('kiosk-toggle-btn');
+if (kioskBtn) {
+    kioskBtn.addEventListener('click', () => {
+        document.body.classList.toggle('kiosk-mode');
+        if (document.body.classList.contains('kiosk-mode')) {
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen().catch(() => {});
+            }
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen().catch(() => {});
+            }
+        }
+    });
+}
+
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
     fetchLibrary();
+    startClock();
 });

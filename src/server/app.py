@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 import logging
 from typing import Optional
@@ -63,10 +64,41 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
         audio_engine.pause()
         return audio_engine.get_status()
 
+    last_skip_time = 0.0
+
     @app.post("/api/v1/player/skip")
     def skip_track():
+        nonlocal last_skip_time
+        now = time.time()
+        # [REQ-UI-010B] Multi-User Skip Throttling (5-second throttle window)
+        if now - last_skip_time < 5.0 and audio_engine.state == "PLAYING":
+            logger.info("Skip throttled: Please wait 5 seconds between skips.")
+            return audio_engine.get_status()
+        
+        last_skip_time = now
         audio_engine.skip()
         return audio_engine.get_status()
+
+    @app.get("/api/v1/lyrics/{track_id}")
+    def get_lyrics(track_id: str):
+        track = db.get_track_by_id(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Track not found")
+        
+        folder = os.path.dirname(track["file_path"])
+        base_name = os.path.splitext(os.path.basename(track["file_path"]))[0]
+        
+        # Check for matching .lrc or .txt lyrics file in folder
+        for ext in [".lrc", ".txt"]:
+            lrc_path = os.path.join(folder, base_name + ext)
+            if os.path.exists(lrc_path):
+                try:
+                    with open(lrc_path, "r", encoding="utf-8", errors="ignore") as f:
+                        return {"track_id": track_id, "lyrics": f.read(), "source": ext.lstrip(".")}
+                except Exception:
+                    pass
+        
+        return {"track_id": track_id, "lyrics": None, "source": "none"}
 
     @app.post("/api/v1/player/volume")
     def set_volume(payload: VolumePayload):
