@@ -15,7 +15,22 @@ CREATE TABLE IF NOT EXISTS tracks (
     has_cover_art BOOLEAN DEFAULT 0,
     file_mtime REAL DEFAULT 0,
     file_size INTEGER DEFAULT 0,
+    musicbrainz_track_id TEXT,
+    musicbrainz_album_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS track_audio_descriptors (
+    track_id TEXT PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    energy REAL,
+    valence REAL,
+    danceability REAL,
+    acousticness REAL,
+    instrumentalness REAL,
+    speechiness REAL,
+    tempo_bpm REAL,
+    key_signature TEXT,
+    loudness_lufs REAL
 );
 
 CREATE TABLE IF NOT EXISTS play_history (
@@ -28,3 +43,4 @@ CREATE TABLE IF NOT EXISTS play_history (
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
+CREATE INDEX IF NOT EXISTS idx_history_played_at ON play_history(played_at);

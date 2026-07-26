@@ -138,3 +138,38 @@ class Database:
             conn.commit()
         finally:
             conn.close()
+
+    def upsert_track_descriptors(self, track_id: str, desc: Dict[str, Any]):
+        sql = """
+        INSERT INTO track_audio_descriptors (
+            track_id, energy, valence, danceability, acousticness,
+            instrumentalness, speechiness, tempo_bpm, key_signature, loudness_lufs
+        ) VALUES (
+            :track_id, :energy, :valence, :danceability, :acousticness,
+            :instrumentalness, :speechiness, :tempo_bpm, :key_signature, :loudness_lufs
+        ) ON CONFLICT(track_id) DO UPDATE SET
+            energy=excluded.energy,
+            valence=excluded.valence,
+            danceability=excluded.danceability,
+            acousticness=excluded.acousticness,
+            tempo_bpm=excluded.tempo_bpm,
+            loudness_lufs=excluded.loudness_lufs;
+        """
+        data = dict(desc)
+        data["track_id"] = track_id
+        conn = self.get_connection()
+        try:
+            conn.execute(sql, data)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_track_descriptors(self, track_id: str) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        try:
+            cursor = conn.execute("SELECT * FROM track_audio_descriptors WHERE track_id = ?", (track_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
