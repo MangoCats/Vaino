@@ -1,0 +1,8 @@
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+mutagen>=1.46.0
+sounddevice>=0.4.6
+miniaudio>=1.59
+numpy>=1.24.0
+pydub>=0.25.1
+websockets>=11.0
