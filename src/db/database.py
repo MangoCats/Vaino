@@ -76,13 +76,16 @@ class Database:
             :id, :file_path, :file_format, :title, :artist, :album,
             :year, :track_number, :duration_ms, :start_offset_ms,
             :end_offset_ms, :has_cover_art, :file_mtime, :file_size
-        ) ON CONFLICT(file_path) DO UPDATE SET
+        ) ON CONFLICT(id) DO UPDATE SET
+            file_path=excluded.file_path,
             title=excluded.title,
             artist=excluded.artist,
             album=excluded.album,
             year=excluded.year,
             track_number=excluded.track_number,
             duration_ms=excluded.duration_ms,
+            start_offset_ms=excluded.start_offset_ms,
+            end_offset_ms=excluded.end_offset_ms,
             has_cover_art=excluded.has_cover_art,
             file_mtime=excluded.file_mtime,
             file_size=excluded.file_size;

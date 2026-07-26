@@ -2,7 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS tracks (
     id TEXT PRIMARY KEY,
-    file_path TEXT NOT NULL UNIQUE,
+    file_path TEXT NOT NULL,
     file_format TEXT NOT NULL,
     title TEXT NOT NULL,
     artist TEXT NOT NULL,
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS play_history (
     completed BOOLEAN DEFAULT 1
 );
 
+CREATE INDEX IF NOT EXISTS idx_tracks_file_path ON tracks(file_path);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
