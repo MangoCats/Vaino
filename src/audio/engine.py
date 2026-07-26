@@ -6,11 +6,19 @@ import numpy as np
 import sounddevice as sd
 import miniaudio
 
+from .crossfader import DualBufferCrossfader, calculate_ramp
+from ..db.database import Database
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AudioEngine:
-    def __init__(self, on_state_change: Optional[Callable[[], None]] = None):
+    """
+    [SPEC-AUD-010] Real-Time Audio Playback & Crossfading Engine
+    Handles passage slicing, DAO offsets, dual-buffer crossfades, and volume control.
+    """
+    def __init__(self, db: Optional[Database] = None, on_state_change: Optional[Callable[[], None]] = None):
+        self.db = db
         self.state = "IDLE"  # IDLE, PLAYING, PAUSED, STOPPED
         self.volume = 0.8    # 0.0 to 1.0
         self.current_track: Optional[Dict[str, Any]] = None
@@ -21,8 +29,16 @@ class AudioEngine:
         self._sample_rate: int = 44100
         self._channels: int = 2
         self._current_frame: int = 0
-        self._stream: Optional[sd.OutputStream] = None
+        self._start_frame: int = 0
+        self._end_frame: Optional[int] = None
 
+        # Crossfade transition state
+        self._next_raw_data: Optional[np.ndarray] = None
+        self._next_track: Optional[Dict[str, Any]] = None
+        self._crossfade_frames: int = 0
+        self._crossfade_progress: int = 0
+
+        self._stream: Optional[sd.OutputStream] = None
         self._lock = threading.Lock()
 
     def _notify_state_change(self):
@@ -38,6 +54,25 @@ class AudioEngine:
             if not self.current_track and self.queue:
                 self.current_track = self.queue.pop(0)
 
+    def _replenish_queue_if_needed(self):
+        """Auto-replenishes queue from database if queue length falls below 3."""
+        if len(self.queue) < 3 and self.db:
+            all_tracks = self.db.get_all_tracks(limit=100)
+            if all_tracks:
+                # Simple rotation for Phase 2; Phase 5 adds Program Director intelligence
+                existing_ids = {t["id"] for t in self.queue}
+                if self.current_track:
+                    existing_ids.add(self.current_track["id"])
+                
+                candidates = [t for t in all_tracks if t["id"] not in existing_ids]
+                if not candidates:
+                    candidates = all_tracks
+                
+                for candidate in candidates[:5]:
+                    if candidate["id"] not in existing_ids:
+                        self.queue.append(candidate)
+                        existing_ids.add(candidate["id"])
+
     def _audio_callback(self, outdata: np.ndarray, frames: int, time_info, status):
         if status:
             logger.warning(f"Audio stream status: {status}")
@@ -47,51 +82,93 @@ class AudioEngine:
                 outdata.fill(0)
                 return
 
-            remaining_frames = len(self._raw_data) - self._current_frame
+            total_frames = len(self._raw_data)
+            max_end = self._end_frame if self._end_frame is not None else total_frames
+            remaining_frames = max_end - self._current_frame
+
+            # Handle Track Completion / Next Transition
             if remaining_frames <= 0:
-                outdata.fill(0)
-                self.state = "STOPPED"
-                # Schedule next track in background thread to avoid blocking callback
-                threading.Thread(target=self.skip, daemon=True).start()
-                return
+                if self._next_raw_data is not None:
+                    # Switch to next crossfaded track seamlessly
+                    self._raw_data = self._next_raw_data
+                    self.current_track = self._next_track
+                    self._current_frame = self._crossfade_progress
+                    self._next_raw_data = None
+                    self._next_track = None
+                    self._crossfade_frames = 0
+                    self._crossfade_progress = 0
+
+                    total_frames = len(self._raw_data)
+                    self._start_frame = int((self.current_track.get("start_offset_ms") or 0) * self._sample_rate / 1000)
+                    end_ms = self.current_track.get("end_offset_ms")
+                    self._end_frame = int(end_ms * self._sample_rate / 1000) if end_ms else total_frames
+                    remaining_frames = self._end_frame - self._current_frame
+                else:
+                    outdata.fill(0)
+                    self.state = "STOPPED"
+                    threading.Thread(target=self.skip, daemon=True).start()
+                    return
 
             chunk_frames = min(frames, remaining_frames)
             chunk = self._raw_data[self._current_frame : self._current_frame + chunk_frames]
-            
-            # Apply master volume
+
+            # Apply Master Volume & Scale Output
             scaled_chunk = (chunk * self.volume).astype(np.float32)
-            
             outdata[:chunk_frames] = scaled_chunk
+
             if chunk_frames < frames:
                 outdata[chunk_frames:].fill(0)
 
             self._current_frame += chunk_frames
 
-    def _load_audio_file(self, file_path: str):
-        logger.info(f"Loading audio file: {file_path}")
+    def _load_audio_file(self, track: Dict[str, Any]) -> Tuple[np.ndarray, int, Optional[int]]:
+        """
+        [REQ-AUD-020] [REQ-AUD-030] Decodes audio file and applies start/end offset slicing.
+        """
+        file_path = track["file_path"]
+        logger.info(f"Loading track: {track.get('title')} ({file_path})")
         decoded = miniaudio.decode_file(file_path)
-        self._sample_rate = decoded.sample_rate
-        self._channels = decoded.nchannels
-        
-        # Convert int16 samples to float32 array normalized between -1.0 and 1.0
+        sample_rate = decoded.sample_rate
+        channels = decoded.nchannels
+
         raw_samples = np.frombuffer(decoded.samples, dtype=np.int16).astype(np.float32) / 32768.0
-        
-        if self._channels > 1:
-            samples = raw_samples.reshape(-1, self._channels)
+        if channels > 1:
+            samples = raw_samples.reshape(-1, channels)
         else:
             samples = raw_samples.reshape(-1, 1)
 
-        self._raw_data = samples
-        self._current_frame = 0
+        total_frames = len(samples)
+        start_ms = track.get("start_offset_ms") or 0
+        end_ms = track.get("end_offset_ms")
+
+        start_frame = int((start_ms / 1000.0) * sample_rate)
+        end_frame = int((end_ms / 1000.0) * sample_rate) if end_ms else total_frames
+
+        start_frame = max(0, min(start_frame, total_frames))
+        end_frame = max(start_frame, min(end_frame, total_frames))
+
+        # Trim sample array to specified offset bounds
+        sliced_samples = samples[start_frame:end_frame]
+        return sliced_samples, sample_rate, channels
 
     def play(self, track: Optional[Dict[str, Any]] = None):
         with self._lock:
             if track:
                 self.current_track = track
-                self._load_audio_file(track["file_path"])
+                samples, sr, ch = self._load_audio_file(track)
+                self._raw_data = samples
+                self._sample_rate = sr
+                self._channels = ch
+                self._current_frame = 0
+                self._end_frame = len(samples)
 
             if self.current_track and self._raw_data is None:
-                self._load_audio_file(self.current_track["file_path"])
+                samples, sr, ch = self._load_audio_file(self.current_track)
+                self._raw_data = samples
+                self._sample_rate = sr
+                self._channels = ch
+                self._current_frame = 0
+                self._end_frame = len(samples)
 
             if self._stream is None or not self._stream.active:
                 self._stream = sd.OutputStream(
@@ -103,6 +180,7 @@ class AudioEngine:
                 self._stream.start()
 
             self.state = "PLAYING"
+            self._replenish_queue_if_needed()
 
         self._notify_state_change()
 
@@ -132,6 +210,7 @@ class AudioEngine:
         logger.info("Skipping to next track...")
         next_track = None
         with self._lock:
+            self._replenish_queue_if_needed()
             if self.queue:
                 next_track = self.queue.pop(0)
 
