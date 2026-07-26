@@ -285,10 +285,10 @@ function renderAlbumsGrid(albums, artistFilter = null) {
     `).join('');
 }
 
-// Drill-down from Album card to sorted Tracklist [REQ-UI-020B, REQ-UI-020D, REQ-UI-020F]
-async function openAlbumTracklist(albumName, artistName) {
+// Drill-down from Album card to sorted Tracklist [REQ-UI-020B, REQ-UI-020D, REQ-UI-020H]
+async function openAlbumTracklist(albumName) {
     currentAlbumFilter = albumName;
-    if (artistName) currentArtistFilter = artistName;
+    currentArtistFilter = ''; // Clear artist filter to show full album context!
     
     currentLetter = '';
     document.querySelectorAll('.letter-btn').forEach(b => b.classList.remove('active'));
@@ -297,8 +297,7 @@ async function openAlbumTracklist(albumName, artistName) {
 
     switchView('tracks');
     try {
-        let url = `/api/v1/library/albums/${encodeURIComponent(albumName)}/tracks`;
-        if (artistName) url += `?artist=${encodeURIComponent(artistName)}`;
+        const url = `/api/v1/library/albums/${encodeURIComponent(albumName)}/tracks`;
         const res = await fetch(url);
         const data = await res.json();
         
@@ -310,7 +309,7 @@ async function openAlbumTracklist(albumName, artistName) {
         const countBadge = document.getElementById('library-count-badge');
         if (countBadge) countBadge.textContent = `${albumName} (${totalTracks} tracks)`;
 
-        setBreadcrumbFilter('Album', artistName ? `${albumName} (${artistName})` : albumName);
+        setBreadcrumbFilter('Album', albumName);
     } catch (e) {
         console.error('Error fetching album tracklist:', e);
     }
@@ -477,13 +476,16 @@ if (btnClearBreadcrumb) {
     });
 }
 
-// View Tabs Navigation Listener [REQ-UI-020A]
+// View Tabs Navigation Listener [REQ-UI-020A, REQ-UI-020H]
 const viewTabs = document.getElementById('view-tabs');
 if (viewTabs) {
     viewTabs.addEventListener('click', (e) => {
         if (e.target.classList.contains('view-tab')) {
             const targetView = e.target.getAttribute('data-view');
-            if (targetView) switchView(targetView);
+            if (targetView) {
+                clearBreadcrumbFilter();
+                switchView(targetView);
+            }
         }
     });
 }
