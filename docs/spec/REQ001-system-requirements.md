@@ -53,6 +53,7 @@ This document defines the formal system requirements for **Vaino**, establishing
 - **`[REQ-UI-020C]` Smart Artist Drilldown & Auto-Bypass**: When selecting an Artist:
   - If the artist has $\ge 2$ albums in the library, display a subset album selection screen containing only that artist's albums.
   - If the artist has exactly $1$ album in the library, automatically bypass the single-item album screen and navigate directly to that album's sorted tracklist.
+- **`[REQ-UI-020D]` Breadcrumb Filter Navigation & View Reduction**: Selecting an artist MUST filter album tiles to show ONLY albums by that artist. Selecting an album MUST reduce the display to a list of ONLY tracks on that particular album. Active filters MUST be indicated with a 1-click removable breadcrumb tag (`[ 🎙️ Artist: Eagles ✖ ]`).
 
 ### 2.3 Program Director & Selection Algorithm
 - **`[REQ-PD-010]` Candidate Scoring Function**: The next song selection engine MUST evaluate candidate tracks $k$ using a composite scoring formula:

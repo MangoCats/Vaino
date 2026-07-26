@@ -221,7 +221,7 @@ async function fetchAlbums(artistFilter = null) {
     }
 }
 
-// Drill-down from Artist card to their Albums [REQ-UI-020C]
+// Drill-down from Artist card to their Albums [REQ-UI-020C, REQ-UI-020D]
 async function browseArtistAlbums(artistName) {
     try {
         const url = `/api/v1/library/albums?artist=${encodeURIComponent(artistName)}`;
@@ -233,9 +233,10 @@ async function browseArtistAlbums(artistName) {
             // Single album: direct navigation to that album's sorted tracklist!
             openAlbumTracklist(albums[0].album, artistName);
         } else {
-            // Multiple albums: show subset album selection screen
+            // Multiple albums: show subset album selection screen containing ONLY that artist's albums
             switchView('albums');
             renderAlbumsGrid(albums, artistName);
+            setBreadcrumbFilter('Artist', artistName);
         }
     } catch (e) {
         console.error('Error browsing artist albums:', e);
@@ -266,7 +267,7 @@ function renderAlbumsGrid(albums, artistFilter = null) {
     `).join('');
 }
 
-// Drill-down from Album card to sorted Tracklist [REQ-UI-020B]
+// Drill-down from Album card to sorted Tracklist [REQ-UI-020B, REQ-UI-020D]
 async function openAlbumTracklist(albumName, artistName) {
     switchView('tracks');
     try {
@@ -282,9 +283,30 @@ async function openAlbumTracklist(albumName, artistName) {
 
         const countBadge = document.getElementById('library-count-badge');
         if (countBadge) countBadge.textContent = `${albumName} (${totalTracks} tracks)`;
+
+        setBreadcrumbFilter('Album', artistName ? `${albumName} (${artistName})` : albumName);
     } catch (e) {
         console.error('Error fetching album tracklist:', e);
     }
+}
+
+// Breadcrumb Filter Management [REQ-UI-020D]
+function setBreadcrumbFilter(type, value) {
+    const bar = document.getElementById('filter-breadcrumb-bar');
+    const text = document.getElementById('breadcrumb-text');
+    if (bar && text) {
+        text.textContent = `${type}: ${value}`;
+        bar.style.display = 'flex';
+    }
+}
+
+function clearBreadcrumbFilter() {
+    const bar = document.getElementById('filter-breadcrumb-bar');
+    if (bar) bar.style.display = 'none';
+
+    if (currentView === 'tracks') fetchLibrary(1);
+    else if (currentView === 'albums') fetchAlbums();
+    else if (currentView === 'artists') fetchArtists();
 }
 
 // View Tab Switcher
@@ -406,6 +428,14 @@ if (pageSizeSelect) {
     pageSizeSelect.addEventListener('change', (e) => {
         pageSize = parseInt(e.target.value);
         fetchLibrary(1);
+    });
+}
+
+// Breadcrumb Filter Clear Listener [REQ-UI-020D]
+const btnClearBreadcrumb = document.getElementById('btn-clear-breadcrumb');
+if (btnClearBreadcrumb) {
+    btnClearBreadcrumb.addEventListener('click', () => {
+        clearBreadcrumbFilter();
     });
 }
 
