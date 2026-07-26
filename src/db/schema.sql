@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     file_size INTEGER DEFAULT 0,
     musicbrainz_track_id TEXT,
     musicbrainz_album_id TEXT,
+    artist_sort_name TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

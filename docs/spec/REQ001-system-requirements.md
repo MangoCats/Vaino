@@ -46,6 +46,7 @@ This document defines the formal system requirements for **Vaino**, establishing
 - **`[REQ-MB-020A]` MusicBrainz ID Linkage**: The scanner MUST query AcoustID and MusicBrainz APIs to populate `recording_mbid` and `release_mbid` into the local `tracks` database table.
 - **`[REQ-MB-020B]` MBID Trust Hierarchy**: The system MUST treat AcoustID fingerprint-verified MBIDs in `vaino.db` as the authoritative source of truth, overriding raw embedded MP3 tags.
 - **`[REQ-MB-020C]` MusicBrainz Metadata Caching**: The system MUST query MusicBrainz details for resolved MBIDs, caching canonical artist name, album name, track number, and album cover art in `vaino.db`.
+- **`[REQ-MB-020D]` MusicBrainz Artist Sort Name Keying**: The system MUST store canonical MusicBrainz `artist_sort_name` (e.g., `Springsteen, Bruce`, `Beatles, The`, `Eagles, The`) in `vaino.db` and use it as the key for Alpha-Artist letter bar filtering (`[REQ-UI-020E]`), while maintaining standard human-friendly artist display names (`Bruce Springsteen`, `The Beatles`) in the UI.
 
 ### 2.3 User Interface & Hierarchical Navigation
 - **`[REQ-UI-020A]` Hierarchical Navigation Views**: The web interface MUST provide dedicated human-friendly navigation views: Browse by Artist, Browse by Album, and Album Tracklist View.

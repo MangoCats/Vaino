@@ -13,6 +13,35 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".wav", ".ogg", ".m4a"}
 
+def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str:
+    """[REQ-MB-020D] Computes or extracts canonical MusicBrainz sort name for an artist."""
+    if embedded and str(embedded).strip():
+        return str(embedded).strip()
+    
+    if not artist or not str(artist).strip():
+        return "Unknown Artist"
+
+    artist_str = str(artist).strip()
+
+    # Already formatted with comma (e.g. 'Springsteen, Bruce' or 'Eagles, The')
+    if "," in artist_str:
+        return artist_str
+
+    # Strip leading 'The ' -> 'Eagles, The'
+    if artist_str.lower().startswith("the "):
+        return f"{artist_str[4:]}, The"
+    
+    # Strip leading 'A ' -> 'Tribe Called Quest, A'
+    if artist_str.lower().startswith("a "):
+        return f"{artist_str[2:]}, A"
+
+    # Flip 2-word personal names 'Bruce Springsteen' -> 'Springsteen, Bruce'
+    parts = artist_str.split()
+    if len(parts) == 2 and not any(p.endswith(".") for p in parts):
+        return f"{parts[1]}, {parts[0]}"
+
+    return artist_str
+
 class MediaScanner:
     def __init__(self, db: Database, music_dir: str):
         self.db = db
@@ -127,6 +156,12 @@ class MediaScanner:
                     album_tag = tags.get("album") or tags.get("TALB")
                     date_tag = tags.get("date") or tags.get("TDRC") or tags.get("TYER")
                     track_tag = tags.get("tracknumber") or tags.get("TRCK")
+                    artist_sort_tag = (
+                        tags.get("artistsort") or
+                        tags.get("TSOP") or
+                        tags.get("XSOP") or
+                        tags.get("musicbrainz_artistsort")
+                    )
 
                     if title_tag:
                         title = str(title_tag[0])
@@ -148,12 +183,16 @@ class MediaScanner:
         except Exception as e:
             logger.warning(f"Error parsing metadata for {file_path}: {e}")
 
+        embedded_sort = str(artist_sort_tag[0]) if artist_sort_tag else None
+        artist_sort_name = compute_artist_sort_name(artist, embedded_sort)
+
         return {
             "id": track_id,
             "file_path": os.path.abspath(file_path),
             "file_format": ext.lstrip(".").upper(),
             "title": title,
             "artist": artist,
+            "artist_sort_name": artist_sort_name,
             "album": album,
             "year": year,
             "track_number": track_number,

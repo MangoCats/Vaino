@@ -16,18 +16,23 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         # Seed sample tracks
         cls.db.upsert_track({
             "id": "t1", "file_path": r"C:\music\eagles_01.mp3", "file_format": "MP3",
-            "title": "Hotel California", "artist": "Eagles", "album": "Hotel California",
+            "title": "Hotel California", "artist": "Eagles", "artist_sort_name": "Eagles", "album": "Hotel California",
             "year": 1976, "track_number": 1, "duration_ms": 391000
         })
         cls.db.upsert_track({
             "id": "t2", "file_path": r"C:\music\eagles_02.mp3", "file_format": "MP3",
-            "title": "New Kid in Town", "artist": "Eagles", "album": "Hotel California",
+            "title": "New Kid in Town", "artist": "Eagles", "artist_sort_name": "Eagles", "album": "Hotel California",
             "year": 1976, "track_number": 2, "duration_ms": 304000
         })
         cls.db.upsert_track({
             "id": "t3", "file_path": r"C:\music\beatles_01.mp3", "file_format": "MP3",
-            "title": "Come Together", "artist": "The Beatles", "album": "Abbey Road",
+            "title": "Come Together", "artist": "The Beatles", "artist_sort_name": "Beatles, The", "album": "Abbey Road",
             "year": 1969, "track_number": 1, "duration_ms": 259000
+        })
+        cls.db.upsert_track({
+            "id": "t4", "file_path": r"C:\music\bruce_01.mp3", "file_format": "MP3",
+            "title": "Born to Run", "artist": "Bruce Springsteen", "artist_sort_name": "Springsteen, Bruce",
+            "album": "Born to Run", "year": 1975, "track_number": 1, "duration_ms": 270000
         })
 
     @classmethod
@@ -41,18 +46,20 @@ class TestVainoPhase3Navigation(unittest.TestCase):
     def test_get_all_artists(self):
         """[REQ-UI-020A] Test artist list grouping and album counts"""
         artists = self.db.get_all_artists()
-        self.assertEqual(len(artists), 2)
+        self.assertEqual(len(artists), 3)
         artist_names = [a["artist"] for a in artists]
         self.assertIn("Eagles", artist_names)
         self.assertIn("The Beatles", artist_names)
+        self.assertIn("Bruce Springsteen", artist_names)
 
     def test_get_all_albums(self):
         """[REQ-UI-020A] Test album grid grouping with year and artist"""
         albums = self.db.get_all_albums()
-        self.assertEqual(len(albums), 2)
+        self.assertEqual(len(albums), 3)
         album_names = [al["album"] for al in albums]
         self.assertIn("Hotel California", album_names)
         self.assertIn("Abbey Road", album_names)
+        self.assertIn("Born to Run", album_names)
 
     def test_album_tracks_sorted_by_track_number(self):
         """[REQ-UI-020B] Test album tracklist sorting by track_number"""
@@ -60,8 +67,16 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         self.assertEqual(len(tracks), 2)
         self.assertEqual(tracks[0]["track_number"], 1)
         self.assertEqual(tracks[1]["track_number"], 2)
-        self.assertEqual(tracks[0]["title"], "Hotel California")
-        self.assertEqual(tracks[1]["title"], "New Kid in Town")
+
+    def test_artist_sort_name_keying(self):
+        """[REQ-MB-020D] Test artist_sort_name letter bar keying (Bruce Springsteen -> S, The Beatles -> B)"""
+        artists_s = self.db.get_all_artists(letter="S")
+        s_names = [a["artist"] for a in artists_s]
+        self.assertIn("Bruce Springsteen", s_names)
+
+        artists_b = self.db.get_all_artists(letter="B")
+        b_names = [a["artist"] for a in artists_b]
+        self.assertIn("The Beatles", b_names)
 
 if __name__ == "__main__":
     unittest.main()

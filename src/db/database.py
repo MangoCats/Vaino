@@ -34,6 +34,8 @@ class Database:
                 conn.execute("ALTER TABLE tracks ADD COLUMN musicbrainz_track_id TEXT")
             if "musicbrainz_album_id" not in columns:
                 conn.execute("ALTER TABLE tracks ADD COLUMN musicbrainz_album_id TEXT")
+            if "artist_sort_name" not in columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN artist_sort_name TEXT")
             conn.commit()
         finally:
             conn.close()
@@ -65,17 +67,20 @@ class Database:
             d.setdefault("has_cover_art", 0)
             d.setdefault("file_mtime", 0.0)
             d.setdefault("file_size", 0)
+            d.setdefault("artist_sort_name", None)
             sanitized.append(d)
 
         sql = """
         INSERT INTO tracks (
             id, file_path, file_format, title, artist, album,
             year, track_number, duration_ms, start_offset_ms,
-            end_offset_ms, has_cover_art, file_mtime, file_size
+            end_offset_ms, has_cover_art, file_mtime, file_size,
+            artist_sort_name
         ) VALUES (
             :id, :file_path, :file_format, :title, :artist, :album,
             :year, :track_number, :duration_ms, :start_offset_ms,
-            :end_offset_ms, :has_cover_art, :file_mtime, :file_size
+            :end_offset_ms, :has_cover_art, :file_mtime, :file_size,
+            :artist_sort_name
         ) ON CONFLICT(id) DO UPDATE SET
             file_path=excluded.file_path,
             title=excluded.title,
@@ -88,7 +93,8 @@ class Database:
             end_offset_ms=excluded.end_offset_ms,
             has_cover_art=excluded.has_cover_art,
             file_mtime=excluded.file_mtime,
-            file_size=excluded.file_size;
+            file_size=excluded.file_size,
+            artist_sort_name=COALESCE(excluded.artist_sort_name, tracks.artist_sort_name);
         """
         conn = self.get_connection()
         try:
@@ -154,30 +160,31 @@ class Database:
             conn.close()
 
     def get_all_artists(self, limit: int = 200, query: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020E] Returns distinct artists starting with selected letter or matching query."""
+        """[REQ-MB-020D, REQ-UI-020E] Returns distinct artists matched by MusicBrainz artist_sort_name prefix key."""
         conn = self.get_connection()
         try:
             where_clauses = []
             params = []
             if letter:
                 if letter == "#":
-                    where_clauses.append("artist GLOB '[0-9]*'")
+                    where_clauses.append("COALESCE(artist_sort_name, artist) GLOB '[0-9]*'")
                 else:
-                    where_clauses.append("artist LIKE ?")
+                    where_clauses.append("COALESCE(artist_sort_name, artist) LIKE ?")
                     params.append(f"{letter}%")
             if query:
                 q = f"%{query}%"
-                where_clauses.append("(artist LIKE ? OR album LIKE ?)")
-                params.extend([q, q])
+                where_clauses.append("(artist LIKE ? OR album LIKE ? OR artist_sort_name LIKE ?)")
+                params.extend([q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
-            SELECT artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
+            SELECT artist, MIN(COALESCE(artist_sort_name, artist)) as artist_sort_name,
+                   COUNT(DISTINCT album) as album_count, COUNT(*) as track_count,
                    COALESCE(MAX(CASE WHEN has_cover_art = 1 THEN id END), MIN(id)) as sample_track_id
             FROM tracks
             {where_str}
             GROUP BY artist
-            ORDER BY artist ASC
+            ORDER BY MIN(COALESCE(artist_sort_name, artist)) ASC
             LIMIT ?
             """
             params.append(limit)

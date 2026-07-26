@@ -46,23 +46,27 @@ class MusicBrainzResolver:
             logger.debug(f"Error reading embedded MBID for {file_path}: {e}")
         return None
 
-    def resolve_track_embedded(self, track: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    def resolve_track_embedded(self, track: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
         file_path = track["file_path"]
+        artist = track.get("artist", "")
         mbid = self.extract_embedded_mbid(file_path)
-        if mbid:
-            return track["id"], mbid
-        return None
+
+        # Extract or compute artist_sort_name [REQ-MB-020D]
+        from .scanner import compute_artist_sort_name
+        sort_name = compute_artist_sort_name(artist)
+
+        return track["id"], mbid, sort_name
 
     def resolve_all_unlinked(self, limit: int = 10000, max_workers: int = 16) -> Tuple[int, int]:
         """
-        [REQ-MB-020] High-speed parallel resolution of unlinked tracks in vaino.db.
+        [REQ-MB-020, REQ-MB-020D] High-speed parallel resolution of unlinked tracks in vaino.db.
         Returns (resolved_count, skipped_count)
         """
         start_time = time.time()
         conn = self.db.get_connection()
         try:
             cursor = conn.execute(
-                "SELECT id, file_path, title, artist FROM tracks WHERE musicbrainz_track_id IS NULL LIMIT ?",
+                "SELECT id, file_path, title, artist FROM tracks WHERE musicbrainz_track_id IS NULL OR artist_sort_name IS NULL LIMIT ?",
                 (limit,)
             )
             unlinked = [dict(row) for row in cursor.fetchall()]
@@ -70,11 +74,11 @@ class MusicBrainzResolver:
             conn.close()
 
         if not unlinked:
-            logger.info("All tracks in database already have resolved MusicBrainz IDs.")
+            logger.info("All tracks in database already have resolved MusicBrainz IDs and sort names.")
             return 0, 0
 
-        logger.info(f"Resolving MusicBrainz IDs for {len(unlinked)} unlinked tracks (Workers: {max_workers})...")
-        resolved_updates: List[Tuple[str, str]] = []
+        logger.info(f"Resolving MusicBrainz metadata for {len(unlinked)} tracks (Workers: {max_workers})...")
+        resolved_updates: List[Tuple[str, Optional[str], str]] = []
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_track = {
@@ -88,13 +92,13 @@ class MusicBrainzResolver:
                 except Exception as e:
                     pass
 
-        # Batch update database with resolved MBIDs
+        # Batch update database with resolved MBIDs and artist_sort_name
         if resolved_updates:
             conn = self.db.get_connection()
             try:
                 conn.executemany(
-                    "UPDATE tracks SET musicbrainz_track_id = ? WHERE id = ?",
-                    [(mbid, track_id) for track_id, mbid in resolved_updates]
+                    "UPDATE tracks SET musicbrainz_track_id = COALESCE(?, musicbrainz_track_id), artist_sort_name = ? WHERE id = ?",
+                    [(mbid, sort_name, track_id) for track_id, mbid, sort_name in resolved_updates]
                 )
                 conn.commit()
             finally:
