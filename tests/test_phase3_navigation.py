@@ -93,5 +93,24 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         self.assertEqual(len(albums_rt), 1)
         self.assertEqual(albums_rt[0]["album"], "Supernatural")
 
+    def test_album_deduplication_by_title(self):
+        """[REQ-UI-020G] Test that albums with varied track artist strings are grouped into a single album tile"""
+        # Seed two tracks on same album with different raw track artist strings
+        self.db.upsert_track({
+            "id": "t6", "file_path": r"C:\music\rarities_01.mp3", "file_format": "MP3",
+            "title": "Song A", "artist": "Sarah McLachlan", "album": "Rarities, B-Sides",
+            "year": 1996, "track_number": 1, "duration_ms": 200000
+        })
+        self.db.upsert_track({
+            "id": "t7", "file_path": r"C:\music\rarities_02.mp3", "file_format": "MP3",
+            "title": "Song B", "artist": "Sarah McLachlan & Cyndi Lauper", "album": "Rarities, B-Sides",
+            "year": 1996, "track_number": 2, "duration_ms": 210000
+        })
+
+        albums_sm = self.db.get_all_albums(artist="Sarah McLachlan")
+        rarities_tiles = [al for al in albums_sm if al["album"] == "Rarities, B-Sides"]
+        self.assertEqual(len(rarities_tiles), 1, "Rarities album was split into multiple duplicate tiles")
+        self.assertEqual(rarities_tiles[0]["track_count"], 2, "Album track count was not aggregated")
+
 if __name__ == "__main__":
     unittest.main()

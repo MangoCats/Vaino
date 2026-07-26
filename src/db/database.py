@@ -227,7 +227,7 @@ class Database:
             conn.close()
 
     def get_all_albums(self, limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020G] Returns distinct albums an artist appears on (as main, featured, or guest artist)."""
+        """[REQ-UI-020G] Returns distinct deduplicated albums (grouped strictly by album title)."""
         conn = self.get_connection()
         try:
             params = []
@@ -258,17 +258,22 @@ class Database:
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
-            SELECT DISTINCT t.album, t.artist, MIN(t.year) as year, COUNT(DISTINCT t.id) as track_count,
+            SELECT t.album,
+                   COALESCE(MAX(CASE WHEN t.artist = ? THEN t.artist END), MIN(t.artist)) as artist,
+                   MIN(t.year) as year,
+                   COUNT(DISTINCT t.id) as track_count,
                    COALESCE(MAX(CASE WHEN t.has_cover_art = 1 THEN t.id END), MIN(t.id)) as sample_track_id
             FROM tracks t
             {join_clause}
             {where_str}
-            GROUP BY t.album, t.artist
-            ORDER BY t.artist ASC, t.album ASC
+            GROUP BY t.album
+            ORDER BY MIN(COALESCE(t.artist_sort_name, t.artist)) ASC, t.album ASC
             LIMIT ?
             """
-            params.append(limit)
-            cursor = conn.execute(sql, tuple(params))
+            all_params = [artist if artist else ""]
+            all_params.extend(params)
+            all_params.append(limit)
+            cursor = conn.execute(sql, tuple(all_params))
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
