@@ -56,13 +56,25 @@ body {
 .brand-logo {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     font-size: 1.4rem;
     font-weight: 700;
     letter-spacing: 1px;
     background: var(--accent-gradient);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
+}
+
+.logo-accent-img {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    box-shadow: 0 0 12px rgba(0, 242, 254, 0.5);
+    transition: transform 0.3s ease;
+}
+
+.logo-accent-img:hover {
+    transform: scale(1.1) rotate(5deg);
 }
 
 .connection-badge {
