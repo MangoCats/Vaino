@@ -42,6 +42,13 @@ class EssentiaExtractor:
             except Exception:
                 pass
 
+        try:
+            from .onnx_extractor import ONNXHighLevelExtractor
+            if ONNXHighLevelExtractor.is_available():
+                return ONNXHighLevelExtractor.extract_descriptors(audio_samples, sample_rate)
+        except Exception:
+            pass
+
         return EssentiaExtractor._extract_via_dsp_fallback(audio_samples, sample_rate)
 
     @staticmethod
