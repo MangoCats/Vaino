@@ -57,6 +57,7 @@ class AudioEngine:
 
     def enqueue_track(self, track: Dict[str, Any], play_next: bool = False):
         """[REQ-QUE-020] Enqueues a single track (play_next=True inserts at index 0)."""
+        should_start_play = False
         with self._lock:
             if play_next:
                 self.queue.insert(0, track)
@@ -64,17 +65,21 @@ class AudioEngine:
                 self.queue.append(track)
             
             if not self.current_track and self.queue:
-                self.current_track = self.queue.pop(0)
-                samples, sr, ch = self._load_audio_file(self.current_track)
-                self._raw_data = samples
-                self._sample_rate = sr
-                self._channels = ch
-                self._current_frame = 0
-                self._end_frame = len(samples)
-        self._notify_state_change()
+                should_start_play = True
+        
+        if should_start_play:
+            first_t = None
+            with self._lock:
+                if self.queue:
+                    first_t = self.queue.pop(0)
+            if first_t:
+                self.play(first_t)
+        else:
+            self._notify_state_change()
 
     def enqueue_album(self, tracks: List[Dict[str, Any]], play_next: bool = False):
         """[REQ-QUE-020] Enqueues a list of album tracks sorted by track_number."""
+        should_start_play = False
         with self._lock:
             sorted_tracks = sorted(tracks, key=lambda t: t.get("track_number") or 0)
             if play_next:
@@ -84,14 +89,17 @@ class AudioEngine:
                 self.queue.extend(sorted_tracks)
 
             if not self.current_track and self.queue:
-                self.current_track = self.queue.pop(0)
-                samples, sr, ch = self._load_audio_file(self.current_track)
-                self._raw_data = samples
-                self._sample_rate = sr
-                self._channels = ch
-                self._current_frame = 0
-                self._end_frame = len(samples)
-        self._notify_state_change()
+                should_start_play = True
+
+        if should_start_play:
+            first_t = None
+            with self._lock:
+                if self.queue:
+                    first_t = self.queue.pop(0)
+            if first_t:
+                self.play(first_t)
+        else:
+            self._notify_state_change()
 
     def remove_from_queue(self, index: int) -> bool:
         """[REQ-QUE-030] Removes item at index from queue."""

@@ -10,7 +10,7 @@ class TestVainoPhase4Queue(unittest.TestCase):
             try: os.remove(self.db_path)
             except Exception: pass
         self.db = Database(self.db_path)
-        self.engine = AudioEngine(db=self.db)
+        self.engine = AudioEngine(db=None)
 
         # Seed test tracks
         self.t1 = {"id": "q1", "file_format": "MP3", "title": "Hotel California", "artist": "Eagles", "album": "Hotel California", "track_number": 1, "duration_ms": 390000, "file_path": r"C:\music\eagles1.mp3"}

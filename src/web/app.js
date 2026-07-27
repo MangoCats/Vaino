@@ -353,14 +353,14 @@ function renderAlbumsGrid(albums, artistFilter = null, totalCount = null) {
     }
 
     grid.innerHTML = albums.map(al => `
-        <div class="nav-card" onclick="openAlbumTracklist('${escapeHtml(al.album)}')">
+        <div class="nav-card album-card" data-album="${escapeHtml(al.album)}">
             <img src="/api/v1/art/${al.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>💿</text></svg>'">
             <div class="nav-card-title">${escapeHtml(al.album)}</div>
             <div class="nav-card-subtitle">${escapeHtml(al.artist)} ${al.year ? '(' + al.year + ')' : ''}</div>
             <div class="table-action-group" style="margin-top: 6px;">
                 <span class="nav-card-badge">${al.track_count} Tracks ▶</span>
-                <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueAlbum('${escapeHtml(al.album)}', true)" title="Enqueue Album Next">➕ Next</button>
-                <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueAlbum('${escapeHtml(al.album)}', false)" title="Add Album to Queue">📥 Queue</button>
+                <button class="btn-action-sm btn-album-next" data-album="${escapeHtml(al.album)}" title="Enqueue Album Next">➕ Next</button>
+                <button class="btn-action-sm btn-album-add" data-album="${escapeHtml(al.album)}" title="Add Album to Queue">📥 Queue</button>
             </div>
         </div>
     `).join('');
@@ -450,7 +450,7 @@ function renderLibrary(tracks, offset = 0) {
     }
 
     libraryTbody.innerHTML = tracks.map((t, idx) => `
-        <tr onclick="playTrack('${t.id}')">
+        <tr class="track-row" data-id="${t.id}">
             <td>${offset + idx + 1}</td>
             <td><strong>${escapeHtml(t.title)}</strong></td>
             <td>${escapeHtml(t.artist)}</td>
@@ -458,9 +458,9 @@ function renderLibrary(tracks, offset = 0) {
             <td>${formatTime(t.duration_ms)}</td>
             <td>
                 <div class="table-action-group">
-                    <button class="btn-action-sm" onclick="event.stopPropagation(); playTrack('${t.id}')" title="Play Now">▶ Play</button>
-                    <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueTrack('${t.id}', true)" title="Play Next">➕ Next</button>
-                    <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueTrack('${t.id}', false)" title="Add to Queue">📥 Queue</button>
+                    <button class="btn-action-sm btn-play-now" data-id="${t.id}" title="Play Now">▶ Play</button>
+                    <button class="btn-action-sm btn-enqueue-next" data-id="${t.id}" title="Play Next">➕ Next</button>
+                    <button class="btn-action-sm btn-enqueue-add" data-id="${t.id}" title="Add to Queue">📥 Queue</button>
                 </div>
             </td>
         </tr>
@@ -798,6 +798,49 @@ async function skipBack() {
     } catch (e) {
         console.error('Error skipping back:', e);
     }
+}
+
+// Track List & Album Grid Event Delegation
+const libraryTbodyEl = document.getElementById('library-tbody');
+if (libraryTbodyEl) {
+    libraryTbodyEl.addEventListener('click', (e) => {
+        const playNowBtn = e.target.closest('.btn-play-now');
+        const playNextBtn = e.target.closest('.btn-enqueue-next');
+        const queueAddBtn = e.target.closest('.btn-enqueue-add');
+        const row = e.target.closest('.track-row');
+
+        if (playNowBtn) {
+            e.stopPropagation();
+            playTrack(playNowBtn.getAttribute('data-id'));
+        } else if (playNextBtn) {
+            e.stopPropagation();
+            enqueueTrack(playNextBtn.getAttribute('data-id'), true);
+        } else if (queueAddBtn) {
+            e.stopPropagation();
+            enqueueTrack(queueAddBtn.getAttribute('data-id'), false);
+        } else if (row) {
+            playTrack(row.getAttribute('data-id'));
+        }
+    });
+}
+
+const albumsGridEl = document.getElementById('albums-grid');
+if (albumsGridEl) {
+    albumsGridEl.addEventListener('click', (e) => {
+        const nextBtn = e.target.closest('.btn-album-next');
+        const addBtn = e.target.closest('.btn-album-add');
+        const card = e.target.closest('.album-card');
+
+        if (nextBtn) {
+            e.stopPropagation();
+            enqueueAlbum(nextBtn.getAttribute('data-album'), true);
+        } else if (addBtn) {
+            e.stopPropagation();
+            enqueueAlbum(addBtn.getAttribute('data-album'), false);
+        } else if (card) {
+            openAlbumTracklist(card.getAttribute('data-album'));
+        }
+    });
 }
 
 // Queue Drawer Event Listeners
