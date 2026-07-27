@@ -893,9 +893,9 @@ async function openDescriptorsModal(trackId) {
         const data = await resp.json();
         const t = data.track || {};
         const d = data.descriptors || {};
-
+        const isFallback = data.is_fallback || false;
         modalTitle.textContent = `🧠 ${t.title || 'Acoustic Descriptors'}`;
-        modalSubtitle.textContent = `${t.artist || 'Unknown Artist'} — ${t.album || 'Unknown Album'}`;
+        modalSubtitle.textContent = `${t.artist || 'Unknown Artist'} — ${t.album || 'Unknown Album'}${isFallback ? ' (⚠️ 0-byte File / Unanalyzed Fallback)' : ''}`;
 
         const rows = [
             {

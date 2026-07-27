@@ -235,7 +235,9 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
     def get_track_descriptors(track_id: str):
         desc = db.get_track_descriptors(track_id)
         track = db.get_track_by_id(track_id)
+        is_fallback = False
         if not desc:
+            is_fallback = True
             desc = {
                 "track_id": track_id,
                 "energy": 0.5,
@@ -248,7 +250,7 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
                 "key_signature": "C Major",
                 "loudness_lufs": -14.0
             }
-        return {"track": track, "descriptors": desc}
+        return {"track": track, "descriptors": desc, "is_fallback": is_fallback}
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
