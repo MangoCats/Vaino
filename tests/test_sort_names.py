@@ -10,7 +10,8 @@ class TestSortNames(unittest.TestCase):
         self.assertEqual(compute_sort_name("`Test`"), "TEST`")
 
         # Leading parentheses, brackets, braces (strips ONLY from the front of the name string)
-        self.assertEqual(compute_sort_name("(The) Dark Side of the Moon"), "DARK SIDE OF THE MOON, THE")
+        self.assertEqual(compute_sort_name("(The) Dark Side of the Moon"), "THE) DARK SIDE OF THE MOON")
+        self.assertEqual(compute_sort_name("The Dark Side of the Moon"), "DARK SIDE OF THE MOON, THE")
         self.assertEqual(compute_sort_name("[1999] Party"), "1999] PARTY")
         self.assertEqual(compute_sort_name("{Special} Song"), "SPECIAL} SONG")
 
