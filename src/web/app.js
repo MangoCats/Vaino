@@ -122,23 +122,31 @@ function updateUI(status) {
 // Library Pagination & View State
 let currentView = 'tracks'; // 'tracks', 'artists', 'albums'
 let currentPage = 1;
-let pageSize = 100;
+let tracksPageSize = 50;
 let totalTracks = 0;
 let currentQuery = '';
 let currentLetter = '';
 let currentArtistFilter = '';
 let currentAlbumFilter = '';
 
+let currentArtistPage = 1;
+let artistsPageSize = 50;
+let totalArtists = 0;
+
+let currentAlbumPage = 1;
+let albumsPageSize = 50;
+let totalAlbums = 0;
+
 // Fetch & Render Library Tracks
 async function fetchLibrary(page = 1) {
-    if (currentView === 'artists' && !currentArtistFilter && !currentAlbumFilter) return fetchArtists();
-    if (currentView === 'albums' && !currentArtistFilter && !currentAlbumFilter) return fetchAlbums();
+    if (currentView === 'artists' && !currentArtistFilter && !currentAlbumFilter) return fetchArtists(page);
+    if (currentView === 'albums' && !currentArtistFilter && !currentAlbumFilter) return fetchAlbums(null, page);
 
     currentPage = page;
-    const offset = (currentPage - 1) * pageSize;
+    const offset = (currentPage - 1) * tracksPageSize;
 
     try {
-        let url = `/api/v1/library/tracks?limit=${pageSize}&offset=${offset}`;
+        let url = `/api/v1/library/tracks?limit=${tracksPageSize}&offset=${offset}`;
         if (currentArtistFilter) {
             url += `&artist=${encodeURIComponent(currentArtistFilter)}`;
         }
@@ -165,10 +173,6 @@ async function fetchLibrary(page = 1) {
     }
 }
 
-let currentArtistPage = 1;
-let currentAlbumPage = 1;
-const gridPageSize = 100;
-
 // Fetch & Render Artists Grid [REQ-UI-020A, REQ-UI-020E, REQ-UI-020I]
 async function fetchArtists(page = 1) {
     const grid = document.getElementById('artists-grid');
@@ -176,10 +180,10 @@ async function fetchArtists(page = 1) {
     grid.innerHTML = `<div class="loading-cell">Loading artists...</div>`;
 
     currentArtistPage = page;
-    const offset = (currentArtistPage - 1) * gridPageSize;
+    const offset = (currentArtistPage - 1) * artistsPageSize;
 
     try {
-        let url = `/api/v1/library/artists?limit=${gridPageSize}&offset=${offset}`;
+        let url = `/api/v1/library/artists?limit=${artistsPageSize}&offset=${offset}`;
         if (currentLetter) {
             url += `&letter=${encodeURIComponent(currentLetter)}`;
         }
@@ -189,10 +193,10 @@ async function fetchArtists(page = 1) {
         const res = await fetch(url);
         const data = await res.json();
         const artists = data.artists || [];
-        const total = data.total || 0;
+        totalArtists = data.total || 0;
 
         const countBadge = document.getElementById('library-count-badge');
-        if (countBadge) countBadge.textContent = `${total} artists`;
+        if (countBadge) countBadge.textContent = `${totalArtists.toLocaleString()} artists`;
 
         if (artists.length === 0) {
             grid.innerHTML = `<div class="loading-cell">No artists found.</div>`;
@@ -207,7 +211,7 @@ async function fetchArtists(page = 1) {
             `).join('');
         }
 
-        updateArtistsPagination(total, offset, artists.length);
+        updateArtistsPagination(totalArtists, offset, artists.length);
     } catch (e) {
         console.error('Error fetching artists:', e);
         grid.innerHTML = `<div class="loading-cell">Failed loading artists.</div>`;
@@ -217,18 +221,24 @@ async function fetchArtists(page = 1) {
 function updateArtistsPagination(total, offset, count) {
     const info = document.getElementById('artists-pagination-info');
     const indicator = document.getElementById('artists-page-indicator');
+    const btnFirst = document.getElementById('btn-first-artists');
     const btnPrev = document.getElementById('btn-prev-artists');
     const btnNext = document.getElementById('btn-next-artists');
+    const btnLast = document.getElementById('btn-last-artists');
 
-    const totalPages = Math.ceil(total / gridPageSize) || 1;
+    const totalPages = Math.max(1, Math.ceil(total / artistsPageSize));
     const start = total === 0 ? 0 : offset + 1;
     const end = offset + count;
 
-    if (info) info.textContent = `Showing ${start}-${end} of ${total} artists`;
+    if (info) info.textContent = `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()} artists`;
     if (indicator) indicator.textContent = `Page ${currentArtistPage} of ${totalPages}`;
 
-    if (btnPrev) btnPrev.disabled = currentArtistPage <= 1;
-    if (btnNext) btnNext.disabled = currentArtistPage >= totalPages;
+    const hasMultiplePages = total > artistsPageSize;
+
+    if (btnFirst) btnFirst.style.display = (hasMultiplePages && currentArtistPage > 1) ? 'inline-block' : 'none';
+    if (btnPrev) btnPrev.style.display = (hasMultiplePages && currentArtistPage > 1) ? 'inline-block' : 'none';
+    if (btnNext) btnNext.style.display = (hasMultiplePages && currentArtistPage < totalPages) ? 'inline-block' : 'none';
+    if (btnLast) btnLast.style.display = (hasMultiplePages && currentArtistPage < totalPages) ? 'inline-block' : 'none';
 }
 
 // Fetch & Render Albums Grid [REQ-UI-020A, REQ-UI-020D, REQ-UI-020E, REQ-UI-020I]
@@ -238,11 +248,11 @@ async function fetchAlbums(artistFilter = null, page = 1) {
     grid.innerHTML = `<div class="loading-cell">Loading albums...</div>`;
 
     currentAlbumPage = page;
-    const offset = (currentAlbumPage - 1) * gridPageSize;
+    const offset = (currentAlbumPage - 1) * albumsPageSize;
     const activeArtist = artistFilter || currentArtistFilter;
 
     try {
-        let url = `/api/v1/library/albums?limit=${gridPageSize}&offset=${offset}`;
+        let url = `/api/v1/library/albums?limit=${albumsPageSize}&offset=${offset}`;
         if (activeArtist) {
             url += `&artist=${encodeURIComponent(activeArtist)}`;
         }
@@ -255,10 +265,10 @@ async function fetchAlbums(artistFilter = null, page = 1) {
         const res = await fetch(url);
         const data = await res.json();
         const albums = data.albums || [];
-        const total = data.total || 0;
+        totalAlbums = data.total || 0;
 
-        renderAlbumsGrid(albums, activeArtist, total);
-        updateAlbumsPagination(total, offset, albums.length);
+        renderAlbumsGrid(albums, activeArtist, totalAlbums);
+        updateAlbumsPagination(totalAlbums, offset, albums.length);
     } catch (e) {
         console.error('Error fetching albums:', e);
         grid.innerHTML = `<div class="loading-cell">Failed loading albums.</div>`;
@@ -268,18 +278,24 @@ async function fetchAlbums(artistFilter = null, page = 1) {
 function updateAlbumsPagination(total, offset, count) {
     const info = document.getElementById('albums-pagination-info');
     const indicator = document.getElementById('albums-page-indicator');
+    const btnFirst = document.getElementById('btn-first-albums');
     const btnPrev = document.getElementById('btn-prev-albums');
     const btnNext = document.getElementById('btn-next-albums');
+    const btnLast = document.getElementById('btn-last-albums');
 
-    const totalPages = Math.ceil(total / gridPageSize) || 1;
+    const totalPages = Math.max(1, Math.ceil(total / albumsPageSize));
     const start = total === 0 ? 0 : offset + 1;
     const end = offset + count;
 
-    if (info) info.textContent = `Showing ${start}-${end} of ${total} albums`;
+    if (info) info.textContent = `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()} albums`;
     if (indicator) indicator.textContent = `Page ${currentAlbumPage} of ${totalPages}`;
 
-    if (btnPrev) btnPrev.disabled = currentAlbumPage <= 1;
-    if (btnNext) btnNext.disabled = currentAlbumPage >= totalPages;
+    const hasMultiplePages = total > albumsPageSize;
+
+    if (btnFirst) btnFirst.style.display = (hasMultiplePages && currentAlbumPage > 1) ? 'inline-block' : 'none';
+    if (btnPrev) btnPrev.style.display = (hasMultiplePages && currentAlbumPage > 1) ? 'inline-block' : 'none';
+    if (btnNext) btnNext.style.display = (hasMultiplePages && currentAlbumPage < totalPages) ? 'inline-block' : 'none';
+    if (btnLast) btnLast.style.display = (hasMultiplePages && currentAlbumPage < totalPages) ? 'inline-block' : 'none';
 }
 
 // Drill-down from Artist card to their Albums [REQ-UI-020C, REQ-UI-020D]
@@ -432,21 +448,27 @@ function renderLibrary(tracks, offset = 0) {
 
 function updatePaginationControls() {
     const countBadge = document.getElementById('library-count-badge');
-    const paginationInfo = document.getElementById('pagination-info');
-    const pageIndicator = document.getElementById('page-indicator');
-    const btnPrev = document.getElementById('btn-prev-page');
-    const btnNext = document.getElementById('btn-next-page');
+    const paginationInfo = document.getElementById('tracks-pagination-info');
+    const pageIndicator = document.getElementById('tracks-page-indicator');
+    const btnFirst = document.getElementById('btn-first-tracks');
+    const btnPrev = document.getElementById('btn-prev-tracks');
+    const btnNext = document.getElementById('btn-next-tracks');
+    const btnLast = document.getElementById('btn-last-tracks');
 
-    const totalPages = Math.max(1, Math.ceil(totalTracks / pageSize));
-    const startItem = totalTracks === 0 ? 0 : (currentPage - 1) * pageSize + 1;
-    const endItem = Math.min(totalTracks, currentPage * pageSize);
+    const totalPages = Math.max(1, Math.ceil(totalTracks / tracksPageSize));
+    const startItem = totalTracks === 0 ? 0 : (currentPage - 1) * tracksPageSize + 1;
+    const endItem = Math.min(totalTracks, currentPage * tracksPageSize);
 
     if (countBadge) countBadge.textContent = `${totalTracks.toLocaleString()} tracks`;
     if (paginationInfo) paginationInfo.textContent = `Showing ${startItem.toLocaleString()}–${endItem.toLocaleString()} of ${totalTracks.toLocaleString()} tracks`;
     if (pageIndicator) pageIndicator.textContent = `Page ${currentPage} of ${totalPages}`;
 
-    if (btnPrev) btnPrev.disabled = (currentPage <= 1);
-    if (btnNext) btnNext.disabled = (currentPage >= totalPages);
+    const hasMultiplePages = totalTracks > tracksPageSize;
+
+    if (btnFirst) btnFirst.style.display = (hasMultiplePages && currentPage > 1) ? 'inline-block' : 'none';
+    if (btnPrev) btnPrev.style.display = (hasMultiplePages && currentPage > 1) ? 'inline-block' : 'none';
+    if (btnNext) btnNext.style.display = (hasMultiplePages && currentPage < totalPages) ? 'inline-block' : 'none';
+    if (btnLast) btnLast.style.display = (hasMultiplePages && currentPage < totalPages) ? 'inline-block' : 'none';
 }
 
 function escapeHtml(str) {
@@ -494,40 +516,59 @@ librarySearch.addEventListener('input', (e) => {
     }, 250);
 });
 
-// Pagination Button Listeners
-const btnPrev = document.getElementById('btn-prev-page');
-const btnNext = document.getElementById('btn-next-page');
-const pageSizeSelect = document.getElementById('page-size-select');
-
-if (btnPrev) {
-    btnPrev.addEventListener('click', () => {
-        if (currentPage > 1) fetchLibrary(currentPage - 1);
-    });
-}
-
-if (btnNext) {
-    btnNext.addEventListener('click', () => {
-        fetchLibrary(currentPage + 1);
-    });
-}
-
-if (pageSizeSelect) {
-    pageSizeSelect.addEventListener('change', (e) => {
-        pageSize = parseInt(e.target.value);
+// --- Tracks Pagination Listeners ---
+const tracksPageSizeSelect = document.getElementById('tracks-page-size-select');
+if (tracksPageSizeSelect) {
+    tracksPageSizeSelect.addEventListener('change', (e) => {
+        tracksPageSize = parseInt(e.target.value);
         fetchLibrary(1);
     });
 }
+const btnFirstTracks = document.getElementById('btn-first-tracks');
+const btnPrevTracks = document.getElementById('btn-prev-tracks');
+const btnNextTracks = document.getElementById('btn-next-tracks');
+const btnLastTracks = document.getElementById('btn-last-tracks');
 
-// Artists & Albums Pagination Listeners [REQ-UI-020I]
+if (btnFirstTracks) btnFirstTracks.addEventListener('click', () => fetchLibrary(1));
+if (btnPrevTracks) btnPrevTracks.addEventListener('click', () => { if (currentPage > 1) fetchLibrary(currentPage - 1); });
+if (btnNextTracks) btnNextTracks.addEventListener('click', () => fetchLibrary(currentPage + 1));
+if (btnLastTracks) btnLastTracks.addEventListener('click', () => fetchLibrary(Math.ceil(totalTracks / tracksPageSize)));
+
+// --- Artists Pagination Listeners ---
+const artistsPageSizeSelect = document.getElementById('artists-page-size-select');
+if (artistsPageSizeSelect) {
+    artistsPageSizeSelect.addEventListener('change', (e) => {
+        artistsPageSize = parseInt(e.target.value);
+        fetchArtists(1);
+    });
+}
+const btnFirstArtists = document.getElementById('btn-first-artists');
 const btnPrevArtists = document.getElementById('btn-prev-artists');
 const btnNextArtists = document.getElementById('btn-next-artists');
-if (btnPrevArtists) btnPrevArtists.addEventListener('click', () => { if (currentArtistPage > 1) fetchArtists(currentArtistPage - 1); });
-if (btnNextArtists) btnNextArtists.addEventListener('click', () => { fetchArtists(currentArtistPage + 1); });
+const btnLastArtists = document.getElementById('btn-last-artists');
 
+if (btnFirstArtists) btnFirstArtists.addEventListener('click', () => fetchArtists(1));
+if (btnPrevArtists) btnPrevArtists.addEventListener('click', () => { if (currentArtistPage > 1) fetchArtists(currentArtistPage - 1); });
+if (btnNextArtists) btnNextArtists.addEventListener('click', () => fetchArtists(currentArtistPage + 1));
+if (btnLastArtists) btnLastArtists.addEventListener('click', () => fetchArtists(Math.ceil(totalArtists / artistsPageSize)));
+
+// --- Albums Pagination Listeners ---
+const albumsPageSizeSelect = document.getElementById('albums-page-size-select');
+if (albumsPageSizeSelect) {
+    albumsPageSizeSelect.addEventListener('change', (e) => {
+        albumsPageSize = parseInt(e.target.value);
+        fetchAlbums(null, 1);
+    });
+}
+const btnFirstAlbums = document.getElementById('btn-first-albums');
 const btnPrevAlbums = document.getElementById('btn-prev-albums');
 const btnNextAlbums = document.getElementById('btn-next-albums');
+const btnLastAlbums = document.getElementById('btn-last-albums');
+
+if (btnFirstAlbums) btnFirstAlbums.addEventListener('click', () => fetchAlbums(null, 1));
 if (btnPrevAlbums) btnPrevAlbums.addEventListener('click', () => { if (currentAlbumPage > 1) fetchAlbums(null, currentAlbumPage - 1); });
-if (btnNextAlbums) btnNextAlbums.addEventListener('click', () => { fetchAlbums(null, currentAlbumPage + 1); });
+if (btnNextAlbums) btnNextAlbums.addEventListener('click', () => fetchAlbums(null, currentAlbumPage + 1));
+if (btnLastAlbums) btnLastAlbums.addEventListener('click', () => fetchAlbums(null, Math.ceil(totalAlbums / albumsPageSize)));
 
 // Breadcrumb Filter Clear Listener [REQ-UI-020D]
 const btnClearBreadcrumb = document.getElementById('btn-clear-breadcrumb');

@@ -158,20 +158,23 @@
                         </table>
                     </div>
 
-                    <!-- Pagination Footer Bar -->
-                    <div class="pagination-bar">
-                        <div class="pagination-info" id="pagination-info">Showing 0-0 of 0 tracks</div>
+                    <!-- Pagination Footer Bar (Tracks) -->
+                    <div class="pagination-bar" id="pagination-bar-tracks">
+                        <div class="pagination-info" id="tracks-pagination-info">Showing 0–0 of 0 tracks</div>
                         <div class="pagination-controls">
-                            <label for="page-size-select">Per page:</label>
-                            <select id="page-size-select" class="page-size-select">
-                                <option value="50">50</option>
-                                <option value="100" selected>100</option>
+                            <label for="tracks-page-size-select">Per page:</label>
+                            <select id="tracks-page-size-select" class="page-size-select">
+                                <option value="10">10</option>
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
                                 <option value="250">250</option>
-                                <option value="500">500</option>
                             </select>
-                            <button id="btn-prev-page" class="btn-page" disabled>◀ Prev</button>
-                            <span id="page-indicator" class="page-indicator">Page 1</span>
-                            <button id="btn-next-page" class="btn-page">Next ▶</button>
+                            <button id="btn-first-tracks" class="btn-page" style="display: none;">« First</button>
+                            <button id="btn-prev-tracks" class="btn-page" style="display: none;">◀ Prev</button>
+                            <span id="tracks-page-indicator" class="page-indicator">Page 1 of 1</span>
+                            <button id="btn-next-tracks" class="btn-page" style="display: none;">Next ▶</button>
+                            <button id="btn-last-tracks" class="btn-page" style="display: none;">Last »</button>
                         </div>
                     </div>
                 </div>
@@ -181,12 +184,23 @@
                     <div class="grid-cards-container" id="artists-grid">
                         <div class="loading-cell">Loading artists...</div>
                     </div>
-                    <div class="pagination-bar">
-                        <div class="pagination-info" id="artists-pagination-info">Showing 0-0 of 0 artists</div>
+                    <!-- Pagination Footer Bar (Artists) -->
+                    <div class="pagination-bar" id="pagination-bar-artists">
+                        <div class="pagination-info" id="artists-pagination-info">Showing 0–0 of 0 artists</div>
                         <div class="pagination-controls">
-                            <button id="btn-prev-artists" class="btn-page" disabled>◀ Prev</button>
-                            <span id="artists-page-indicator" class="page-indicator">Page 1</span>
-                            <button id="btn-next-artists" class="btn-page">Next ▶</button>
+                            <label for="artists-page-size-select">Per page:</label>
+                            <select id="artists-page-size-select" class="page-size-select">
+                                <option value="10">10</option>
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="250">250</option>
+                            </select>
+                            <button id="btn-first-artists" class="btn-page" style="display: none;">« First</button>
+                            <button id="btn-prev-artists" class="btn-page" style="display: none;">◀ Prev</button>
+                            <span id="artists-page-indicator" class="page-indicator">Page 1 of 1</span>
+                            <button id="btn-next-artists" class="btn-page" style="display: none;">Next ▶</button>
+                            <button id="btn-last-artists" class="btn-page" style="display: none;">Last »</button>
                         </div>
                     </div>
                 </div>
@@ -196,12 +210,23 @@
                     <div class="grid-cards-container" id="albums-grid">
                         <div class="loading-cell">Loading albums...</div>
                     </div>
-                    <div class="pagination-bar">
-                        <div class="pagination-info" id="albums-pagination-info">Showing 0-0 of 0 albums</div>
+                    <!-- Pagination Footer Bar (Albums) -->
+                    <div class="pagination-bar" id="pagination-bar-albums">
+                        <div class="pagination-info" id="albums-pagination-info">Showing 0–0 of 0 albums</div>
                         <div class="pagination-controls">
-                            <button id="btn-prev-albums" class="btn-page" disabled>◀ Prev</button>
-                            <span id="albums-page-indicator" class="page-indicator">Page 1</span>
-                            <button id="btn-next-albums" class="btn-page">Next ▶</button>
+                            <label for="albums-page-size-select">Per page:</label>
+                            <select id="albums-page-size-select" class="page-size-select">
+                                <option value="10">10</option>
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="250">250</option>
+                            </select>
+                            <button id="btn-first-albums" class="btn-page" style="display: none;">« First</button>
+                            <button id="btn-prev-albums" class="btn-page" style="display: none;">◀ Prev</button>
+                            <span id="albums-page-indicator" class="page-indicator">Page 1 of 1</span>
+                            <button id="btn-next-albums" class="btn-page" style="display: none;">Next ▶</button>
+                            <button id="btn-last-albums" class="btn-page" style="display: none;">Last »</button>
                         </div>
                     </div>
                 </div>
