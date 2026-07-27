@@ -43,13 +43,13 @@ def compute_sort_name(raw_name: str) -> str:
     lower_text = text.lower()
 
     if lower_text.startswith("the "):
-        res = f"{text[4:]}, {text[:3]}"
+        res = f"{text[4:].strip()}, {text[:3]}"
     elif lower_text.startswith("a "):
-        res = f"{text[2:]}, {text[:1]}"
+        res = f"{text[2:].strip()}, {text[:1]}"
     elif lower_text.startswith("an "):
-        res = f"{text[3:]}, {text[:2]}"
+        res = f"{text[3:].strip()}, {text[:2]}"
     else:
-        res = text
+        res = text.strip()
 
     return normalize_diacritics(res).upper()
 
