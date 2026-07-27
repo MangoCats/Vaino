@@ -30,17 +30,29 @@ CREATE TABLE IF NOT EXISTS tracks (
     fade_out_ms          INTEGER DEFAULT 3000,
     fade_ramp_profile    TEXT DEFAULT 'S_CURVE', -- 'LINEAR', 'EXPONENTIAL', 'S_CURVE'
     
-    -- Metadata Identifiers
+    -- Metadata Identifiers & Uniform Sort Names
     has_cover_art        BOOLEAN DEFAULT 0,
     file_mtime           REAL DEFAULT 0,
     file_size            INTEGER DEFAULT 0,
     musicbrainz_track_id TEXT,                  -- recording_mbid
     musicbrainz_album_id TEXT,                  -- release_mbid
+    artist_sort_name     TEXT,                  -- MusicBrainz sort tag or fallback
+    album_sort_name      TEXT,                  -- Article-stripped album sort name
+    title_sort_name      TEXT,                  -- Article-stripped track title sort name
     
     created_at           DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Audio Characteristics (AudioBrainz / Essentia Features)
+-- 2. Individual Artist Decomposition Junction Table [REQ-MB-020E]
+CREATE TABLE IF NOT EXISTS track_artists (
+    track_id             TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    artist_name          TEXT NOT NULL,
+    artist_sort_name     TEXT NOT NULL,
+    artist_mbid          TEXT,
+    PRIMARY KEY (track_id, artist_name)
+);
+
+-- 3. Audio Characteristics (AudioBrainz / Essentia Features)
 CREATE TABLE IF NOT EXISTS track_audio_descriptors (
     track_id             TEXT PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
     energy               REAL,  -- 0.0 to 1.0 (intensity)
@@ -54,7 +66,7 @@ CREATE TABLE IF NOT EXISTS track_audio_descriptors (
     loudness_lufs        REAL   -- Integrated loudness (LUFS) for volume leveling
 );
 
--- 3. Play History & Cooldown Tracking
+-- 4. Play History & Cooldown Tracking
 CREATE TABLE IF NOT EXISTS play_history (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     track_id             TEXT REFERENCES tracks(id),
@@ -62,10 +74,26 @@ CREATE TABLE IF NOT EXISTS play_history (
     completed            BOOLEAN DEFAULT 1
 );
 
+-- 5. Persistent Queue & Player State across Restarts
+CREATE TABLE IF NOT EXISTS player_queue (
+    queue_order          INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id             TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS player_state (
+    id                   INTEGER PRIMARY KEY CHECK (id = 1),
+    current_track_id     TEXT REFERENCES tracks(id) ON DELETE SET NULL,
+    playback_state       TEXT DEFAULT 'IDLE',
+    volume               INTEGER DEFAULT 80,
+    updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for Fast Query Performance
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
+CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_name);
+CREATE INDEX IF NOT EXISTS idx_track_artists_sort ON track_artists(artist_sort_name);
 CREATE INDEX IF NOT EXISTS idx_history_played_at ON play_history(played_at);
 ```
 
