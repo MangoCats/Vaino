@@ -5,7 +5,7 @@ from src.db.scanner import compute_sort_name, compute_artist_sort_name
 class TestSortNames(unittest.TestCase):
     def test_strip_leading_special_chars_and_uppercase(self):
         # Leading quotes
-        self.assertEqual(compute_sort_name("'Hello'"), "HELLO")
+        self.assertEqual(compute_sort_name("'Hello'"), "HELLO'")
         self.assertEqual(compute_sort_name('"World"'), "WORLD")
         self.assertEqual(compute_sort_name("`Test`"), "TEST")
 

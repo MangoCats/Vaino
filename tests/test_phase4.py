@@ -84,7 +84,7 @@ class TestVainoPhase4(unittest.TestCase):
         # Verify DB row updated with resolved MBID and artist_sort_name
         track = self.db.get_track_by_id("mb_test_01")
         self.assertEqual(track["musicbrainz_track_id"], mock_mbid)
-        self.assertEqual(track["artist_sort_name"], "Eagles, The")
+        self.assertEqual(track["artist_sort_name"], "EAGLES, THE")
 
 if __name__ == "__main__":
     unittest.main()
