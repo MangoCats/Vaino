@@ -218,8 +218,10 @@ class MediaScanner:
                     track_tag = tags.get("tracknumber") or tags.get("TRCK")
                     artist_sort_tag = (
                         tags.get("artistsort") or
+                        tags.get("ARTISTSORT") or
                         tags.get("TSOP") or
                         tags.get("XSOP") or
+                        tags.get("soar") or
                         tags.get("musicbrainz_artistsort")
                     )
 
@@ -243,8 +245,16 @@ class MediaScanner:
         except Exception as e:
             logger.warning(f"Error parsing metadata for {file_path}: {e}")
 
-        embedded_sort = str(artist_sort_tag[0]) if artist_sort_tag else None
-        artist_sort_name = compute_artist_sort_name(artist, embedded_sort)
+        embedded_sort = None
+        if artist_sort_tag:
+            if hasattr(artist_sort_tag, "text") and artist_sort_tag.text:
+                embedded_sort = str(artist_sort_tag.text[0])
+            elif isinstance(artist_sort_tag, list) and artist_sort_tag:
+                embedded_sort = str(artist_sort_tag[0])
+            else:
+                embedded_sort = str(artist_sort_tag)
+
+        artist_sort_name = compute_artist_sort_name(artist, embedded=embedded_sort)
 
         return {
             "id": track_id,

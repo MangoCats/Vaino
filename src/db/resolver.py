@@ -46,14 +46,40 @@ class MusicBrainzResolver:
             logger.debug(f"Error reading embedded MBID for {file_path}: {e}")
         return None
 
+    def extract_embedded_artist_sort(self, file_path: str) -> Optional[str]:
+        """
+        [REQ-MB-020D] Extracts embedded MusicBrainz Artist Sort tag from ID3, FLAC, or M4A tags.
+        """
+        try:
+            audio = mutagen.File(file_path)
+            if audio is not None and audio.tags:
+                tags = audio.tags
+                sort_tag = (
+                    tags.get("artistsort") or
+                    tags.get("ARTISTSORT") or
+                    tags.get("TSOP") or
+                    tags.get("XSOP") or
+                    tags.get("soar") or
+                    tags.get("musicbrainz_artistsort")
+                )
+                if sort_tag:
+                    if hasattr(sort_tag, "text") and sort_tag.text:
+                        return str(sort_tag.text[0]).strip()
+                    elif isinstance(sort_tag, list) and sort_tag:
+                        return str(sort_tag[0]).strip()
+                    return str(sort_tag).strip()
+        except Exception as e:
+            logger.debug(f"Error reading embedded sort tag for {file_path}: {e}")
+        return None
+
     def resolve_track_embedded(self, track: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
         file_path = track["file_path"]
         artist = track.get("artist", "")
         mbid = self.extract_embedded_mbid(file_path)
+        embedded_sort = self.extract_embedded_artist_sort(file_path)
 
-        # Extract or compute artist_sort_name [REQ-MB-020D]
         from .scanner import compute_artist_sort_name
-        sort_name = compute_artist_sort_name(artist)
+        sort_name = compute_artist_sort_name(artist, embedded=embedded_sort)
 
         return track["id"], mbid, sort_name
 
