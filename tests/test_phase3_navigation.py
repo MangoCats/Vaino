@@ -159,10 +159,14 @@ class TestVainoPhase3Navigation(unittest.TestCase):
             "year": 1975, "track_number": 1, "duration_ms": 240000
         })
 
-        # "The Dark Side of the Moon" -> album_sort_name "Dark Side of the Moon, The" -> appears under D
+        # "The Dark Side of the Moon" -> album_sort_name "Dark Side of the Moon, The" -> appears under D, NOT under T
         albums_d = self.db.get_all_albums(letter="D")
         d_album_names = [al["album"] for al in albums_d]
         self.assertIn("The Dark Side of the Moon", d_album_names)
+
+        albums_t = self.db.get_all_albums(letter="T")
+        t_album_names = [al["album"] for al in albums_t]
+        self.assertNotIn("The Dark Side of the Moon", t_album_names)
 
         # "A Hard Day's Night" -> title_sort_name "Hard Day's Night, A" -> appears under H
         tracks_h = self.db.get_all_tracks(letter="H")

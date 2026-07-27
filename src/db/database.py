@@ -40,6 +40,31 @@ class Database:
                 conn.execute("ALTER TABLE tracks ADD COLUMN album_sort_name TEXT")
             if "title_sort_name" not in columns:
                 conn.execute("ALTER TABLE tracks ADD COLUMN title_sort_name TEXT")
+
+            # Backfill/re-compute sort names for existing DB rows to enforce article stripping
+            cursor = conn.execute("SELECT id, title, artist, album, artist_sort_name, album_sort_name, title_sort_name FROM tracks")
+            rows = cursor.fetchall()
+            if rows:
+                from .scanner import compute_sort_name, compute_artist_sort_name
+                updates = []
+                for row in rows:
+                    cur_art_sort = row["artist_sort_name"]
+                    cur_alb_sort = row["album_sort_name"]
+                    cur_ttl_sort = row["title_sort_name"]
+
+                    art_sort = cur_art_sort if cur_art_sort else compute_artist_sort_name(row["artist"])
+                    alb_sort = compute_sort_name(row["album"])
+                    ttl_sort = compute_sort_name(row["title"])
+
+                    if alb_sort != cur_alb_sort or ttl_sort != cur_ttl_sort or art_sort != cur_art_sort:
+                        updates.append((art_sort, alb_sort, ttl_sort, row["id"]))
+
+                if updates:
+                    conn.executemany(
+                        "UPDATE tracks SET artist_sort_name = ?, album_sort_name = ?, title_sort_name = ? WHERE id = ?",
+                        updates
+                    )
+
             conn.commit()
         finally:
             conn.close()

@@ -25,19 +25,16 @@ def normalize_diacritics(text: str) -> str:
 def compute_sort_name(raw_name: str) -> str:
     """
     [REQ-UI-020I, REQ-UI-020J] General sort name computation:
-    1. If string contains a comma (e.g. 'Surname, Given' or already normalized), use as-is after diacritic normalization.
-    2. Strips leading English articles ('The ', 'A ', 'An ') and appends them after a comma.
+    1. Strips leading English articles ('The ', 'A ', 'An ') and appends them after a comma.
+    2. Names already in 'Surname, Given' or 'Title, The' format without leading articles are preserved as-is.
     3. Applies diacritic normalization per [REQ-UI-020I].
     """
     if not raw_name or not str(raw_name).strip():
         return ""
 
     text = str(raw_name).strip()
-
-    if "," in text:
-        return normalize_diacritics(text)
-
     lower_text = text.lower()
+
     if lower_text.startswith("the "):
         res = f"{text[4:]}, {text[:3]}"
     elif lower_text.startswith("a "):
