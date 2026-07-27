@@ -110,3 +110,14 @@ To ensure mathematical precision across Python and Rust implementations, unit te
 ### Test Case `UT-AUD-003`: Crossfade Energy Balance
 - **Input**: Equal-power crossfade at $t = 0.5$ for two identical in-phase sine waves.
 - **Expected Output**: Output RMS amplitude variance $< 0.05 \text{ dB}$.
+
+---
+
+## 5. Decoder Resiliency & In-Memory Fallback `[SPEC-AUD-050]`
+
+When opening audio files on operating systems with exotic file paths (e.g. Windows paths containing Private Use Area `PUA` Unicode symbols like `\uf03a`), standard file-path decoding C bindings (such as `miniaudio.decode_file`) may fail with file-not-found or invalid path errors.
+
+To ensure decoder resiliency:
+1. **Primary Strategy**: Attempt direct C-binding file path decoding (`decode_file`).
+2. **Fallback Strategy**: If primary decoding raises an OS/decoding error, the system MUST catch the exception, open the file using OS-native binary file IO (`open(file_path, "rb")`), load raw bytes into an in-memory stream buffer (`BytesIO`), and decode via byte-stream decoder bindings (`decode_io`).
+3. If byte-stream decoding also fails, log an error and advance gracefully to the next track.

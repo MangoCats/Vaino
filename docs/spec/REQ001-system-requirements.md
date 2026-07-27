@@ -83,6 +83,8 @@ This document defines the formal system requirements for **Vaino**, establishing
 - **`[REQ-HW-010A]` Maximum Memory Footprint**: The production Rust runtime (Phase 6) MUST NOT consume more than **30.0 MB** of RSS RAM during continuous playback.
 - **`[REQ-HW-010B]` Boot Readiness Priority**: Track 1 audio playback MUST begin within **1.0 second** of core daemon startup. HTTP/WebSocket management services MUST initialize asynchronously without delaying audio playback.
 
-### 3.2 Real-Time WebSocket Synchronization
+### 3.2 Real-Time WebSocket Synchronization & Remote Accessibility
 - **`[REQ-UI-010A]` Broadcast Latency**: All connected WebSocket clients MUST receive state broadcast updates within **100 milliseconds** of a state change event (Play, Pause, Skip, Volume, Track Change).
 - **`[REQ-UI-010B]` Configurable Multi-User Skip Throttling**: The server MUST enforce a configurable minimum throttle window (default: `5.0` seconds, configurable via `skip_throttle_seconds` in `config.json`) between user skip commands across all connected web clients. Both the REST `POST /api/v1/player/skip` endpoint and the WebSocket `SKIP` action MUST respect this global throttle. When a skip is throttled, the server MUST return the current status without advancing the track.
+- **`[REQ-UI-010C]` Keyboard Transport Shortcuts & Auto-Reconnect**: The web interface MUST support global keyboard transport controls (`Space` for Play/Pause, `Right Arrow` for Skip, `Left Arrow` for Skip Back) and automatic WebSocket reconnection with exponential backoff.
+- **`[REQ-DB-010B]` Filename Metadata Extraction Fallback**: When audio files lack valid ID3v2/FLAC tags, the scanner MUST parse the filename structure (e.g. `01 - Hotel California.mp3`) to extract track number and title fallback fields.

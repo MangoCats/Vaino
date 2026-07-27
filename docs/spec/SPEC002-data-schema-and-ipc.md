@@ -133,7 +133,32 @@ Broadcasted instantly whenever state, track position, or volume changes.
 
 ---
 
-## 3. Unit Testing Specifications
+## 3. REST API Endpoints Specification
+
+All REST endpoints operate under the base URI `/api/v1`.
+
+| Endpoint | Method | Parameters / Payload | Description |
+| :--- | :--- | :--- | :--- |
+| `/api/v1/status` | `GET` | None | Returns current player state, active track, volume, and queue length. |
+| `/api/v1/library/tracks` | `GET` | `limit`, `offset`, `artist`, `album`, `letter`, `q` | Returns paginated track items matching optional filters. |
+| `/api/v1/library/artists` | `GET` | `limit`, `offset`, `letter`, `q` | Returns paginated artist tiles with track/album counts. |
+| `/api/v1/library/albums` | `GET` | `limit`, `offset`, `artist`, `letter`, `q` | Returns paginated album tiles sorted by `album_sort_name`. |
+| `/api/v1/library/albums/{album_name}/tracks` | `GET` | `artist` (optional) | Returns tracks within specified album ordered by `track_number`. |
+| `/api/v1/art/{track_id}` | `GET` | None | Streams binary cover art image (`image/jpeg`, `image/png`). |
+| `/api/v1/player/play` | `POST` | None | Starts or resumes audio playback. |
+| `/api/v1/player/pause` | `POST` | None | Pauses active audio playback. |
+| `/api/v1/player/skip` | `POST` | None | Advances to next track in queue (subject to skip throttle). |
+| `/api/v1/player/skip_back` | `POST` | None | Returns to previous track in playback history stack. |
+| `/api/v1/player/volume` | `POST` | `{"volume": 0..100}` | Sets master audio volume percentage. |
+| `/api/v1/queue/enqueue` | `POST` | `{"track_id": "...", "play_next": bool}` | Appends or inserts track/album into active playback queue. |
+| `/api/v1/queue/{index}` | `DELETE` | Path param `index` | Removes item at 0-based queue index. |
+| `/api/v1/queue/reorder` | `POST` | `{"from_index": int, "to_index": int}` | Reorders item in queue. |
+| `/api/v1/queue/clear` | `DELETE` | None | Removes all items from active queue. |
+| `/api/v1/scanner/rescan` | `POST` | None | Triggers background library rescan & MusicBrainz resolution. |
+
+---
+
+## 4. Unit Testing Specifications
 
 ### Test Case `UT-DB-001`: Batch Upsert Atomicity
 - **Test**: Upsert a batch of 1,000 track records inside a single WAL transaction.
