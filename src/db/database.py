@@ -189,8 +189,38 @@ class Database:
         finally:
             conn.close()
 
-    def get_all_artists(self, limit: int = 200, query: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-MB-020E, REQ-UI-020G] Returns distinct individual artists from track_artists junction table."""
+    def get_total_artist_count(self, query: Optional[str] = None, letter: Optional[str] = None) -> int:
+        """[REQ-UI-020I] Returns total distinct individual artist count matching letter/query filters."""
+        conn = self.get_connection()
+        try:
+            where_clauses = []
+            params = []
+            if letter:
+                if letter == "#":
+                    where_clauses.append("ta.artist_sort_name GLOB '[0-9]*'")
+                else:
+                    where_clauses.append("ta.artist_sort_name LIKE ?")
+                    params.append(f"{letter}%")
+            if query:
+                q = f"%{query}%"
+                where_clauses.append("(ta.artist_name LIKE ? OR t.album LIKE ? OR ta.artist_sort_name LIKE ?)")
+                params.extend([q, q, q])
+
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"""
+            SELECT COUNT(DISTINCT ta.artist_name)
+            FROM track_artists ta
+            JOIN tracks t ON ta.track_id = t.id
+            {where_str}
+            """
+            cursor = conn.execute(sql, tuple(params))
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        finally:
+            conn.close()
+
+    def get_all_artists(self, limit: int = 100, offset: int = 0, query: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """[REQ-MB-020E, REQ-UI-020G, REQ-UI-020I] Returns paginated distinct individual artists from track_artists junction table."""
         conn = self.get_connection()
         try:
             where_clauses = []
@@ -218,16 +248,59 @@ class Database:
             {where_str}
             GROUP BY ta.artist_name
             ORDER BY MIN(ta.artist_sort_name) ASC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """
-            params.append(limit)
+            params.extend([limit, offset])
             cursor = conn.execute(sql, tuple(params))
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
 
-    def get_all_albums(self, limit: int = 200, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020G] Returns distinct deduplicated albums (grouped strictly by album title)."""
+    def get_total_album_count(self, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> int:
+        """[REQ-UI-020I] Returns total distinct album count matching artist/letter/query filters."""
+        conn = self.get_connection()
+        try:
+            params = []
+            where_clauses = []
+            join_clause = ""
+            if artist:
+                join_clause = "JOIN track_artists ta ON t.id = ta.track_id"
+                where_clauses.append("(ta.artist_name = ? OR t.artist = ?)")
+                params.extend([artist, artist])
+            if letter:
+                if letter == "#":
+                    if artist:
+                        where_clauses.append("t.album GLOB '[0-9]*'")
+                    else:
+                        where_clauses.append("(t.album GLOB '[0-9]*' OR t.artist GLOB '[0-9]*' OR COALESCE(t.artist_sort_name, t.artist) GLOB '[0-9]*')")
+                else:
+                    l = f"{letter}%"
+                    if artist:
+                        where_clauses.append("t.album LIKE ?")
+                        params.append(l)
+                    else:
+                        where_clauses.append("(t.album LIKE ? OR t.artist LIKE ? OR COALESCE(t.artist_sort_name, t.artist) LIKE ?)")
+                        params.extend([l, l, l])
+            if query:
+                q = f"%{query}%"
+                where_clauses.append("(t.album LIKE ? OR t.artist LIKE ? OR t.artist_sort_name LIKE ?)")
+                params.extend([q, q, q])
+
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"""
+            SELECT COUNT(DISTINCT t.album)
+            FROM tracks t
+            {join_clause}
+            {where_str}
+            """
+            cursor = conn.execute(sql, tuple(params))
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        finally:
+            conn.close()
+
+    def get_all_albums(self, limit: int = 100, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """[REQ-UI-020G, REQ-UI-020I] Returns paginated distinct deduplicated albums."""
         conn = self.get_connection()
         try:
             params = []
@@ -268,11 +341,11 @@ class Database:
             {where_str}
             GROUP BY t.album
             ORDER BY MIN(COALESCE(t.artist_sort_name, t.artist)) ASC, t.album ASC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """
             all_params = [artist if artist else ""]
             all_params.extend(params)
-            all_params.append(limit)
+            all_params.extend([limit, offset])
             cursor = conn.execute(sql, tuple(all_params))
             return [dict(row) for row in cursor.fetchall()]
         finally:

@@ -13,32 +13,20 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".wav", ".ogg", ".m4a"}
 
-def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str:
-    """[REQ-MB-020D] Computes or extracts canonical MusicBrainz sort name for an artist."""
-    if embedded and str(embedded).strip():
-        return str(embedded).strip()
-    
-    if not artist or not str(artist).strip():
-        return "Unknown Artist"
+import unicodedata
 
-    artist_str = str(artist).strip()
-
-    if "," in artist_str:
-        return artist_str
-
-    if artist_str.lower().startswith("the "):
-        return f"{artist_str[4:]}, The"
-    
-    if artist_str.lower().startswith("a "):
-        return f"{artist_str[2:]}, A"
-
-    parts = artist_str.split()
-    if len(parts) == 2 and not any(p.endswith(".") for p in parts):
-        return f"{parts[1]}, {parts[0]}"
-
-    return artist_str
+def normalize_diacritics(text: str) -> str:
+    """Removes diacritics and accents (e.g. Mötley Crüe -> Motley Crue, Beyoncé -> Beyonce)."""
+    if not text:
+        return ""
+    nfkd = unicodedata.normalize('NFD', text)
+    return "".join(c for c in nfkd if unicodedata.category(c) != 'Mn')
 
 KNOWN_SINGLE_GROUPS = {
+    "mötley crüe", "motley crue", "blue öyster cult", "blue oyster cult",
+    "pink floyd", "led zeppelin", "deep purple", "black sabbath",
+    "lynyrd skynyrd", "judas priest", "iron maiden", "jethro tull",
+    "fleetwood mac", "def leppard", "bad company", "dire straits",
     "earth, wind & fire", "earth wind & fire",
     "sam the sham & the pharaohs", "sam the sham and the pharaohs",
     "emerson, lake & palmer", "emerson lake & palmer",
@@ -52,6 +40,34 @@ KNOWN_SINGLE_GROUPS = {
     "tom petty and the heartbreakers", "tom petty & the heartbreakers",
     "joan jett & the blackhearts", "joan jett and the blackhearts"
 }
+
+def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str:
+    """[REQ-MB-020D, REQ-UI-020I] Computes canonical MusicBrainz sort name for an artist, normalized for A-Z filtering."""
+    if embedded and str(embedded).strip():
+        return normalize_diacritics(str(embedded).strip())
+    
+    if not artist or not str(artist).strip():
+        return "Unknown Artist"
+
+    artist_str = str(artist).strip()
+    if artist_str.lower() in KNOWN_SINGLE_GROUPS or normalize_diacritics(artist_str.lower()) in KNOWN_SINGLE_GROUPS:
+        return normalize_diacritics(artist_str)
+
+    if "," in artist_str:
+        return normalize_diacritics(artist_str)
+
+    if artist_str.lower().startswith("the "):
+        res = f"{artist_str[4:]}, The"
+    elif artist_str.lower().startswith("a "):
+        res = f"{artist_str[2:]}, A"
+    else:
+        parts = artist_str.split()
+        if len(parts) == 2 and not any(p.endswith(".") for p in parts):
+            res = f"{parts[1]}, {parts[0]}"
+        else:
+            res = artist_str
+
+    return normalize_diacritics(res)
 
 def split_artists(artist_str: str) -> List[Tuple[str, str]]:
     """

@@ -181,12 +181,28 @@
                     <div class="grid-cards-container" id="artists-grid">
                         <div class="loading-cell">Loading artists...</div>
                     </div>
+                    <div class="pagination-bar">
+                        <div class="pagination-info" id="artists-pagination-info">Showing 0-0 of 0 artists</div>
+                        <div class="pagination-controls">
+                            <button id="btn-prev-artists" class="btn-page" disabled>◀ Prev</button>
+                            <span id="artists-page-indicator" class="page-indicator">Page 1</span>
+                            <button id="btn-next-artists" class="btn-page">Next ▶</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Albums Grid View Container -->
                 <div id="view-container-albums" class="view-content-block" style="display: none;">
                     <div class="grid-cards-container" id="albums-grid">
                         <div class="loading-cell">Loading albums...</div>
+                    </div>
+                    <div class="pagination-bar">
+                        <div class="pagination-info" id="albums-pagination-info">Showing 0-0 of 0 albums</div>
+                        <div class="pagination-controls">
+                            <button id="btn-prev-albums" class="btn-page" disabled>◀ Prev</button>
+                            <span id="albums-page-indicator" class="page-indicator">Page 1</span>
+                            <button id="btn-next-albums" class="btn-page">Next ▶</button>
+                        </div>
                     </div>
                 </div>
             </section>

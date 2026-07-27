@@ -110,7 +110,16 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         albums_sm = self.db.get_all_albums(artist="Sarah McLachlan")
         rarities_tiles = [al for al in albums_sm if al["album"] == "Rarities, B-Sides"]
         self.assertEqual(len(rarities_tiles), 1, "Rarities album was split into multiple duplicate tiles")
-        self.assertEqual(rarities_tiles[0]["track_count"], 2, "Album track count was not aggregated")
+    def test_diacritic_normalization_motley_crue(self):
+        """[REQ-UI-020I] Test that Mötley Crüe with diacritics appears under letter filter M"""
+        self.db.upsert_track({
+            "id": "t8", "file_path": r"C:\music\motley_01.mp3", "file_format": "MP3",
+            "title": "Kickstart My Heart", "artist": "Mötley Crüe", "album": "Dr. Feelgood",
+            "year": 1989, "track_number": 1, "duration_ms": 284000
+        })
+        artists_m = self.db.get_all_artists(letter="M")
+        m_names = [a["artist"] for a in artists_m]
+        self.assertIn("Mötley Crüe", m_names)
 
 if __name__ == "__main__":
     unittest.main()

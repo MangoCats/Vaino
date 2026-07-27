@@ -165,14 +165,21 @@ async function fetchLibrary(page = 1) {
     }
 }
 
-// Fetch & Render Artists Grid [REQ-UI-020A, REQ-UI-020E]
-async function fetchArtists() {
+let currentArtistPage = 1;
+let currentAlbumPage = 1;
+const gridPageSize = 100;
+
+// Fetch & Render Artists Grid [REQ-UI-020A, REQ-UI-020E, REQ-UI-020I]
+async function fetchArtists(page = 1) {
     const grid = document.getElementById('artists-grid');
     if (!grid) return;
     grid.innerHTML = `<div class="loading-cell">Loading artists...</div>`;
 
+    currentArtistPage = page;
+    const offset = (currentArtistPage - 1) * gridPageSize;
+
     try {
-        let url = `/api/v1/library/artists?limit=200`;
+        let url = `/api/v1/library/artists?limit=${gridPageSize}&offset=${offset}`;
         if (currentLetter) {
             url += `&letter=${encodeURIComponent(currentLetter)}`;
         }
@@ -182,39 +189,60 @@ async function fetchArtists() {
         const res = await fetch(url);
         const data = await res.json();
         const artists = data.artists || [];
+        const total = data.total || 0;
 
         const countBadge = document.getElementById('library-count-badge');
-        if (countBadge) countBadge.textContent = `${artists.length} artists`;
+        if (countBadge) countBadge.textContent = `${total} artists`;
 
         if (artists.length === 0) {
             grid.innerHTML = `<div class="loading-cell">No artists found.</div>`;
-            return;
+        } else {
+            grid.innerHTML = artists.map(a => `
+                <div class="nav-card" onclick="browseArtistAlbums('${escapeHtml(a.artist)}')">
+                    <img src="/api/v1/art/${a.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>🎙️</text></svg>'">
+                    <div class="nav-card-title">${escapeHtml(a.artist)}</div>
+                    <div class="nav-card-subtitle">${a.album_count} Albums • ${a.track_count} Tracks</div>
+                    <span class="nav-card-badge">View Albums ▶</span>
+                </div>
+            `).join('');
         }
 
-        grid.innerHTML = artists.map(a => `
-            <div class="nav-card" onclick="browseArtistAlbums('${escapeHtml(a.artist)}')">
-                <img src="/api/v1/art/${a.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>🎙️</text></svg>'">
-                <div class="nav-card-title">${escapeHtml(a.artist)}</div>
-                <div class="nav-card-subtitle">${a.album_count} Albums • ${a.track_count} Tracks</div>
-                <span class="nav-card-badge">View Albums ▶</span>
-            </div>
-        `).join('');
+        updateArtistsPagination(total, offset, artists.length);
     } catch (e) {
         console.error('Error fetching artists:', e);
         grid.innerHTML = `<div class="loading-cell">Failed loading artists.</div>`;
     }
 }
 
-// Fetch & Render Albums Grid [REQ-UI-020A, REQ-UI-020D, REQ-UI-020E]
-async function fetchAlbums(artistFilter = null) {
+function updateArtistsPagination(total, offset, count) {
+    const info = document.getElementById('artists-pagination-info');
+    const indicator = document.getElementById('artists-page-indicator');
+    const btnPrev = document.getElementById('btn-prev-artists');
+    const btnNext = document.getElementById('btn-next-artists');
+
+    const totalPages = Math.ceil(total / gridPageSize) || 1;
+    const start = total === 0 ? 0 : offset + 1;
+    const end = offset + count;
+
+    if (info) info.textContent = `Showing ${start}-${end} of ${total} artists`;
+    if (indicator) indicator.textContent = `Page ${currentArtistPage} of ${totalPages}`;
+
+    if (btnPrev) btnPrev.disabled = currentArtistPage <= 1;
+    if (btnNext) btnNext.disabled = currentArtistPage >= totalPages;
+}
+
+// Fetch & Render Albums Grid [REQ-UI-020A, REQ-UI-020D, REQ-UI-020E, REQ-UI-020I]
+async function fetchAlbums(artistFilter = null, page = 1) {
     const grid = document.getElementById('albums-grid');
     if (!grid) return;
     grid.innerHTML = `<div class="loading-cell">Loading albums...</div>`;
 
+    currentAlbumPage = page;
+    const offset = (currentAlbumPage - 1) * gridPageSize;
     const activeArtist = artistFilter || currentArtistFilter;
 
     try {
-        let url = `/api/v1/library/albums?limit=200`;
+        let url = `/api/v1/library/albums?limit=${gridPageSize}&offset=${offset}`;
         if (activeArtist) {
             url += `&artist=${encodeURIComponent(activeArtist)}`;
         }
@@ -226,11 +254,32 @@ async function fetchAlbums(artistFilter = null) {
         }
         const res = await fetch(url);
         const data = await res.json();
-        renderAlbumsGrid(data.albums || [], activeArtist);
+        const albums = data.albums || [];
+        const total = data.total || 0;
+
+        renderAlbumsGrid(albums, activeArtist, total);
+        updateAlbumsPagination(total, offset, albums.length);
     } catch (e) {
         console.error('Error fetching albums:', e);
         grid.innerHTML = `<div class="loading-cell">Failed loading albums.</div>`;
     }
+}
+
+function updateAlbumsPagination(total, offset, count) {
+    const info = document.getElementById('albums-pagination-info');
+    const indicator = document.getElementById('albums-page-indicator');
+    const btnPrev = document.getElementById('btn-prev-albums');
+    const btnNext = document.getElementById('btn-next-albums');
+
+    const totalPages = Math.ceil(total / gridPageSize) || 1;
+    const start = total === 0 ? 0 : offset + 1;
+    const end = offset + count;
+
+    if (info) info.textContent = `Showing ${start}-${end} of ${total} albums`;
+    if (indicator) indicator.textContent = `Page ${currentAlbumPage} of ${totalPages}`;
+
+    if (btnPrev) btnPrev.disabled = currentAlbumPage <= 1;
+    if (btnNext) btnNext.disabled = currentAlbumPage >= totalPages;
 }
 
 // Drill-down from Artist card to their Albums [REQ-UI-020C, REQ-UI-020D]
@@ -242,18 +291,18 @@ async function browseArtistAlbums(artistName) {
     if (allLetterBtn) allLetterBtn.classList.add('active');
 
     try {
-        const url = `/api/v1/library/albums?artist=${encodeURIComponent(artistName)}`;
+        const url = `/api/v1/library/albums?artist=${encodeURIComponent(artistName)}&limit=100`;
         const res = await fetch(url);
         const data = await res.json();
         const albums = data.albums || [];
+        const total = data.total || albums.length;
 
         if (albums.length === 1) {
-            // Single album: direct navigation to that album's sorted tracklist!
-            openAlbumTracklist(albums[0].album, artistName);
+            openAlbumTracklist(albums[0].album);
         } else {
-            // Multiple albums: show subset album selection screen containing ONLY that artist's albums
             switchView('albums');
-            renderAlbumsGrid(albums, artistName);
+            renderAlbumsGrid(albums, artistName, total);
+            updateAlbumsPagination(total, 0, albums.length);
             setBreadcrumbFilter('Artist', artistName);
         }
     } catch (e) {
@@ -261,13 +310,14 @@ async function browseArtistAlbums(artistName) {
     }
 }
 
-function renderAlbumsGrid(albums, artistFilter = null) {
+function renderAlbumsGrid(albums, artistFilter = null, totalCount = null) {
     const grid = document.getElementById('albums-grid');
     if (!grid) return;
 
+    const displayTotal = totalCount !== null ? totalCount : albums.length;
     const countBadge = document.getElementById('library-count-badge');
     if (countBadge) {
-        countBadge.textContent = artistFilter ? `${artistFilter} (${albums.length} albums)` : `${albums.length} albums`;
+        countBadge.textContent = artistFilter ? `${artistFilter} (${displayTotal} albums)` : `${displayTotal} albums`;
     }
 
     if (albums.length === 0) {
@@ -276,7 +326,7 @@ function renderAlbumsGrid(albums, artistFilter = null) {
     }
 
     grid.innerHTML = albums.map(al => `
-        <div class="nav-card" onclick="openAlbumTracklist('${escapeHtml(al.album)}', '${escapeHtml(al.artist)}')">
+        <div class="nav-card" onclick="openAlbumTracklist('${escapeHtml(al.album)}')">
             <img src="/api/v1/art/${al.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>💿</text></svg>'">
             <div class="nav-card-title">${escapeHtml(al.album)}</div>
             <div class="nav-card-subtitle">${escapeHtml(al.artist)} ${al.year ? '(' + al.year + ')' : ''}</div>
@@ -467,6 +517,17 @@ if (pageSizeSelect) {
         fetchLibrary(1);
     });
 }
+
+// Artists & Albums Pagination Listeners [REQ-UI-020I]
+const btnPrevArtists = document.getElementById('btn-prev-artists');
+const btnNextArtists = document.getElementById('btn-next-artists');
+if (btnPrevArtists) btnPrevArtists.addEventListener('click', () => { if (currentArtistPage > 1) fetchArtists(currentArtistPage - 1); });
+if (btnNextArtists) btnNextArtists.addEventListener('click', () => { fetchArtists(currentArtistPage + 1); });
+
+const btnPrevAlbums = document.getElementById('btn-prev-albums');
+const btnNextAlbums = document.getElementById('btn-next-albums');
+if (btnPrevAlbums) btnPrevAlbums.addEventListener('click', () => { if (currentAlbumPage > 1) fetchAlbums(null, currentAlbumPage - 1); });
+if (btnNextAlbums) btnNextAlbums.addEventListener('click', () => { fetchAlbums(null, currentAlbumPage + 1); });
 
 // Breadcrumb Filter Clear Listener [REQ-UI-020D]
 const btnClearBreadcrumb = document.getElementById('btn-clear-breadcrumb');
