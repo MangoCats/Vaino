@@ -194,11 +194,16 @@ class Database:
                 params.extend([q, q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            if album:
+                order_clause = "ORDER BY CASE WHEN t.track_number IS NULL OR t.track_number = 0 THEN 999 ELSE t.track_number END ASC, COALESCE(t.title_sort_name, t.title) ASC"
+            else:
+                order_clause = "ORDER BY COALESCE(t.title_sort_name, t.title) ASC, t.artist ASC"
+
             sql = f"""
             SELECT DISTINCT t.* FROM tracks t
             {join_clause}
             {where_str}
-            ORDER BY t.artist, t.album, CASE WHEN t.track_number IS NULL OR t.track_number = 0 THEN 999 ELSE t.track_number END ASC, t.title
+            {order_clause}
             LIMIT ? OFFSET ?
             """
             params.extend([limit, offset])

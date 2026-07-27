@@ -178,5 +178,12 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         e_track_titles = [tr["title"] for tr in tracks_e]
         self.assertIn("An Evening With...", e_track_titles)
 
+    def test_tracks_view_alphabetical_sorting_by_sort_title(self):
+        """[REQ-UI-020E, REQ-UI-020I] Test that top-level Tracks view returns tracks sorted by title_sort_name ASC"""
+        from src.db.scanner import compute_sort_name
+        all_tracks = self.db.get_all_tracks(limit=100)
+        sort_titles = [t.get("title_sort_name") or compute_sort_name(t["title"]) for t in all_tracks]
+        self.assertEqual(sort_titles, sorted(sort_titles))
+
 if __name__ == "__main__":
     unittest.main()
