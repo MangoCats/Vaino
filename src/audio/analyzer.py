@@ -33,19 +33,22 @@ class AudioAnalyzer:
         tempo (BPM), key signature, acousticness, instrumentalness, speechiness
         from an audio file using spectral and amplitude signal analysis.
         """
-        if not os.path.exists(file_path):
-            return None
-
         try:
             # 1. Decode PCM audio samples
             decoded = None
             try:
                 decoded = miniaudio.decode_file(file_path)
             except Exception:
+                pass
+
+            if not decoded or len(decoded.samples) == 0:
                 # In-memory buffer fallback for Windows PUA / Unicode paths [SPEC-AUD-050]
-                with open(file_path, "rb") as f:
-                    file_bytes = f.read()
-                decoded = miniaudio.decode_io(file_bytes)
+                try:
+                    with open(file_path, "rb") as f:
+                        file_bytes = f.read()
+                    decoded = miniaudio.decode(file_bytes)
+                except Exception:
+                    return None
 
             if not decoded or len(decoded.samples) == 0:
                 return None

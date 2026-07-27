@@ -461,6 +461,7 @@ function renderLibrary(tracks, offset = 0) {
                     <button class="btn-action-sm btn-play-now" data-id="${t.id}" title="Play Now">▶ Play</button>
                     <button class="btn-action-sm btn-enqueue-next" data-id="${t.id}" title="Play Next">➕ Next</button>
                     <button class="btn-action-sm btn-enqueue-add" data-id="${t.id}" title="Add to Queue">📥 Queue</button>
+                    <button class="btn-action-sm btn-descriptors" data-id="${t.id}" title="View Acoustic Descriptors">🧠</button>
                 </div>
             </td>
         </tr>
@@ -853,6 +854,7 @@ if (libraryTbodyEl) {
         const playNowBtn = e.target.closest('.btn-play-now');
         const playNextBtn = e.target.closest('.btn-enqueue-next');
         const queueAddBtn = e.target.closest('.btn-enqueue-add');
+        const descriptorsBtn = e.target.closest('.btn-descriptors');
         const row = e.target.closest('.track-row');
 
         if (playNowBtn) {
@@ -864,8 +866,139 @@ if (libraryTbodyEl) {
         } else if (queueAddBtn) {
             e.stopPropagation();
             enqueueTrack(queueAddBtn.getAttribute('data-id'), false);
+        } else if (descriptorsBtn) {
+            e.stopPropagation();
+            openDescriptorsModal(descriptorsBtn.getAttribute('data-id'));
         } else if (row) {
             playTrack(row.getAttribute('data-id'));
+        }
+    });
+}
+
+async function openDescriptorsModal(trackId) {
+    const modalOverlay = document.getElementById('descriptors-modal-overlay');
+    const modalTitle = document.getElementById('descriptors-modal-title');
+    const modalSubtitle = document.getElementById('descriptors-modal-subtitle');
+    const modalBody = document.getElementById('descriptors-modal-body');
+
+    if (!modalOverlay || !modalBody) return;
+
+    modalOverlay.style.display = 'flex';
+    modalBody.innerHTML = `<div class="loading-cell">Loading acoustic descriptors...</div>`;
+
+    try {
+        const resp = await fetch(`/api/v1/descriptors/${trackId}`);
+        if (!resp.ok) throw new Error('Failed to fetch descriptors');
+        const data = await resp.json();
+        const t = data.track || {};
+        const d = data.descriptors || {};
+
+        modalTitle.textContent = `🧠 ${t.title || 'Acoustic Descriptors'}`;
+        modalSubtitle.textContent = `${t.artist || 'Unknown Artist'} — ${t.album || 'Unknown Album'}`;
+
+        const rows = [
+            {
+                name: '⚡ Energy',
+                val: (d.energy ?? 0.5).toFixed(3),
+                concept: (d.energy ?? 0.5) >= 0.5 ? 'High Intensity / Peak' : 'Mellow / Low Intensity',
+                pct: Math.round((d.energy ?? 0.5) * 100)
+            },
+            {
+                name: '😊 Valence',
+                val: (d.valence ?? 0.5).toFixed(3),
+                concept: (d.valence ?? 0.5) >= 0.5 ? 'Happy / Positive Mood' : 'Melancholic / Sad',
+                pct: Math.round((d.valence ?? 0.5) * 100)
+            },
+            {
+                name: '💃 Danceability',
+                val: (d.danceability ?? 0.5).toFixed(3),
+                concept: (d.danceability ?? 0.5) >= 0.5 ? 'Danceable (Rhythmic)' : 'Not Danceable',
+                pct: Math.round((d.danceability ?? 0.5) * 100)
+            },
+            {
+                name: '🎻 Acousticness',
+                val: (d.acousticness ?? 0.5).toFixed(3),
+                concept: (d.acousticness ?? 0.5) >= 0.5 ? 'Acoustic' : 'Electronic / Electric',
+                pct: Math.round((d.acousticness ?? 0.5) * 100)
+            },
+            {
+                name: '🎺 Instrumentalness',
+                val: (d.instrumentalness ?? 0.5).toFixed(3),
+                concept: (d.instrumentalness ?? 0.5) >= 0.5 ? 'Instrumental Track' : 'Vocal / Lyric-focused',
+                pct: Math.round((d.instrumentalness ?? 0.5) * 100)
+            },
+            {
+                name: '🗣️ Speechiness',
+                val: (d.speechiness ?? 0.1).toFixed(3),
+                concept: (d.speechiness ?? 0.1) >= 0.33 ? 'Spoken Word / Voice' : 'Music / Song',
+                pct: Math.round((d.speechiness ?? 0.1) * 100)
+            },
+            {
+                name: '🥁 Tempo',
+                val: `${(d.tempo_bpm ?? 120).toFixed(1)} BPM`,
+                concept: (d.tempo_bpm ?? 120) < 90 ? 'Slow (Lento)' : ((d.tempo_bpm ?? 120) <= 130 ? 'Moderate (Andante)' : 'Fast (Presto)'),
+                pct: Math.round(Math.max(0, Math.min(100, ((d.tempo_bpm ?? 120) - 60) / 140 * 100)))
+            },
+            {
+                name: '🎹 Key Signature',
+                val: d.key_signature || 'C Major',
+                concept: 'Tonal Key Center',
+                pct: null
+            },
+            {
+                name: '🔊 Loudness',
+                val: `${(d.loudness_lufs ?? -14).toFixed(2)} LUFS`,
+                concept: 'EBU R128 Integrated Target Leveling',
+                pct: Math.round(Math.max(0, Math.min(100, ((d.loudness_lufs ?? -14) + 60) / 60 * 100)))
+            }
+        ];
+
+        modalBody.innerHTML = `
+            <table class="descriptors-table">
+                <thead>
+                    <tr>
+                        <th>Descriptor</th>
+                        <th>Value</th>
+                        <th>Categorization Concept</th>
+                        <th>Bar Graph</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(r => `
+                        <tr>
+                            <td><span class="descriptor-name">${r.name}</span></td>
+                            <td><span class="descriptor-value-badge">${r.val}</span></td>
+                            <td><span class="descriptor-concept">${r.concept}</span></td>
+                            <td>
+                                ${r.pct !== null ? `
+                                    <div class="descriptor-bar-track">
+                                        <div class="descriptor-bar-fill" style="width: ${r.pct}%;"></div>
+                                    </div>
+                                ` : '<span class="descriptor-concept">—</span>'}
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (e) {
+        modalBody.innerHTML = `<div class="loading-cell" style="color: var(--danger-color);">Error loading descriptors: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+// Descriptors Modal Close Event Handlers
+const closeDescriptorsModalBtn = document.getElementById('btn-close-descriptors-modal');
+const descriptorsModalOverlay = document.getElementById('descriptors-modal-overlay');
+
+if (closeDescriptorsModalBtn) {
+    closeDescriptorsModalBtn.addEventListener('click', () => {
+        if (descriptorsModalOverlay) descriptorsModalOverlay.style.display = 'none';
+    });
+}
+if (descriptorsModalOverlay) {
+    descriptorsModalOverlay.addEventListener('click', (e) => {
+        if (e.target === descriptorsModalOverlay) {
+            descriptorsModalOverlay.style.display = 'none';
         }
     });
 }

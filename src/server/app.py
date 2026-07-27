@@ -231,6 +231,25 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
             "total_tracks": analyzer.total_tracks
         }
 
+    @app.get("/api/v1/descriptors/{track_id}")
+    def get_track_descriptors(track_id: str):
+        desc = db.get_track_descriptors(track_id)
+        track = db.get_track_by_id(track_id)
+        if not desc:
+            desc = {
+                "track_id": track_id,
+                "energy": 0.5,
+                "valence": 0.5,
+                "danceability": 0.5,
+                "acousticness": 0.5,
+                "instrumentalness": 0.5,
+                "speechiness": 0.1,
+                "tempo_bpm": 120.0,
+                "key_signature": "C Major",
+                "loudness_lufs": -14.0
+            }
+        return {"track": track, "descriptors": desc}
+
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         await manager.connect(websocket)

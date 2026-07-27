@@ -316,6 +316,13 @@ class TestClosedLoopServer(unittest.TestCase):
             data = json.loads(resp.read().decode('utf-8'))
             self.assertIn("lyrics", data)
 
+        # 3b. GET /api/v1/descriptors/{track_id} (Descriptors endpoint)
+        desc_url = f"{self.base_url}/api/v1/descriptors/{t_id}"
+        with urllib.request.urlopen(urllib.request.Request(desc_url)) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            self.assertIn("descriptors", data)
+
         # 4. POST /api/v1/queue/move (Reorder items)
         if status["queue_length"] >= 2:
             reo_url = f"{self.base_url}/api/v1/queue/move"

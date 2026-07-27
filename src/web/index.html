@@ -294,6 +294,22 @@
         </div>
     </aside>
 
+    <!-- Audio Descriptors Dialog Modal -->
+    <div class="modal-overlay" id="descriptors-modal-overlay" style="display: none;">
+        <div class="modal-dialog descriptors-modal">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h3 id="descriptors-modal-title">🧠 Acoustic Descriptors</h3>
+                    <span class="modal-subtitle" id="descriptors-modal-subtitle">Track audio feature analysis</span>
+                </div>
+                <button class="btn-icon-close" id="btn-close-descriptors-modal" title="Close">✕</button>
+            </div>
+            <div class="modal-body" id="descriptors-modal-body">
+                <div class="loading-cell">Loading audio descriptors...</div>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

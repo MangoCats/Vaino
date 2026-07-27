@@ -146,6 +146,7 @@ All REST endpoints operate under the base URI `/api/v1`.
 | `/api/v1/library/albums/{album_name}/tracks` | `GET` | `artist` (optional) | Returns tracks within specified album ordered by `track_number`. |
 | `/api/v1/art/{track_id}` | `GET` | None | Streams binary cover art image (`image/jpeg`, `image/png`). |
 | `/api/v1/lyrics/{track_id}` | `GET` | None | Returns lyrics content from `.lrc` or `.txt` file if present. |
+| `/api/v1/descriptors/{track_id}` | `GET` | None | Returns high-level audio descriptors and track metadata. |
 | `/api/v1/player/play` | `POST` | None | Starts or resumes audio playback. |
 | `/api/v1/player/pause` | `POST` | None | Pauses active audio playback. |
 | `/api/v1/player/skip` | `POST` | None | Advances to next track in queue (subject to skip throttle). |
