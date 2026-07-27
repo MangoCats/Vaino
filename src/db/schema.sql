@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS track_audio_descriptors (
     speechiness REAL,
     tempo_bpm REAL,
     key_signature TEXT,
-    loudness_lufs REAL
+    loudness_lufs REAL,
+    essentia_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS play_history (

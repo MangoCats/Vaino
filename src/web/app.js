@@ -954,6 +954,58 @@ async function openDescriptorsModal(trackId) {
             }
         ];
 
+        const esData = d.essentia || {};
+        const gender = esData.gender || {};
+        const timbre = esData.timbre || {};
+        const moodAgg = esData.mood_aggressive || {};
+        const moodParty = esData.mood_party || {};
+        const moodRelaxed = esData.mood_relaxed || {};
+        const moodSad = esData.mood_sad || {};
+        const genreRos = esData.genre_rosamerica || {};
+
+        if (gender.female !== undefined) {
+            rows.push({
+                name: '🎙️ Vocal Gender',
+                val: (gender.female >= (gender.male || 0.5)) ? `Female (${(gender.female * 100).toFixed(1)}%)` : `Male (${((gender.male || 0.5) * 100).toFixed(1)}%)`,
+                concept: 'AcousticBrainz Voice Gender Model',
+                pct: Math.round((gender.female || 0.5) * 100)
+            });
+        }
+        if (timbre.bright !== undefined) {
+            rows.push({
+                name: '🎸 Timbre Profile',
+                val: (timbre.bright >= 0.5) ? `Bright (${(timbre.bright * 100).toFixed(1)}%)` : `Dark (${((timbre.dark || 0.5) * 100).toFixed(1)}%)`,
+                concept: 'Spectral Centroid Timbre Balance',
+                pct: Math.round((timbre.bright || 0.5) * 100)
+            });
+        }
+        if (moodAgg.aggressive !== undefined) {
+            rows.push({
+                name: '💥 Mood Aggressive',
+                val: (moodAgg.aggressive >= 0.5) ? `Aggressive (${(moodAgg.aggressive * 100).toFixed(1)}%)` : `Not Aggressive (${((moodAgg.not_aggressive || 0.5) * 100).toFixed(1)}%)`,
+                concept: 'Zero Crossing Dynamics Model',
+                pct: Math.round((moodAgg.aggressive || 0.1) * 100)
+            });
+        }
+        if (moodParty.party !== undefined) {
+            rows.push({
+                name: '🎉 Mood Party',
+                val: (moodParty.party >= 0.5) ? `Party (${(moodParty.party * 100).toFixed(1)}%)` : `Mellow (${((moodParty.not_party || 0.5) * 100).toFixed(1)}%)`,
+                concept: 'Rhythmic Beat Density Model',
+                pct: Math.round((moodParty.party || 0.5) * 100)
+            });
+        }
+        if (genreRos.cla !== undefined) {
+            const topGenre = Object.entries(genreRos).sort((a, b) => b[1] - a[1])[0];
+            const genreNames = { cla: 'Classical', dan: 'Dance', hip: 'Hip-Hop', jaz: 'Jazz', pop: 'Pop', rhy: 'R&B/Soul', roc: 'Rock', spe: 'Speech' };
+            rows.push({
+                name: '📻 Primary Genre (Rosamerica)',
+                val: `${genreNames[topGenre[0]] || topGenre[0]} (${(topGenre[1] * 100).toFixed(1)}%)`,
+                concept: 'Multi-class Rosamerica ML Profile',
+                pct: Math.round((topGenre[1] || 0.1) * 100)
+            });
+        }
+
         modalBody.innerHTML = `
             <table class="descriptors-table">
                 <thead>

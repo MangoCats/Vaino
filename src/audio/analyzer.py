@@ -133,6 +133,10 @@ class AudioAnalyzer:
                     "F# Major", "G Major", "G# Major", "A Major", "A# Major", "B Major"]
             key_index = int(np.argmax(fft_data[:12])) % 12
             key_signature = keys[key_index]
+            # 9. Essentia High-Level AcousticBrainz Classifications
+            import json
+            from .essentia_extractor import EssentiaExtractor
+            essentia_data = EssentiaExtractor.extract_high_level(samples, sample_rate)
 
             return {
                 "energy": round(float(energy), 3),
@@ -143,7 +147,8 @@ class AudioAnalyzer:
                 "speechiness": speechiness,
                 "tempo_bpm": bpm,
                 "key_signature": key_signature,
-                "loudness_lufs": round(float(loudness_lufs), 2)
+                "loudness_lufs": round(float(loudness_lufs), 2),
+                "essentia_json": json.dumps(essentia_data)
             }
         except Exception as e:
             logger.debug(f"Error analyzing {file_path}: {e}")

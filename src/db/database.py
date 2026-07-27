@@ -41,6 +41,11 @@ class Database:
             if "title_sort_name" not in columns:
                 conn.execute("ALTER TABLE tracks ADD COLUMN title_sort_name TEXT")
 
+            cursor = conn.execute("PRAGMA table_info(track_audio_descriptors)")
+            desc_cols = [row["name"] for row in cursor.fetchall()]
+            if "essentia_json" not in desc_cols:
+                conn.execute("ALTER TABLE track_audio_descriptors ADD COLUMN essentia_json TEXT")
+
             # Backfill/re-compute sort names for existing DB rows to enforce article stripping
             cursor = conn.execute("SELECT id, title, artist, album, artist_sort_name, album_sort_name, title_sort_name FROM tracks")
             rows = cursor.fetchall()
@@ -477,10 +482,10 @@ class Database:
         sql = """
         INSERT INTO track_audio_descriptors (
             track_id, energy, valence, danceability, acousticness,
-            instrumentalness, speechiness, tempo_bpm, key_signature, loudness_lufs
+            instrumentalness, speechiness, tempo_bpm, key_signature, loudness_lufs, essentia_json
         ) VALUES (
             :track_id, :energy, :valence, :danceability, :acousticness,
-            :instrumentalness, :speechiness, :tempo_bpm, :key_signature, :loudness_lufs
+            :instrumentalness, :speechiness, :tempo_bpm, :key_signature, :loudness_lufs, :essentia_json
         )
         ON CONFLICT(track_id) DO UPDATE SET
             energy = excluded.energy,
@@ -491,7 +496,8 @@ class Database:
             speechiness = excluded.speechiness,
             tempo_bpm = excluded.tempo_bpm,
             key_signature = excluded.key_signature,
-            loudness_lufs = excluded.loudness_lufs
+            loudness_lufs = excluded.loudness_lufs,
+            essentia_json = excluded.essentia_json
         """
         records = []
         for track_id, d in batch:
@@ -506,6 +512,7 @@ class Database:
             rec.setdefault("tempo_bpm", 120.0)
             rec.setdefault("key_signature", "C Major")
             rec.setdefault("loudness_lufs", -14.0)
+            rec.setdefault("essentia_json", None)
             records.append(rec)
 
         conn = self.get_connection()
@@ -520,7 +527,16 @@ class Database:
         try:
             cursor = conn.execute("SELECT * FROM track_audio_descriptors WHERE track_id = ?", (track_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            res = dict(row)
+            if res.get("essentia_json"):
+                try:
+                    import json
+                    res["essentia"] = json.loads(res["essentia_json"])
+                except Exception:
+                    res["essentia"] = None
+            return res
         finally:
             conn.close()
 
