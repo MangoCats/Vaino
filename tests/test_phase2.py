@@ -58,5 +58,66 @@ class TestVainoPhase2(unittest.TestCase):
             self.assertEqual(sr, 44100)
             self.assertEqual(ch, 2)
 
+    def test_volume_pcm_scaling(self):
+        """[REQ-AUD-050] Verify dynamic master volume PCM scaling (0–100%) without clipping"""
+        engine = AudioEngine()
+        chunk = np.array([[0.8, -0.6], [1.0, -1.0]], dtype=np.float32)
+
+        # 50% Volume -> scale factor 0.5
+        engine.set_volume(50)
+        scaled_50 = (chunk * engine.volume).astype(np.float32)
+        self.assertAlmostEqual(scaled_50[0, 0], 0.4, places=4)
+        self.assertAlmostEqual(scaled_50[0, 1], -0.3, places=4)
+        self.assertAlmostEqual(scaled_50[1, 0], 0.5, places=4)
+        self.assertAlmostEqual(scaled_50[1, 1], -0.5, places=4)
+
+        # 0% Volume -> all zeros
+        engine.set_volume(0)
+        scaled_0 = (chunk * engine.volume).astype(np.float32)
+        self.assertTrue(np.all(scaled_0 == 0.0))
+
+        # 100% Volume -> identity
+        engine.set_volume(100)
+        scaled_100 = (chunk * engine.volume).astype(np.float32)
+        self.assertTrue(np.array_equal(scaled_100, chunk))
+
+    def test_multi_format_decoding(self):
+        """[REQ-AUD-010] Verify PCM audio decoding of synthetic WAV file"""
+        import wave
+        import tempfile
+        wav_path = os.path.join(tempfile.gettempdir(), "test_synth.wav")
+        try:
+            # Generate a 1-second 44.1kHz 16-bit stereo sine wave WAV file
+            sample_rate = 44100
+            num_frames = sample_rate
+            t = np.linspace(0, 1.0, num_frames, False)
+            tone = (np.sin(2 * np.pi * 440 * t) * 32767).astype(np.int16)
+            stereo_signal = np.column_stack((tone, tone))
+
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(2)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(stereo_signal.tobytes())
+
+            engine = AudioEngine()
+            samples, sr, channels = engine._load_audio_file({
+                "file_path": wav_path,
+                "title": "Synthetic Tone",
+                "start_offset_ms": 0,
+                "end_offset_ms": None
+            })
+
+            self.assertEqual(sr, 44100)
+            self.assertEqual(channels, 2)
+            self.assertGreater(len(samples), 0)
+            self.assertTrue(np.max(samples) <= 1.0 and np.min(samples) >= -1.0)
+        finally:
+            if os.path.exists(wav_path):
+                try:
+                    os.remove(wav_path)
+                except Exception:
+                    pass
+
 if __name__ == "__main__":
     unittest.main()

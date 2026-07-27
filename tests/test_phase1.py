@@ -42,5 +42,23 @@ class TestVainoPhase1(unittest.TestCase):
         self.assertEqual(status["state"], "IDLE")
         self.assertEqual(status["volume"], 80)
 
+    def test_incremental_scan_benchmark(self):
+        """[REQ-DB-020] Benchmark incremental scanning (<0.1s re-scan on cached files)"""
+        import time
+        if os.path.exists(self.music_dir):
+            scanner = MediaScanner(db=self.db, music_dir=self.music_dir)
+            # Initial scan -> populates file_mtime / file_size cache
+            total, updated1, skipped1 = scanner.scan_directory()
+            self.assertGreater(total, 0)
+
+            # Benchmark second scan -> all files should be skipped via fast mtime/size check
+            t_start = time.time()
+            total2, updated2, skipped2 = scanner.scan_directory()
+            elapsed = time.time() - t_start
+
+            self.assertEqual(updated2, 0)
+            self.assertEqual(skipped2, total)
+            self.assertLess(elapsed, 0.1, f"Incremental rescan took {elapsed:.3f}s, exceeding 0.1s threshold")
+
 if __name__ == "__main__":
     unittest.main()
