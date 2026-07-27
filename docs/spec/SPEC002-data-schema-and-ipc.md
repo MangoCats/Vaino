@@ -145,16 +145,17 @@ All REST endpoints operate under the base URI `/api/v1`.
 | `/api/v1/library/albums` | `GET` | `limit`, `offset`, `artist`, `letter`, `q` | Returns paginated album tiles sorted by `album_sort_name`. |
 | `/api/v1/library/albums/{album_name}/tracks` | `GET` | `artist` (optional) | Returns tracks within specified album ordered by `track_number`. |
 | `/api/v1/art/{track_id}` | `GET` | None | Streams binary cover art image (`image/jpeg`, `image/png`). |
+| `/api/v1/lyrics/{track_id}` | `GET` | None | Returns lyrics content from `.lrc` or `.txt` file if present. |
 | `/api/v1/player/play` | `POST` | None | Starts or resumes audio playback. |
 | `/api/v1/player/pause` | `POST` | None | Pauses active audio playback. |
 | `/api/v1/player/skip` | `POST` | None | Advances to next track in queue (subject to skip throttle). |
-| `/api/v1/player/skip_back` | `POST` | None | Returns to previous track in playback history stack. |
+| `/api/v1/player/previous` | `POST` | None | Returns to previous track in playback history stack. |
 | `/api/v1/player/volume` | `POST` | `{"volume": 0..100}` | Sets master audio volume percentage. |
-| `/api/v1/queue/enqueue` | `POST` | `{"track_id": "...", "play_next": bool}` | Appends or inserts track/album into active playback queue. |
-| `/api/v1/queue/{index}` | `DELETE` | Path param `index` | Removes item at 0-based queue index. |
-| `/api/v1/queue/reorder` | `POST` | `{"from_index": int, "to_index": int}` | Reorders item in queue. |
+| `/api/v1/queue` | `GET` | None | Returns active playback queue, current track, and history state. |
+| `/api/v1/queue/add` | `POST` | `{"track_id": "...", "play_next": bool}` | Appends or inserts track/album into active playback queue. |
+| `/api/v1/queue/move` | `POST` | `{"from_index": int, "to_index": int}` | Reorders item in queue. |
+| `/api/v1/queue/remove/{index}` | `DELETE` | Path param `index` | Removes item at 0-based queue index. |
 | `/api/v1/queue/clear` | `DELETE` | None | Removes all items from active queue. |
-| `/api/v1/scanner/rescan` | `POST` | None | Triggers background library rescan & MusicBrainz resolution. |
 
 ---
 
