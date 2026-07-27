@@ -8,9 +8,18 @@ class Database:
         self._init_db()
 
     def get_connection(self) -> sqlite3.Connection:
+        if self.db_path == ":memory:":
+            if not hasattr(self, "_mem_conn") or self._mem_conn is None:
+                self._mem_conn = sqlite3.connect(":memory:")
+                self._mem_conn.row_factory = sqlite3.Row
+            return self._mem_conn
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def close_connection(self, conn: sqlite3.Connection):
+        if self.db_path != ":memory:":
+            conn.close()
 
     def _init_db(self):
         schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
@@ -85,7 +94,7 @@ class Database:
 
             conn.commit()
         finally:
-            conn.close()
+            self.close_connection(conn)
 
     def get_existing_file_map(self) -> Dict[str, Tuple[float, int]]:
         """Returns {file_path: (file_mtime, file_size)} for fast incremental scanning."""
@@ -639,7 +648,7 @@ class Database:
             conn.commit()
             return album_id
         finally:
-            conn.close()
+            self.close_connection(conn)
 
     def get_album_cover_art(self, album_name: str, artist_name: Optional[str] = None) -> Optional[Tuple[bytes, str]]:
         """Retrieves album cover art (image_bytes, mime_type) from album_cover_art table."""
@@ -659,5 +668,5 @@ class Database:
                 return row["image_data"], row["mime_type"]
             return None
         finally:
-            conn.close()
+            self.close_connection(conn)
 
