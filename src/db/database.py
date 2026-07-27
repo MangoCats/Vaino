@@ -398,26 +398,34 @@ class Database:
             conn.close()
 
     def get_album_tracks(self, album_name: str, artist_name: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020B] Returns all tracks in an album sorted strictly by track_number."""
+        """[REQ-UI-020B] Returns all tracks in an album sorted strictly by track_number and passage offset."""
         conn = self.get_connection()
         try:
+            # Check if sliced passage tracks exist for this album
             if artist_name:
-                sql = """
-                SELECT * FROM tracks
-                WHERE album = ? AND artist = ?
-                ORDER BY CASE WHEN track_number IS NULL OR track_number = 0 THEN 999 ELSE track_number END ASC, title ASC
-                """
-                cursor = conn.execute(sql, (album_name, artist_name))
+                cursor = conn.execute("SELECT COUNT(*) FROM tracks WHERE album = ? AND artist = ? AND end_offset_ms IS NOT NULL", (album_name, artist_name))
             else:
-                sql = """
-                SELECT * FROM tracks
-                WHERE album = ?
-                ORDER BY CASE WHEN track_number IS NULL OR track_number = 0 THEN 999 ELSE track_number END ASC, title ASC
-                """
-                cursor = conn.execute(sql, (album_name,))
+                cursor = conn.execute("SELECT COUNT(*) FROM tracks WHERE album = ? AND end_offset_ms IS NOT NULL", (album_name,))
+            has_passages = cursor.fetchone()[0] > 0
+
+            where_clause = "album = ?"
+            params = [album_name]
+            if artist_name:
+                where_clause += " AND artist = ?"
+                params.append(artist_name)
+            
+            if has_passages:
+                where_clause += " AND end_offset_ms IS NOT NULL"
+
+            sql = f"""
+            SELECT * FROM tracks
+            WHERE {where_clause}
+            ORDER BY CASE WHEN track_number IS NULL OR track_number = 0 THEN 999 ELSE track_number END ASC, start_offset_ms ASC, title ASC
+            """
+            cursor = conn.execute(sql, tuple(params))
             return [dict(row) for row in cursor.fetchall()]
         finally:
-            conn.close()
+            self.close_connection(conn)
 
     def get_total_track_count(self, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None, letter: Optional[str] = None) -> int:
         conn = self.get_connection()
