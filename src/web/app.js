@@ -937,6 +937,21 @@ if (btnCloseQueue) btnCloseQueue.addEventListener('click', () => toggleQueueDraw
 if (queueOverlay) queueOverlay.addEventListener('click', () => toggleQueueDrawer(false));
 if (btnClearQueue) btnClearQueue.addEventListener('click', () => { clearQueue(); currentQueuePage = 1; });
 
+// Keyboard Shortcuts Listener [REQ-UI-010C]
+document.addEventListener('keydown', (e) => {
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+    if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+    } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        skipTrack();
+    } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        skipBack();
+    }
+});
+
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
     initWebSocket();

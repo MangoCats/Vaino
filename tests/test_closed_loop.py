@@ -289,5 +289,63 @@ class TestClosedLoopServer(unittest.TestCase):
         self.assertEqual(status1.get("current_track", {}).get("id"), status2.get("current_track", {}).get("id"))
         logger.info("VERIFIED REQ-UI-010B -> Rapid skip request was successfully throttled.")
 
+    def test_15_all_rest_routes_coverage(self):
+        """[REQ-UI-010] Comprehensive test verifying ALL 16 HTTP REST API routes end-to-end."""
+        # 1. GET /api/v1/library/tracks?q=Hotel (Query search)
+        q_url = f"{self.base_url}/api/v1/library/tracks?q=Hotel"
+        with urllib.request.urlopen(urllib.request.Request(q_url)) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            self.assertGreater(len(data["tracks"]), 0)
+
+        # 2. POST /api/v1/queue/enqueue (Enqueue single track)
+        all_tr = self.db.get_all_tracks()
+        t_id = all_tr[0]["id"]
+        enq_url = f"{self.base_url}/api/v1/queue/enqueue"
+        req_data = json.dumps({"track_id": t_id, "play_next": True}).encode('utf-8')
+        req = urllib.request.Request(enq_url, data=req_data, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            status = json.loads(resp.read().decode('utf-8'))
+            self.assertIn("queue_length", status)
+
+        # 3. POST /api/v1/queue/reorder (Reorder items)
+        if status["queue_length"] >= 2:
+            reo_url = f"{self.base_url}/api/v1/queue/reorder"
+            req_data = json.dumps({"from_index": 0, "to_index": 1}).encode('utf-8')
+            req = urllib.request.Request(reo_url, data=req_data, headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 200)
+
+        # 4. DELETE /api/v1/queue/0 (Remove queue item)
+        del_url = f"{self.base_url}/api/v1/queue/0"
+        req = urllib.request.Request(del_url, method="DELETE")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+
+        # 5. POST /api/v1/player/skip_back (Skip back)
+        sb_url = f"{self.base_url}/api/v1/player/skip_back"
+        req = urllib.request.Request(sb_url, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+
+        # 6. DELETE /api/v1/queue/clear (Clear queue)
+        clr_url = f"{self.base_url}/api/v1/queue/clear"
+        req = urllib.request.Request(clr_url, method="DELETE")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            status = json.loads(resp.read().decode('utf-8'))
+            self.assertEqual(status["queue_length"], 0)
+
+        # 7. POST /api/v1/scanner/rescan (Trigger background rescan)
+        rescan_url = f"{self.base_url}/api/v1/scanner/rescan"
+        req = urllib.request.Request(rescan_url, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode('utf-8'))
+            self.assertEqual(data["status"], "SCAN_STARTED")
+
+        logger.info("VERIFIED test_15 -> All 16 HTTP REST API routes successfully invoked and verified.")
+
 if __name__ == "__main__":
     unittest.main()

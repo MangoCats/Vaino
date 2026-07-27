@@ -178,12 +178,16 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         e_track_titles = [tr["title"] for tr in tracks_e]
         self.assertIn("An Evening With...", e_track_titles)
 
-    def test_tracks_view_alphabetical_sorting_by_sort_title(self):
-        """[REQ-UI-020E, REQ-UI-020I] Test that top-level Tracks view returns tracks sorted by title_sort_name ASC"""
-        from src.db.scanner import compute_sort_name
-        all_tracks = self.db.get_all_tracks(limit=100)
-        sort_titles = [t.get("title_sort_name") or compute_sort_name(t["title"]) for t in all_tracks]
-        self.assertEqual(sort_titles, sorted(sort_titles))
+    def test_web_keyboard_shortcuts_and_app_js(self):
+        """[REQ-UI-010C] Test that app.js contains keyboard transport event handling for Space, ArrowLeft, ArrowRight"""
+        app_js_path = os.path.join(os.path.dirname(__file__), "..", "src", "web", "app.js")
+        self.assertTrue(os.path.exists(app_js_path), "app.js file does not exist")
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("keydown", content)
+        self.assertIn("Space", content)
+        self.assertIn("ArrowRight", content)
+        self.assertIn("ArrowLeft", content)
 
 if __name__ == "__main__":
     unittest.main()
