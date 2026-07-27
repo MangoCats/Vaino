@@ -1161,8 +1161,8 @@ body.kiosk-mode .track-album {
 .table-action-group {
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
+    gap: 4px;
+    flex-wrap: nowrap;
 }
 
 .btn-action-sm {
@@ -1228,6 +1228,11 @@ body.kiosk-mode .track-album {
     background: rgba(168, 85, 247, 0.15);
     border: 1px solid rgba(168, 85, 247, 0.3);
     color: #c084fc;
+    padding: 4px 8px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    line-height: 1;
+    flex-shrink: 0;
 }
 
 .btn-descriptors:hover {

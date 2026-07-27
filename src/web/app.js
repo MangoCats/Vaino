@@ -461,7 +461,7 @@ function renderLibrary(tracks, offset = 0) {
                     <button class="btn-action-sm btn-play-now" data-id="${t.id}" title="Play Now">▶ Play</button>
                     <button class="btn-action-sm btn-enqueue-next" data-id="${t.id}" title="Play Next">➕ Next</button>
                     <button class="btn-action-sm btn-enqueue-add" data-id="${t.id}" title="Add to Queue">📥 Queue</button>
-                    <button class="btn-action-sm btn-descriptors" data-id="${t.id}" title="View Acoustic Descriptors">🧠 Descriptors</button>
+                    <button class="btn-action-sm btn-descriptors" data-id="${t.id}" title="View Acoustic Descriptors">🧠</button>
                 </div>
             </td>
         </tr>
