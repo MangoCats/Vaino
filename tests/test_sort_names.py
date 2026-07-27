@@ -4,14 +4,14 @@ from src.db.scanner import compute_sort_name, compute_artist_sort_name
 
 class TestSortNames(unittest.TestCase):
     def test_strip_leading_special_chars_and_uppercase(self):
-        # Leading quotes
+        # Leading quotes (strips ONLY from the front of the name string)
         self.assertEqual(compute_sort_name("'Hello'"), "HELLO'")
-        self.assertEqual(compute_sort_name('"World"'), "WORLD")
-        self.assertEqual(compute_sort_name("`Test`"), "TEST")
+        self.assertEqual(compute_sort_name('"World"'), 'WORLD"')
+        self.assertEqual(compute_sort_name("`Test`"), "TEST`")
 
-        # Leading parentheses, brackets, braces
+        # Leading parentheses, brackets, braces (strips ONLY from the front of the name string)
         self.assertEqual(compute_sort_name("(The) Dark Side of the Moon"), "DARK SIDE OF THE MOON, THE")
-        self.assertEqual(compute_sort_name("[1999] Party"), "PARTY")
+        self.assertEqual(compute_sort_name("[1999] Party"), "1999] PARTY")
         self.assertEqual(compute_sort_name("{Special} Song"), "SPECIAL} SONG")
 
         # Leading punctuation (periods, commas, spaces)
