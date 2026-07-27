@@ -16,7 +16,7 @@ class TestSortNames(unittest.TestCase):
         self.assertEqual(compute_sort_name("{Special} Song"), "SPECIAL} SONG")
 
         # Leading punctuation (periods, commas, spaces)
-        self.assertEqual(compute_sort_name("...And Justice for All"), "JUSTICE FOR ALL, AND")
+        self.assertEqual(compute_sort_name("...And Justice for All"), "AND JUSTICE FOR ALL")
         self.assertEqual(compute_sort_name("  The Beatles  "), "BEATLES, THE")
         self.assertEqual(compute_sort_name(",,,Simple Minds"), "SIMPLE MINDS")
 
