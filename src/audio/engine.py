@@ -306,8 +306,6 @@ class AudioEngine:
         logger.info("Skipping to next track...")
         next_track = None
         with self._lock:
-            if self.current_track:
-                self.history_stack.append(self.current_track)
             self._replenish_queue_if_needed()
             if self.queue:
                 next_track = self.queue.pop(0)

@@ -79,18 +79,11 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
         audio_engine.pause()
         return audio_engine.get_status()
 
-    last_skip_time = 0.0
-
     @app.post("/api/v1/player/skip")
     def skip_track():
-        nonlocal last_skip_time
-        now = time.time()
-        # [REQ-UI-010B] Multi-User Skip Throttling (5-second throttle window)
-        if now - last_skip_time < 5.0 and audio_engine.state == "PLAYING":
-            logger.info("Skip throttled: Please wait 5 seconds between skips.")
-            return audio_engine.get_status()
-        
-        last_skip_time = now
+        audio_engine.skip()
+        return audio_engine.get_status()
+
     @app.post("/api/v1/player/previous")
     def previous_track():
         audio_engine.skip_back()

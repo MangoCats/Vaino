@@ -517,7 +517,15 @@ btnPlayPause.addEventListener('click', async () => {
 });
 
 btnSkip.addEventListener('click', async () => {
-    await fetch('/api/v1/player/skip', { method: 'POST' });
+    try {
+        const res = await fetch('/api/v1/player/skip', { method: 'POST' });
+        if (res.ok) {
+            const status = await res.json();
+            updateUI(status);
+        }
+    } catch (e) {
+        console.error('Error skipping track:', e);
+    }
 });
 
 volumeSlider.addEventListener('input', (e) => {
