@@ -22,17 +22,24 @@ def normalize_diacritics(text: str) -> str:
     nfkd = unicodedata.normalize('NFD', text)
     return "".join(c for c in nfkd if unicodedata.category(c) != 'Mn')
 
+LEADING_SORT_STRIP_CHARS = " \t\n\r'\"`()[]{},."
+
 def compute_sort_name(raw_name: str) -> str:
     """
     [REQ-UI-020I, REQ-UI-020J] General sort name computation:
-    1. Strips leading English articles ('The ', 'A ', 'An ') and appends them after a comma.
-    2. Names already in 'Surname, Given' or 'Title, The' format without leading articles are preserved as-is.
-    3. Applies diacritic normalization per [REQ-UI-020I].
+    1. Strips leading special characters: whitespace, ', ", `, (, ), [, ], {, }, ,, .
+    2. Strips leading English articles ('The ', 'A ', 'An ') and appends them after a comma.
+    3. Preserves 'Surname, Given' structure if present.
+    4. Applies diacritic normalization.
+    5. Converts final sort order string to ALL CAPS for case-insensitive sorting.
     """
     if not raw_name or not str(raw_name).strip():
         return ""
 
-    text = str(raw_name).strip()
+    text = str(raw_name).lstrip(LEADING_SORT_STRIP_CHARS)
+    if not text:
+        return ""
+
     lower_text = text.lower()
 
     if lower_text.startswith("the "):
@@ -44,18 +51,20 @@ def compute_sort_name(raw_name: str) -> str:
     else:
         res = text
 
-    return normalize_diacritics(res)
+    return normalize_diacritics(res).upper()
 
 def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str:
     """
     [REQ-MB-020D, REQ-UI-020J] Uses official MusicBrainz sort name if present (e.g. 'Springsteen, Bruce' or 'Mötley Crüe').
-    If MusicBrainz sort tag is omitted, applies general article-stripping & diacritic sort rules.
+    If MusicBrainz sort tag is omitted, applies general article-stripping, leading character removal & diacritic sort rules.
+    Converts result to ALL CAPS for consistent sorting.
     """
     if embedded and str(embedded).strip():
-        return normalize_diacritics(str(embedded).strip())
+        clean_emb = str(embedded).lstrip(LEADING_SORT_STRIP_CHARS)
+        return normalize_diacritics(clean_emb).upper()
     
     if not artist or not str(artist).strip():
-        return "Unknown Artist"
+        return "UNKNOWN ARTIST"
 
     return compute_sort_name(artist)
 

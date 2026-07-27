@@ -57,7 +57,7 @@ class Database:
                     cur_alb_sort = row["album_sort_name"]
                     cur_ttl_sort = row["title_sort_name"]
 
-                    art_sort = cur_art_sort if cur_art_sort else compute_artist_sort_name(row["artist"])
+                    art_sort = compute_artist_sort_name(row["artist"], cur_art_sort)
                     alb_sort = compute_sort_name(row["album"])
                     ttl_sort = compute_sort_name(row["title"])
 
