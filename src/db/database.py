@@ -46,6 +46,19 @@ class Database:
             if "essentia_json" not in desc_cols:
                 conn.execute("ALTER TABLE track_audio_descriptors ADD COLUMN essentia_json TEXT")
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS album_cover_art (
+                    album_id TEXT PRIMARY KEY,
+                    album_name TEXT NOT NULL,
+                    artist_name TEXT,
+                    image_data BLOB NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_album_cover_art_album ON album_cover_art(album_name);")
+
             # Backfill/re-compute sort names for existing DB rows to enforce article stripping
             cursor = conn.execute("SELECT id, title, artist, album, artist_sort_name, album_sort_name, title_sort_name FROM tracks")
             rows = cursor.fetchall()
