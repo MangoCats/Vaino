@@ -250,6 +250,11 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
                 "key_signature": "C Major",
                 "loudness_lufs": -14.0
             }
+        
+        if desc and not desc.get("essentia"):
+            from .audio.essentia_extractor import EssentiaExtractor
+            desc["essentia"] = EssentiaExtractor._get_default_descriptors()
+
         return {"track": track, "descriptors": desc, "is_fallback": is_fallback}
 
     @app.websocket("/ws")
