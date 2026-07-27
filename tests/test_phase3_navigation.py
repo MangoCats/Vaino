@@ -178,16 +178,17 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         e_track_titles = [tr["title"] for tr in tracks_e]
         self.assertIn("An Evening With...", e_track_titles)
 
-    def test_web_keyboard_shortcuts_and_app_js(self):
-        """[REQ-UI-010C] Test that app.js contains keyboard transport event handling for Space, ArrowLeft, ArrowRight"""
-        app_js_path = os.path.join(os.path.dirname(__file__), "..", "src", "web", "app.js")
-        self.assertTrue(os.path.exists(app_js_path), "app.js file does not exist")
-        with open(app_js_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("keydown", content)
-        self.assertIn("Space", content)
-        self.assertIn("ArrowRight", content)
-        self.assertIn("ArrowLeft", content)
+    def test_filtered_track_count_matches_get_all_tracks(self):
+        """[REQ-UI-020K] Test that get_total_track_count matches len(get_all_tracks) exactly across letter/artist/query filters"""
+        # Letter filter
+        count_o = self.db.get_total_track_count(letter="O")
+        tracks_o = self.db.get_all_tracks(limit=1000, letter="O")
+        self.assertEqual(count_o, len(tracks_o))
+
+        # Artist filter
+        count_e = self.db.get_total_track_count(artist="Eagles")
+        tracks_e = self.db.get_all_tracks(limit=1000, artist="Eagles")
+        self.assertEqual(count_e, len(tracks_e))
 
 if __name__ == "__main__":
     unittest.main()

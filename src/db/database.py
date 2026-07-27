@@ -397,26 +397,28 @@ class Database:
         try:
             where_clauses = []
             params = []
+            join_clause = ""
             if artist:
-                where_clauses.append("artist = ?")
-                params.append(artist)
+                join_clause = "JOIN track_artists ta ON t.id = ta.track_id"
+                where_clauses.append("(ta.artist_name = ? OR t.artist = ?)")
+                params.extend([artist, artist])
             if album:
-                where_clauses.append("album = ?")
+                where_clauses.append("t.album = ?")
                 params.append(album)
             if letter:
                 if letter == "#":
-                    where_clauses.append("(COALESCE(title_sort_name, title) GLOB '[0-9]*' OR artist GLOB '[0-9]*')")
+                    where_clauses.append("COALESCE(t.title_sort_name, t.title) GLOB '[0-9]*'")
                 else:
                     l = f"{letter}%"
-                    where_clauses.append("(COALESCE(title_sort_name, title) LIKE ? OR artist LIKE ?)")
-                    params.extend([l, l])
+                    where_clauses.append("COALESCE(t.title_sort_name, t.title) LIKE ?")
+                    params.append(l)
             if query:
                 q = f"%{query}%"
-                where_clauses.append("(title LIKE ? OR artist LIKE ? OR album LIKE ?)")
-                params.extend([q, q, q])
+                where_clauses.append("(t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.artist_sort_name LIKE ?)")
+                params.extend([q, q, q, q])
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-            sql = f"SELECT COUNT(*) as cnt FROM tracks {where_str}"
+            sql = f"SELECT COUNT(DISTINCT t.id) as cnt FROM tracks t {join_clause} {where_str}"
             cursor = conn.execute(sql, tuple(params))
             row = cursor.fetchone()
             return row["cnt"] if row else 0
