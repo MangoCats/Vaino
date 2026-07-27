@@ -461,7 +461,7 @@ function renderLibrary(tracks, offset = 0) {
                     <button class="btn-action-sm btn-play-now" data-id="${t.id}" title="Play Now">▶ Play</button>
                     <button class="btn-action-sm btn-enqueue-next" data-id="${t.id}" title="Play Next">➕ Next</button>
                     <button class="btn-action-sm btn-enqueue-add" data-id="${t.id}" title="Add to Queue">📥 Queue</button>
-                    <button class="btn-action-sm btn-descriptors" data-id="${t.id}" title="View Acoustic Descriptors">🧠</button>
+                    <button class="btn-action-sm btn-descriptors" data-id="${t.id}" title="View Acoustic Descriptors">🧠 Descriptors</button>
                 </div>
             </td>
         </tr>
@@ -743,6 +743,7 @@ function renderQueue(currentTrack, queueList) {
                 <div class="queue-item-actions">
                     ${!isFirst ? `<button class="btn-queue-action" onclick="moveQueueItem(${actualIdx}, ${actualIdx - 1})" title="Move Up">▲</button>` : ''}
                     ${!isLast ? `<button class="btn-queue-action" onclick="moveQueueItem(${actualIdx}, ${actualIdx + 1})" title="Move Down">▼</button>` : ''}
+                    <button class="btn-queue-action" onclick="openDescriptorsModal('${item.id}')" title="View Acoustic Descriptors">🧠</button>
                     <button class="btn-queue-action btn-queue-delete" onclick="removeQueueItem(${actualIdx})" title="Remove from Queue">🗑</button>
                 </div>
             </div>
