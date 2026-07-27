@@ -262,8 +262,24 @@ body {
 .controls-toolbar {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
     gap: 16px;
     margin-top: 20px;
+    width: 100%;
+}
+
+.playback-btn-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.volume-queue-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
 }
 
 .btn-control {
@@ -308,7 +324,6 @@ body {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-left: auto;
     background: rgba(255, 255, 255, 0.04);
     padding: 8px 16px;
     border-radius: 20px;
@@ -334,12 +349,17 @@ body {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     padding: 24px;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .library-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
     margin-bottom: 20px;
 }
 
@@ -354,7 +374,8 @@ body {
     padding: 8px 16px;
     border-radius: var(--radius-sm);
     color: var(--text-main);
-    width: 280px;
+    width: 240px;
+    max-width: 100%;
     font-size: 0.9rem;
     outline: none;
     transition: border-color 0.2s;
@@ -826,7 +847,7 @@ body.kiosk-mode .track-album {
     position: fixed;
     top: 0;
     right: 0;
-    width: 420px;
+    width: min(440px, 100vw);
     height: 100vh;
     background: #111420;
     border-left: 1px solid var(--border-color);
@@ -834,8 +855,9 @@ body.kiosk-mode .track-album {
     z-index: 999;
     display: flex;
     flex-direction: column;
-    padding: 24px;
+    padding: 20px;
     box-sizing: border-box;
+    overflow-x: hidden;
 }
 
 .queue-drawer-header {

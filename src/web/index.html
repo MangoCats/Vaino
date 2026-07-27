@@ -56,27 +56,31 @@
 
                     <!-- Transport Controls -->
                     <div class="controls-toolbar">
-                        <button class="btn-control btn-secondary" id="btn-prev" title="Previous Track">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-                        </button>
-                        <button class="btn-control btn-primary" id="btn-play-pause" title="Play / Pause">
-                            <svg id="icon-play" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                            <svg id="icon-pause" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                        </button>
-                        <button class="btn-control btn-secondary" id="btn-skip" title="Skip Track">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-                        </button>
-
-                        <div class="volume-container">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
-                            <input type="range" id="volume-slider" min="0" max="100" value="80" class="volume-slider">
-                            <span class="volume-value" id="volume-value">80%</span>
+                        <div class="playback-btn-group">
+                            <button class="btn-control btn-secondary" id="btn-prev" title="Previous Track">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                            </button>
+                            <button class="btn-control btn-primary" id="btn-play-pause" title="Play / Pause">
+                                <svg id="icon-play" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                <svg id="icon-pause" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                            </button>
+                            <button class="btn-control btn-secondary" id="btn-skip" title="Skip Track">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                            </button>
                         </div>
 
-                        <button class="btn-control btn-secondary btn-queue-toggle" id="btn-toggle-queue" title="View Queue">
-                            <span>≡ Queue</span>
-                            <span class="queue-badge" id="queue-badge">0</span>
-                        </button>
+                        <div class="volume-queue-group">
+                            <div class="volume-container">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+                                <input type="range" id="volume-slider" min="0" max="100" value="80" class="volume-slider">
+                                <span class="volume-value" id="volume-value">80%</span>
+                            </div>
+
+                            <button class="btn-control btn-secondary btn-queue-toggle" id="btn-toggle-queue" title="View Queue">
+                                <span>≡ Queue</span>
+                                <span class="queue-badge" id="queue-badge">0</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
