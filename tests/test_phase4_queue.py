@@ -96,5 +96,21 @@ class TestVainoPhase4Queue(unittest.TestCase):
         # t2 should be back at index 0 of queue
         self.assertEqual(self.engine.queue[0]["id"], "q2")
 
+    def test_large_queue_clear_and_status_sync(self):
+        """[REQ-QUE-030] Test queue behavior with 500 items and clearing all items"""
+        large_queue = [{"id": f"q_{i}", "file_format": "MP3", "title": f"Track {i}", "artist": "Various", "album": "Compilation", "duration_ms": 180000, "file_path": r"C:\music\track.mp3"} for i in range(500)]
+        self.engine.current_track = large_queue[0]
+        self.engine.queue = large_queue[1:]
+
+        self.assertEqual(len(self.engine.queue), 499)
+        status = self.engine.get_status()
+        self.assertEqual(status["queue_length"], 499)
+
+        # Clear queue
+        self.engine.clear_queue()
+        self.assertEqual(len(self.engine.queue), 0)
+        status_cleared = self.engine.get_status()
+        self.assertEqual(status_cleared["queue_length"], 0)
+
 if __name__ == "__main__":
     unittest.main()

@@ -658,6 +658,8 @@ if (kioskBtn) {
 // --- Playlist Queue Management UI [REQ-QUE-010, REQ-QUE-020, REQ-QUE-030, REQ-QUE-040] ---
 
 let isQueueOpen = false;
+let currentQueuePage = 1;
+let queuePageSize = 50;
 
 function toggleQueueDrawer(show = null) {
     const drawer = document.getElementById('queue-drawer');
@@ -680,7 +682,8 @@ function renderQueue(currentTrack, queueList) {
     const nowPlayingContainer = document.getElementById('queue-now-playing');
     const queueListContainer = document.getElementById('queue-items-list');
 
-    if (subtitle) subtitle.textContent = `${queueList.length} track${queueList.length === 1 ? '' : 's'} in queue`;
+    const totalQueued = queueList ? queueList.length : 0;
+    if (subtitle) subtitle.textContent = `${totalQueued} track${totalQueued === 1 ? '' : 's'} in queue`;
 
     if (nowPlayingContainer) {
         if (currentTrack) {
@@ -697,35 +700,70 @@ function renderQueue(currentTrack, queueList) {
         }
     }
 
-    if (queueListContainer) {
-        if (!queueList || queueList.length === 0) {
-            queueListContainer.innerHTML = `<div class="loading-cell">Queue is empty.</div>`;
-            return;
-        }
+    if (!queueListContainer) return;
 
-        queueListContainer.innerHTML = queueList.map((item, idx) => {
-            const artSrc = item.has_cover_art ? `/api/v1/art/${item.id}` : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><rect width='140' height='140' fill='%231e2230'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%234a5568' font-size='24'>🎵</text></svg>";
-            const isFirst = idx === 0;
-            const isLast = idx === queueList.length - 1;
+    if (!queueList || queueList.length === 0) {
+        queueListContainer.innerHTML = `<div class="loading-cell">Queue is empty.</div>`;
+        updateQueuePagination(0);
+        return;
+    }
 
-            return `
-                <div class="queue-item-card">
-                    <div class="queue-item-details">
-                        <img src="${artSrc}" class="queue-item-art">
-                        <div class="queue-item-text">
-                            <div class="queue-item-title">${idx + 1}. ${escapeHtml(item.title)}</div>
-                            <div class="queue-item-artist">${escapeHtml(item.artist)}</div>
-                        </div>
-                    </div>
-                    <div class="queue-item-actions">
-                        ${!isFirst ? `<button class="btn-queue-action" onclick="moveQueueItem(${idx}, ${idx - 1})" title="Move Up">▲</button>` : ''}
-                        ${!isLast ? `<button class="btn-queue-action" onclick="moveQueueItem(${idx}, ${idx + 1})" title="Move Down">▼</button>` : ''}
-                        <button class="btn-queue-action btn-queue-delete" onclick="removeQueueItem(${idx})" title="Remove from Queue">🗑</button>
+    const totalPages = Math.max(1, Math.ceil(totalQueued / queuePageSize));
+    if (currentQueuePage > totalPages) currentQueuePage = totalPages;
+    if (currentQueuePage < 1) currentQueuePage = 1;
+
+    const startIdx = (currentQueuePage - 1) * queuePageSize;
+    const endIdx = Math.min(totalQueued, startIdx + queuePageSize);
+    const pagedItems = queueList.slice(startIdx, endIdx);
+
+    queueListContainer.innerHTML = pagedItems.map((item, localIdx) => {
+        const actualIdx = startIdx + localIdx;
+        const artSrc = item.has_cover_art ? `/api/v1/art/${item.id}` : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><rect width='140' height='140' fill='%231e2230'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%234a5568' font-size='24'>🎵</text></svg>";
+        const isFirst = actualIdx === 0;
+        const isLast = actualIdx === totalQueued - 1;
+
+        return `
+            <div class="queue-item-card">
+                <div class="queue-item-details">
+                    <img src="${artSrc}" class="queue-item-art">
+                    <div class="queue-item-text">
+                        <div class="queue-item-title">${actualIdx + 1}. ${escapeHtml(item.title)}</div>
+                        <div class="queue-item-artist">${escapeHtml(item.artist)}</div>
                     </div>
                 </div>
-            `;
-        }).join('');
-    }
+                <div class="queue-item-actions">
+                    ${!isFirst ? `<button class="btn-queue-action" onclick="moveQueueItem(${actualIdx}, ${actualIdx - 1})" title="Move Up">▲</button>` : ''}
+                    ${!isLast ? `<button class="btn-queue-action" onclick="moveQueueItem(${actualIdx}, ${actualIdx + 1})" title="Move Down">▼</button>` : ''}
+                    <button class="btn-queue-action btn-queue-delete" onclick="removeQueueItem(${actualIdx})" title="Remove from Queue">🗑</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    updateQueuePagination(totalQueued);
+}
+
+function updateQueuePagination(totalQueued) {
+    const info = document.getElementById('queue-pagination-info');
+    const indicator = document.getElementById('queue-page-indicator');
+    const btnFirst = document.getElementById('btn-first-queue');
+    const btnPrev = document.getElementById('btn-prev-queue');
+    const btnNext = document.getElementById('btn-next-queue');
+    const btnLast = document.getElementById('btn-last-queue');
+
+    const totalPages = Math.max(1, Math.ceil(totalQueued / queuePageSize));
+    const startItem = totalQueued === 0 ? 0 : (currentQueuePage - 1) * queuePageSize + 1;
+    const endItem = Math.min(totalQueued, currentQueuePage * queuePageSize);
+
+    if (info) info.textContent = `Showing ${startItem.toLocaleString()}–${endItem.toLocaleString()} of ${totalQueued.toLocaleString()} queued tracks`;
+    if (indicator) indicator.textContent = `Page ${currentQueuePage} of ${totalPages}`;
+
+    const hasMultiplePages = totalQueued > queuePageSize;
+
+    if (btnFirst) btnFirst.style.display = (hasMultiplePages && currentQueuePage > 1) ? 'inline-block' : 'none';
+    if (btnPrev) btnPrev.style.display = (hasMultiplePages && currentQueuePage > 1) ? 'inline-block' : 'none';
+    if (btnNext) btnNext.style.display = (hasMultiplePages && currentQueuePage < totalPages) ? 'inline-block' : 'none';
+    if (btnLast) btnLast.style.display = (hasMultiplePages && currentQueuePage < totalPages) ? 'inline-block' : 'none';
 }
 
 async function enqueueTrack(trackId, playNext = false) {
@@ -843,6 +881,38 @@ if (albumsGridEl) {
     });
 }
 
+async function fetchStatus() {
+    try {
+        const res = await fetch('/api/v1/status');
+        if (res.ok) {
+            const status = await res.json();
+            updateUI(status);
+        }
+    } catch (e) {
+        console.error('Error polling status:', e);
+    }
+}
+
+// Queue Pagination Listeners
+const queuePageSizeSelect = document.getElementById('queue-page-size-select');
+if (queuePageSizeSelect) {
+    queuePageSizeSelect.addEventListener('change', (e) => {
+        queuePageSize = parseInt(e.target.value);
+        currentQueuePage = 1;
+        if (currentStatus) renderQueue(currentStatus.current_track, currentStatus.queue || []);
+    });
+}
+
+const btnFirstQueue = document.getElementById('btn-first-queue');
+const btnPrevQueue = document.getElementById('btn-prev-queue');
+const btnNextQueue = document.getElementById('btn-next-queue');
+const btnLastQueue = document.getElementById('btn-last-queue');
+
+if (btnFirstQueue) btnFirstQueue.addEventListener('click', () => { currentQueuePage = 1; if (currentStatus) renderQueue(currentStatus.current_track, currentStatus.queue || []); });
+if (btnPrevQueue) btnPrevQueue.addEventListener('click', () => { if (currentQueuePage > 1) { currentQueuePage--; if (currentStatus) renderQueue(currentStatus.current_track, currentStatus.queue || []); } });
+if (btnNextQueue) btnNextQueue.addEventListener('click', () => { currentQueuePage++; if (currentStatus) renderQueue(currentStatus.current_track, currentStatus.queue || []); });
+if (btnLastQueue) btnLastQueue.addEventListener('click', () => { if (currentStatus && currentStatus.queue) { currentQueuePage = Math.ceil(currentStatus.queue.length / queuePageSize); renderQueue(currentStatus.current_track, currentStatus.queue); } });
+
 // Queue Drawer Event Listeners
 const btnPrevTrack = document.getElementById('btn-prev');
 if (btnPrevTrack) {
@@ -857,11 +927,13 @@ const btnClearQueue = document.getElementById('btn-clear-queue');
 if (btnToggleQueue) btnToggleQueue.addEventListener('click', () => toggleQueueDrawer());
 if (btnCloseQueue) btnCloseQueue.addEventListener('click', () => toggleQueueDrawer(false));
 if (queueOverlay) queueOverlay.addEventListener('click', () => toggleQueueDrawer(false));
-if (btnClearQueue) btnClearQueue.addEventListener('click', clearQueue);
+if (btnClearQueue) btnClearQueue.addEventListener('click', () => { clearQueue(); currentQueuePage = 1; });
 
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
     fetchLibrary();
     startClock();
+    fetchStatus();
+    setInterval(fetchStatus, 2000); // Periodic fallback polling every 2s to guarantee 100% sync
 });

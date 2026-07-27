@@ -864,20 +864,36 @@ body.kiosk-mode .track-album {
     gap: 12px;
 }
 
-.btn-text-danger {
-    background: transparent;
+.btn-danger-prominent {
+    background: linear-gradient(135deg, #ff416c, #ff4b2b);
     border: none;
-    color: #ff4d4d;
-    font-size: 0.8rem;
-    font-weight: 600;
+    color: #ffffff;
+    font-size: 0.85rem;
+    font-weight: 700;
     cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 6px;
-    transition: background 0.2s;
+    padding: 6px 14px;
+    border-radius: 16px;
+    box-shadow: 0 4px 12px rgba(255, 65, 108, 0.4);
+    transition: all 0.2s ease-in-out;
 }
 
-.btn-text-danger:hover {
-    background: rgba(255, 77, 77, 0.15);
+.btn-danger-prominent:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 16px rgba(255, 65, 108, 0.6);
+}
+
+.pagination-bar-queue {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.pagination-bar-queue .pagination-controls {
+    justify-content: space-between;
+    width: 100%;
 }
 
 .btn-icon-close {

@@ -248,8 +248,8 @@
                 <span class="queue-drawer-subtitle" id="queue-drawer-subtitle">0 tracks in queue</span>
             </div>
             <div class="queue-drawer-actions">
-                <button class="btn-text-danger" id="btn-clear-queue">Clear Queue</button>
-                <button class="btn-icon-close" id="btn-close-queue">✕</button>
+                <button class="btn-danger-prominent" id="btn-clear-queue" title="Clear all queued items">🗑 Clear Queue</button>
+                <button class="btn-icon-close" id="btn-close-queue" title="Close Queue">✕</button>
             </div>
         </div>
 
@@ -266,6 +266,26 @@
             <div class="queue-section-title">UP NEXT</div>
             <div class="queue-items-list" id="queue-items-list">
                 <div class="loading-cell">Queue is empty.</div>
+            </div>
+        </div>
+
+        <!-- Pagination Footer Bar (Queue) -->
+        <div class="pagination-bar pagination-bar-queue" id="pagination-bar-queue">
+            <div class="pagination-info" id="queue-pagination-info">Showing 0–0 of 0 queued tracks</div>
+            <div class="pagination-controls">
+                <label for="queue-page-size-select">Per page:</label>
+                <select id="queue-page-size-select" class="page-size-select">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                    <option value="250">250</option>
+                </select>
+                <button id="btn-first-queue" class="btn-page" style="display: none;">« First</button>
+                <button id="btn-prev-queue" class="btn-page" style="display: none;">◀ Prev</button>
+                <span id="queue-page-indicator" class="page-indicator">Page 1 of 1</span>
+                <button id="btn-next-queue" class="btn-page" style="display: none;">Next ▶</button>
+                <button id="btn-last-queue" class="btn-page" style="display: none;">Last »</button>
             </div>
         </div>
     </aside>

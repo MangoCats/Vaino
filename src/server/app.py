@@ -31,13 +31,28 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
         allow_headers=["*"],
     )
 
+    main_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    @app.on_event("startup")
+    async def startup_event():
+        nonlocal main_loop
+        main_loop = asyncio.get_running_loop()
+
     def on_audio_state_change():
         status = audio_engine.get_status()
-        try:
-            loop = asyncio.get_running_loop()
-            asyncio.run_coroutine_threadsafe(manager.broadcast({"type": "STATUS_UPDATE", "data": status}), loop)
-        except RuntimeError:
-            pass
+        nonlocal main_loop
+        if main_loop and main_loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(manager.broadcast({"type": "STATUS_UPDATE", "data": status}), main_loop)
+            except Exception as e:
+                logger.error(f"Error broadcasting state update: {e}")
+        else:
+            try:
+                loop = asyncio.get_running_loop()
+                main_loop = loop
+                asyncio.run_coroutine_threadsafe(manager.broadcast({"type": "STATUS_UPDATE", "data": status}), loop)
+            except RuntimeError:
+                pass
 
     audio_engine.on_state_change = on_audio_state_change
 
