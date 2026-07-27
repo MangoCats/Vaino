@@ -204,9 +204,22 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
     def get_cover_art(track_id: str):
         track = db.get_track_by_id(track_id)
         if track:
+            # 1. Try embedded tag artwork
             art_result = scanner.extract_cover_art_bytes(track["file_path"])
             if art_result:
                 image_bytes, mime_type = art_result
+                return Response(content=image_bytes, media_type=mime_type)
+
+            # 2. Try database album_cover_art or local folder / MusicBrainz fetcher
+            from .db.cover_art_fetcher import CoverArtFetcher
+            fetcher = CoverArtFetcher(db)
+            resolved_art = fetcher.resolve_album_art(
+                album_name=track["album"],
+                artist_name=track["artist"],
+                sample_file_path=track["file_path"]
+            )
+            if resolved_art:
+                image_bytes, mime_type = resolved_art
                 return Response(content=image_bytes, media_type=mime_type)
 
         # Fallback SVG placeholder graphic

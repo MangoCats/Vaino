@@ -600,3 +600,51 @@ class Database:
         finally:
             conn.close()
 
+    def save_album_cover_art(self, album_name: str, artist_name: Optional[str], image_bytes: bytes, mime_type: str, source: str = "MUSICBRAINZ") -> str:
+        """Saves or updates album cover art blob in album_cover_art table."""
+        import hashlib
+        album_id = hashlib.md5(f"{artist_name or ''}||{album_name}".lower().encode("utf-8")).hexdigest()
+        conn = self.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO album_cover_art (album_id, album_name, artist_name, image_data, mime_type, source, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(album_id) DO UPDATE SET
+                    image_data = excluded.image_data,
+                    mime_type = excluded.mime_type,
+                    source = excluded.source,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (album_id, album_name, artist_name, image_bytes, mime_type, source)
+            )
+            # Update tracks for this album so has_cover_art = 1
+            conn.execute(
+                "UPDATE tracks SET has_cover_art = 1 WHERE album = ?",
+                (album_name,)
+            )
+            conn.commit()
+            return album_id
+        finally:
+            conn.close()
+
+    def get_album_cover_art(self, album_name: str, artist_name: Optional[str] = None) -> Optional[Tuple[bytes, str]]:
+        """Retrieves album cover art (image_bytes, mime_type) from album_cover_art table."""
+        import hashlib
+        album_id = hashlib.md5(f"{artist_name or ''}||{album_name}".lower().encode("utf-8")).hexdigest()
+        conn = self.get_connection()
+        try:
+            cursor = conn.execute("SELECT image_data, mime_type FROM album_cover_art WHERE album_id = ?", (album_id,))
+            row = cursor.fetchone()
+            if row:
+                return row["image_data"], row["mime_type"]
+
+            # Fallback by album_name match
+            cursor = conn.execute("SELECT image_data, mime_type FROM album_cover_art WHERE album_name = ? LIMIT 1", (album_name,))
+            row = cursor.fetchone()
+            if row:
+                return row["image_data"], row["mime_type"]
+            return None
+        finally:
+            conn.close()
+

@@ -73,3 +73,15 @@ CREATE TABLE IF NOT EXISTS player_state (
     volume INTEGER DEFAULT 80,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS album_cover_art (
+    album_id TEXT PRIMARY KEY,
+    album_name TEXT NOT NULL,
+    artist_name TEXT,
+    image_data BLOB NOT NULL,
+    mime_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_album_cover_art_album ON album_cover_art(album_name);
