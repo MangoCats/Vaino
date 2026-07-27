@@ -82,6 +82,15 @@ function updateUI(status) {
     volumeSlider.value = status.volume;
     volumeValue.textContent = `${status.volume}%`;
 
+    const queueBadge = document.getElementById('queue-badge');
+    if (queueBadge) queueBadge.textContent = status.queue_length || 0;
+
+    const btnPrevTrack = document.getElementById('btn-prev');
+    if (btnPrevTrack) {
+        btnPrevTrack.disabled = !status.can_skip_back;
+        btnPrevTrack.style.opacity = status.can_skip_back ? '1' : '0.4';
+    }
+
     if (status.state === 'PLAYING') {
         iconPlay.style.display = 'none';
         iconPause.style.display = 'block';
@@ -117,6 +126,8 @@ function updateUI(status) {
         timeTotal.textContent = '0:00';
         progressBarFill.style.width = '0%';
     }
+
+    renderQueue(status.current_track, status.queue || []);
 }
 
 // Library Pagination & View State
@@ -346,7 +357,11 @@ function renderAlbumsGrid(albums, artistFilter = null, totalCount = null) {
             <img src="/api/v1/art/${al.sample_track_id}" class="nav-card-art" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'140\\' height=\\'140\\'><rect width=\\'140\\' height=\\'140\\' fill=\\'%231e2230\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%234a5568\\' font-size=\\'36\\'>💿</text></svg>'">
             <div class="nav-card-title">${escapeHtml(al.album)}</div>
             <div class="nav-card-subtitle">${escapeHtml(al.artist)} ${al.year ? '(' + al.year + ')' : ''}</div>
-            <span class="nav-card-badge">${al.track_count} Tracks ▶</span>
+            <div class="table-action-group" style="margin-top: 6px;">
+                <span class="nav-card-badge">${al.track_count} Tracks ▶</span>
+                <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueAlbum('${escapeHtml(al.album)}', true)" title="Enqueue Album Next">➕ Next</button>
+                <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueAlbum('${escapeHtml(al.album)}', false)" title="Add Album to Queue">📥 Queue</button>
+            </div>
         </div>
     `).join('');
 }
@@ -441,7 +456,13 @@ function renderLibrary(tracks, offset = 0) {
             <td>${escapeHtml(t.artist)}</td>
             <td>${escapeHtml(t.album || '-')}</td>
             <td>${formatTime(t.duration_ms)}</td>
-            <td><button class="btn-play-track" onclick="event.stopPropagation(); playTrack('${t.id}')">▶ Play</button></td>
+            <td>
+                <div class="table-action-group">
+                    <button class="btn-action-sm" onclick="event.stopPropagation(); playTrack('${t.id}')" title="Play Now">▶ Play</button>
+                    <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueTrack('${t.id}', true)" title="Play Next">➕ Next</button>
+                    <button class="btn-action-sm" onclick="event.stopPropagation(); enqueueTrack('${t.id}', false)" title="Add to Queue">📥 Queue</button>
+                </div>
+            </td>
         </tr>
     `).join('');
 }
@@ -633,6 +654,167 @@ if (kioskBtn) {
         }
     });
 }
+
+// --- Playlist Queue Management UI [REQ-QUE-010, REQ-QUE-020, REQ-QUE-030, REQ-QUE-040] ---
+
+let isQueueOpen = false;
+
+function toggleQueueDrawer(show = null) {
+    const drawer = document.getElementById('queue-drawer');
+    const overlay = document.getElementById('queue-drawer-overlay');
+    if (!drawer || !overlay) return;
+
+    if (show === null) isQueueOpen = !isQueueOpen;
+    else isQueueOpen = show;
+
+    drawer.style.display = isQueueOpen ? 'flex' : 'none';
+    overlay.style.display = isQueueOpen ? 'block' : 'none';
+
+    if (isQueueOpen && currentStatus) {
+        renderQueue(currentStatus.current_track, currentStatus.queue || []);
+    }
+}
+
+function renderQueue(currentTrack, queueList) {
+    const subtitle = document.getElementById('queue-drawer-subtitle');
+    const nowPlayingContainer = document.getElementById('queue-now-playing');
+    const queueListContainer = document.getElementById('queue-items-list');
+
+    if (subtitle) subtitle.textContent = `${queueList.length} track${queueList.length === 1 ? '' : 's'} in queue`;
+
+    if (nowPlayingContainer) {
+        if (currentTrack) {
+            const artSrc = currentTrack.has_cover_art ? `/api/v1/art/${currentTrack.id}` : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><rect width='140' height='140' fill='%231e2230'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%234a5568' font-size='36'>🎵</text></svg>";
+            nowPlayingContainer.innerHTML = `
+                <img src="${artSrc}" class="now-playing-card-art">
+                <div class="now-playing-card-info">
+                    <div class="now-playing-card-title">${escapeHtml(currentTrack.title)}</div>
+                    <div class="now-playing-card-artist">${escapeHtml(currentTrack.artist)} • ${escapeHtml(currentTrack.album || '')}</div>
+                </div>
+            `;
+        } else {
+            nowPlayingContainer.innerHTML = `<div class="loading-cell">No track currently playing.</div>`;
+        }
+    }
+
+    if (queueListContainer) {
+        if (!queueList || queueList.length === 0) {
+            queueListContainer.innerHTML = `<div class="loading-cell">Queue is empty.</div>`;
+            return;
+        }
+
+        queueListContainer.innerHTML = queueList.map((item, idx) => {
+            const artSrc = item.has_cover_art ? `/api/v1/art/${item.id}` : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><rect width='140' height='140' fill='%231e2230'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='%234a5568' font-size='24'>🎵</text></svg>";
+            const isFirst = idx === 0;
+            const isLast = idx === queueList.length - 1;
+
+            return `
+                <div class="queue-item-card">
+                    <div class="queue-item-details">
+                        <img src="${artSrc}" class="queue-item-art">
+                        <div class="queue-item-text">
+                            <div class="queue-item-title">${idx + 1}. ${escapeHtml(item.title)}</div>
+                            <div class="queue-item-artist">${escapeHtml(item.artist)}</div>
+                        </div>
+                    </div>
+                    <div class="queue-item-actions">
+                        ${!isFirst ? `<button class="btn-queue-action" onclick="moveQueueItem(${idx}, ${idx - 1})" title="Move Up">▲</button>` : ''}
+                        ${!isLast ? `<button class="btn-queue-action" onclick="moveQueueItem(${idx}, ${idx + 1})" title="Move Down">▼</button>` : ''}
+                        <button class="btn-queue-action btn-queue-delete" onclick="removeQueueItem(${idx})" title="Remove from Queue">🗑</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+}
+
+async function enqueueTrack(trackId, playNext = false) {
+    try {
+        const res = await fetch('/api/v1/queue/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ track_id: trackId, play_next: playNext })
+        });
+        const status = await res.json();
+        updateUI(status);
+    } catch (e) {
+        console.error('Error enqueuing track:', e);
+    }
+}
+
+async function enqueueAlbum(albumName, playNext = false) {
+    try {
+        const res = await fetch('/api/v1/queue/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ album_name: albumName, play_next: playNext })
+        });
+        const status = await res.json();
+        updateUI(status);
+    } catch (e) {
+        console.error('Error enqueuing album:', e);
+    }
+}
+
+async function moveQueueItem(fromIndex, toIndex) {
+    try {
+        const res = await fetch('/api/v1/queue/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from_index: fromIndex, to_index: toIndex })
+        });
+        const status = await res.json();
+        updateUI(status);
+    } catch (e) {
+        console.error('Error moving queue item:', e);
+    }
+}
+
+async function removeQueueItem(index) {
+    try {
+        const res = await fetch(`/api/v1/queue/remove/${index}`, { method: 'DELETE' });
+        const status = await res.json();
+        updateUI(status);
+    } catch (e) {
+        console.error('Error removing queue item:', e);
+    }
+}
+
+async function clearQueue() {
+    try {
+        const res = await fetch('/api/v1/queue/clear', { method: 'DELETE' });
+        const status = await res.json();
+        updateUI(status);
+    } catch (e) {
+        console.error('Error clearing queue:', e);
+    }
+}
+
+async function skipBack() {
+    try {
+        const res = await fetch('/api/v1/player/previous', { method: 'POST' });
+        const status = await res.json();
+        updateUI(status);
+    } catch (e) {
+        console.error('Error skipping back:', e);
+    }
+}
+
+// Queue Drawer Event Listeners
+const btnPrevTrack = document.getElementById('btn-prev');
+if (btnPrevTrack) {
+    btnPrevTrack.addEventListener('click', skipBack);
+}
+
+const btnToggleQueue = document.getElementById('btn-toggle-queue');
+const btnCloseQueue = document.getElementById('btn-close-queue');
+const queueOverlay = document.getElementById('queue-drawer-overlay');
+const btnClearQueue = document.getElementById('btn-clear-queue');
+
+if (btnToggleQueue) btnToggleQueue.addEventListener('click', () => toggleQueueDrawer());
+if (btnCloseQueue) btnCloseQueue.addEventListener('click', () => toggleQueueDrawer(false));
+if (queueOverlay) queueOverlay.addEventListener('click', () => toggleQueueDrawer(false));
+if (btnClearQueue) btnClearQueue.addEventListener('click', clearQueue);
 
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {

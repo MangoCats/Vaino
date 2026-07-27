@@ -72,6 +72,11 @@
                             <input type="range" id="volume-slider" min="0" max="100" value="80" class="volume-slider">
                             <span class="volume-value" id="volume-value">80%</span>
                         </div>
+
+                        <button class="btn-control btn-secondary btn-queue-toggle" id="btn-toggle-queue" title="View Queue">
+                            <span>≡ Queue</span>
+                            <span class="queue-badge" id="queue-badge">0</span>
+                        </button>
                     </div>
                 </div>
             </section>
@@ -147,7 +152,7 @@
                                     <th>Artist</th>
                                     <th>Album</th>
                                     <th>Duration</th>
-                                    <th>Action</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="library-tbody">
@@ -233,6 +238,37 @@
             </section>
         </main>
     </div>
+
+    <!-- Slide-Out Playlist Queue Drawer -->
+    <div class="queue-drawer-overlay" id="queue-drawer-overlay" style="display: none;"></div>
+    <aside class="queue-drawer" id="queue-drawer" style="display: none;">
+        <div class="queue-drawer-header">
+            <div class="queue-drawer-title">
+                <h3>📑 Playlist Queue</h3>
+                <span class="queue-drawer-subtitle" id="queue-drawer-subtitle">0 tracks in queue</span>
+            </div>
+            <div class="queue-drawer-actions">
+                <button class="btn-text-danger" id="btn-clear-queue">Clear Queue</button>
+                <button class="btn-icon-close" id="btn-close-queue">✕</button>
+            </div>
+        </div>
+
+        <!-- Currently Playing Section -->
+        <div class="queue-section">
+            <div class="queue-section-title">NOW PLAYING</div>
+            <div class="now-playing-card" id="queue-now-playing">
+                <div class="loading-cell">No track currently playing.</div>
+            </div>
+        </div>
+
+        <!-- Up Next Queue Section -->
+        <div class="queue-section queue-section-flexible">
+            <div class="queue-section-title">UP NEXT</div>
+            <div class="queue-items-list" id="queue-items-list">
+                <div class="loading-cell">Queue is empty.</div>
+            </div>
+        </div>
+    </aside>
 
     <script src="app.js"></script>
 </body>

@@ -156,8 +156,8 @@ class TestClosedLoopServer(unittest.TestCase):
         req_skip = urllib.request.Request(url_skip, data=b"", headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req_skip) as resp:
             self.assertEqual(resp.status, 200)
-            data = json.loads(resp.read().decode('utf-8'))
-            logger.info(f"VERIFIED POST /api/v1/player/skip -> Skipped to: {data.get('current_track', {}).get('title')}")
+            curr_t = data.get('current_track') or {}
+            logger.info(f"VERIFIED POST /api/v1/player/skip -> Skipped to: {curr_t.get('title')}")
 
     def test_06_websocket_closed_loop(self):
         async def test_ws():

@@ -76,7 +76,62 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
             return audio_engine.get_status()
         
         last_skip_time = now
-        audio_engine.skip()
+    @app.post("/api/v1/player/previous")
+    def previous_track():
+        audio_engine.skip_back()
+        return audio_engine.get_status()
+
+    @app.get("/api/v1/queue")
+    def get_queue():
+        return {
+            "queue": audio_engine.queue,
+            "current_track": audio_engine.current_track,
+            "can_skip_back": len(audio_engine.history_stack) > 0,
+            "history_length": len(audio_engine.history_stack)
+        }
+
+    class EnqueuePayload(BaseModel):
+        track_id: Optional[str] = None
+        album_name: Optional[str] = None
+        play_next: bool = False
+
+    @app.post("/api/v1/queue/add")
+    def enqueue_item(payload: EnqueuePayload):
+        if payload.track_id:
+            track = db.get_track_by_id(payload.track_id)
+            if not track:
+                raise HTTPException(status_code=404, detail="Track not found")
+            audio_engine.enqueue_track(track, play_next=payload.play_next)
+        elif payload.album_name:
+            tracks = db.get_album_tracks(payload.album_name)
+            if not tracks:
+                raise HTTPException(status_code=404, detail="Album not found")
+            audio_engine.enqueue_album(tracks, play_next=payload.play_next)
+        else:
+            raise HTTPException(status_code=400, detail="Must specify track_id or album_name")
+        return audio_engine.get_status()
+
+    class MoveQueuePayload(BaseModel):
+        from_index: int
+        to_index: int
+
+    @app.post("/api/v1/queue/move")
+    def move_queue_item(payload: MoveQueuePayload):
+        success = audio_engine.move_in_queue(payload.from_index, payload.to_index)
+        if not success:
+            raise HTTPException(status_code=400, detail="Invalid queue indices")
+        return audio_engine.get_status()
+
+    @app.delete("/api/v1/queue/remove/{index}")
+    def remove_queue_item(index: int):
+        success = audio_engine.remove_from_queue(index)
+        if not success:
+            raise HTTPException(status_code=400, detail="Invalid queue index")
+        return audio_engine.get_status()
+
+    @app.delete("/api/v1/queue/clear")
+    def clear_queue():
+        audio_engine.clear_queue()
         return audio_engine.get_status()
 
     @app.get("/api/v1/lyrics/{track_id}")

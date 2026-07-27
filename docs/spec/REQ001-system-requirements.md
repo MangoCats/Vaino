@@ -64,7 +64,13 @@ This document defines the formal system requirements for **Vaino**, establishing
 - **`[REQ-UI-020J]` Strict MusicBrainz Sort Keying & As-Is Fallback**: When an artist lacks an explicit MusicBrainz sort tag or MusicBrainz API sort field, the system MUST use the artist's name as-is for sort keying (e.g. `Simple Minds` $\rightarrow$ `Simple Minds` under `S`). The system MUST NOT attempt to flip 2-word names algorithmically without explicit MusicBrainz sort tag guidance.
 - **`[REQ-UI-020K]` Dynamic Pagination Controls & Page Size Dropdown**: All views (Tracks, Artists, Albums) MUST provide a page size selector with options `10`, `25`, `50` (default), `100`, and `250`. When total items exceed page size, navigation controls (`First`, `Prev`, `Next`, `Last`) MUST be dynamically shown. When total items fit on a single page, navigation buttons MUST be hidden while keeping the page size dropdown available for adjustment.
 
-### 2.3 Program Director & Selection Algorithm
+### 2.4 Playlist Queue & Track History Management
+- **`[REQ-QUE-010]` Queue Data Structure & Prioritization**: The audio engine MUST maintain an ordered FIFO playlist queue. User-enqueued tracks (single or album) MUST take immediate priority over auto-generated Program Director selections.
+- **`[REQ-QUE-020]` Enqueue Operations (Single Track & Album Batch)**: The REST API and Web UI MUST support enqueuing individual tracks or entire albums (sorted by `track_number`) with options to **Play Next** (insert at index 0 of queue) or **Add to End** (append to queue).
+- **`[REQ-QUE-030]` Interactive Queue Manipulation**: Users MUST be able to inspect the full queue, remove items at any index, reorder tracks (move up/down), and clear the queue.
+- **`[REQ-QUE-040]` Track History Memory & Transport Controls**: The audio engine MUST maintain a `history_stack` of played tracks. The UI transport bar MUST provide **`⏮ Previous`**, **`▶/⏸ Play/Pause`**, **`⏭ Next`**, and **`≡ Queue`** toggle controls.
+
+### 2.5 Program Director & Selection Algorithm
 - **`[REQ-PD-010]` Candidate Scoring Function**: The next song selection engine MUST evaluate candidate tracks $k$ using a composite scoring formula:
   $$S(k) = w_{\text{flow}} \cdot S_{\text{flow}}(k) + w_{\text{time}} \cdot S_{\text{time}}(k) + w_{\text{pref}} \cdot S_{\text{pref}}(k) - P_{\text{repeat}}(k)$$
   where $S_{\text{flow}}$ measures acoustic distance to the current track, $S_{\text{time}}$ measures time-of-day energy match, and $P_{\text{repeat}}$ penalizes recent plays.
