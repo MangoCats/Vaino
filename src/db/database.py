@@ -108,7 +108,8 @@ class Database:
             for t in sanitized:
                 track_id = t["id"]
                 raw_artist = t.get("artist", "")
-                individual_artists = split_artists(raw_artist)
+                embedded_sort = t.get("artist_sort_name")
+                individual_artists = split_artists(raw_artist, embedded=embedded_sort)
                 for a_name, a_sort in individual_artists:
                     artist_rows.append((track_id, a_name, a_sort))
 

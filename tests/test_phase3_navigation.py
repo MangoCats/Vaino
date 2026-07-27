@@ -119,7 +119,20 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         })
         artists_m = self.db.get_all_artists(letter="M")
         m_names = [a["artist"] for a in artists_m]
-        self.assertIn("Mötley Crüe", m_names)
+    def test_simple_minds_as_is_fallback(self):
+        """[REQ-UI-020J] Test that artist without MusicBrainz sort tag uses name as-is (Simple Minds -> S)"""
+        self.db.upsert_track({
+            "id": "t9", "file_path": r"C:\music\simple_minds_01.mp3", "file_format": "MP3",
+            "title": "Don't You (Forget About Me)", "artist": "Simple Minds", "album": "Once Upon a Time",
+            "year": 1985, "track_number": 1, "duration_ms": 260000
+        })
+        artists_s = self.db.get_all_artists(letter="S")
+        s_names = [a["artist"] for a in artists_s]
+        self.assertIn("Simple Minds", s_names)
+
+        artists_m = self.db.get_all_artists(letter="M")
+        m_names = [a["artist"] for a in artists_m]
+        self.assertNotIn("Simple Minds", m_names)
 
 if __name__ == "__main__":
     unittest.main()

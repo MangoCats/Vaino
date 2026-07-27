@@ -22,27 +22,11 @@ def normalize_diacritics(text: str) -> str:
     nfkd = unicodedata.normalize('NFD', text)
     return "".join(c for c in nfkd if unicodedata.category(c) != 'Mn')
 
-KNOWN_SINGLE_GROUPS = {
-    "mötley crüe", "motley crue", "blue öyster cult", "blue oyster cult",
-    "pink floyd", "led zeppelin", "deep purple", "black sabbath",
-    "lynyrd skynyrd", "judas priest", "iron maiden", "jethro tull",
-    "fleetwood mac", "def leppard", "bad company", "dire straits",
-    "earth, wind & fire", "earth wind & fire",
-    "sam the sham & the pharaohs", "sam the sham and the pharaohs",
-    "emerson, lake & palmer", "emerson lake & palmer",
-    "crosby, stills, nash & young", "crosby, stills & nash",
-    "sly & the family stone", "sly and the family stone",
-    "the mamas & the papas", "kurtis blow", "hall & oates", "daryl hall & john oates",
-    "katrina and the waves", "huey lewis & the news", "huey lewis and the news",
-    "hootie & the blowfish", "hootie and the blowfish", "kc & the sunshine band",
-    "gladys knight & the pips", "mott the hoople", "spartak", "iron & wine",
-    "ziggy marley & the melody makers", "bob marley & the wailers",
-    "tom petty and the heartbreakers", "tom petty & the heartbreakers",
-    "joan jett & the blackhearts", "joan jett and the blackhearts"
-}
-
 def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str:
-    """[REQ-MB-020D, REQ-UI-020I] Computes canonical MusicBrainz sort name for an artist, normalized for A-Z filtering."""
+    """
+    [REQ-MB-020D, REQ-UI-020J] Uses official MusicBrainz sort name if present (e.g. 'Springsteen, Bruce' or 'Mötley Crüe').
+    If MusicBrainz sort tag is omitted, uses the artist name as-is (e.g. 'Simple Minds' -> 'Simple Minds' under S).
+    """
     if embedded and str(embedded).strip():
         return normalize_diacritics(str(embedded).strip())
     
@@ -50,8 +34,6 @@ def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str
         return "Unknown Artist"
 
     artist_str = str(artist).strip()
-    if artist_str.lower() in KNOWN_SINGLE_GROUPS or normalize_diacritics(artist_str.lower()) in KNOWN_SINGLE_GROUPS:
-        return normalize_diacritics(artist_str)
 
     if "," in artist_str:
         return normalize_diacritics(artist_str)
@@ -61,15 +43,11 @@ def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str
     elif artist_str.lower().startswith("a "):
         res = f"{artist_str[2:]}, A"
     else:
-        parts = artist_str.split()
-        if len(parts) == 2 and not any(p.endswith(".") for p in parts):
-            res = f"{parts[1]}, {parts[0]}"
-        else:
-            res = artist_str
+        res = artist_str
 
     return normalize_diacritics(res)
 
-def split_artists(artist_str: str) -> List[Tuple[str, str]]:
+def split_artists(artist_str: str, embedded: Optional[str] = None) -> List[Tuple[str, str]]:
     """
     [REQ-MB-020E, REQ-UI-020G] Decomposes combined artist strings into individual (artist_name, artist_sort_name) tuples.
     Handles 'feat.', 'ft.', 'featuring', 'with', 'vs.', '/', '&', and 'and' separators while preserving canonical groups.
@@ -78,8 +56,6 @@ def split_artists(artist_str: str) -> List[Tuple[str, str]]:
         return [("Unknown Artist", "Unknown Artist")]
 
     raw = str(artist_str).strip()
-    if raw.lower() in KNOWN_SINGLE_GROUPS:
-        return [(raw, compute_artist_sort_name(raw))]
 
     import re
     pattern = r'\s+(?:feat\.?|ft\.?|featuring|with|vs\.?|\/|\&|and)\s+'
@@ -96,11 +72,13 @@ def split_artists(artist_str: str) -> List[Tuple[str, str]]:
             for sss in sub_sub:
                 name = sss.strip()
                 if name:
-                    sort_name = compute_artist_sort_name(name)
+                    # Pass embedded sort name for primary artist matching
+                    s_name = embedded if (embedded and name.lower() in raw.lower()) else None
+                    sort_name = compute_artist_sort_name(name, embedded=s_name)
                     if (name, sort_name) not in results:
                         results.append((name, sort_name))
 
-    return results if results else [(raw, compute_artist_sort_name(raw))]
+    return results if results else [(raw, compute_artist_sort_name(raw, embedded=embedded))]
 
 class MediaScanner:
     def __init__(self, db: Database, music_dir: str):
