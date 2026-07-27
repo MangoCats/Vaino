@@ -252,7 +252,7 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
             }
         
         if desc and not desc.get("essentia"):
-            from .audio.essentia_extractor import EssentiaExtractor
+            from ..audio.essentia_extractor import EssentiaExtractor
             desc["essentia"] = EssentiaExtractor._get_default_descriptors()
 
         return {"track": track, "descriptors": desc, "is_fallback": is_fallback}
