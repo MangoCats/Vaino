@@ -112,5 +112,37 @@ class TestVainoPhase4Queue(unittest.TestCase):
         status_cleared = self.engine.get_status()
         self.assertEqual(status_cleared["queue_length"], 0)
 
+    def test_queue_persistence_across_server_restart(self):
+        """[REQ-QUE-010, REQ-QUE-030] Test persistence of current playing track and queue state across engine restarts"""
+        # Set up engine with db link
+        self.engine.db = self.db
+        self.engine.current_track = self.t1
+        self.engine.queue = [dict(self.t2), dict(self.t3)]
+        self.engine.set_volume(75)
+
+        # Trigger state persistence
+        self.engine._notify_state_change()
+
+        # Simulate server shutdown & new AudioEngine instance on restart
+        new_engine = AudioEngine(db=self.db)
+        saved_state = self.db.get_player_state()
+        saved_queue = self.db.get_player_queue_tracks()
+
+        self.assertIsNotNone(saved_state)
+        self.assertEqual(saved_state["current_track_id"], "q1")
+        self.assertEqual(len(saved_queue), 2)
+        self.assertEqual(saved_queue[0]["id"], "q2")
+        self.assertEqual(saved_queue[1]["id"], "q3")
+
+        # Simulate main.py restoration logic
+        new_engine.queue = saved_queue
+        cur_track = self.db.get_track_by_id(saved_state["current_track_id"])
+        new_engine.current_track = cur_track
+        new_engine.set_volume(saved_state["volume"])
+
+        self.assertEqual(new_engine.current_track["id"], "q1")
+        self.assertEqual(len(new_engine.queue), 2)
+        self.assertEqual(new_engine.volume, 0.75)
+
 if __name__ == "__main__":
     unittest.main()

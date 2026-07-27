@@ -42,7 +42,19 @@ class AudioEngine:
         self._stream: Optional[sd.OutputStream] = None
         self._lock = threading.Lock()
 
+    def _persist_state(self):
+        if self.db:
+            try:
+                cur_id = self.current_track["id"] if self.current_track else None
+                vol_int = int(round(self.volume * 100))
+                self.db.save_player_state(current_track_id=cur_id, playback_state=self.state, volume=vol_int)
+                queue_ids = [t["id"] for t in self.queue if "id" in t]
+                self.db.save_player_queue(queue_ids)
+            except Exception as e:
+                logger.error(f"Error persisting player state: {e}")
+
     def _notify_state_change(self):
+        self._persist_state()
         if self.on_state_change:
             try:
                 self.on_state_change()
@@ -54,6 +66,7 @@ class AudioEngine:
             self.queue = list(tracks)
             if not self.current_track and self.queue:
                 self.current_track = self.queue.pop(0)
+        self._notify_state_change()
 
     def enqueue_track(self, track: Dict[str, Any], play_next: bool = False):
         """[REQ-QUE-020] Enqueues a single track (play_next=True inserts at index 0)."""

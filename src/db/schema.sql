@@ -59,3 +59,16 @@ CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_name
 CREATE INDEX IF NOT EXISTS idx_track_artists_sort ON track_artists(artist_sort_name);
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_history_played_at ON play_history(played_at);
+
+CREATE TABLE IF NOT EXISTS player_queue (
+    queue_order INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS player_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    current_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
+    playback_state TEXT DEFAULT 'IDLE',
+    volume INTEGER DEFAULT 80,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

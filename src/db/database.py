@@ -448,3 +448,63 @@ class Database:
         finally:
             conn.close()
 
+    def save_player_state(self, current_track_id: Optional[str], playback_state: str, volume: int):
+        """Persists current playing track ID, playback state, and master volume."""
+        conn = self.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO player_state (id, current_track_id, playback_state, volume, updated_at)
+                VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    current_track_id = excluded.current_track_id,
+                    playback_state = excluded.playback_state,
+                    volume = excluded.volume,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (current_track_id, playback_state, volume)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_player_state(self) -> Optional[Dict[str, Any]]:
+        """Retrieves persisted player state."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.execute("SELECT * FROM player_state WHERE id = 1")
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def save_player_queue(self, track_ids: List[str]):
+        """Persists ordered list of queued track IDs."""
+        conn = self.get_connection()
+        try:
+            conn.execute("DELETE FROM player_queue")
+            if track_ids:
+                conn.executemany(
+                    "INSERT INTO player_queue (track_id) VALUES (?)",
+                    [(tid,) for tid in track_ids]
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_player_queue_tracks(self) -> List[Dict[str, Any]]:
+        """Retrieves ordered queue track records."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.execute(
+                """
+                SELECT t.*
+                FROM player_queue pq
+                JOIN tracks t ON pq.track_id = t.id
+                ORDER BY pq.queue_order ASC
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+

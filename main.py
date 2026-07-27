@@ -76,13 +76,31 @@ def main():
         logger.info("Scan-only mode completed. Exiting.")
         sys.exit(0)
 
-    # 3. Initialize Audio Engine & Load Queue
-    audio_engine = AudioEngine()
-    audio_engine.set_volume(cfg.get("volume", 80))
-    all_tracks = db.get_all_tracks(limit=500)
-    if all_tracks:
-        audio_engine.load_queue(all_tracks)
-        logger.info(f"Loaded {len(all_tracks)} tracks into initial playback queue.")
+    # 3. Initialize Audio Engine & Restore Persisted Player State & Queue
+    audio_engine = AudioEngine(db=db)
+    
+    saved_state = db.get_player_state()
+    saved_queue = db.get_player_queue_tracks()
+
+    if saved_state or saved_queue:
+        if saved_queue:
+            audio_engine.queue = saved_queue
+            logger.info(f"Restored {len(saved_queue)} tracks into playback queue from database.")
+        
+        if saved_state:
+            cur_id = saved_state.get("current_track_id")
+            if cur_id:
+                cur_track = db.get_track_by_id(cur_id)
+                if cur_track:
+                    audio_engine.current_track = cur_track
+                    logger.info(f"Restored current track: {cur_track.get('title')}")
+            if saved_state.get("volume") is not None:
+                audio_engine.set_volume(saved_state["volume"])
+    else:
+        all_tracks = db.get_all_tracks(limit=50)
+        if all_tracks:
+            audio_engine.load_queue(all_tracks)
+            logger.info(f"First-time launch: Loaded {len(all_tracks)} initial tracks into playback queue.")
 
     # 4. Create Web App
     app = create_app(db=db, audio_engine=audio_engine, scanner=scanner, skip_throttle_seconds=float(cfg.get("skip_throttle_seconds", 5.0)))
