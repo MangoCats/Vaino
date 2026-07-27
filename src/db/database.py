@@ -158,18 +158,11 @@ class Database:
                 params.append(album)
             if letter:
                 if letter == "#":
-                    if album or artist:
-                        where_clauses.append("COALESCE(t.title_sort_name, t.title) GLOB '[0-9]*'")
-                    else:
-                        where_clauses.append("(COALESCE(t.title_sort_name, t.title) GLOB '[0-9]*' OR t.artist GLOB '[0-9]*' OR COALESCE(t.artist_sort_name, t.artist) GLOB '[0-9]*')")
+                    where_clauses.append("COALESCE(t.title_sort_name, t.title) GLOB '[0-9]*'")
                 else:
                     l = f"{letter}%"
-                    if album or artist:
-                        where_clauses.append("COALESCE(t.title_sort_name, t.title) LIKE ?")
-                        params.append(l)
-                    else:
-                        where_clauses.append("(COALESCE(t.title_sort_name, t.title) LIKE ? OR t.artist LIKE ? OR COALESCE(t.artist_sort_name, t.artist) LIKE ?)")
-                        params.extend([l, l, l])
+                    where_clauses.append("COALESCE(t.title_sort_name, t.title) LIKE ?")
+                    params.append(l)
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.artist_sort_name LIKE ?)")
@@ -278,18 +271,11 @@ class Database:
                 params.extend([artist, artist])
             if letter:
                 if letter == "#":
-                    if artist:
-                        where_clauses.append("COALESCE(t.album_sort_name, t.album) GLOB '[0-9]*'")
-                    else:
-                        where_clauses.append("(COALESCE(t.album_sort_name, t.album) GLOB '[0-9]*' OR t.artist GLOB '[0-9]*' OR COALESCE(t.artist_sort_name, t.artist) GLOB '[0-9]*')")
+                    where_clauses.append("COALESCE(t.album_sort_name, t.album) GLOB '[0-9]*'")
                 else:
                     l = f"{letter}%"
-                    if artist:
-                        where_clauses.append("COALESCE(t.album_sort_name, t.album) LIKE ?")
-                        params.append(l)
-                    else:
-                        where_clauses.append("(COALESCE(t.album_sort_name, t.album) LIKE ? OR t.artist LIKE ? OR COALESCE(t.artist_sort_name, t.artist) LIKE ?)")
-                        params.extend([l, l, l])
+                    where_clauses.append("COALESCE(t.album_sort_name, t.album) LIKE ?")
+                    params.append(l)
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(t.album LIKE ? OR t.artist LIKE ? OR t.artist_sort_name LIKE ?)")
@@ -309,7 +295,7 @@ class Database:
             conn.close()
 
     def get_all_albums(self, limit: int = 100, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, letter: Optional[str] = None) -> List[Dict[str, Any]]:
-        """[REQ-UI-020G, REQ-UI-020I] Returns paginated distinct deduplicated albums."""
+        """[REQ-UI-020G, REQ-UI-020I] Returns paginated distinct deduplicated albums sorted by album_sort_name."""
         conn = self.get_connection()
         try:
             params = []
@@ -321,18 +307,11 @@ class Database:
                 params.extend([artist, artist])
             if letter:
                 if letter == "#":
-                    if artist:
-                        where_clauses.append("COALESCE(t.album_sort_name, t.album) GLOB '[0-9]*'")
-                    else:
-                        where_clauses.append("(COALESCE(t.album_sort_name, t.album) GLOB '[0-9]*' OR t.artist GLOB '[0-9]*' OR COALESCE(t.artist_sort_name, t.artist) GLOB '[0-9]*')")
+                    where_clauses.append("COALESCE(t.album_sort_name, t.album) GLOB '[0-9]*'")
                 else:
                     l = f"{letter}%"
-                    if artist:
-                        where_clauses.append("COALESCE(t.album_sort_name, t.album) LIKE ?")
-                        params.append(l)
-                    else:
-                        where_clauses.append("(COALESCE(t.album_sort_name, t.album) LIKE ? OR t.artist LIKE ? OR COALESCE(t.artist_sort_name, t.artist) LIKE ?)")
-                        params.extend([l, l, l])
+                    where_clauses.append("COALESCE(t.album_sort_name, t.album) LIKE ?")
+                    params.append(l)
             if query:
                 q = f"%{query}%"
                 where_clauses.append("(t.album LIKE ? OR t.artist LIKE ? OR t.artist_sort_name LIKE ?)")
@@ -341,6 +320,7 @@ class Database:
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             sql = f"""
             SELECT t.album,
+                   MIN(COALESCE(t.album_sort_name, t.album)) as album_sort_name,
                    COALESCE(MAX(CASE WHEN t.artist = ? THEN t.artist END), MIN(t.artist)) as artist,
                    MIN(t.year) as year,
                    COUNT(DISTINCT t.id) as track_count,
@@ -349,7 +329,7 @@ class Database:
             {join_clause}
             {where_str}
             GROUP BY t.album
-            ORDER BY MIN(COALESCE(t.artist_sort_name, t.artist)) ASC, t.album ASC
+            ORDER BY MIN(COALESCE(t.album_sort_name, t.album)) ASC
             LIMIT ? OFFSET ?
             """
             all_params = [artist if artist else ""]

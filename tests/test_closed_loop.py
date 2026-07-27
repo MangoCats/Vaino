@@ -236,8 +236,8 @@ class TestClosedLoopServer(unittest.TestCase):
             tracks = data["tracks"]
             self.assertGreater(len(tracks), 0)
             for t in tracks:
-                title_or_artist_starts = t["title"].startswith("H") or t["artist"].startswith("H")
-                self.assertTrue(title_or_artist_starts, f"Track {t['title']} by {t['artist']} does not start with H")
+                sort_title = t.get("title_sort_name") or t["title"]
+                self.assertTrue(sort_title.startswith("H") or t["title"].startswith("H"), f"Track {t['title']} does not start with H")
             logger.info(f"VERIFIED GET /api/v1/library/tracks?letter=H -> Returned {len(tracks)} prefix matched tracks.")
 
     def test_12_regression_artist_drilldown_with_letter_filter(self):
