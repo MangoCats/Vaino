@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     musicbrainz_track_id TEXT,
     musicbrainz_album_id TEXT,
     artist_sort_name TEXT,
+    album_sort_name TEXT,
+    title_sort_name TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

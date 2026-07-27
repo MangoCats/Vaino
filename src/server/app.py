@@ -19,9 +19,10 @@ logger = logging.getLogger(__name__)
 class VolumePayload(BaseModel):
     volume: float
 
-def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -> FastAPI:
+def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, skip_throttle_seconds: float = 5.0) -> FastAPI:
     app = FastAPI(title="Vaino Audio Engine & Server", version="0.1.0")
     manager = ConnectionManager()
+    last_skip_time = 0.0
 
     app.add_middleware(
         CORSMiddleware,
@@ -81,6 +82,12 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
 
     @app.post("/api/v1/player/skip")
     def skip_track():
+        nonlocal last_skip_time
+        now = time.time()
+        if now - last_skip_time < skip_throttle_seconds:
+            logger.info(f"Skip throttled: Please wait {skip_throttle_seconds}s between skips.")
+            return audio_engine.get_status()
+        last_skip_time = now
         audio_engine.skip()
         return audio_engine.get_status()
 
@@ -221,7 +228,13 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner) -
                 elif action == "PAUSE":
                     audio_engine.pause()
                 elif action == "SKIP":
-                    audio_engine.skip()
+                    nonlocal last_skip_time
+                    now = time.time()
+                    if now - last_skip_time >= skip_throttle_seconds:
+                        last_skip_time = now
+                        audio_engine.skip()
+                    else:
+                        logger.info(f"WebSocket skip throttled: Please wait {skip_throttle_seconds}s between skips.")
                 elif action == "VOLUME":
                     vol = data.get("volume", 80)
                     audio_engine.set_volume(vol)

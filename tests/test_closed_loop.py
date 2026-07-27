@@ -269,5 +269,25 @@ class TestClosedLoopServer(unittest.TestCase):
                 self.assertTrue(al["album"].startswith("H"))
             logger.info(f"VERIFIED test_13 -> GET /api/v1/library/albums?artist=Eagles&letter=H returned {len(albums)} stacked album(s).")
 
+    def test_14_skip_throttle_enforcement(self):
+        """[REQ-UI-010B] Verifies multi-user skip throttling: rapidly repeated skip POSTs are rate-limited."""
+        url = f"{self.base_url}/api/v1/player/skip"
+        
+        # 1. First skip -> allowed
+        req1 = urllib.request.Request(url, method="POST")
+        with urllib.request.urlopen(req1) as resp1:
+            self.assertEqual(resp1.status, 200)
+            status1 = json.loads(resp1.read().decode('utf-8'))
+
+        # 2. Immediate second skip -> throttled (returns status without advancing track)
+        req2 = urllib.request.Request(url, method="POST")
+        with urllib.request.urlopen(req2) as resp2:
+            self.assertEqual(resp2.status, 200)
+            status2 = json.loads(resp2.read().decode('utf-8'))
+
+        # Tracks should match because skip #2 was throttled
+        self.assertEqual(status1.get("current_track", {}).get("id"), status2.get("current_track", {}).get("id"))
+        logger.info("VERIFIED REQ-UI-010B -> Rapid skip request was successfully throttled.")
+
 if __name__ == "__main__":
     unittest.main()

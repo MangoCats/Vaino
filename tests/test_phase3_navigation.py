@@ -134,5 +134,45 @@ class TestVainoPhase3Navigation(unittest.TestCase):
         m_names = [a["artist"] for a in artists_m]
         self.assertNotIn("Simple Minds", m_names)
 
+    def test_album_and_track_article_stripping(self):
+        """[REQ-UI-020I, REQ-UI-020J] Test article stripping ('The', 'A', 'An') for album and track sort names"""
+        from src.db.scanner import compute_sort_name
+        self.db.upsert_track({
+            "id": "t10", "file_path": r"C:\music\pink_floyd_01.mp3", "file_format": "MP3",
+            "title": "Money", "title_sort_name": compute_sort_name("Money"),
+            "artist": "Pink Floyd", "artist_sort_name": compute_sort_name("Pink Floyd"),
+            "album": "The Dark Side of the Moon", "album_sort_name": compute_sort_name("The Dark Side of the Moon"),
+            "year": 1973, "track_number": 6, "duration_ms": 382000
+        })
+        self.db.upsert_track({
+            "id": "t11", "file_path": r"C:\music\beatles_hard.mp3", "file_format": "MP3",
+            "title": "A Hard Day's Night", "title_sort_name": compute_sort_name("A Hard Day's Night"),
+            "artist": "The Beatles", "artist_sort_name": compute_sort_name("The Beatles"),
+            "album": "A Hard Day's Night", "album_sort_name": compute_sort_name("A Hard Day's Night"),
+            "year": 1964, "track_number": 1, "duration_ms": 154000
+        })
+        self.db.upsert_track({
+            "id": "t12", "file_path": r"C:\music\john_evening.mp3", "file_format": "MP3",
+            "title": "An Evening With...", "title_sort_name": compute_sort_name("An Evening With..."),
+            "artist": "John Denver", "artist_sort_name": compute_sort_name("John Denver"),
+            "album": "An Evening With John Denver", "album_sort_name": compute_sort_name("An Evening With John Denver"),
+            "year": 1975, "track_number": 1, "duration_ms": 240000
+        })
+
+        # "The Dark Side of the Moon" -> album_sort_name "Dark Side of the Moon, The" -> appears under D
+        albums_d = self.db.get_all_albums(letter="D")
+        d_album_names = [al["album"] for al in albums_d]
+        self.assertIn("The Dark Side of the Moon", d_album_names)
+
+        # "A Hard Day's Night" -> title_sort_name "Hard Day's Night, A" -> appears under H
+        tracks_h = self.db.get_all_tracks(letter="H")
+        h_track_titles = [tr["title"] for tr in tracks_h]
+        self.assertIn("A Hard Day's Night", h_track_titles)
+
+        # "An Evening With..." -> title_sort_name "Evening With..., An" -> appears under E
+        tracks_e = self.db.get_all_tracks(letter="E")
+        e_track_titles = [tr["title"] for tr in tracks_e]
+        self.assertIn("An Evening With...", e_track_titles)
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,10 +22,37 @@ def normalize_diacritics(text: str) -> str:
     nfkd = unicodedata.normalize('NFD', text)
     return "".join(c for c in nfkd if unicodedata.category(c) != 'Mn')
 
+def compute_sort_name(raw_name: str) -> str:
+    """
+    [REQ-UI-020I, REQ-UI-020J] General sort name computation:
+    1. If string contains a comma (e.g. 'Surname, Given' or already normalized), use as-is after diacritic normalization.
+    2. Strips leading English articles ('The ', 'A ', 'An ') and appends them after a comma.
+    3. Applies diacritic normalization per [REQ-UI-020I].
+    """
+    if not raw_name or not str(raw_name).strip():
+        return ""
+
+    text = str(raw_name).strip()
+
+    if "," in text:
+        return normalize_diacritics(text)
+
+    lower_text = text.lower()
+    if lower_text.startswith("the "):
+        res = f"{text[4:]}, {text[:3]}"
+    elif lower_text.startswith("a "):
+        res = f"{text[2:]}, {text[:1]}"
+    elif lower_text.startswith("an "):
+        res = f"{text[3:]}, {text[:2]}"
+    else:
+        res = text
+
+    return normalize_diacritics(res)
+
 def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str:
     """
     [REQ-MB-020D, REQ-UI-020J] Uses official MusicBrainz sort name if present (e.g. 'Springsteen, Bruce' or 'Mötley Crüe').
-    If MusicBrainz sort tag is omitted, uses the artist name as-is (e.g. 'Simple Minds' -> 'Simple Minds' under S).
+    If MusicBrainz sort tag is omitted, applies general article-stripping & diacritic sort rules.
     """
     if embedded and str(embedded).strip():
         return normalize_diacritics(str(embedded).strip())
@@ -33,19 +60,7 @@ def compute_artist_sort_name(artist: str, embedded: Optional[str] = None) -> str
     if not artist or not str(artist).strip():
         return "Unknown Artist"
 
-    artist_str = str(artist).strip()
-
-    if "," in artist_str:
-        return normalize_diacritics(artist_str)
-
-    if artist_str.lower().startswith("the "):
-        res = f"{artist_str[4:]}, The"
-    elif artist_str.lower().startswith("a "):
-        res = f"{artist_str[2:]}, A"
-    else:
-        res = artist_str
-
-    return normalize_diacritics(res)
+    return compute_sort_name(artist)
 
 def split_artists(artist_str: str, embedded: Optional[str] = None) -> List[Tuple[str, str]]:
     """
@@ -233,15 +248,19 @@ class MediaScanner:
                 embedded_sort = str(artist_sort_tag)
 
         artist_sort_name = compute_artist_sort_name(artist, embedded=embedded_sort)
+        album_sort_name = compute_sort_name(album)
+        title_sort_name = compute_sort_name(title)
 
         return {
             "id": track_id,
             "file_path": os.path.abspath(file_path),
             "file_format": ext.lstrip(".").upper(),
             "title": title,
+            "title_sort_name": title_sort_name,
             "artist": artist,
             "artist_sort_name": artist_sort_name,
             "album": album,
+            "album_sort_name": album_sort_name,
             "year": year,
             "track_number": track_number,
             "duration_ms": duration_ms,

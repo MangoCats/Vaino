@@ -23,7 +23,8 @@ def load_config() -> dict:
         "db_path": "vaino.db",
         "host": "0.0.0.0",
         "port": 8000,
-        "volume": 80
+        "volume": 80,
+        "skip_throttle_seconds": 5.0
     }
     if os.path.exists(config_path):
         try:
@@ -84,7 +85,7 @@ def main():
         logger.info(f"Loaded {len(all_tracks)} tracks into initial playback queue.")
 
     # 4. Create Web App
-    app = create_app(db=db, audio_engine=audio_engine, scanner=scanner)
+    app = create_app(db=db, audio_engine=audio_engine, scanner=scanner, skip_throttle_seconds=float(cfg.get("skip_throttle_seconds", 5.0)))
 
     # 5. Start Server
     logger.info(f"Launching Vaino Web Interface at http://localhost:{port}")
