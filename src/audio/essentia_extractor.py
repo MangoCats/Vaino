@@ -159,15 +159,18 @@ class EssentiaExtractor:
         zero_crossings = []
         rms_values = []
         low_band_energies = []
-        vocal_band_energies = []
         high_band_energies = []
 
         window = np.hanning(frame_size)
         freq_bins = np.fft.rfftfreq(frame_size, d=1.0/sample_rate)
         
-        vocal_mask = (freq_bins >= 300) & (freq_bins <= 3400)
+        male_mask = (freq_bins >= 85) & (freq_bins <= 165)
+        female_mask = (freq_bins >= 165) & (freq_bins <= 265)
         low_mask = (freq_bins >= 20) & (freq_bins <= 250)
         high_mask = (freq_bins >= 4000)
+
+        male_energies = []
+        female_energies = []
 
         for f in range(0, num_frames, step):
             start = f * hop_size
@@ -190,19 +193,26 @@ class EssentiaExtractor:
                 spectral_centroids.append(centroid)
 
                 low_band_energies.append(np.sum(fft_mag[low_mask]) / total_mag)
-                vocal_band_energies.append(np.sum(fft_mag[vocal_mask]) / total_mag)
                 high_band_energies.append(np.sum(fft_mag[high_mask]) / total_mag)
+                male_energies.append(np.sum(fft_mag[male_mask]))
+                female_energies.append(np.sum(fft_mag[female_mask]))
 
         avg_centroid = float(np.mean(spectral_centroids)) if spectral_centroids else 2000.0
         avg_zc = float(np.mean(zero_crossings)) if zero_crossings else 0.05
-        avg_vocal = float(np.mean(vocal_band_energies)) if vocal_band_energies else 0.4
         avg_low = float(np.mean(low_band_energies)) if low_band_energies else 0.3
         avg_high = float(np.mean(high_band_energies)) if high_band_energies else 0.1
+
+        avg_m = float(np.mean(male_energies)) if male_energies else 1.0
+        avg_f = float(np.mean(female_energies)) if female_energies else 1.0
+        tot = avg_m + avg_f
+        raw_female = (avg_f / tot) if tot > 0 else 0.5
 
         bright_score = min(1.0, max(0.0, (avg_centroid - 600.0) / 4000.0))
         aggressive_score = min(1.0, max(0.0, (avg_zc * 10.0 + avg_high * 2.0) / 2.0))
         party_score = min(1.0, max(0.0, (avg_low * 2.5 + aggressive_score * 0.5) / 2.0))
-        female_voice_score = min(1.0, max(0.0, (avg_vocal * 1.5 + bright_score * 0.5) / 2.0))
+        
+        # Pitch F0 Vocal Gender score
+        female_voice_score = min(1.0, max(0.0, raw_female))
 
         cla_prob = round((1.0 - aggressive_score) * (1.0 - party_score) * 0.6, 3)
         roc_prob = round(aggressive_score * 0.5, 3)

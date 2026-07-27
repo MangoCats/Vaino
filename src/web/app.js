@@ -964,11 +964,22 @@ async function openDescriptorsModal(trackId) {
         const genreRos = esData.genre_rosamerica || {};
 
         if (gender.female !== undefined) {
+            const fVal = gender.female || 0.5;
+            const mVal = gender.male || (1.0 - fVal);
+            let genderText = 'Dual Vocal / Instrumental (50.0%)';
+            let genderConcept = 'Neutral Pitch Harmonic Balance';
+            if (fVal > 0.55) {
+                genderText = `Female (${(fVal * 100).toFixed(1)}%)`;
+                genderConcept = 'Female Lead Vocalist Pitch F0 Model';
+            } else if (mVal > 0.55) {
+                genderText = `Male (${(mVal * 100).toFixed(1)}%)`;
+                genderConcept = 'Male Lead Vocalist Pitch F0 Model';
+            }
             rows.push({
                 name: '🎙️ Vocal Gender',
-                val: (gender.female >= (gender.male || 0.5)) ? `Female (${(gender.female * 100).toFixed(1)}%)` : `Male (${((gender.male || 0.5) * 100).toFixed(1)}%)`,
-                concept: 'AcousticBrainz Voice Gender Model',
-                pct: Math.round((gender.female || 0.5) * 100)
+                val: genderText,
+                concept: genderConcept,
+                pct: Math.round(fVal * 100)
             });
         }
         if (timbre.bright !== undefined) {
