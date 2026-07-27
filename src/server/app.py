@@ -3,7 +3,7 @@ import time
 import asyncio
 import logging
 from typing import Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response, Query, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from ..db.database import Database
 from ..db.scanner import MediaScanner
 from ..audio.engine import AudioEngine
+from ..audio.analyzer import AudioAnalyzer
 from .websocket import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class VolumePayload(BaseModel):
 def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, skip_throttle_seconds: float = 5.0) -> FastAPI:
     app = FastAPI(title="Vaino Audio Engine & Server", version="0.1.0")
     manager = ConnectionManager()
+    analyzer = AudioAnalyzer(db=db)
     last_skip_time = 0.0
 
     app.add_middleware(
@@ -213,6 +215,21 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
             <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#4a5568" font-size="48">🎵</text>
         </svg>"""
         return Response(content=svg_placeholder.encode("utf-8"), media_type="image/svg+xml")
+
+    @app.post("/api/v1/analyzer/start")
+    def start_analysis(background_tasks: BackgroundTasks):
+        if analyzer.is_analyzing:
+            return {"status": "ALREADY_RUNNING", "analyzed": analyzer.analyzed_count, "total": analyzer.total_tracks}
+        background_tasks.add_task(analyzer.analyze_all_unprocessed, 10000, 16)
+        return {"status": "ANALYSIS_STARTED"}
+
+    @app.get("/api/v1/analyzer/status")
+    def analyzer_status():
+        return {
+            "is_analyzing": analyzer.is_analyzing,
+            "analyzed_count": analyzer.analyzed_count,
+            "total_tracks": analyzer.total_tracks
+        }
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

@@ -471,6 +471,50 @@ class Database:
         finally:
             conn.close()
 
+    def upsert_track_descriptors_batch(self, batch: List[Tuple[str, Dict[str, Any]]]):
+        if not batch:
+            return
+        sql = """
+        INSERT INTO track_audio_descriptors (
+            track_id, energy, valence, danceability, acousticness,
+            instrumentalness, speechiness, tempo_bpm, key_signature, loudness_lufs
+        ) VALUES (
+            :track_id, :energy, :valence, :danceability, :acousticness,
+            :instrumentalness, :speechiness, :tempo_bpm, :key_signature, :loudness_lufs
+        )
+        ON CONFLICT(track_id) DO UPDATE SET
+            energy = excluded.energy,
+            valence = excluded.valence,
+            danceability = excluded.danceability,
+            acousticness = excluded.acousticness,
+            instrumentalness = excluded.instrumentalness,
+            speechiness = excluded.speechiness,
+            tempo_bpm = excluded.tempo_bpm,
+            key_signature = excluded.key_signature,
+            loudness_lufs = excluded.loudness_lufs
+        """
+        records = []
+        for track_id, d in batch:
+            rec = dict(d)
+            rec["track_id"] = track_id
+            rec.setdefault("energy", 0.5)
+            rec.setdefault("valence", 0.5)
+            rec.setdefault("danceability", 0.5)
+            rec.setdefault("acousticness", 0.5)
+            rec.setdefault("instrumentalness", 0.5)
+            rec.setdefault("speechiness", 0.1)
+            rec.setdefault("tempo_bpm", 120.0)
+            rec.setdefault("key_signature", "C Major")
+            rec.setdefault("loudness_lufs", -14.0)
+            records.append(rec)
+
+        conn = self.get_connection()
+        try:
+            conn.executemany(sql, records)
+            conn.commit()
+        finally:
+            conn.close()
+
     def get_track_descriptors(self, track_id: str) -> Optional[Dict[str, Any]]:
         conn = self.get_connection()
         try:
