@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS track_artists (
     PRIMARY KEY (track_id, artist_name)
 );
 
+-- 3. Album Cover Art Storage Table [REQ-MB-020C]
+CREATE TABLE IF NOT EXISTS album_cover_art (
+    album_id             TEXT PRIMARY KEY,       -- MD5 hex digest of (album_name + "::" + artist_name)
+    album_name           TEXT NOT NULL,
+    artist_name          TEXT NOT NULL,
+    image_data           BLOB NOT NULL,
+    mime_type            TEXT NOT NULL,          -- 'image/jpeg', 'image/png'
+    source               TEXT NOT NULL,          -- 'EMBEDDED', 'FOLDER', 'MUSICBRAINZ_MBID', 'MUSICBRAINZ_SEARCH'
+    updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 3. Audio Characteristics (AudioBrainz / Essentia Features)
 CREATE TABLE IF NOT EXISTS track_audio_descriptors (
     track_id             TEXT PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
