@@ -177,10 +177,11 @@ class DAOSlicer:
                 tracklist = []
                 for idx, tr in enumerate(media[0]["tracks"], 1):
                     rec = tr.get("recording", {})
+                    length_val = tr.get("length") or rec.get("length") or 180000
                     tracklist.append({
                         "track_number": idx,
-                        "title": tr.get("title") or rec.get("title"),
-                        "length_ms": tr.get("length") or rec.get("length", 180000),
+                        "title": tr.get("title") or rec.get("title") or f"Track {idx}",
+                        "length_ms": int(length_val),
                         "recording_mbid": rec.get("id"),
                         "release_mbid": release_id
                     })
