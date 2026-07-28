@@ -157,12 +157,44 @@ class CoverArtFetcher:
 
         return None
 
-    def resolve_album_art(self, album_name: str, artist_name: Optional[str], sample_file_path: Optional[str] = None) -> Optional[Tuple[bytes, str]]:
+    def fetch_art_via_recording_mbid(self, recording_mbid: str) -> Optional[Tuple[bytes, str]]:
+        """Queries MusicBrainz Recording API for Release / Release Group MBID and fetches Cover Art Archive image."""
+        if not recording_mbid or not recording_mbid.strip():
+            return None
+
+        url = f"https://musicbrainz.org/ws/2/recording/{recording_mbid.strip()}?inc=releases+release-groups&fmt=json"
+        res = self._safe_http_get(url)
+        if not res:
+            return None
+
+        try:
+            data = json.loads(res[0].decode("utf-8"))
+            releases = data.get("releases", [])
+            for r in releases:
+                rel_mbid = r.get("id")
+                rg_mbid = r.get("release-group", {}).get("id")
+
+                if rel_mbid:
+                    art = self.fetch_from_cover_art_archive(rel_mbid, is_release_group=False)
+                    if art:
+                        return art
+
+                if rg_mbid:
+                    art = self.fetch_from_cover_art_archive(rg_mbid, is_release_group=True)
+                    if art:
+                        return art
+        except Exception as e:
+            logger.debug(f"Error fetching release art for recording MBID {recording_mbid}: {e}")
+
+        return None
+
+    def resolve_album_art(self, album_name: str, artist_name: Optional[str], sample_file_path: Optional[str] = None, recording_mbid: Optional[str] = None) -> Optional[Tuple[bytes, str]]:
         """
         Resolves album art using priority fallback:
         1. Database stored album_cover_art
         2. Local directory cover files
-        3. MusicBrainz / Cover Art Archive API
+        3. Recording MBID -> Cover Art Archive
+        4. MusicBrainz Search API -> Cover Art Archive
         """
         # 1. Check SQLite album_cover_art table
         stored = self.db.get_album_cover_art(album_name, artist_name)
@@ -177,11 +209,19 @@ class CoverArtFetcher:
                 self.db.save_album_cover_art(album_name, artist_name, img_bytes, mime, source="FOLDER")
                 return local_art
 
-        # 3. Query MusicBrainz / Cover Art Archive
+        # 3. Query Cover Art Archive via Recording MBID
+        if recording_mbid:
+            rec_art = self.fetch_art_via_recording_mbid(recording_mbid)
+            if rec_art:
+                img_bytes, mime = rec_art
+                self.db.save_album_cover_art(album_name, artist_name, img_bytes, mime, source="MUSICBRAINZ_MBID")
+                return rec_art
+
+        # 4. Query MusicBrainz / Cover Art Archive via Search
         mb_art = self.search_musicbrainz_and_fetch_art(album_name, artist_name)
         if mb_art:
             img_bytes, mime = mb_art
-            self.db.save_album_cover_art(album_name, artist_name, img_bytes, mime, source="MUSICBRAINZ")
+            self.db.save_album_cover_art(album_name, artist_name, img_bytes, mime, source="MUSICBRAINZ_SEARCH")
             return mb_art
 
         return None
