@@ -211,12 +211,13 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
                 return Response(content=image_bytes, media_type=mime_type)
 
             # 2. Try database album_cover_art or local folder / MusicBrainz fetcher
-            from .db.cover_art_fetcher import CoverArtFetcher
+            from ..db.cover_art_fetcher import CoverArtFetcher
             fetcher = CoverArtFetcher(db)
             resolved_art = fetcher.resolve_album_art(
                 album_name=track["album"],
                 artist_name=track["artist"],
-                sample_file_path=track["file_path"]
+                sample_file_path=track["file_path"],
+                recording_mbid=track.get("musicbrainz_track_id")
             )
             if resolved_art:
                 image_bytes, mime_type = resolved_art
