@@ -150,7 +150,7 @@ class DAOSlicer:
             best_diff = float("inf")
 
             for ed in candidate_editions:
-                total_edition_ms = sum(t.get("length_ms", 0) for t in ed)
+                total_edition_ms = sum((t.get("length_ms") or 0) for t in ed)
                 diff = abs(total_edition_ms - dao_duration_ms)
                 if diff < best_diff:
                     best_diff = diff
