@@ -245,6 +245,18 @@ class AudioEngine:
             samples = raw_samples.reshape(-1, 1)
 
         total_frames = len(samples)
+        exact_full_duration_ms = int((total_frames / sample_rate) * 1000)
+
+        # Update DB with exact decoded duration for non-passage tracks if VBR header estimate was off
+        if self.db and track.get("id") and not track.get("end_offset_ms"):
+            try:
+                conn = self.db.get_connection()
+                conn.execute("UPDATE tracks SET duration_ms = ? WHERE id = ?", (exact_full_duration_ms, track["id"]))
+                conn.commit()
+                self.db.close_connection(conn)
+            except Exception as dberr:
+                logger.debug(f"Could not update exact decoded duration in DB: {dberr}")
+
         start_ms = track.get("start_offset_ms") or 0
         end_ms = track.get("end_offset_ms")
 
@@ -372,11 +384,17 @@ class AudioEngine:
             if self._sample_rate > 0:
                 elapsed_ms = int((self._current_frame / self._sample_rate) * 1000)
 
+            duration_ms = 0
+            if self._raw_data is not None and self._sample_rate > 0:
+                duration_ms = int((len(self._raw_data) / self._sample_rate) * 1000)
+            elif self.current_track:
+                duration_ms = self.current_track.get("duration_ms", 0)
+
             return {
                 "state": self.state,
                 "volume": int(self.volume * 100),
                 "elapsed_ms": elapsed_ms,
-                "duration_ms": self.current_track["duration_ms"] if self.current_track else 0,
+                "duration_ms": duration_ms,
                 "current_track": self.current_track,
                 "queue_length": len(self.queue),
                 "queue": list(self.queue),
