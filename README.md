@@ -51,6 +51,7 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - 🔬 **[GUIDE003: Feature Extraction Strategy](docs/GUIDE003-feature-extraction-strategy.md)** — **P0 critical path.** Replacing AcousticBrainz: harvest the archived dumps, reproduce the pipeline, two-stage validation, best-effort iteration.
 - 📊 **[LOG001: Feature Extraction Iteration Log](docs/LOG001-extraction-iterations.md)** — Dated record of every extraction attempt, its measured result, and why it plateaued.
 - 📋 **[REQ002: Functional Requirements](docs/spec/REQ002-functional-requirements.md)** — What Vaino and Sampo must do. Supersedes REQ001.
+- 🧙 **[SPEC009: Program Director](docs/spec/SPEC009-program-director.md)** — Selection pipeline: frequency vs character, seeds and Taste, flow and roulette.
 - 🗃️ **[SPEC008: Database Schema](docs/spec/SPEC008-database-schema.md)** — `vaino.db` DDL: identity spine, Album/Radio duality, flavor storage, class-D segregation.
 - 🏭 **[SPEC007: Sampo Architecture](docs/spec/SPEC007-sampo-architecture.md)** — **Provisional.** The library builder: pipeline stages, toolchain verification, and what is still open.
 - 🔗 **[SPEC006: Data Flow & Library Portability](docs/spec/SPEC006-data-flow-and-portability.md)** — Source of truth, the three identity keys, and how Sampo's derived data travels to a Vaino install that has no Sampo.
