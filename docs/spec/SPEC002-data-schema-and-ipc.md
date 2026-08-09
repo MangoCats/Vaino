@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS tracks (
     fade_ramp_profile    TEXT DEFAULT 'S_CURVE', -- 'LINEAR', 'EXPONENTIAL', 'S_CURVE'
     
     -- Metadata Identifiers & Uniform Sort Names
-    -- Metadata Identifiers & Uniform Sort Names
     has_cover_art        BOOLEAN DEFAULT 0,
     file_mtime           REAL DEFAULT 0,
     file_size            INTEGER DEFAULT 0,
@@ -41,15 +40,6 @@ CREATE TABLE IF NOT EXISTS tracks (
     album_sort_name      TEXT,                  -- Article-stripped album sort name
     title_sort_name      TEXT,                  -- Article-stripped track title sort name
     
-    -- Play Tracking & Automatic Song Selection Ratings [REQ-PD-040..080]
-    play_count           INTEGER DEFAULT 0,
-    last_played_at       DATETIME DEFAULT NULL,
-    rotation             REAL DEFAULT 0.0,      -- log rotation value (0.0 = 1 hour)
-    recovery             REAL DEFAULT 0.778,    -- log recovery value (0.778 = 6 hours)
-    restraint            REAL DEFAULT 0.0,      -- logarithmic preference multiplier (10^-restraint)
-    profanity            REAL DEFAULT 0.0,      -- profanity rating (0.0 clean to 1.0 explicit)
-    occasions            TEXT DEFAULT NULL,     -- seasonal tags: '[C]', '[W]', '[S]', '[K]'
-
     created_at           DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -62,29 +52,7 @@ CREATE TABLE IF NOT EXISTS track_artists (
     PRIMARY KEY (track_id, artist_name)
 );
 
--- 3. Artist Preferences & Selection Ratings Table [REQ-PD-040..080]
-CREATE TABLE IF NOT EXISTS artist_ratings (
-    artist_id            TEXT PRIMARY KEY,       -- MD5 hex digest of artist_name
-    artist_name          TEXT NOT NULL UNIQUE,
-    artist_sort_name     TEXT NOT NULL,
-    play_count           INTEGER DEFAULT 0,
-    last_played_at       DATETIME DEFAULT NULL,
-    rotation             REAL DEFAULT 0.778,     -- default 6 hours (10^0.778 * 3600)
-    recovery             REAL DEFAULT 0.778,     -- default 6 hours
-    restraint            REAL DEFAULT 0.0,       -- 10^-restraint frequency factor
-    streak_length        REAL DEFAULT 0.0,
-    updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 4. Track Relations Table (Rotation Lockout Linkage) [REQ-PD-050]
-CREATE TABLE IF NOT EXISTS track_relations (
-    track_id             TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-    related_track_id     TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-    relationship_weight  REAL DEFAULT 1.0,       -- lockout scaling multiplier
-    PRIMARY KEY (track_id, related_track_id)
-);
-
--- 5. Album Cover Art Storage Table [REQ-MB-020C]
+-- 3. Album Cover Art Storage Table [REQ-MB-020C]
 CREATE TABLE IF NOT EXISTS album_cover_art (
     album_id             TEXT PRIMARY KEY,       -- MD5 hex digest of (album_name + "::" + artist_name)
     album_name           TEXT NOT NULL,
@@ -95,7 +63,7 @@ CREATE TABLE IF NOT EXISTS album_cover_art (
     updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 6. Audio Characteristics (AudioBrainz / Essentia Features)
+-- 3. Audio Characteristics (AudioBrainz / Essentia Features)
 CREATE TABLE IF NOT EXISTS track_audio_descriptors (
     track_id             TEXT PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
     energy               REAL,  -- 0.0 to 1.0 (intensity)
@@ -109,7 +77,7 @@ CREATE TABLE IF NOT EXISTS track_audio_descriptors (
     loudness_lufs        REAL   -- Integrated loudness (LUFS) for volume leveling
 );
 
--- 7. Play History & Cooldown Tracking
+-- 4. Play History & Cooldown Tracking
 CREATE TABLE IF NOT EXISTS play_history (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     track_id             TEXT REFERENCES tracks(id),
@@ -117,7 +85,7 @@ CREATE TABLE IF NOT EXISTS play_history (
     completed            BOOLEAN DEFAULT 1
 );
 
--- 8. Persistent Queue & Player State across Restarts
+-- 5. Persistent Queue & Player State across Restarts
 CREATE TABLE IF NOT EXISTS player_queue (
     queue_order          INTEGER PRIMARY KEY AUTOINCREMENT,
     track_id             TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE
@@ -135,10 +103,8 @@ CREATE TABLE IF NOT EXISTS player_state (
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
-CREATE INDEX IF NOT EXISTS idx_tracks_last_played ON tracks(last_played_at);
 CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_name);
 CREATE INDEX IF NOT EXISTS idx_track_artists_sort ON track_artists(artist_sort_name);
-CREATE INDEX IF NOT EXISTS idx_artist_ratings_sort ON artist_ratings(artist_sort_name);
 CREATE INDEX IF NOT EXISTS idx_history_played_at ON play_history(played_at);
 ```
 
@@ -202,10 +168,6 @@ All REST endpoints operate under the base URI `/api/v1`.
 | `/api/v1/queue/move` | `POST` | `{"from_index": int, "to_index": int}` | Reorders item in queue. |
 | `/api/v1/queue/remove/{index}` | `DELETE` | Path param `index` | Removes item at 0-based queue index. |
 | `/api/v1/queue/clear` | `DELETE` | None | Removes all items from active queue. |
-| `/api/v1/ratings/track/{track_id}` | `GET` | None | Returns track rating parameters (`rotation`, `recovery`, `restraint`, `profanity`, `occasions`, `play_count`, `last_played_at`). |
-| `/api/v1/ratings/track/{track_id}` | `PUT` | JSON ratings payload | Updates track rating sliders (`rotation`, `recovery`, `restraint`, `profanity`). |
-| `/api/v1/ratings/artist/{artist_name}` | `GET` | None | Returns artist rating parameters (`rotation`, `recovery`, `restraint`, `streak_length`, `play_count`, `last_played_at`). |
-| `/api/v1/ratings/artist/{artist_name}` | `PUT` | JSON ratings payload | Updates artist rating sliders (`rotation`, `recovery`, `restraint`, `streak_length`). |
 
 ---
 
