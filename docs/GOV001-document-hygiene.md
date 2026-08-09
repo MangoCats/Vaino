@@ -53,6 +53,11 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `MB` — MusicBrainz, AcoustID, Chromaprint Fingerprinting
 - `FE` — Feature Extraction, Essentia, LUFS Loudness
 - `FD` — Flavor Distance, Song Similarity Metric
+- `SC` — Database Schema, Relational Model
+- `SA` — Sampo Architecture, Pipeline Stages
+- `VIS` — Visibility, Process Transparency
+- `LIB` — Library Building, Ingest (Sampo)
+- `PORT` — Portability, Metadata Transport
 - `DF` — Data Flow, Identity Keys, Library Portability
 - `PD` — Program Director, Auto-Playlist Selection Math
 - `UI` — Web Server, REST API, WebSocket Protocol, Web UI
@@ -94,6 +99,9 @@ grep -rn "SPEC-PD" docs/
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
+| `[REQ-*]` (AUD/PD/VIS/LIB/PORT/HW) | Functional requirements — supersedes REQ001 | [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md) |
+| `[SPEC-SC-030]` | Identity spine: files / recordings / passages DDL | [SPEC008-database-schema.md](spec/SPEC008-database-schema.md#2-identity-spine) |
+| `[SPEC-SC-060]` | Flavor storage: long/narrow, per-characteristic provenance | [SPEC008-database-schema.md](spec/SPEC008-database-schema.md#4-flavor) |
 | `[SPEC-SA-020]` | Sampo pipeline stages S1-S7 | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#2-pipeline) |
 | `[SPEC-SA-090]` | OPEN: per-passage extraction, untested | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |

@@ -160,24 +160,33 @@ def main():
                         errors.append(f"[INH-HAZ-020] {p} DEFINES reserved-prefix tag {t}")
                         break
 
-    # 3 -- exact tag collisions between the two sets
-    v = {}
-    for p in vaino_docs():
-        for t in tags_in(p):
-            v.setdefault(t, []).append(p)
-    i = {}
-    for p in inherited_docs():
-        for t in tags_in(p, skip_banner=True):
-            i.setdefault(t, []).append(p)
-    for t in sorted(set(v) & set(i)):
-        if t.split("-")[0] in RESERVED_PREFIXES:
-            continue  # Vaino citing an inherited tag is correct usage
+    # 3 -- exact tag collisions: a collision is two DEFINITIONS, not a
+    # citation. Vaino documents legitimately cite inherited tags such as
+    # [MFL-DEF-040] and [ENT-MP-030]; that is correct cross-referencing, not a
+    # namespace clash. Comparing raw presence flagged those as errors.
+    def definitions(paths, skip_banner=False):
+        out = {}
+        for path in paths:
+            text = open(path, encoding="utf-8").read()
+            if skip_banner and text.lstrip().startswith(">"):
+                parts = text.split("\n---\n", 1)
+                if len(parts) == 2:
+                    text = parts[1]
+            for line in text.splitlines():
+                for t in set(TAG.findall(line)):
+                    if is_definition(line, t):
+                        out.setdefault(t, []).append(path)
+        return out
+
+    vdef = definitions(vaino_docs())
+    idef = definitions(inherited_docs(), skip_banner=True)
+    for t in sorted(set(vdef) & set(idef)):
         if t in KNOWN_COLLISIONS:
             warnings.append(f"[INH-HAZ-020] known collision {t} "
                             f"(retires when {COLLISION_RETIRES_WHEN})")
             continue
-        errors.append(f"[INH-HAZ-020] tag {t} defined in BOTH "
-                      f"{os.path.basename(v[t][0])} and {os.path.basename(i[t][0])}")
+        errors.append(f"[INH-HAZ-020] tag {t} DEFINED in both "
+                      f"{os.path.basename(vdef[t][0])} and {os.path.basename(idef[t][0])}")
 
     # 4 -- relative links resolve
     for p in glob.glob("docs/**/*.md", recursive=True):
