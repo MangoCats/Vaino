@@ -17,6 +17,8 @@ To ensure that both human contributors and AI coding assistants can quickly insp
 2. **Inherited documents are segregated and prefixed** (`[GOV-DOC-030]`):
    - Material copied from predecessor projects lives only under `docs/inherited/`, carries an `MCR-` (or equivalent) filename prefix, and opens with a banner stating its class.
    - This is required because McRhythm and Vaino both number `SPEC003`–`SPEC006` with different meanings. See [inherited/README.md](inherited/README.md) `[INH-HAZ-010]`.
+   - **Enforced by `tools/check_docs.py`** (`[GOV-DOC-040]`), which also fails on new identifier collisions and unresolvable links. Run it before committing documentation changes.
+   - **Searches over `REQ`/`ENT` must be scoped**: `grep -rn "REQ-AUD" docs/ --exclude-dir=inherited`. Inherited material defines 651 tags of its own `[INH-HAZ-020]`.
 
 3. **Unique Grep-Searchable Identifiers**:
    - All requirements, design specs, entity definitions, and test cases MUST be assigned a unique, bracketed identifier tag (e.g., `[REQ-AUD-010]`, `[SPEC-AUD-020]`, `[UT-AUD-001]`).

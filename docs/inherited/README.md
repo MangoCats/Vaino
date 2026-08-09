@@ -73,12 +73,25 @@ The user has identified McRhythm's functional requirements as the most refined i
 
 ## 4. Hazards
 
-**`[INH-HAZ-010]` Document number collisions.** McRhythm and Vaino both number `SPEC003`, `SPEC004`, `SPEC005`, `SPEC006` — with entirely different meanings. Vaino's SPEC005 is Flavor Distance; McRhythm's is Program Director. **The `MCR-` filename prefix is mandatory** for every inherited file, and inherited documents must always be cited with that prefix.
+**`[INH-HAZ-010]` Document number collisions.** *Mitigation: `tools/check_docs.py` enforces the `MCR-` prefix on every inherited file; `[GOV-DOC-030]` makes it a governance rule.*
 
-**`[INH-HAZ-020]` Identifier namespaces differ.** Inherited documents use McRhythm's tags — `[MFL-*]`, `[MTA-*]`, `[LD-*]`, `[DBD-*]`, `[AM-*]`, `[AFS-*]`. Vaino uses `[REQ-*]`, `[SPEC-*]`, `[ENT-*]`, `[UT-*]`, `[GOV-*]`, `[GDE-*]`, `[LOG-*]`. They do not currently collide, and Vaino documents may cite McRhythm tags directly — but a `grep` for a Vaino tag must not silently match inherited material.
+ McRhythm and Vaino both number `SPEC003`, `SPEC004`, `SPEC005`, `SPEC006` — with entirely different meanings. Vaino's SPEC005 is Flavor Distance; McRhythm's is Program Director. **The `MCR-` filename prefix is mandatory** for every inherited file, and inherited documents must always be cited with that prefix.
+
+**`[INH-HAZ-020]` Identifier tags collide — measured, not assumed.** An earlier draft of this register asserted that Vaino and McRhythm tags "do not currently collide". That was wrong. Measurement over 651 inherited and 209 Vaino tags found **seven exact collisions**, all between Vaino's own `REQ001` and McRhythm's:
+
+`REQ-QUE-010/020/030/040`, `REQ-UI-010/020/030` — e.g. `[REQ-QUE-010]` is *"Queue Data Structure & Prioritization"* in Vaino and *"Add passages to queue (append)"* in McRhythm.
+
+Three prefixes are shared: `REQ`, `ENT`, `MFL`. (`MFL-DEF-040` appearing in both is *correct* — Vaino specs deliberately cite McRhythm's tag. Citation is not definition.)
+
+**Mitigations, in force:**
+1. `tools/check_docs.py` fails on any *new* collision. The seven existing ones sit in a `KNOWN_COLLISIONS` register with a stated retirement condition — Vaino's `REQ001` is a v1 artifact on the disposal path `[GDE-DIS-010]`, so the collisions retire with the document rather than being fixed by churn.
+2. `RESERVED_PREFIXES` in the same tool blocks Vaino from *defining* tags under prefixes owned by inherited material (`DBD`, `MFL`, `MTA`, `LD`, `AM`, `AFS`, `XFD`, `SSP`, `PERF`, `ARCH`), while still permitting citation.
+3. **Scoped search is now required** for `REQ`/`ENT`: `grep -rn "REQ-AUD" docs/ --exclude-dir=inherited` for Vaino-only. GOV001's search examples are otherwise misleading.
 
 **`[INH-HAZ-030]` These copies are frozen.** They are not synchronised with the source repositories. If McRhythm changes, these do not. That is intentional: they record what Vaino's decisions were actually based on.
 
-**`[INH-HAZ-050]` Cross-references inside inherited documents were adjusted.** Prose is unaltered, but links were rewired: 58 now point at imported siblings (`MCR-`-prefixed), and 111 pointing at McRhythm documents that were *not* imported were reduced to plain text. So a reference reading `SPEC008-library_management.md` in an inherited file is a real McRhythm document that simply does not exist here — import it on demand if a Vaino decision comes to depend on it.
+**`[INH-HAZ-050]` Cross-references inside inherited documents were adjusted.** Prose is unaltered, but links were rewired: 58 now point at imported siblings (`MCR-`-prefixed), and 111 pointing at McRhythm documents that were *not* imported were reduced to plain text. A reference reading `SPEC008-library_management.md` in an inherited file is a real McRhythm document that simply does not exist here.
+
+**Mitigation:** [`PROVENANCE.json`](PROVENANCE.json) records the sha256 of each **source** file as it stood at import. Because our copies deliberately differ, they cannot be diffed against the originals directly — but the manifest makes drift in the source repositories detectable whenever those repositories are present. Verified 2026-08-09: 16 of 16 sources unchanged since import.
 
 **`[INH-HAZ-040]` Inherited ≠ agreed.** Copying a document here does not adopt its conclusions. McRhythm's architecture is explicitly rejected `[GDE-CHT-050]` while its requirements are inherited — the two travel in the same files.
