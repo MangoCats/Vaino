@@ -52,3 +52,7 @@ data/*
 data/stageb/*
 !data/stageb/*.json
 !data/stageb/*.log
+data/vaino_new.db
+data/*.log
+!data/migration_report.json
+data/missing_files.json
