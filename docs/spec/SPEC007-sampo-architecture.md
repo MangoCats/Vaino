@@ -4,7 +4,7 @@
 
 Structure of **Sampo**, the library builder that turns raw audio into everything `vaino.db` needs. Named for the *Kalevala*'s mill that ground abundance from raw material — a separate artifact that Väinämöinen depends on but never contains `[GDE-ARC-010]`.
 
-> **Status.** §§1–5 rest on measured results and are stable. **§6 (segmentation & identification) is provisional** — the pipeline is specified, but the per-passage extraction question `[SPEC-SA-090]` is untested and could move it. Marked accordingly rather than asserted.
+> **Status.** §§1–5 rest on measured results and are stable. **§6 remains provisional on segmentation**, which is inherited from McRhythm but not yet reproduced `[SPEC-SA-070]`. The per-passage extraction question that previously gated it has been **measured and resolved** `[SPEC-SA-090]`.
 
 > **Related:** [GUIDE002 §2](../GUIDE002-rearchitecture-plan.md#2-architectural-decisions) · [GUIDE003](../GUIDE003-feature-extraction-strategy.md) · [SPEC006](SPEC006-data-flow-and-portability.md) · inherited [MCR-SPEC033 Album Matching](../inherited/mcrhythm/MCR-SPEC033-album_matching.md) · [MCR-SPEC025 Amplitude Analysis](../inherited/mcrhythm/MCR-SPEC025-amplitude_analysis.md)
 
@@ -61,7 +61,7 @@ Subprocess invocation also keeps the AGPL boundary clean — aggregation rather 
 
 ## 4. Classification (S5) — Settled
 
-**`[SPEC-SA-040]`** Distilled models map 928 lowlevel features → 71 highlevel dimensions, reproducing AcousticBrainz's classifiers without Gaia, without a build, and without reverse-engineering a binary format `[GDE-FEX-065]`. Median err/β **0.152** against the reference's own 0.210 self-inconsistency `[LOG-I5-020]` — though that floor is known to be too generous `[LOG-MET-030]`.
+**`[SPEC-SA-040]`** Distilled models map 928 lowlevel features → 71 highlevel dimensions, reproducing AcousticBrainz's classifiers without Gaia, without a build, and without reverse-engineering a binary format `[GDE-FEX-065]`. Median err/β **0.182** against the library-native floor of **0.359** `[LOG-I6-020]` — 0.51× floor, with 16 of 18 characteristics at or below their own.
 
 **`[SPEC-SA-045]` Model artifacts are raw fp32 arrays, not pickles.** Inference is numpy-only: three matmuls and a ReLU, portable to any language `[LOG-NEXT-050]`. sklearn pickles break across versions and these ship to machines we do not control. Bundles are self-describing — feature ordering, class names, training config, measured accuracy — so a stored model can be audited without the code that made it `[GDE-CHT-030]`.
 
@@ -99,13 +99,25 @@ Subprocess invocation also keeps the AGPL boundary clean — aggregation rather 
 
 **`[SPEC-SA-085]` Every decision is recorded, not just logged** — which stage matched, at what confidence, which candidates were rejected `[GDE-CHT-030]`. This is what converts an undocumented ritual into a reviewable process.
 
-**`[SPEC-SA-090]` OPEN — per-passage extraction is untested and may move this section.** Extraction must run **per passage**, not per file: a 40-track DAO file needs 40 extractor runs over 40 slices, which forces S2 before S4 and makes S4 consume sliced temporary audio. Consequences not yet measured:
+**`[SPEC-SA-090]` Per-passage extraction — MEASURED 2026-08-09. The mechanism works.** Extraction runs **per passage**, not per file: a 40-track DAO file needs 40 extractor runs over 40 slices, which forces S2 before S4 and makes S4 consume sliced temporary audio.
 
-- The ~27 s/track figure `[GDE-FEX-062]` came entirely from whole single-track files; slicing cost is unaccounted.
-- Classifiers were distilled from features over **whole recordings**. Whether a short slice yields in-distribution features is unknown. MuLibPlay's Radio cuts run to a **12 s minimum**, with 2.5% under 90 s.
-- A minimum-duration policy, a fallback, or per-length calibration may be needed — each with different architectural consequences.
+Ten tracks were truncated to centred excerpts and each excerpt's flavor compared against the same track's full-length flavor, in SPEC005 distance `[SPEC-FD-040]` normalized by the floor:
 
-Experiment scheduled after the current model retrain completes.
+| slice | flavor distance | vs floor | extraction failures |
+| ---: | ---: | ---: | ---: |
+| 180 s | 0.246 | 1.17× | 0 |
+| 90 s | 0.386 | 1.83× | 0 |
+| 45 s | 0.454 | 2.15× | 0 |
+| 20 s | 0.550 | 2.61× | 0 |
+| **12 s** | 0.548 | 2.60× | **0** |
+
+**Zero extraction failures at any duration, down to 12 s** — the length of MuLibPlay's shortest radio passage. The pipeline shape in §2 stands; ffmpeg slicing to WAV plus a subprocess extraction is viable, and no minimum-duration fallback is needed for the mechanism to function.
+
+**`[SPEC-SA-092]` What the experiment does and does not show.** It varies *truncation*: how much hearing less of a song changes its computed flavor. A DAO passage is **not** a truncation — the passage boundaries capture the whole recording, so a 240-second DAO passage should behave like a 240-second standalone file. The result therefore does *not* say short passages give unreliable flavor.
+
+**It says something more useful: boundary accuracy affects flavor, not just playback.** A boundary clipping a song to ~70% of its length costs ~1.17× floor; to ~35%, ~2.15×. Segmentation error propagates into selection quality, which raises the stakes on `[SPEC-SA-070]` well beyond "the track starts in the wrong place."
+
+**`[SPEC-SA-094]` Still open:** whether *genuinely short recordings* — 12-second interludes, not truncated long songs — yield reliable flavor. That needs short songs as subjects and is a different experiment.
 
 ---
 

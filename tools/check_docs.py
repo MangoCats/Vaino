@@ -30,8 +30,11 @@ TAG = re.compile(r"\[([A-Z]{2,6}-[A-Z0-9]{2,10}-[0-9]{2,4})\]")
 
 # Peel leading markdown one token at a time. '*' counts as a bullet only when
 # followed by whitespace, so '**' (bold) survives to mark a definition.
+# Emoji/symbol range is deliberately broad (U+2190-U+2BFF plus the emoji planes):
+# a narrow list silently broke definition detection when a document used a
+# character that had not been enumerated -- e.g. U+2705 white-heavy-check-mark.
 PREFIX = re.compile(r"^(?:\s+|>|\#{1,6}|\d+[.)]|[-+]\s|\*\s|\||~~"
-                    r"|[⚠⭐️🌀-🫿])")
+                    r"|[←-⯿️\U0001F300-\U0001FAFF])")
 LINK = re.compile(r"\[[^\]\[]*\]\((?!https?:|file:|mailto:|#)([^)]+)\)")
 CODESPAN = re.compile(r"`[^`\n]*`")
 

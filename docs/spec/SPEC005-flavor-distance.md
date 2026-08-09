@@ -69,7 +69,7 @@ A characteristic whose two submissions differ as much as two random songs carrie
 
 Measured over **8,463 multi-submission recordings** and 15,000 random pairs from the 2022-06-23 **sample** dump:
 
-> ⚠️ **`[SPEC-FD-051]` These constants are provisional and pending regeneration.** They were measured on a generic AcousticBrainz sample before the full harvest. The library's *own* 7,685 multi-submission recordings `[GDE-FEX-057]` are now available and are the correct population — β is a property of the corpus being searched, and ours is not the average corpus. Regenerate before these values are relied on in production.
+> ✅ **`[SPEC-FD-051]` Regenerated 2026-08-09 on the library's own 7,685 multi-submission recordings.** The table below is now **superseded** by `[SPEC-FD-052]`; it is retained because the comparison between the two is itself a finding.
 
 | Characteristic | K | β_c (scale) | w_c (reliability) | | Characteristic | K | β_c | w_c |
 | :--- | --: | --: | --: | :-- | :--- | --: | --: | --: |
@@ -85,7 +85,27 @@ Measured over **8,463 multi-submission recordings** and 15,000 random pairs from
 | | | | | | `mood_party` | 2 | 0.3197 | 0.752 |
 | | | | | | `danceability` | 2 | 0.4297 | **0.751** |
 
-**`[SPEC-FD-055]` The headline finding: four of the six complex characteristics rank among the seven most reliable.** `genre_electronic` and `genre_dortmund` (0.880) beat every mood classifier. MuLibPlay discarded all six. Including them is the single largest available improvement to similarity quality `[SPEC-FD-060]`.
+**`[SPEC-FD-052]` Library-native constants — normative.** Measured over the library's own 7,685 multi-submission recordings. **Use these.**
+
+| Characteristic | β_c | w_c | | Characteristic | β_c | w_c |
+| :--- | --: | --: | :-- | :--- | --: | --: |
+| `genre_electronic` | 0.3315 | **0.743** | | `ismir04_rhythm` | 0.4954 | 0.578 |
+| `genre_dortmund` | 0.2721 | **0.742** | | `mood_happy` | 0.2867 | 0.568 |
+| `mood_sad` | 0.2447 | **0.734** | | `mood_party` | 0.2850 | 0.545 |
+| `genre_rosamerica` | 0.5477 | **0.706** | | `danceability` | 0.3441 | 0.526 |
+| `mood_acoustic` | 0.3336 | **0.704** | | `voice_instrumental` | 0.3795 | 0.517 |
+| `gender` | 0.3448 | 0.666 | | `genre_tzanetakis` | 0.1175 | 0.516 |
+| `mood_aggressive` | 0.2562 | 0.624 | | `tonal_atonal` | 0.3760 | 0.498 |
+| `mood_relaxed` | 0.3438 | 0.620 | | `timbre` | 0.3709 | 0.482 |
+| `moods_mirex` | 0.2979 | 0.600 | | `mood_electronic` | 0.3107 | 0.454 |
+
+**`[SPEC-FD-053]` Two differences from the generic sample, both consequential.**
+
+*β is smaller for 16 of 18 characteristics* — the library is far more homogeneous in flavor than a random slice of AcousticBrainz, which is unsurprising for one person's collection. Distances are compressed, so the same raw difference reads as a larger normalized distance. This is also why MuLibPlay's pool parameters `[SPEC-DIR-200]` are better founded than they looked: they were tuned *on this library's own distance distribution*.
+
+*Reliability is uniformly lower* — 0.45–0.74 here against 0.75–0.88 on the sample. AcousticBrainz is **less** self-consistent on our library, not more. The likely cause is popularity: our recordings carry a mean of 77 submissions from many different rips `[GDE-FEX-057]`, where a random sample's multi-submission recordings often have just two, frequently from similar sources. More submitters means more encoding diversity means more spread.
+
+**`[SPEC-FD-055]` The headline finding survives regeneration: four of the six complex characteristics rank among the seven most reliable.** `genre_electronic` (0.743) and `genre_dortmund` (0.742) still beat every mood classifier, and `genre_rosamerica` sits fourth — the same ordering the generic sample gave. MuLibPlay discarded all six. Including them remains the single largest available improvement to similarity quality `[SPEC-FD-060]`.
 
 The reliability spread is narrow (0.75–0.88), so weighting is a refinement rather than a transformation. Values are re-derived, not hand-tuned; regenerate them whenever the flavor source changes.
 

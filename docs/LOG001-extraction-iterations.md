@@ -14,9 +14,11 @@ Strategy in [GUIDE003](GUIDE003-feature-extraction-strategy.md). Metric definiti
 
 **`[LOG-MET-020]`** The reference point is **the floor**: AcousticBrainz's own submission-to-submission error, likewise normalized `[GDE-FEX-085]`. Median floor is **0.210**. At or below the floor, further effort is chasing encoding noise rather than improving anything real — the calibration point `[GDE-PHS-005]` calls for.
 
-> ⚠️ **`[LOG-MET-030]` The floor is known to be too generous, and every ratio below inherits that.** 0.210 is a *single-submission vs single-submission* figure. The dump actually holds a mean of **77 submissions per library recording** `[GDE-FEX-057]`, and a multi-submission mean would set a stricter reference by averaging encoding noise away.
+> ⚠️ **`[LOG-MET-030]` The 0.210 floor used throughout this log is measured on a generic AcousticBrainz sample, not on our library — and it is WRONG IN THE OPPOSITE DIRECTION to what was predicted.**
 >
-> So every **vs floor** ratio in this log — including the headline *13 of 18 at or below floor* — is **flattering by an unmeasured margin**. Treat them as provisional until the constants are recomputed on the 7,685 multi-submission library recordings `[LOG-I5-050]`. This caveat is stated here, before the results, rather than only after them.
+> This log previously warned that 0.210 was *too generous* and that every ratio was "flattering by an unmeasured margin". **That prediction was wrong.** Recomputed on the library's own 7,685 multi-submission recordings `[LOG-I6-010]`, the floor is **0.359**, not 0.210 — AcousticBrainz is markedly *less* self-consistent on our library than on a random sample, because our recordings carry a mean of 77 submissions from many different rips.
+>
+> Corrected on library-native constants: median err/β **0.182 against a 0.359 floor = 0.51×**, and **16 of 18** characteristics at or below their own floor. The ratios below were **pessimistic**, not flattering. They are retained as recorded, with `[LOG-I6-010]` as the authority.
 
 ---
 
@@ -160,7 +162,36 @@ Four characteristics remain above their floor. Three are genre classifiers, plus
 
 **Stopping condition per `[LOG-NEXT-040]`:** the 13 characteristics at or below floor are **frozen**. Further tuning there fits encoding noise, not signal.
 
-**`[LOG-I5-050]` Caveat — the floor itself is now known to be pessimistic.** `[GDE-FEX-057]` found the dump holds a mean of 77 submissions per library recording. The 0.210 floor is a *single-vs-single* figure; a multi-submission mean would set a stricter, more honest reference. Every "vs floor" ratio above is therefore **flattering by an unmeasured margin**, and the constants should be recomputed on the 7,685 multi-submission library recordings before these figures are treated as final.
+**`[LOG-I5-050]` Caveat — resolved by `[LOG-I6-010]`, in the opposite direction to the one predicted.** The concern was that the single-vs-single floor was too generous. Measurement showed the reverse: on our library the floor is 0.359, not 0.210, so these ratios were pessimistic. Superseded below.
+
+---
+
+## Iteration 6 — Library-native constants
+
+**`[LOG-I6-010]` Approach.** Recompute β and the floor on the library's own 7,685 multi-submission recordings rather than a generic AcousticBrainz sample, capped at 8 submissions each (4.1M values). Two floors computed: submission-vs-submission, and submission-vs-consensus — the latter being the stricter reference the caveat called for.
+
+**Result — both predictions wrong, in informative ways.**
+
+| | generic sample | our library |
+| :--- | ---: | ---: |
+| median floor, single vs single | 0.210 | **0.411** |
+| median floor, single vs consensus | — | **0.359** |
+| consensus tightening | predicted large | **1.14× only** |
+
+Averaging submissions barely tightens the floor (1.14×), so the "77 submissions cancel the noise" reasoning was much weaker than assumed. And the library floor is nearly **double** the generic one: AcousticBrainz is *less* self-consistent on our music, not more. The likely cause is popularity — 77 submissions from many rippers carry more encoding diversity than a sample recording's two.
+
+**`[LOG-I6-020]` Corrected model performance.** Errors recomputed with library β (the numerator changes too, since β is smaller for 16 of 18 characteristics):
+
+| | old (sample constants) | new (library constants) |
+| :--- | ---: | ---: |
+| median err/β | 0.152 | 0.182 |
+| median floor | 0.210 | 0.359 |
+| **ratio** | 0.72× | **0.51×** |
+| at or below floor | 13/18 | **16/18** |
+
+Only `genre_tzanetakis` (1.87×) and `gender` (1.04×) now exceed their floor. `genre_tzanetakis` remains the outlier: its library β is 0.1175 against 0.2186 on the sample, so its distributions are half as spread here and the same absolute error normalizes to twice as much.
+
+**`[LOG-I6-030]` Lesson.** Two consecutive predictions about the floor were wrong — first its direction, then the size of the consensus correction. Reference constants are a property of the corpus, and this project has now been surprised by that twice. Constants measured on anything other than the corpus in use should be treated as unvalidated, not as approximations `[SPEC-FD-053]`.
 
 ---
 
