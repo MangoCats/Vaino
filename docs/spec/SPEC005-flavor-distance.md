@@ -116,20 +116,33 @@ Distance is only ever computed *between two tracks in this library*. Absolute ag
 - **Uniform provenance** — every track scored by the same model from the same decoder on our own files. Whatever error the model has is **common-mode**: it shifts both sides of every comparison and largely cancels. Encoding variance is *zero*, because there is only one encode of each file — ours.
 - **Mixed provenance** — some tracks from the dump, some locally extracted. Every cross-provenance comparison pays *both* an encoding difference and a model difference, and the metric cannot tell that systematic offset apart from genuine musical difference. The library splits into two subpopulations that the distance function silently treats as musically distinct.
 
-**`[SPEC-FD-140]` The consequence is counter-intuitive and important: a locally extracted library may rank similarity better than the AcousticBrainz dump values do, even while scoring *worse* against AcousticBrainz as ground truth.**
+**`[SPEC-FD-140]` Measured 2026-08-09 — the mixed-provenance penalty is confirmed and large; the predicted local-beats-dump advantage is not.**
 
-The dump is not itself uniform. Its values came from many contributors' rips and encodes — which is precisely the ~0.210 err/β self-inconsistency measured in `[GDE-FEX-085]`. That variance is baked into the dump and cannot be removed. Local extraction over our own files carries none of it.
+The `[SPEC-FD-060]` retrieval test, run under three provenance regimes over 1,500 queries against 500 candidates:
 
-So the ordering to expect, best first:
-1. **All-local** — no encoding variance, no model variance.
-2. **All-dump** — no model variance, but the dump's own encoding variance throughout.
-3. **Mixed** — both, plus a systematic split between subpopulations.
+| Regime | top-1 | top-5 | MRR |
+| :--- | ---: | ---: | ---: |
+| **A** all-teacher (dump only) | **77.9%** | 81.2% | **0.796** |
+| **B** all-student (local only) | 76.7% | 81.1% | 0.789 |
+| **C** mixed (local query, dump library) | **69.6%** | 77.3% | 0.733 |
 
-**`[SPEC-FD-150]` Design consequence — the dumps' role changes.** They remain essential as **validation ground truth** and as the source of the `β_c` and `w_c` constants `[SPEC-FD-050]`, but they should **not** be assumed to be the production flavor values. Once local extraction is good enough, extracting the entire library locally is preferable to using dump values for the covered portion and local values for the rest.
+**Confirmed, decisively: mixing provenance costs ~8 points of top-1 accuracy** — worse than *either* pure regime, exactly as the metric's construction predicts. This is the finding that matters for design, and it is robust.
+
+**Not confirmed: all-local was predicted to beat all-dump, and it did not** — 76.7% against 77.9%, marginally behind. The prediction rested on the dump's encoding variance `[GDE-FEX-085]` being a net handicap; measurement says the student's own approximation error slightly outweighs the encoding variance it avoids.
+
+Two caveats bound that negative result, neither yet resolved:
+- The student here is the **iteration-1 shared MLP** (median err/β 0.223), not the final per-characteristic selection (0.152) `[LOG-I5-030]`. A rerun with the final models would likely close or reverse a 1.2-point gap.
+- `[GDE-FEX-057]` found the dump holds a mean of 77 submissions per library recording. Regime A used single submissions; **averaged references would make the dump stronger still**, cutting against a rerun's favour.
+
+So the honest ordering is **A ≈ B ≫ C**, with A and B within noise of each other and the gap between them unresolved.
+
+**`[SPEC-FD-145]` The design conclusion survives, but for a different reason than argued.** Uniform provenance is required not because local extraction is *better* than the dump, but because mixing is materially worse than either. Since a distributable Vaino cannot ship the dump `[GDE-CHT-045]` and future acquisitions can never be in it `[GDE-FEX-025]`, uniform-local is the only regime reachable in the general case — and it costs at most ~1 point against an all-dump library we could not build anyway.
+
+**`[SPEC-FD-150]` Design consequence — the dumps' role changes.** They remain essential as **validation ground truth** and as the source of the `β_c` and `w_c` constants `[SPEC-FD-050]`, but they should **not** be the production flavor values. Extracting the entire library locally is preferable to using dump values for the covered 93.7% `[GDE-FEX-055]` and local values for the rest — that split is precisely regime C, the one measurably worst option `[SPEC-FD-140]`.
 
 Note this also removes the awkwardness in `[SPEC-FD-120]`: with uniform provenance there is no per-track provenance weighting to apply, because every track has the same provenance.
 
-**`[SPEC-FD-160]` Status: predicted, not yet confirmed.** Tested by `tools/provenance_consistency_test.py`, which runs the `[SPEC-FD-060]` retrieval test under all three regimes. Until that returns, treat the ordering above as a hypothesis. What is *not* in doubt is the direction of the mixed-provenance penalty — that follows from the metric's construction.
+**`[SPEC-FD-160]` Status: measured 2026-08-09** by `tools/provenance_consistency_test.py`. The mixed-provenance penalty is confirmed at ~8 points of top-1. The predicted all-local advantage is **not** confirmed and remains open, bounded by the two caveats in `[SPEC-FD-140]`.
 
 ---
 

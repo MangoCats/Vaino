@@ -46,6 +46,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `MB` — MusicBrainz, AcoustID, Chromaprint Fingerprinting
 - `FE` — Feature Extraction, Essentia, LUFS Loudness
 - `FD` — Flavor Distance, Song Similarity Metric
+- `DF` — Data Flow, Identity Keys, Library Portability
 - `PD` — Program Director, Auto-Playlist Selection Math
 - `UI` — Web Server, REST API, WebSocket Protocol, Web UI
 - `HW` — Embedded Target, RPi Zero 2W, Storage Partitioning
@@ -85,6 +86,8 @@ grep -rn "SPEC-PD" docs/
 | `[LOG-I*-*]` | Extraction iteration history & measured results | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
+| `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
+| `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |
 | `[REQ-AUD-010]` | Gapless Audio File Decoding | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
 | `[REQ-AUD-020]` | Passage Timestamp Trimming | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
 | `[REQ-AUD-040]` | Dual-Buffer Crossfade Ramp Mixing | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |

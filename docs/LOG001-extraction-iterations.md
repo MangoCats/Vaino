@@ -117,11 +117,46 @@ So iteration 3's error `[LOG-I3-030]` was patched for the subset that was notice
 
 ---
 
-## Iteration 5 — Completing the factorial *(running)*
+## Iteration 5 — Completing the factorial
 
-**`[LOG-I5-010]` Approach.** Fit dedicated MLPs for the nine remaining characteristics, so every cell of the 18 × {shared MLP, dedicated GBM, dedicated MLP} comparison comes from the same candidate set. `genre_tzanetakis` already has all three from `[LOG-I2-030]` (GBM 0.462 beat dedicated MLP 0.527).
+**`[LOG-I5-010]` Approach.** Fit dedicated MLPs for the ten remaining characteristics, so every cell of the 18 × {shared MLP, dedicated GBM, dedicated MLP} comparison finally comes from the same candidate set. 6.7 h.
 
-**Result:** pending.
+**`[LOG-I5-020]` Result — median err/β 0.174 → 0.152, against the 0.210 floor.** At or below their own floor: **13 of 18**. Dedicated MLPs won 9 of the 10 tested here; `mood_party` was the sole exception, and only just (GBM 0.222 vs 0.225).
+
+Across the whole factorial, the **dedicated MLP is the best family for 16 of 18 characteristics**. Only `genre_tzanetakis` and `mood_party` retain gradient boosting. Iteration 3's original conclusion — that model class is strongly characteristic-dependent — was largely an artefact of the missing candidate `[LOG-I3-030]`.
+
+Largest movers: `mood_sad` 0.119 → **0.077**, `moods_mirex` 0.179 → **0.135**, `ismir04_rhythm` 0.227 → **0.149**.
+
+**`[LOG-I5-030]` Final model selection.**
+
+| Characteristic | err/β | vs floor | Family |
+| :--- | ---: | ---: | :--- |
+| `mood_happy` | 0.076 | **0.35×** | dedicated MLP |
+| `mood_sad` | 0.077 | **0.64×** | dedicated MLP |
+| `moods_mirex` | 0.135 | **0.64×** | dedicated MLP |
+| `tonal_atonal` | 0.140 | **0.64×** | dedicated MLP |
+| `timbre` | 0.152 | **0.70×** | dedicated MLP |
+| `ismir04_rhythm` | 0.149 | **0.72×** | dedicated MLP |
+| `mood_relaxed` | 0.170 | **0.77×** | dedicated MLP |
+| `danceability` | 0.203 | **0.82×** | dedicated MLP |
+| `genre_electronic` | 0.104 | **0.87×** | dedicated MLP |
+| `mood_aggressive` | 0.184 | **0.87×** | dedicated MLP |
+| `voice_instrumental` | 0.209 | **0.89×** | dedicated MLP |
+| `mood_party` | 0.222 | **0.90×** | GBM |
+| `mood_electronic` | 0.123 | **0.54×** | dedicated MLP |
+| `mood_acoustic` | 0.134 | **1.00×** | dedicated MLP |
+| `genre_rosamerica` | 0.158 | 1.21× | dedicated MLP |
+| `genre_dortmund` | 0.152 | 1.27× | dedicated MLP |
+| `gender` | 0.337 | 1.72× | dedicated MLP |
+| `genre_tzanetakis` | 0.460 | 2.55× | GBM |
+
+**`[LOG-I5-040]` Analysis.** Distillation `[GDE-FEX-065]` is validated: the median characteristic now reproduces AcousticBrainz **28% more consistently than AcousticBrainz reproduces itself**, with no Gaia, no Essentia build, and no binary-format reverse-engineering.
+
+Four characteristics remain above their floor. Three are genre classifiers, plus `gender`. Per `[SPEC-FD-050]` the genre classifiers are the *most reliable* in AcousticBrainz, so the residual error is concentrated where it carries the most information — `[LOG-NEXT-010]` (Nyström kernel approximation of the RBF-SVM teacher) targets exactly this group.
+
+**Stopping condition per `[LOG-NEXT-040]`:** the 13 characteristics at or below floor are **frozen**. Further tuning there fits encoding noise, not signal.
+
+**`[LOG-I5-050]` Caveat — the floor itself is now known to be pessimistic.** `[GDE-FEX-057]` found the dump holds a mean of 77 submissions per library recording. The 0.210 floor is a *single-vs-single* figure; a multi-submission mean would set a stricter, more honest reference. Every "vs floor" ratio above is therefore **flattering by an unmeasured margin**, and the constants should be recomputed on the 7,685 multi-submission library recordings before these figures are treated as final.
 
 ---
 

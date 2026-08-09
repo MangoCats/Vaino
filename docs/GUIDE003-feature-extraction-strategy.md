@@ -68,6 +68,35 @@ Mirror both. The lowlevel dump is what makes Stage B validation possible `[GDE-F
 
 Extract the library's ~7,900 recording MBIDs. Every hit is an exact 71-dimension reference vector.
 
+#### `[GDE-FEX-055]` Coverage measured 2026-08-09 — `[GDE-OPN-010]` answered
+
+Full harvest across all 31 files, **29,560,615 documents scanned**:
+
+| | |
+| :--- | ---: |
+| Library recordings found | **8,001 of 8,542 — 93.7%** |
+| …with more than one submission | 7,685 |
+| Mean submissions per found recording | **77** (max 1,270) |
+| Dimension values stored | 43,760,424 |
+
+**`[GDE-FEX-056]` The gaps skew new, which is the population that matters for distribution.** Among `vaino.db`'s 7,912 MBIDs, 522 are absent. Their era profile differs sharply from the found set:
+
+| Era | of found | of missing |
+| :--- | ---: | ---: |
+| pre-1980 | 7% | 3% |
+| 1980–94 | 39% | 15% |
+| 1995–2004 | 26% | 30% |
+| 2005–12 | 12% | 19% |
+| **2013+** | **8%** | **18%** |
+
+Post-2013 material is **2.3× over-represented** among the misses, confirming the pattern McRhythm saw. Our library skews old; **a recipient's library will skew newer, so their coverage will be worse than 93.7%** — direct support for `[GDE-FEX-027]`.
+
+**`[GDE-FEX-057]` Unexpected asset: 77 submissions per recording on average.** This was not anticipated and it cuts two ways.
+
+*Favourably* — averaging many submissions yields a far lower-noise reference than any single one. The 0.210 floor `[GDE-FEX-085]` is a *single-submission vs single-submission* figure; a 77-submission mean largely averages that encoding noise away. This gives validation a materially better ground truth than assumed, and the `β_c` / `w_c` constants `[SPEC-FD-050]` should be recomputed on these 7,685 library recordings rather than on a generic sample.
+
+*Against the earlier argument* — `[SPEC-FD-140]` reasoned that all-local might beat all-dump because the dump carries encoding variance. With averaging available, dump values for covered recordings are **cleaner than credited**. That weakens one strand of the case, though not the conclusion: a library where 8,001 recordings carry 77-submission averages and 541 carry single local extractions is *maximally* mixed provenance, which is the regime `[SPEC-FD-130]` warns against. The consistency and distribution arguments stand unaffected.
+
 **Note the superseded claim.** An earlier draft said "only the misses need Tier 1" and treated coverage `[GDE-OPN-010]` as sizing the whole document. Three later findings each independently overturn that: future acquisitions are permanently outside the dump `[GDE-FEX-025]`, distribution forbids depending on it `[GDE-FEX-027]`, and uniform local scoring may rank similarity better than mixed provenance does `[SPEC-FD-140]`. Coverage is still worth measuring — it bounds how much reference data validation has to work with — but it no longer sizes the work.
 
 ### `[GDE-FEX-060]` Tier 1 — Reproduce AcousticBrainz's pipeline, don't approximate it

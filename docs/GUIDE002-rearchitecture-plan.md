@@ -214,7 +214,7 @@ Per `[GDE-ARC-060]`, predecessors are retained only while they still teach. Each
 
 ## 6. Open Questions
 
-1. **`[GDE-OPN-010]` How complete is dump coverage for this library?** Answerable early in P0 and it sizes everything downstream: recordings present in the 2022-06-23 dump need no local extraction at all. Coverage was 91.1% on McRhythm's 2,664-recording sample `[GDE-MCR-045]`, but that library skews older than the 729 novel tracks that most need it.
+1. ~~**`[GDE-OPN-010]` How complete is dump coverage?**~~ — **ANSWERED 2026-08-09: 93.7%** (8,001 of 8,542 recordings) `[GDE-FEX-055]`. Misses skew post-2013 by 2.3×, so a recipient's newer library will fare worse. Note this no longer sizes the extraction work — three separate findings made local extraction mandatory regardless `[GDE-FEX-025]`, `[GDE-FEX-027]`, `[SPEC-FD-140]`.
 2. **`[GDE-OPN-020]` Rust for the player — confirm or reconsider?** The evidence supports it `[GDE-ARC-020]`, but McRhythm's stall is a real counter-signal worth weighing explicitly before P2 starts.
 3. **`[GDE-OPN-030]` How should Taste feed the Program Director?** McRhythm specified the Taste model but explicitly deferred this coupling `[GDE-MCR-070]`. It interacts with MuLibPlay's seed-track shaping `[GDE-PD-050]`, which already does something similar by different means. Genuine new design work.
 4. **`[GDE-OPN-040]` Which user-defined characteristics to define first?** `[GDE-ARC-030]` supports them generally; MuLibPlay's six years of use suggest christmas / winter / summer / kids are the proven ones `[GDE-PD-020]`.
