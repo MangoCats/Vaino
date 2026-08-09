@@ -172,13 +172,13 @@ Build the **"Why this track?" panel** `[GDE-CHT-030]`: artist weight, rotation b
 
 ### `[GDE-PHS-040]` P4 — Ingest & DAO Segmentation
 
-**Reproduce** McRhythm's cascade `[GDE-MCR-010]` — not merely port it. The inherited [MCR-SPEC033](../inherited/mcrhythm/MCR-SPEC033-album_matching.md) describes *McRhythm's implementation*, not Vaino's contract, so reproduction has three deliverables in order:
+**Reproduce** McRhythm's cascade `[GDE-MCR-010]` — not merely port it. The inherited [MCR-SPEC033](inherited/mcrhythm/MCR-SPEC033-album_matching.md) describes *McRhythm's implementation*, not Vaino's contract, so reproduction has three deliverables in order:
 
 1. **Requirements** — what Vaino demands of segmentation, independent of how McRhythm did it. Source material: MCR-SPEC033, MCR-IMPL005.
 2. **Specification** — Vaino's own cascade spec: grid search → DP assembly → RMS quiet-spot → extra merging, 7-strategy MusicBrainz edition search, windowed-dB-profile optimization, Stage-6 RMS boundary refinement.
 3. **Implementation + review UI** — waveform with draggable boundaries, lead-in/lead-out markers and gain `[SPEC-SA-080]`.
 
-Trim points and segue frames are **computed**, from the inherited amplitude analysis [MCR-SPEC025](../inherited/mcrhythm/MCR-SPEC025-amplitude_analysis.md) `[SPEC-SA-075]` — this supplies the Radio side of the Album/Radio duality `[GDE-BMK-030]` that MuLibPlay only ever produced by hand. Automatic placement is always reviewable and overridable; manual edits outrank computed values permanently.
+Trim points and segue frames are **computed**, from the inherited amplitude analysis [MCR-SPEC025](inherited/mcrhythm/MCR-SPEC025-amplitude_analysis.md) `[SPEC-SA-075]` — this supplies the Radio side of the Album/Radio duality `[GDE-BMK-030]` that MuLibPlay only ever produced by hand. Automatic placement is always reviewable and overridable; manual edits outrank computed values permanently.
 
 Every decision persisted as an inspectable **ingest decision record** — which stage matched, at what confidence, which editions were considered and rejected `[GDE-CHT-030]`. This turns "undocumented ritual" into "reviewable process".
 
