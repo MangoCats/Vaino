@@ -1,0 +1,5 @@
+fitting dedicated MLPs for 10: danceability, genre_dortmund, genre_electronic, genre_rosamerica, ismir04_rhythm, mood_acoustic, mood_aggressive, mood_party, mood_sad, moods_mirex
+
+characteristic          prev best  ded.MLP  new best   floor  vs floor
+danceability                0.222    0.203     0.203   0.249     0.82x  <- mlp-dedicated  IMPROVED  (480s)
+genre_dortmund              0.170    0.152     0.152   0.120     1.27x  <- mlp-dedicated  IMPROVED  (1516s)

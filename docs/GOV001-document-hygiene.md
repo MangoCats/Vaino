@@ -37,15 +37,27 @@ All unique identifiers MUST use one of the following standardized prefixes:
 | **Entities & Data Models** | `[ENT-<NAME>-<NUM>]` | Core relational data entities & schemas | `[ENT-TRACK-010]`, `[ENT-PASSAGE-010]` |
 | **Unit & Integration Tests**| `[UT-<DOMAIN>-<NUM>]` | Automated test suite assertions | `[UT-AUD-001]`, `[UT-DB-001]` |
 | **Governance & Process** | `[GOV-<DOMAIN>-<NUM>]` | Repository rules & policies | `[GOV-DOC-010]` |
+| **Development Guidance** | `[GDE-<DOMAIN>-<NUM>]` | Lessons learned, architectural rationale, forbidden patterns | `[GDE-LES-010]`, `[GDE-ARC-020]` |
+| **Experiment Records** | `[LOG-<DOMAIN>-<NUM>]` | Dated iteration history: approach, measured result, why it plateaued | `[LOG-I1-020]`, `[LOG-NEXT-010]` |
 
 ### Domain Acronyms
 - `AUD` — Audio Engine, Decoders, Slicing, Crossfading
 - `DB` — Database, SQLite, Media Scanner
 - `MB` — MusicBrainz, AcoustID, Chromaprint Fingerprinting
 - `FE` — Feature Extraction, Essentia, LUFS Loudness
+- `FD` — Flavor Distance, Song Similarity Metric
 - `PD` — Program Director, Auto-Playlist Selection Math
 - `UI` — Web Server, REST API, WebSocket Protocol, Web UI
 - `HW` — Embedded Target, RPi Zero 2W, Storage Partitioning
+
+### Development Guidance Domains (`GDE`)
+- `BMK` — MuLibPlay benchmark measurements
+- `PD` — MuLibPlay selection algorithm (preserved behaviour)
+- `MCR` — McRhythm/wkmp findings
+- `V1` — Vaino v1 measured failures
+- `LES` — Distilled lessons
+- `FEX` — Feature extraction strategy (P0 critical path)
+- `CHT` / `ARC` / `PHS` / `FBD` / `DIS` / `OPN` — Charter, architecture decisions, phases, forbidden patterns, disposal register, open questions
 
 ---
 
@@ -63,6 +75,16 @@ grep -rn "SPEC-PD" docs/
 
 | Tag ID | Component | Location Document |
 | :--- | :--- | :--- |
+| `[GDE-BMK-*]` | MuLibPlay benchmark & selection algorithm | [GUIDE001-lineage-and-lessons.md](GUIDE001-lineage-and-lessons.md) |
+| `[GDE-LES-*]` | Distilled lessons from all predecessors | [GUIDE001-lineage-and-lessons.md](GUIDE001-lineage-and-lessons.md#6-the-lessons-distilled) |
+| `[GDE-ARC-*]` | Re-architecture decisions | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#2-architectural-decisions) |
+| `[GDE-PHS-*]` | Phased implementation plan | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#3-phased-plan) |
+| `[GDE-FBD-*]` | Forbidden patterns | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#4-forbidden-patterns) |
+| `[GDE-DIS-*]` | Predecessor disposal register | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#5-disposal-register) |
+| `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
+| `[LOG-I*-*]` | Extraction iteration history & measured results | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
+| `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
+| `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
 | `[REQ-AUD-010]` | Gapless Audio File Decoding | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
 | `[REQ-AUD-020]` | Passage Timestamp Trimming | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
 | `[REQ-AUD-040]` | Dual-Buffer Crossfade Ramp Mixing | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |

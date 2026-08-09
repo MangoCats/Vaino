@@ -45,6 +45,11 @@ Vaino is a fresh project and the spiritual successor to the abandoned `McRhythm`
 
 Detailed architectural and design specifications are organized in the [`docs/`](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs) folder:
 
+- 🧭 **[GUIDE001: Project Lineage & Lessons Learned](docs/GUIDE001-lineage-and-lessons.md)** — Measured state of MuLibPlay, McRhythm/wkmp and Vaino v1; the benchmark to beat, the selection algorithm to preserve, and the failures to never repeat. **Start here.**
+- 🗺️ **[GUIDE002: Re-Architecture Plan](docs/GUIDE002-rearchitecture-plan.md)** — Design charter, architectural decisions, phased plan, forbidden patterns, and the predecessor disposal register.
+- 🔬 **[GUIDE003: Feature Extraction Strategy](docs/GUIDE003-feature-extraction-strategy.md)** — **P0 critical path.** Replacing AcousticBrainz: harvest the archived dumps, reproduce the pipeline, two-stage validation, best-effort iteration.
+- 📊 **[LOG001: Feature Extraction Iteration Log](docs/LOG001-extraction-iterations.md)** — Dated record of every extraction attempt, its measured result, and why it plateaued.
+- 📐 **[SPEC005: Flavor Distance & Song Similarity](docs/spec/SPEC005-flavor-distance.md)** — Total-variation metric unifying binary and multi-class characteristics, with measured per-characteristic reliability weights.
 - 📋 **[GOV001: Document Hygiene & Governance Standard](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/GOV001-document-hygiene.md)** — Repository governance rules, unique identifier taxonomy (`REQ`, `SPEC`, `UT`, `ENT`), modularity principles, and master search index.
 - 🏛️ **[System Architecture & Audio Pipeline](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/architecture.md)** — Core components, audio pipeline, trimming, crossfading, and audio locality rules.
 - ⚡ **[Embedded Hardware & Storage Resilience](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs/embedded-hardware.md)** — Raspberry Pi Zero 2W spec, fast-boot sequence, and 3-partition layout.

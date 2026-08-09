@@ -43,3 +43,12 @@ vaino.db
 
 # Rust target directory (for Phase 6 Rust engine)
 /target/
+
+# Sampo / feature-extraction working data.
+# Large, re-derivable artifacts stay out; measured RESULTS stay in.
+data/*
+!data/reliability.json
+!data/stageb/
+data/stageb/*
+!data/stageb/*.json
+!data/stageb/*.log
