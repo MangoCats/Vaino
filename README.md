@@ -45,6 +45,7 @@ Vaino is a fresh project and the spiritual successor to the abandoned `McRhythm`
 
 Detailed architectural and design specifications are organized in the [`docs/`](file:///c:/Users/Mango%20Cat/Dev/Vaino/docs) folder:
 
+- 📥 **[Inherited Documents Register](docs/inherited/README.md)** — Design material copied in from MuLibPlay and McRhythm, classified as active design input vs historical evidence, with collision hazards noted.
 - 🧭 **[GUIDE001: Project Lineage & Lessons Learned](docs/GUIDE001-lineage-and-lessons.md)** — Measured state of MuLibPlay, McRhythm/wkmp and Vaino v1; the benchmark to beat, the selection algorithm to preserve, and the failures to never repeat. **Start here.**
 - 🗺️ **[GUIDE002: Re-Architecture Plan](docs/GUIDE002-rearchitecture-plan.md)** — Design charter, architectural decisions, phased plan, forbidden patterns, and the predecessor disposal register.
 - 🔬 **[GUIDE003: Feature Extraction Strategy](docs/GUIDE003-feature-extraction-strategy.md)** — **P0 critical path.** Replacing AcousticBrainz: harvest the archived dumps, reproduce the pipeline, two-stage validation, best-effort iteration.

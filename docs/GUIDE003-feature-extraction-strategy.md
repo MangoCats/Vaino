@@ -256,4 +256,4 @@ From the v1 post-mortem `[GDE-V1-020]`. Each would be caught by Stage A `[GDE-FE
 
 ---
 
-**See also:** [GUIDE001: Lineage & Lessons](GUIDE001-lineage-and-lessons.md) · [GUIDE002: Re-Architecture Plan](GUIDE002-rearchitecture-plan.md) · McRhythm [SPEC003: Musical Flavor](../../McRhythm/docs/SPEC003-musical_flavor.md)
+**See also:** [GUIDE001: Lineage & Lessons](GUIDE001-lineage-and-lessons.md) · [GUIDE002: Re-Architecture Plan](GUIDE002-rearchitecture-plan.md) · McRhythm [SPEC003: Musical Flavor](inherited/mcrhythm/MCR-SPEC003-musical_flavor.md)

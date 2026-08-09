@@ -49,13 +49,13 @@ The Program Director selects **only `Radio` cuts**. One recording, multiple pres
 
 **`[GDE-BMK-040]` Dead schema — do not port.** The following `tracks` columns have been NULL for all 8,116 rows across six years: `tempo`, `intensity`, `keyMood`, `darkLight`, `genre`, `themes`. `quality`, `jts`, `popularity` have ≤10 rows. They were aspirational and never used. Six years of production is conclusive evidence.
 
-**`[GDE-BMK-050]` The confirmed weak spot — there is no ingest.** `MaintController::scanFile` ([maintController.cpp:380](../../MuLibPlay/maintController.cpp)) does exactly one thing: hash a file, `SELECT * FROM files WHERE sig = :hash`, and update `filePath` if it matches. It **relocates known files**. It cannot induct new music. MuLibPlay contains no MusicBrainz client, no fingerprinting, no segmentation. The entire new-music process is external manual labor — which is precisely why it is undocumented, unrepeatable, and easily forgotten.
+**`[GDE-BMK-050]` The confirmed weak spot — there is no ingest.** `MaintController::scanFile` (`maintController.cpp:380` (MuLibPlay source, not imported)) does exactly one thing: hash a file, `SELECT * FROM files WHERE sig = :hash`, and update `filePath` if it matches. It **relocates known files**. It cannot induct new music. MuLibPlay contains no MusicBrainz client, no fingerprinting, no segmentation. The entire new-music process is external manual labor — which is precisely why it is undocumented, unrepeatable, and easily forgotten.
 
 ---
 
 ## 3. MuLibPlay's Selection Algorithm — Preserve Exactly
 
-Source: [musicdirector.cpp](../../MuLibPlay/musicdirector.cpp). This algorithm produces the good selections. It is the most valuable transferable asset in the lineage after the data itself.
+Source: [musicdirector.cpp](inherited/mulibplay/musicdirector.cpp). This algorithm produces the good selections. It is the most valuable transferable asset in the lineage after the data itself.
 
 **`[GDE-PD-010]` Log-scale time encoding.** `rotationValueToSeconds(rv) = 10^rv × 3600`. So `-1.0` → 6 min, `0.0` → 1 hour, `1.0` → 10 hours. One tunable float spans four orders of magnitude.
 
@@ -92,7 +92,7 @@ Randomness is applied *last*, over an already-shaped pool. The character comes f
 
 ## 4. McRhythm / wkmp — What Worked, What Killed It
 
-**`[GDE-MCR-010]` The DAO segmenter genuinely works.** Measured over a 200-album test ([STAGE6_FULL_TEST_RESULTS_20260109.md](../../McRhythm/STAGE6_FULL_TEST_RESULTS_20260109.md)):
+**`[GDE-MCR-010]` The DAO segmenter genuinely works.** Measured over a 200-album test ([STAGE6_FULL_TEST_RESULTS_20260109.md](inherited/mcrhythm/MCR-STAGE6_FULL_TEST_RESULTS_20260109.md)):
 
 - **93.0%** album match rate (186/200); 7 genuine failures, 7 intentionally skipped.
 - **96.0%** mean track-boundary match; **67.2%** of matched albums perfect (100%).
@@ -101,9 +101,9 @@ Randomness is applied *last*, over an already-shaped pool. The character comes f
 
 Architecture: a cascade — parameter grid search → dynamic-programming assembly (over-segmented) → RMS quiet-spot (vinyl/cassette) → extra merging (bonus tracks) — plus a 7-strategy MusicBrainz edition search (CamelCase splitting, fuzzy edit distance, per-token fuzzy, album-only fallback). **This is the fix for MuLibPlay's weak spot and it already exists.**
 
-**`[GDE-MCR-020]` The audio player design is correct.** [SPEC016](../../McRhythm/docs/SPEC016-decoder_buffer_design.md): per-passage `decoder → resampler → fader → ring buffer` chains, ~15 s buffered per passage (**5.3 MB** at 44.1 kHz stereo f32), mixer draining into an output ring buffer, target **≤150 MB total RSS** on a 512 MB Pi Zero 2W. Streaming, bounded, never whole-file.
+**`[GDE-MCR-020]` The audio player design is correct.** [SPEC016](inherited/mcrhythm/MCR-SPEC016-decoder_buffer_design.md): per-passage `decoder → resampler → fader → ring buffer` chains, ~15 s buffered per passage (**5.3 MB** at 44.1 kHz stereo f32), mixer draining into an output ring buffer, target **≤150 MB total RSS** on a 512 MB Pi Zero 2W. Streaming, bounded, never whole-file.
 
-**`[GDE-MCR-030]` What killed it: scope multiplied by six.** From the project's own [TECHNICAL_DEBT_ANALYSIS.md](../../McRhythm/TECHNICAL_DEBT_ANALYSIS.md):
+**`[GDE-MCR-030]` What killed it: scope multiplied by six.** From the project's own [TECHNICAL_DEBT_ANALYSIS.md](inherited/mcrhythm/MCR-TECHNICAL_DEBT_ANALYSIS.md):
 - Six microservices (`ap`, `ui`, `pd`, `ai`, `le`, `dr`) each with its own HTTP server, all against one SQLite file.
 - The ingest service alone reached **71,321 lines of Rust**.
 - **Two complete parallel extractor hierarchies** (`src/extractors/` and `src/fusion/extractors/`) — flagged CRITICAL by the project's own analysis.
@@ -114,7 +114,7 @@ The technology was fine. The surface area was not. A 6-service split for a singl
 
 **`[GDE-MCR-040]` AcousticBrainz shutdown is the unsolved blocker.** With the service gone, descriptors for new music must be computed locally. Neither McRhythm nor Vaino v1 ever landed a validated local extractor. **This is the true critical-path problem of the whole lineage** — see [GUIDE003](GUIDE003-feature-extraction-strategy.md).
 
-**`[GDE-MCR-045]` The live API died between January and August 2026 — measured.** McRhythm successfully queried `acousticbrainz.org` on **2026-01-01**, retrieving data for 2,427 of 2,664 recordings (91.1% coverage) ([acousticbrainz_coverage_report.md](../../McRhythm/acousticbrainz_coverage_report.md)). Retested **2026-08-08**: every request returns HTTP 500 or times out. That window has closed.
+**`[GDE-MCR-045]` The live API died between January and August 2026 — measured.** McRhythm successfully queried `acousticbrainz.org` on **2026-01-01**, retrieving data for 2,427 of 2,664 recordings (91.1% coverage) ([acousticbrainz_coverage_report.md](inherited/mcrhythm/MCR-acousticbrainz_coverage_report.md)). Retested **2026-08-08**: every request returns HTTP 500 or times out. That window has closed.
 
 **The 2022-06-23 archival dumps are still served** from `data.metabrainz.org/pub/musicbrainz/acousticbrainz/dumps/` — `highlevel-json` and `lowlevel-json`, roughly 30 shards of 1–2 GB each. Given that the API died without notice, these should be treated as **also at risk and mirrored promptly**.
 
@@ -122,15 +122,15 @@ The technology was fine. The surface area was not. A 6-service split for a singl
 
 | Document | Lines | Contributes |
 | :--- | ---: | :--- |
-| [REQ001-requirements.md](../../McRhythm/docs/REQ001-requirements.md) | 731 | 15 revision commits. Covers ground Vaino's 116-line REQ001 does not: queue-empty behaviour, play history, network status, user identity, offline operation, error handling, library edge cases, three build tiers |
-| [REQ002-entity_definitions.md](../../McRhythm/docs/REQ002-entity_definitions.md) | 247 | Passage / Song / Recording / Work entity model |
-| [SPEC003-musical_flavor.md](../../McRhythm/docs/SPEC003-musical_flavor.md) | 188 | See `[GDE-MCR-060]` |
-| [SPEC005-program_director.md](../../McRhythm/docs/SPEC005-program_director.md) | 471 | Selection algorithm design |
-| [SPEC004-musical_taste.md](../../McRhythm/docs/SPEC004-musical_taste.md) · [SPEC006-like_dislike.md](../../McRhythm/docs/SPEC006-like_dislike.md) | 203 | Taste model, Like/Dislike semantics |
+| [REQ001-requirements.md](inherited/mcrhythm/MCR-REQ001-requirements.md) | 731 | 15 revision commits. Covers ground Vaino's 116-line REQ001 does not: queue-empty behaviour, play history, network status, user identity, offline operation, error handling, library edge cases, three build tiers |
+| [REQ002-entity_definitions.md](inherited/mcrhythm/MCR-REQ002-entity_definitions.md) | 247 | Passage / Song / Recording / Work entity model |
+| [SPEC003-musical_flavor.md](inherited/mcrhythm/MCR-SPEC003-musical_flavor.md) | 188 | See `[GDE-MCR-060]` |
+| [SPEC005-program_director.md](inherited/mcrhythm/MCR-SPEC005-program_director.md) | 471 | Selection algorithm design |
+| [SPEC004-musical_taste.md](inherited/mcrhythm/MCR-SPEC004-musical_taste.md) · [SPEC006-like_dislike.md](inherited/mcrhythm/MCR-SPEC006-like_dislike.md) | 203 | Taste model, Like/Dislike semantics |
 
 For scale: McRhythm's REQ001 alone (731 lines) is more than a third the size of Vaino's entire `docs/` tree (2,049 lines).
 
-**`[GDE-MCR-060]` Musical Flavor is a genuine advance over MuLibPlay's 11 numbers.** [SPEC003](../../McRhythm/docs/SPEC003-musical_flavor.md) defines flavor as the **full AcousticBrainz highlevel vector — 18 classifiers, 71 dimensions**, not the 11 scalars MuLibPlay stores:
+**`[GDE-MCR-060]` Musical Flavor is a genuine advance over MuLibPlay's 11 numbers.** [SPEC003](inherited/mcrhythm/MCR-SPEC003-musical_flavor.md) defines flavor as the **full AcousticBrainz highlevel vector — 18 classifiers, 71 dimensions**, not the 11 scalars MuLibPlay stores:
 
 - **Binary characteristics** (2 dims summing to 1.0): `danceability`, `gender`, `mood_*`, `timbre`, `tonal_atonal`, `voice_instrumental`.
 - **Complex characteristics** (3+ dims summing to 1.0): `genre_dortmund` (9), `genre_tzanetakis` (10), `genre_rosamerica` (8), `genre_electronic` (5), `ismir04_rhythm` (10), `moods_mirex` (5). **None of these exist in `mulib.db`.**
@@ -140,7 +140,7 @@ Two deliberate, documented asymmetries worth preserving:
 - **Flavor distance uses only *intersecting* characteristics** — never assume missing data is zero when comparing two specific items.
 - **Taste uses the *union* centroid** — build the broadest possible profile when aggregating many items.
 
-**`[GDE-MCR-070]` The Like/Dislike model is well thought through.** [SPEC006](../../McRhythm/docs/SPEC006-like_dislike.md): two centroids (Like-Taste and Dislike-Taste) producing two ranked lists, with the dislike list usable as an exclusion filter — "well-liked yet potentially unexpected". Click-stacking within a 5-minute window increases weight; the opposite button acts as undo; a detail panel exposes and permits direct editing of the resulting float weights. Passage-level actions are distributed across constituent songs. Note its own caveat: how Taste feeds the Program Director is explicitly *left undefined*.
+**`[GDE-MCR-070]` The Like/Dislike model is well thought through.** [SPEC006](inherited/mcrhythm/MCR-SPEC006-like_dislike.md): two centroids (Like-Taste and Dislike-Taste) producing two ranked lists, with the dislike list usable as an exclusion filter — "well-liked yet potentially unexpected". Click-stacking within a 5-minute window increases weight; the opposite button acts as undo; a detail panel exposes and permits direct editing of the resulting float weights. Passage-level actions are distributed across constituent songs. Note its own caveat: how Taste feeds the Program Director is explicitly *left undefined*.
 
 ---
 
@@ -157,14 +157,14 @@ Two deliberate, documented asymmetries worth preserving:
 
 That is not agreement — that is **copying**. **7,481 of 8,215 rows (91%) are bit-identical** to MuLibPlay's values to within 1e-6. Only **292 rows (3.6%)** carry the ONNX extractor's signature (3-decimal rounding, `[0.02, 0.98]` clamp). The claim that Essentia/ONNX replaced AcousticBrainz was never tested at scale; the data looks excellent only because it was borrowed from its predecessor.
 
-**`[GDE-V1-020]` The ONNX extractor is technically broken.** [src/audio/onnx_extractor.py](../../Vaino/src/audio/onnx_extractor.py), four independent defects, any one of which invalidates the output:
+**`[GDE-V1-020]` The ONNX extractor is technically broken.** [src/audio/onnx_extractor.py](../src/audio/onnx_extractor.py), four independent defects, any one of which invalidates the output:
 
 1. **Decimation is not resampling.** `samples[::int(sr/16000)]` gives `step = 2` for 44.1 kHz → **22,050 Hz**, then labels it 16,000 Hz. No anti-alias filter, so the result is aliased *and* time-scaled.
 2. **A 3-second sample stands in for the whole track.** 187 frames × 256 hop ≈ 2.99 s, taken from the file's midpoint. AcousticBrainz aggregates over the entire recording.
 3. **Wrong compression.** `log10(max(1e-5, magnitude))` on an unnormalized filterbank, where Essentia's `TensorflowInputMusiCNN` uses `log10(1 + 10000·x)` on normalized power mel. MusicNN receives out-of-distribution input.
 4. **Discrimination discarded** by clamping to `[0.02, 0.98]` and rounding to 3 decimals.
 
-**`[GDE-V1-030]` The lag has one cause: whole-file decode.** `AudioEngine._load_audio_file` calls `miniaudio.decode_file(file_path)` — the entire file into a NumPy array — while holding `self._lock`, from a synchronous FastAPI handler ([engine.py:226](../../Vaino/src/audio/engine.py)). Play/skip latency is therefore proportional to *whole-file* decode time.
+**`[GDE-V1-030]` The lag has one cause: whole-file decode.** `AudioEngine._load_audio_file` calls `miniaudio.decode_file(file_path)` — the entire file into a NumPy array — while holding `self._lock`, from a synchronous FastAPI handler ([engine.py:226](../src/audio/engine.py)). Play/skip latency is therefore proportional to *whole-file* decode time.
 
 For this library's largest file (244.9 min): **~2.6 GB** decoded at int16, **~5.2 GB** at float32. That is not slow on a Pi Zero 2W — it is impossible. Compare McRhythm's 5.3 MB streaming buffer `[GDE-MCR-020]`. **A ~1000× memory difference.**
 

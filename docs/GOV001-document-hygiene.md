@@ -14,14 +14,18 @@ To ensure that both human contributors and AI coding assistants can quickly insp
    - Every document MUST focus on a single domain or component.
    - Target file length is **100 to 250 lines** per document. Large documents MUST be split into sub-documents within appropriate folders (e.g., `docs/spec/`).
 
-2. **Unique Grep-Searchable Identifiers**:
+2. **Inherited documents are segregated and prefixed** (`[GOV-DOC-030]`):
+   - Material copied from predecessor projects lives only under `docs/inherited/`, carries an `MCR-` (or equivalent) filename prefix, and opens with a banner stating its class.
+   - This is required because McRhythm and Vaino both number `SPEC003`–`SPEC006` with different meanings. See [inherited/README.md](inherited/README.md) `[INH-HAZ-010]`.
+
+3. **Unique Grep-Searchable Identifiers**:
    - All requirements, design specs, entity definitions, and test cases MUST be assigned a unique, bracketed identifier tag (e.g., `[REQ-AUD-010]`, `[SPEC-AUD-020]`, `[UT-AUD-001]`).
    - Tags MUST be consistent across specifications, source code comments, and automated test names.
 
-3. **Direct Markdown Hyperlinks**:
+4. **Direct Markdown Hyperlinks**:
    - All references to other documents MUST use standard GitHub Markdown file links with explicit relative paths (e.g., `[SPEC001: Audio Engine](SPEC001-audio-engine.md)`).
 
-4. **Synchronous Specification & Test Maintenance Rule (`[GOV-DOC-020]`)**:
+5. **Synchronous Specification & Test Maintenance Rule (`[GOV-DOC-020]`)**:
    - Whenever an interactive conversation or prompt results in new code creation, architectural refinement, or settled design decisions, the corresponding formal requirements/specifications (`docs/spec/`) and automated test suites (`tests/`) MUST be updated synchronously within the same conversation turn.
 
 ---
@@ -39,6 +43,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 | **Governance & Process** | `[GOV-<DOMAIN>-<NUM>]` | Repository rules & policies | `[GOV-DOC-010]` |
 | **Development Guidance** | `[GDE-<DOMAIN>-<NUM>]` | Lessons learned, architectural rationale, forbidden patterns | `[GDE-LES-010]`, `[GDE-ARC-020]` |
 | **Experiment Records** | `[LOG-<DOMAIN>-<NUM>]` | Dated iteration history: approach, measured result, why it plateaued | `[LOG-I1-020]`, `[LOG-NEXT-010]` |
+| **Inherited Material** | `[INH-<DOMAIN>-<NUM>]` | Provenance and classification of documents copied from predecessor projects | `[INH-HAZ-010]` |
 
 ### Domain Acronyms
 - `AUD` — Audio Engine, Decoders, Slicing, Crossfading
@@ -84,6 +89,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-DIS-*]` | Predecessor disposal register | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#5-disposal-register) |
 | `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
 | `[LOG-I*-*]` | Extraction iteration history & measured results | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
+| `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
