@@ -94,6 +94,8 @@ grep -rn "SPEC-PD" docs/
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
+| `[SPEC-SA-020]` | Sampo pipeline stages S1-S7 | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#2-pipeline) |
+| `[SPEC-SA-090]` | OPEN: per-passage extraction, untested | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |
 | `[REQ-AUD-010]` | Gapless Audio File Decoding | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |

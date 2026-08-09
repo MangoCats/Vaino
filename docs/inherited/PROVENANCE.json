@@ -97,6 +97,24 @@
    "source_path": "musicdirector.h",
    "source_sha256": "a569df06537c17dc029d29eda80ee20093836bbb76bd96f2e13b7f8496276252",
    "class": "active"
+  },
+  "MCR-SPEC025-amplitude_analysis.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC025-amplitude_analysis.md",
+   "source_sha256": "7361382f30743ffb8ce5e3b223ae74247b91ca0aad70ce5b4c2c16c68e36528a",
+   "class": "active"
+  },
+  "MCR-SPEC002-crossfade.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC002-crossfade.md",
+   "source_sha256": "d9247295f21906319dd6039f198f67a5a27605328085634753f9e1d1503eebae",
+   "class": "active"
+  },
+  "MCR-IMPL009-amplitude_analyzer_implementation.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/IMPL009-amplitude_analyzer_implementation.md",
+   "source_sha256": "3d3b416f53fe66f6475d51e700bf65529cea887bc507cc8c8febe26354eb41f7",
+   "class": "active"
   }
  }
 }
