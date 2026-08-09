@@ -14,6 +14,10 @@ Strategy in [GUIDE003](GUIDE003-feature-extraction-strategy.md). Metric definiti
 
 **`[LOG-MET-020]`** The reference point is **the floor**: AcousticBrainz's own submission-to-submission error, likewise normalized `[GDE-FEX-085]`. Median floor is **0.210**. At or below the floor, further effort is chasing encoding noise rather than improving anything real — the calibration point `[GDE-PHS-005]` calls for.
 
+> ⚠️ **`[LOG-MET-030]` The floor is known to be too generous, and every ratio below inherits that.** 0.210 is a *single-submission vs single-submission* figure. The dump actually holds a mean of **77 submissions per library recording** `[GDE-FEX-057]`, and a multi-submission mean would set a stricter reference by averaging encoding noise away.
+>
+> So every **vs floor** ratio in this log — including the headline *13 of 18 at or below floor* — is **flattering by an unmeasured margin**. Treat them as provisional until the constants are recomputed on the 7,685 multi-submission library recordings `[LOG-I5-050]`. This caveat is stated here, before the results, rather than only after them.
+
 ---
 
 ## Iteration 0 — Vaino v1 (inherited, for contrast)

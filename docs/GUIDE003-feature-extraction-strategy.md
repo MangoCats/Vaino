@@ -8,7 +8,14 @@ Strategy for replacing AcousticBrainz with local analysis — the work that beco
 
 ## 1. Why This Comes First
 
-**`[GDE-FEX-010]` 729 tracks already depend on it.** That is the measured count of tracks in `vaino.db` with no counterpart in `mulib.db` — real music already in the library whose classification, and therefore whose induction into the selection system, rests on nothing trustworthy today `[GDE-V1-010]`.
+**`[GDE-FEX-010]` Tracks already depending on it — two distinct populations, not one.** These are frequently confused; they overlap but neither contains the other:
+
+| Population | Count | Definition |
+| :--- | ---: | :--- |
+| **Untrusted** | **729** | In `vaino.db` with no `mulib.db` counterpart — classification rests on nothing trustworthy today `[GDE-V1-010]`. Some *are* in the dump and can be repaired from it. |
+| **Unreachable** | **522** | In `vaino.db` but absent from the AcousticBrainz dump `[GDE-FEX-056]`. No reference exists at any price; only local extraction can serve them. |
+
+The union is the work; the *unreachable* set is the part no amount of harvesting can fix.
 
 **`[GDE-FEX-020]` It gates the project's actual purpose.** A segmenter that finds passages it cannot characterize has not solved new-music induction `[GDE-CHT-020]`. Every subsequent phase either depends on flavor data or is less valuable without it.
 
@@ -27,7 +34,9 @@ The size comparison settles it — though not where the tension actually lies:
 
 Worth stating plainly: **distribution size is not an argument against the dedicated per-characteristic models** that iterations 4–5 favour. At 44 MB they ship comfortably; it is the *dump* that is impossible, at ~840× the dedicated models and ~30,000× the shared one. The accuracy-vs-size question between model families stays open on its own merits `[LOG-NEXT-050]`.
 
-**`[GDE-FEX-028]` And if local extraction merely matches the dump, local extraction wins outright** `[SPEC-FD-130]`. Similarity is a relative judgment within our library, so uniform scoring beats per-track fidelity: a library scored entirely by one model on our own files has zero encoding variance and common-mode model error, while a mixed library pays both an encoding and a model difference on every cross-provenance comparison. The dump is *itself* non-uniform — its ~0.210 err/β self-inconsistency `[GDE-FEX-085]` is exactly that. So all-local may rank similarity **better** than the dump does, while scoring *worse* against the dump as ground truth `[SPEC-FD-140]`.
+**`[GDE-FEX-028]` And if local extraction merely matches the dump, local extraction wins outright** `[SPEC-FD-130]`. Similarity is a relative judgment within our library, so uniform scoring beats per-track fidelity: a library scored entirely by one model on our own files has zero encoding variance and common-mode model error, while a mixed library pays both an encoding and a model difference on every cross-provenance comparison. The dump is *itself* non-uniform — its ~0.210 err/β self-inconsistency `[GDE-FEX-085]` is exactly that.
+
+**Measured 2026-08-09, and the prediction was half wrong** `[SPEC-FD-140]`. Mixing provenance costs ~8 points of top-1 retrieval — confirmed decisively, and it is the part that governs the design. But all-local did **not** beat all-dump (76.7% vs 77.9%); the student's approximation error slightly outweighs the encoding variance it avoids. The conclusion survives on the mixing penalty alone `[SPEC-FD-145]`: uniform-local is the only regime reachable in the general case, and it costs ~1 point against an all-dump library that cannot be built anyway.
 
 **`[GDE-FEX-030]` It is the one problem no predecessor solved.** McRhythm specified local Essentia analysis and never landed it `[GDE-MCR-040]`. Vaino v1 claimed to have landed it and had not `[GDE-V1-010]`. Two projects have now been wrong about this in opposite directions, which is reason enough to attack it first and honestly.
 
@@ -50,7 +59,7 @@ The 11 dimensions MuLibPlay stores map to one side of eleven binary classifiers 
 
 Three tiers in strict priority order. Each is cheaper and more accurate than the one below it, so exhaust each before descending.
 
-### `[GDE-FEX-050]` Tier 0 — Harvest the archived dumps ✅ **MIRRORED 2026-08-08**
+### `[GDE-FEX-050]` Tier 0 — Harvest the archived dumps ✅ **MIRRORED 2026-08-09**
 
 **Status: complete.** 31 of 31 files downloaded and checksum-verified against MetaBrainz's published manifest — the full 30-shard highlevel dump plus the paired lowlevel sample, 41 GB. The archive is now held locally and no longer at the mercy of `data.metabrainz.org` `[GDE-FEX-120]`.
 
@@ -235,8 +244,8 @@ This is the direct structural answer to `[GDE-V1-010]`: with provenance and accu
 | :--- | :--- | :--- |
 | **`[GDE-FEX-120]`** ~~Dumps disappear as the API did~~ — **RETIRED 2026-08-08** | Was the single most time-sensitive risk in the project | **Mirrored and verified: 31/31 files, 41 GB** `[GDE-FEX-050]`. The archive is local. Remaining exposure is ordinary data-loss risk on our own storage, not the loss of an irreplaceable external resource — so it is now a backup question, not a race. |
 | **`[GDE-FEX-130]`** ~~Gaia / Essentia will not build~~ — **RESOLVED 2026-08-08** | Was rated moderate-high; now **near zero**. No build is required: AcousticBrainz's own static extractor binary runs natively here `[GDE-FEX-062]`, and the SVM models are published `[GDE-FEX-065]` | Route 3 (distillation) avoids Gaia entirely. Route 2 (reimplement the `.history` chain) is the fallback. Building Gaia is now the option of last resort, not the plan. |
-| **`[GDE-FEX-140]`** Dump coverage is poor for the 729 novel tracks | Moderate. Coverage was 91.1% on an older-skewing sample `[GDE-MCR-045]`; gaps clustered in post-2012 releases, soundtracks and niche genres — plausibly where new music lives | Measure first `[GDE-OPN-010]`. If coverage is poor, Tier 1 matters more, not less. |
-| **`[GDE-FEX-135]`** ~~Import time~~ — **ACCEPTED, not a risk** | 27 s/track measured `[GDE-FEX-062]`. 10,000 tracks ≈ 9 h across 8 cores — an acceptable overnight job, and an unrepresentative worst case: most users start at ~1,000 tracks or fewer | **Incremental import is the normal mode**, not batch: users add tracks as they collect them `[GDE-FEX-136]`. Still cache lowlevel permanently — improving a classifier later must never re-decode anyone's audio. |
+| **`[GDE-FEX-140]`** Dump coverage is poor for newer music (the *unreachable* set `[GDE-FEX-010]`) | Moderate. Coverage was 91.1% on an older-skewing sample `[GDE-MCR-045]`; gaps clustered in post-2012 releases, soundtracks and niche genres — plausibly where new music lives | Measure first `[GDE-OPN-010]`. If coverage is poor, Tier 1 matters more, not less. |
+| **`[GDE-FEX-135]`** ~~Import time~~ — **ACCEPTED, not a risk** | 27 s/track measured `[GDE-FEX-062]`. 10,000 tracks ≈ 9 h across 8 cores — an acceptable overnight job, and an unrepresentative worst case: most users start at ~1,000 tracks or fewer | **Incremental import is the normal mode**, not batch: users add tracks as they collect them `[GDE-CHT-045]`. Still cache lowlevel permanently — improving a classifier later must never re-decode anyone's audio. |
 | **`[GDE-FEX-137]`** ~~No ARM64 extractor~~ — **RESOLVED by scope** | Published builds are win-i686, linux-i686, linux-x86_64, and an x86_64 macOS build from 2015 | **`sampo` is declared x86-only.** The player stays portable and reaches ARM `[GDE-ARC-015]`. Not solved — scoped out, deliberately. An ARM64 Essentia build is a later option, never a prerequisite. |
 | **`[GDE-FEX-139]`** ~~Licensing~~ — **RESOLVED by separation** | Essentia is AGPL-3.0/commercial dual-licensed | **`sampo` is AGPL-3.0; `vaino` stays MIT** `[GDE-ARC-018]`. Separate processes, communicating only via the shared SQLite file; nothing AGPL is linked into the player. Conservative by design — subprocess invocation is likely aggregation anyway. The distilled classifiers remain separable: models trained on AcousticBrainz data, not Essentia code. |
 | **`[GDE-FEX-150]`** No local ground truth for the 47 complex dimensions until the dumps are mirrored | Certain, by construction `[GDE-FEX-060]` | Tier 0 resolves it. Until then, restrict validation to the 11 binary dimensions `mulib.db` provides, and label results as partial. |

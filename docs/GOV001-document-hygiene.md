@@ -10,14 +10,14 @@ This document establishes the official document hygiene standards, naming conven
 
 To ensure that both human contributors and AI coding assistants can quickly inspect specific specifications without consuming excessive context window capacity or wading through unrelated content, all project documentation MUST follow these core principles:
 
-1. **Focused Single-Purpose Documents**:
+1. **`[GOV-DOC-010]` Focused Single-Purpose Documents**:
    - Every document MUST focus on a single domain or component.
    - Target file length is **100 to 250 lines** per document. Large documents MUST be split into sub-documents within appropriate folders (e.g., `docs/spec/`).
 
-2. **Inherited documents are segregated and prefixed** (`[GOV-DOC-030]`):
+2. **`[GOV-DOC-030]` Inherited documents are segregated and prefixed**:
    - Material copied from predecessor projects lives only under `docs/inherited/`, carries an `MCR-` (or equivalent) filename prefix, and opens with a banner stating its class.
    - This is required because McRhythm and Vaino both number `SPEC003`–`SPEC006` with different meanings. See [inherited/README.md](inherited/README.md) `[INH-HAZ-010]`.
-   - **Enforced by `tools/check_docs.py`** (`[GOV-DOC-040]`), which also fails on new identifier collisions and unresolvable links. Run it before committing documentation changes.
+   - **`[GOV-DOC-040]` Enforced by `tools/check_docs.py`**, which also fails on new identifier collisions, dangling tags and unresolvable links. Run it before committing documentation changes.
    - **Searches over `REQ`/`ENT` must be scoped**: `grep -rn "REQ-AUD" docs/ --exclude-dir=inherited`. Inherited material defines 651 tags of its own `[INH-HAZ-020]`.
 
 3. **Unique Grep-Searchable Identifiers**:
@@ -27,7 +27,7 @@ To ensure that both human contributors and AI coding assistants can quickly insp
 4. **Direct Markdown Hyperlinks**:
    - All references to other documents MUST use standard GitHub Markdown file links with explicit relative paths (e.g., `[SPEC001: Audio Engine](SPEC001-audio-engine.md)`).
 
-5. **Synchronous Specification & Test Maintenance Rule (`[GOV-DOC-020]`)**:
+5. **`[GOV-DOC-020]` Synchronous Specification & Test Maintenance Rule**:
    - Whenever an interactive conversation or prompt results in new code creation, architectural refinement, or settled design decisions, the corresponding formal requirements/specifications (`docs/spec/`) and automated test suites (`tests/`) MUST be updated synchronously within the same conversation turn.
 
 ---
@@ -104,6 +104,6 @@ grep -rn "SPEC-PD" docs/
 | `[REQ-PD-010]` | Candidate Fitness Scoring Model | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#23-program-director--selection-algorithm) |
 | `[SPEC-AUD-010]`| Audio Engine Trait Contracts | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#1-interface-trait-contracts-rust--python-specs) |
 | `[SPEC-AUD-040]`| Mathematical Ramp Profiles | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#2-mathematical-ramp-profile-models) |
-| `[SPEC-DB-010]` | Relational DDL & Indexes | [SPEC002-data-schema-and-ipc.md](spec/SPEC002-data-schema-and-ipc.md#1-database-relational-schema-sqlite-ddl) |
+| ~~`[SPEC-DB-010]`~~ | Relational DDL & Indexes | ⚠️ **Dead entry.** `SPEC002-data-schema-and-ipc.md` contains no `[SPEC-*]` tags; this row was aspirational. The document is a v1 artifact on the disposal path `[GDE-DIS-010]`. |
 | `[SPEC-PD-010]` | Acoustic Transition Flow Scoring | [SPEC003-program-director-intelligence.md](spec/SPEC003-program-director-intelligence.md#21-acoustic-transition-flow-s_flow) |
-| `[SPEC-RUST-010]`| Python to Rust Module Mapping | [SPEC004-rust-migration-guide.md](spec/SPEC004-rust-migration-guide.md#1-python-to-rust-module-mapping-matrix) |
+| ~~`[SPEC-RUST-010]`~~| Python to Rust Module Mapping | ⚠️ **Dead entry.** `SPEC004-rust-migration-guide.md` contains no `[SPEC-*]` tags; this row was aspirational. Superseded by `[GDE-ARC-020]`. |

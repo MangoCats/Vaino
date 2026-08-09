@@ -13,6 +13,7 @@ Checks:
   3. No exact tag collision between Vaino documents and inherited documents.
   4. Every relative markdown link resolves (code spans excluded).
   5. Vaino documents obey the 100-250 line target [GOV-DOC-010]; warn only.
+  6. Every cited tag is defined somewhere; no tag is defined twice.
 
 Usage:
     python tools/check_docs.py            # report
@@ -26,6 +27,11 @@ import re
 import sys
 
 TAG = re.compile(r"\[([A-Z]{2,6}-[A-Z0-9]{2,10}-[0-9]{2,4})\]")
+
+# Peel leading markdown one token at a time. '*' counts as a bullet only when
+# followed by whitespace, so '**' (bold) survives to mark a definition.
+PREFIX = re.compile(r"^(?:\s+|>|\#{1,6}|\d+[.)]|[-+]\s|\*\s|\||~~"
+                    r"|[⚠⭐️🌀-🫿])")
 LINK = re.compile(r"\[[^\]\[]*\]\((?!https?:|file:|mailto:|#)([^)]+)\)")
 CODESPAN = re.compile(r"`[^`\n]*`")
 
@@ -49,14 +55,61 @@ KNOWN_COLLISIONS = {
 }
 COLLISION_RETIRES_WHEN = "docs/spec/REQ001-system-requirements.md is replaced [GDE-DIS-010]"
 
+# Dangling tags inside Vaino v1 documents that are themselves on the disposal
+# path [GDE-DIS-010]. Recorded rather than fixed: editing a document slated for
+# replacement is churn. Retires with the document.
+PREEXISTING_V1_DANGLING = {"SPEC-AUD-050", "REQ-SYS-010", "REQ-SYS-020",
+                           "REQ-MB-020", "REQ-PD-080", "REQ-HW-010", "REQ-HW-020",
+                           "SPEC-AUD-010", "SPEC-DB-010", "SPEC-RUST-010"}
+
+# Tags used illustratively in GOV001's taxonomy table -- examples of the FORM
+# of an identifier, not references to real ones.
+EXAMPLE_TAGS = {"REQ-AUD-010", "REQ-DB-020", "SPEC-AUD-020", "SPEC-AUD-040",
+                "SPEC-PD-010", "ENT-TRACK-010", "ENT-PASSAGE-010",
+                "UT-AUD-001", "UT-DB-001", "GOV-DOC-010"}
+
 
 def strip_code(text):
     return CODESPAN.sub("", text)
 
 
+def strip_lead(line):
+    prev = None
+    while prev != line:
+        prev = line
+        line = PREFIX.sub("", line, count=1)
+    return line
+
+
+def is_definition(line, tag):
+    """A definition OPENS a line; a citation sits mid-sentence.
+
+    Deliberately conservative. An earlier heuristic accepted any bolded line
+    containing the tag and reported 94 duplicate definitions, nearly all false.
+    Index rows cannot be excluded by shape -- real definitions also live in
+    multi-column tables -- so REFERENCE_SECTIONS names them instead.
+    """
+    return bool(re.match(r"(?:\*\*)?`?\[" + re.escape(tag) + r"\]`?", strip_lead(line)))
+
+
+# Sections that INDEX tags defined elsewhere. Structure alone cannot distinguish
+# these from definitions -- real definitions also live in multi-column tables
+# (the lessons and risks tables) -- so they are named explicitly.
+REFERENCE_SECTIONS = ("master specification search index", "identifier taxonomy standard")
+
+
+def in_reference_section(heading):
+    return heading and any(k in heading.lower() for k in REFERENCE_SECTIONS)
+
+
 def vaino_docs():
-    out = [p for p in glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")]
-    return [p for p in out if INHERITED_DIR not in p]
+    """Vaino-authored markdown. docs/inherited/README.md is ours, not inherited."""
+    out = glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")
+    out = [p for p in out if INHERITED_DIR not in p]
+    reg = os.path.join(INHERITED_DIR, "README.md")
+    if os.path.exists(reg):
+        out.append(reg)
+    return out
 
 
 def inherited_docs():
@@ -64,10 +117,19 @@ def inherited_docs():
             if os.path.basename(p) != "README.md"]
 
 
-def tags_in(path, skip_quoted=False):
+def tags_in(path, skip_banner=False):
+    """Tags in a document.
+
+    skip_banner drops ONLY the import banner (everything above the first
+    horizontal rule), not every blockquote. Source documents legitimately put
+    tags in blockquotes -- McRhythm's SPEC003 defines [MFL-DIST-010] in one --
+    and dropping those made real tags appear undefined.
+    """
     text = open(path, encoding="utf-8").read()
-    if skip_quoted:  # drop the import banner, which quotes Vaino tags
-        text = "\n".join(l for l in text.split("\n") if not l.startswith(">"))
+    if skip_banner and text.lstrip().startswith(">"):
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2:
+            text = parts[1]
     return set(TAG.findall(text))
 
 
@@ -105,7 +167,7 @@ def main():
             v.setdefault(t, []).append(p)
     i = {}
     for p in inherited_docs():
-        for t in tags_in(p, skip_quoted=True):
+        for t in tags_in(p, skip_banner=True):
             i.setdefault(t, []).append(p)
     for t in sorted(set(v) & set(i)):
         if t.split("-")[0] in RESERVED_PREFIXES:
@@ -124,6 +186,36 @@ def main():
             target = os.path.normpath(os.path.join(root, m.group(1).split("#")[0]))
             if not os.path.exists(target):
                 errors.append(f"broken link: {p} -> {m.group(1)}")
+
+    # 6 -- tag definition integrity
+    inherited_tags = set()
+    for p in inherited_docs():
+        inherited_tags |= tags_in(p, skip_banner=True)
+    defs, uses = {}, {}
+    for p in vaino_docs():
+        heading, fenced = "", False
+        for n, line in enumerate(open(p, encoding="utf-8"), 1):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+            if fenced:
+                continue
+            if line.lstrip().startswith("#"):
+                heading = line.strip("#").strip()
+            ref = in_reference_section(heading)
+            for t in set(TAG.findall(line)):
+                d = is_definition(line, t) and not ref
+                (defs if d else uses).setdefault(t, []).append(f"{p}:{n}")
+    for t, locs in sorted(uses.items()):
+        if t in defs or t in inherited_tags or t in EXAMPLE_TAGS:
+            continue
+        if t in PREEXISTING_V1_DANGLING:
+            warnings.append(f"pre-existing v1 dangling tag {t} at {locs[0]} "
+                            f"(retires with the document, [GDE-DIS-010])")
+            continue
+        errors.append(f"dangling tag {t} cited at {locs[0]} but never defined")
+    for t, locs in sorted(defs.items()):
+        if len(locs) > 1 and t not in KNOWN_COLLISIONS:
+            warnings.append(f"tag {t} defined {len(locs)}x: {', '.join(locs)}")
 
     # 5 -- line-count governance, advisory
     for p in vaino_docs():

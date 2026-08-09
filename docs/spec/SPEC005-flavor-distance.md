@@ -67,7 +67,9 @@ reliability  =  1 − ───────────────────�
 
 A characteristic whose two submissions differ as much as two random songs carries no information (reliability 0). One that is identical across submissions while separating random songs carries full information (reliability 1).
 
-Measured over **8,463 multi-submission recordings** and 15,000 random pairs from the 2022-06-23 sample dump:
+Measured over **8,463 multi-submission recordings** and 15,000 random pairs from the 2022-06-23 **sample** dump:
+
+> ⚠️ **`[SPEC-FD-051]` These constants are provisional and pending regeneration.** They were measured on a generic AcousticBrainz sample before the full harvest. The library's *own* 7,685 multi-submission recordings `[GDE-FEX-057]` are now available and are the correct population — β is a property of the corpus being searched, and ours is not the average corpus. Regenerate before these values are relied on in production.
 
 | Characteristic | K | β_c (scale) | w_c (reliability) | | Characteristic | K | β_c | w_c |
 | :--- | --: | --: | --: | :-- | :--- | --: | --: | --: |
@@ -92,6 +94,8 @@ The reliability spread is narrow (0.75–0.88), so weighting is a refinement rat
 ## 4. Validation
 
 **`[SPEC-FD-060]`** Metric designs compared by retrieval: given submission 0 of a recording as the query, how well does each metric rank submission 1 of the *same* recording against 499 random distractors? 1,500 queries.
+
+> **Not comparable with the table in §5.** This section varies the *metric* with provenance held constant; §5 `[SPEC-FD-140]` varies the *provenance* with the metric held constant. Different baselines and different questions — the two sets of percentages must not be read as a progression.
 
 | Metric | top-1 | top-5 | MRR |
 | :--- | ---: | ---: | ---: |

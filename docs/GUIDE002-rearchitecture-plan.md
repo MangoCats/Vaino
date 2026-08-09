@@ -140,7 +140,17 @@ There is **no ship/no-ship threshold.** The discipline being enforced is *measur
 
 Schema per `[GDE-ARC-030..040]`, plus a **lossless importer from `mulib.db`**. The migration is the schema's first and best test: if the model cannot hold six years of real production data, it is the wrong model.
 
-Carry over `[GDE-LES-060]`: 37,134 play events, 8,062 AcousticBrainz vectors (tagged `inherited:mulib`, 11 dims), 16,232 verified cut boundaries, 2,918 tuned rotation/recovery/restraint settings, 8 programs with their seed tracks. Merge with the P0 dump extraction to widen 11 dims → 71 wherever the dump has coverage.
+Three flavor sources now exist, in descending order of authority — the schema must hold all three with per-characteristic provenance `[GDE-ARC-030]`:
+
+| Source | Coverage | Dims | Role |
+| :--- | ---: | ---: | :--- |
+| AcousticBrainz dump `[GDE-FEX-055]` | 8,001 recordings (93.7%) | **71** | Reference / ground truth `[SPEC-FD-150]` |
+| `mulib.db` `abXxx` | 8,062 recordings | 11 | Fallback and cross-check only |
+| Sampo local extraction | all | 71 | **Production values** `[SPEC-FD-145]` |
+
+The dump is *not* the production source. Mixed provenance measurably degrades similarity `[SPEC-FD-140]`, so production flavor is uniformly locally extracted and the dump serves as the yardstick.
+
+Otherwise carry over `[GDE-LES-060]` unchanged: 37,134 play events, 16,232 verified cut boundaries, 2,918 tuned rotation/recovery/restraint settings, 8 programs with their seed tracks. These have no other source.
 
 > **Reports:** every non-dead field round-trips; row counts reconcile exactly; the 11-D vectors match to 1e-9; dimension coverage per recording.
 
