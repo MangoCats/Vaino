@@ -1,0 +1,18 @@
+[package]
+name = "vaino-player"
+version = "0.1.0"
+edition = "2021"
+description = "Vaino audio player: bounded streaming decode, crossfade, queue"
+license = "MIT"
+
+[dependencies]
+symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
+rubato = "0.15"
+
+[[bin]]
+name = "memcheck"
+path = "src/bin/memcheck.rs"
+
+[profile.release]
+opt-level = 3
+lto = true

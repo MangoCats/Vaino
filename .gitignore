@@ -56,3 +56,4 @@ data/vaino_new.db
 data/*.log
 !data/migration_report.json
 data/missing_files.json
+player/target/
