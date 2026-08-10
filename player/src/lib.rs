@@ -11,6 +11,8 @@
 //! function of how many passages are open, never of how long they are.
 
 pub mod decoder;
+pub mod fade;
+pub mod mixer;
 
 /// Frames of audio buffered per passage. 15 s at 44.1 kHz.
 ///
