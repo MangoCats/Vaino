@@ -49,6 +49,7 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - 🧭 **[GUIDE001: Project Lineage & Lessons Learned](docs/GUIDE001-lineage-and-lessons.md)** — Measured state of MuLibPlay, McRhythm/wkmp and Vaino v1; the benchmark to beat, the selection algorithm to preserve, and the failures to never repeat. **Start here.**
 - 🗺️ **[GUIDE002: Re-Architecture Plan](docs/GUIDE002-rearchitecture-plan.md)** — Design charter, architectural decisions, phased plan, forbidden patterns, and the predecessor disposal register.
 - 🔬 **[GUIDE003: Feature Extraction Strategy](docs/GUIDE003-feature-extraction-strategy.md)** — **P0 critical path.** Replacing AcousticBrainz: harvest the archived dumps, reproduce the pipeline, two-stage validation, best-effort iteration.
+- 🍓 **[IMPL001: Pi Zero 2W Appliance Setup](docs/IMPL001-appliance-setup.md)** — Step-by-step OS build for the appliance. **Unvalidated** until run on hardware.
 - 📊 **[LOG001: Feature Extraction Iteration Log](docs/LOG001-extraction-iterations.md)** — Dated record of every extraction attempt, its measured result, and why it plateaued.
 - 📋 **[REQ002: Functional Requirements](docs/spec/REQ002-functional-requirements.md)** — What Vaino and Sampo must do. Supersedes REQ001.
 - 🧙 **[SPEC009: Program Director](docs/spec/SPEC009-program-director.md)** — Selection pipeline: frequency vs character, seeds and Taste, flow and roulette.
