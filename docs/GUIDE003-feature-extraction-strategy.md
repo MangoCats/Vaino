@@ -189,7 +189,17 @@ Every model carries `probA`/`probB`, so the 0–1 values AcousticBrainz publishe
 
 Support-vector counts are small (68–1,569), so prediction costs nothing next to the ~27 s extraction that precedes it.
 
-What remains for route 2 is applying the chain: the `remove`/`select` descriptor lists (already legible), the `normalize` and `cleaner` coefficients, and libsvm RBF/polynomial prediction with pairwise coupling for the multi-class cases. It is **exactly verifiable**: 658 AcousticBrainz lowlevel JSONs are on disk beside their published highlevel outputs, so the reimplementation can be checked against the reference on its own inputs `[GDE-FEX-090]`.
+#### `[GDE-FEX-069]` The parameter tree is ordinary Qt `QVariant`
+
+No bespoke format anywhere: `quint32` type, `quint8` isNull, payload, with the standard QMetaType ids — map 8, list 9, string 10, double 6. `read_variant` handles the six types Gaia actually uses and **raises on anything else rather than guessing**, because a wrong guess here yields plausible numbers, which is the worst possible failure mode for a transform chain.
+
+The `normalize` step decodes fully. `coeffs` is a map of descriptor → `{a, b}`, each a list of doubles — length 1 for scalars, 36 for `.tonal.hpcp.*`, 24 for `.tonal.chords_histogram`. Normalisation is **`y = a·x + b`**: `tuning_frequency` carries `a=0.0402, b=-17.35`, mapping 440 Hz to 0.35 — min-max scaling written as scale-and-offset rather than as a range.
+
+All 18 parse, at 372–875 dimensions each.
+
+**A trap caught before it shipped:** six of the eighteen — `genre_dortmund`, `genre_electronic`, `mood_relaxed`, `moods_mirex`, `timbre`, `voice_instrumental` — normalize **twice**, once at step five and again before the SVM. An API returning "the" coefficients hands back the wrong step for a third of the classifiers, and the output still looks like reasonable numbers. `normalize_coeffs` therefore returns a **list** in chain order.
+
+What remains for route 2 is applying the chain: the `cleaner` parameters, and libsvm RBF/polynomial prediction with pairwise coupling for the six multi-class cases. It is **exactly verifiable**: 658 AcousticBrainz lowlevel JSONs are on disk beside their published highlevel outputs, so the reimplementation can be checked against the reference on its own inputs `[GDE-FEX-090]`.
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
 

@@ -110,6 +110,83 @@ def parse(path: Path, verbose: bool = False) -> dict:
     return info
 
 
+# Qt QMetaType ids, as QDataStream writes them.
+T_BOOL, T_INT, T_UINT, T_DOUBLE = 1, 2, 3, 6
+T_MAP, T_LIST, T_STRING, T_STRINGLIST = 8, 9, 10, 11
+
+
+def read_variant(r: Reader, depth: int = 0):
+    """One QVariant: quint32 type, quint8 isNull, then the payload.
+
+    Only the types Gaia's parameter tree actually uses. An unknown type raises
+    rather than guessing — a wrong guess here would produce plausible numbers,
+    which is the worst possible failure for a transform chain.
+    """
+    if depth > 24:
+        raise ValueError("variant nesting too deep")
+    t = r.u32()
+    is_null = r.u8()
+    if is_null:
+        return None
+    if t == T_MAP:
+        n = r.u32()
+        return {r.qstring(): read_variant(r, depth + 1) for _ in range(n)}
+    if t == T_LIST:
+        return [read_variant(r, depth + 1) for _ in range(r.u32())]
+    if t == T_STRING:
+        return r.qstring()
+    if t == T_STRINGLIST:
+        return r.qstringlist()
+    if t == T_DOUBLE:
+        return r.f64()
+    if t in (T_INT, T_UINT):
+        return r.i32()
+    if t == T_BOOL:
+        return bool(r.u8())
+    raise ValueError(f"unhandled QVariant type {t} at {r.p}")
+
+
+def read_param_at(path: Path, name: str, occurrence: int = 0):
+    """Read the QVariant that follows the parameter named `name`.
+
+    Locating by name rather than walking the whole chain from the start: the
+    chain's outer framing is not yet modelled, and the parameters themselves are
+    self-describing once found.
+    """
+    data = path.read_bytes()
+    key = name.encode("utf-16-be")
+    needle = struct.pack(">I", len(key)) + key
+    pos = -1
+    for _ in range(occurrence + 1):
+        pos = data.find(needle, pos + 1)
+        if pos < 0:
+            return None
+    r = Reader(data)
+    r.p = pos + 4 + len(key)
+    return read_variant(r)
+
+
+def normalize_coeffs(path: Path) -> list[dict[str, dict]]:
+    """Every `normalize` step's per-descriptor `a` and `b` vectors, in order.
+
+    A **list**, not a single map, because six of the eighteen chains normalize
+    twice — once at step five and again before the SVM. Returning "the" coeffs
+    would silently hand back the wrong step for a third of the classifiers, and
+    the result would still look like plausible numbers.
+
+    Normalisation is `y = a·x + b`: `tuning_frequency` carries `a=0.0402,
+    b=-17.35`, mapping 440 Hz to 0.35 — a min-max scaling written as a scale
+    and an offset rather than as a range.
+    """
+    out: list[dict[str, dict]] = []
+    for i in range(8):
+        c = read_param_at(path, "coeffs", occurrence=i)
+        if c is None:
+            break
+        out.append(c)
+    return out
+
+
 def extract_svm_model(path: Path) -> str | None:
     """The libsvm model, as text.
 
