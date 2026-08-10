@@ -46,6 +46,10 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 >
 > **Bit-identical reproduction is therefore no longer the acceptance test**, and could not be: the two now deliberately differ. The `GateOnly` coupling is retained so the divergence can be *measured* rather than assumed, which is the more useful check — it says how much the corrected ramp actually changes selection. Consistent with `[GDE-QUA-*]`, that measurement is diagnostic, never a pass/fail gate.
 
+**`[REQ-PD-115]` Related recordings share a rotation.** Hearing a live take, a remaster or a compilation appearance suppresses the others `[SPEC-DIR-116]`. Every relation applies, each judged on its own play history, damped over a recovery window scaled by relation strength.
+
+**`[REQ-PD-118]` Two master time scales — one for artists, one for tracks** — multiply every block and ramp duration `[SPEC-DIR-118]`. Range 0.0001–100.0000 to four decimal places, default 1.0000, at which they are exactly inert. They scale durations only, never weights, so *when* a passage becomes eligible is adjustable without touching *how much* it is wanted.
+
 **`[REQ-PD-120]`** Select from **`radio` passages only** `[GDE-BMK-030]`.
 
 **`[REQ-PD-130]`** Shape candidates by flavor distance `[SPEC-FD-040]` in two stages — prune against programme seeds, then order by similarity to the passage already queued — and apply randomness **last**, over the shaped pool `[GDE-PD-050]`.

@@ -194,6 +194,21 @@ CREATE TABLE IF NOT EXISTS listener_preferences (
     PRIMARY KEY (subject_kind, subject_id)
 ) WITHOUT ROWID;
 
+-- Master multipliers over every block and ramp DURATION [SPEC-DIR-118]. One
+-- dial each for artists and tracks: 1.0 is inert, 0.5 halves every window,
+-- 2.0 doubles it. Per-subject values are log-scale, so "everything a bit
+-- sooner" is not otherwise expressible without editing thousands of rows.
+-- The range is enforced here as well as in code -- a stored value out of
+-- range would silently change selection everywhere.
+CREATE TABLE IF NOT EXISTS listener_settings (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    artist_time_scale REAL NOT NULL DEFAULT 1.0
+                      CHECK (artist_time_scale BETWEEN 0.0001 AND 100.0),
+    track_time_scale  REAL NOT NULL DEFAULT 1.0
+                      CHECK (track_time_scale  BETWEEN 0.0001 AND 100.0),
+    updated_at        TEXT NOT NULL
+);
+
 -- A programme is a list of exemplar passages, not tuned parameters
 -- [SPEC-DIR-140].
 CREATE TABLE IF NOT EXISTS listener_programs (

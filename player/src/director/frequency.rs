@@ -34,8 +34,7 @@ pub fn seconds(v: f64) -> f64 {
 /// The recovery ramp, transcribed from MuLibPlay's `recoveryWeight`.
 ///
 /// Blocked below `rot`, fully recovered at `rot + rec`, linear between. The
-/// boundaries are inclusive exactly as shipped -- `age == rot` is still zero --
-/// because the acceptance test is reproducing its selections `[REQ-PD-110]`.
+/// boundaries are inclusive as shipped -- `age == rot` is still zero.
 pub fn recovery_weight(age_s: f64, rot_s: f64, rec_s: f64) -> f64 {
     if age_s <= rot_s {
         return 0.0;
@@ -46,7 +45,45 @@ pub fn recovery_weight(age_s: f64, rot_s: f64, rec_s: f64) -> f64 {
     (age_s - rot_s) / rec_s
 }
 
-/// Per-subject tuning, for an artist or a recording `[SPEC-SC-*]`.
+/// A master multiplier over every block and ramp *duration* `[SPEC-DIR-118]`.
+///
+/// One for artists, one for tracks. At 1.0 it does nothing; at 0.5 every block
+/// and ramp is half as long, at 2.0 twice. It exists because the per-subject
+/// tuning values are log-scale `[SPEC-DIR-110]` — nudging thousands of them to
+/// say "everything a bit sooner" is not a thing a listener can do, whereas one
+/// dial is. Scaling *durations* rather than weights keeps frequency and
+/// character orthogonal `[SPEC-DIR-100]`: it changes when a passage becomes
+/// eligible, never how much it is liked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimeScale(f64);
+
+impl TimeScale {
+    pub const MIN: f64 = 0.0001;
+    pub const MAX: f64 = 100.0;
+    pub const PLACES: f64 = 10_000.0; // four decimal places
+
+    /// Clamped to range and rounded to four places, so a stored value and a
+    /// typed value always mean the same thing. Non-finite input falls back to
+    /// 1.0 rather than poisoning every weight with NaN.
+    pub fn new(v: f64) -> Self {
+        if !v.is_finite() {
+            return Self(1.0);
+        }
+        let clamped = v.clamp(Self::MIN, Self::MAX);
+        Self((clamped * Self::PLACES).round() / Self::PLACES)
+    }
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl Default for TimeScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// Per-subject tuning, for an artist or a recording.
 #[derive(Debug, Clone, Copy)]
 pub struct Tuning {
     pub rotation: f64,
@@ -82,6 +119,27 @@ pub enum ArtistCoupling {
     GateOnly,
 }
 
+/// Everything about how selection is tuned, as opposed to what is being
+/// weighed. Defaults reproduce Vaino's intended behaviour with no scaling.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Policy {
+    pub coupling: ArtistCoupling,
+    pub artist_scale: TimeScale,
+    pub track_scale: TimeScale,
+}
+
+/// Another recording that shares this one's rotation `[SPEC-DIR-116]` — a
+/// live take, a remaster, the same song on a compilation.
+#[derive(Debug, Clone, Copy)]
+pub struct Related {
+    /// Seconds since *this related recording* last played; `None` if never.
+    pub age_s: Option<f64>,
+    /// How strongly the two are related, 0..1. Scales the recovery window: a
+    /// weak relation recovers quickly, a near-identical one behaves almost
+    /// like the recording itself.
+    pub strength: f64,
+}
+
 /// Everything that produced the weight, kept as separate terms.
 ///
 /// Returned rather than logged, because `[SPEC-DIR-190]` requires the decision
@@ -93,6 +151,8 @@ pub struct Weighing {
     pub artist_blocked: bool,
     pub track_restraint: f64,
     pub track_ramp: f64,
+    /// Product of the ramps of every related recording still recovering.
+    pub related_damping: f64,
     pub length_bonus: f64,
     pub occasion: f64,
     pub weight: f64,
@@ -103,6 +163,7 @@ pub struct Weighing {
 pub enum Exclusion {
     ArtistRotationBlock,
     TrackRotationBlock,
+    RelatedRotationBlock,
     TooShort,
     TooLong,
     TooDeep,
@@ -116,6 +177,7 @@ impl Weighing {
             artist_blocked: reason == Exclusion::ArtistRotationBlock,
             track_restraint: 0.0,
             track_ramp: 0.0,
+            related_damping: 1.0,
             length_bonus: 0.0,
             occasion: 1.0,
             weight: 0.0,
@@ -129,7 +191,7 @@ impl Weighing {
 
 /// One passage's frequency inputs.
 #[derive(Debug, Clone, Copy)]
-pub struct Candidate {
+pub struct Candidate<'a> {
     pub length_s: f64,
     /// How far into its file the passage starts — a DAO file holds up to 40,
     /// and the deep ones are rarely what a listener means by "a song".
@@ -140,6 +202,10 @@ pub struct Candidate {
     pub track_age_s: Option<f64>,
     /// Seconds since anything by this artist last played; `None` if never.
     pub artist_age_s: Option<f64>,
+    /// Other recordings of the same song `[SPEC-DIR-116]`. Borrowed rather
+    /// than owned: most candidates have none, and a selection pass weighs
+    /// thousands.
+    pub related: &'a [Related],
     /// Seasonal multiplier from `[SPEC-DIR-130]`, already resolved to a number
     /// by the occasion curve. Kept as an input so this module stays free of
     /// the clock.
@@ -152,7 +218,7 @@ pub struct Candidate {
 /// ramp entirely: with no history there is nothing to recover from, so the
 /// weight is the restraint term alone. That is what makes a fresh library
 /// degrade to uniform random rather than to silence `[SPEC-DIR-158]`.
-pub fn weigh(c: &Candidate, coupling: ArtistCoupling) -> Weighing {
+pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     // Passage filters first: they are free, and they are the reason a 90-minute
     // live set does not enter the roulette [SPEC-DIR-125].
     if c.length_s < MIN_LENGTH_S {
@@ -166,8 +232,9 @@ pub fn weigh(c: &Candidate, coupling: ArtistCoupling) -> Weighing {
     }
 
     // --- artist pass ---
-    let art_rot = seconds(c.artist.rotation);
-    let art_rec = seconds(c.artist.recovery);
+    let a_scale = policy.artist_scale.get();
+    let art_rot = seconds(c.artist.rotation) * a_scale;
+    let art_rec = seconds(c.artist.recovery) * a_scale;
     let mut artist_weight = 10f64.powf(-c.artist.restraint);
     if let Some(age) = c.artist_age_s {
         if age < art_rot {
@@ -177,25 +244,43 @@ pub fn weigh(c: &Candidate, coupling: ArtistCoupling) -> Weighing {
     }
 
     // --- track pass ---
-    let trk_rot = seconds(c.track.rotation);
-    let trk_rec = seconds(c.track.recovery);
+    let t_scale = policy.track_scale.get();
+    let trk_rot = seconds(c.track.rotation) * t_scale;
+    let trk_rec = seconds(c.track.recovery) * t_scale;
     let track_restraint = 10f64.powf(-c.track.restraint);
     let mut track_ramp = 1.0;
     if let Some(age) = c.track_age_s {
         if age < trk_rot {
             return Weighing::excluded(Exclusion::TrackRotationBlock);
         }
-        // Guarded exactly as shipped: the ramp is applied only inside the
-        // recovery window, and returns 1.0 outside it anyway.
         if age < trk_rot + trk_rec {
             track_ramp = recovery_weight(age, trk_rot, trk_rec);
         }
     }
 
+    // --- related recordings [SPEC-DIR-116] ---
+    // Each is judged on ITS OWN age. MuLibPlay passed the primary track's age
+    // here, and iterated its relation map by value rather than by key, so
+    // related recordings never damped anything at all.
+    let mut related_damping = 1.0;
+    for r in c.related {
+        let Some(age) = r.age_s else { continue };
+        if age < trk_rot {
+            return Weighing::excluded(Exclusion::RelatedRotationBlock);
+        }
+        // Strength scales the recovery window, not the block: a weak relation
+        // recovers sooner, but sharing a rotation is the point of relating them.
+        let window = trk_rec * r.strength.clamp(0.0, 1.0);
+        if age < trk_rot + window {
+            related_damping *= recovery_weight(age, trk_rot, window);
+        }
+    }
+
     let length_bonus = length_bonus(c.length_s);
 
-    let mut weight = track_restraint * track_ramp * length_bonus * c.occasion;
-    if coupling == ArtistCoupling::Damped {
+    let mut weight =
+        track_restraint * track_ramp * related_damping * length_bonus * c.occasion;
+    if policy.coupling == ArtistCoupling::Damped {
         weight *= artist_weight;
     }
 
@@ -204,6 +289,7 @@ pub fn weigh(c: &Candidate, coupling: ArtistCoupling) -> Weighing {
         artist_blocked: false,
         track_restraint,
         track_ramp,
+        related_damping,
         length_bonus,
         occasion: c.occasion,
         weight,
@@ -211,8 +297,7 @@ pub fn weigh(c: &Candidate, coupling: ArtistCoupling) -> Weighing {
     };
     // Strictly greater, as shipped: `if (weight > minWeightLimit)`.
     if !(weight > MIN_WEIGHT) {
-        weight = 0.0;
-        w.weight = weight;
+        w.weight = 0.0;
         w.excluded = Some(Exclusion::BelowMinWeight);
     }
     w
@@ -251,7 +336,7 @@ mod tests {
         assert_eq!(recovery_weight(9e9, rot, rec), 1.0, "and stays there");
     }
 
-    fn candidate() -> Candidate {
+    fn candidate<'a>() -> Candidate<'a> {
         Candidate {
             length_s: LENGTH_MIDPOINT_S,
             depth_s: 0.0,
@@ -259,6 +344,7 @@ mod tests {
             artist: Tuning::artist_defaults(),
             track_age_s: None,
             artist_age_s: None,
+            related: &[],
             occasion: 1.0,
         }
     }
@@ -267,7 +353,7 @@ mod tests {
     /// a fresh library is not uniform random but silently biased.
     #[test]
     fn a_never_played_library_is_uniform() {
-        let w = weigh(&candidate(), ArtistCoupling::default());
+        let w = weigh(&candidate(), &Policy::default());
         assert!(w.is_eligible());
         assert!((w.weight - 1.0).abs() < 1e-9, "weight was {}", w.weight);
         assert_eq!(w.track_ramp, 1.0, "no history means no ramp to be on");
@@ -277,79 +363,221 @@ mod tests {
     fn a_recent_play_blocks_the_track() {
         let mut c = candidate();
         c.track_age_s = Some(seconds(DEF_ROTATION_TRK) - 1.0);
-        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TrackRotationBlock));
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::TrackRotationBlock));
     }
 
     #[test]
     fn a_recent_play_by_the_artist_blocks_the_track() {
         let mut c = candidate();
         c.artist_age_s = Some(seconds(DEF_ROTATION_ART) - 1.0);
-        let w = weigh(&c, ArtistCoupling::default());
+        let w = weigh(&c, &Policy::default());
         assert_eq!(w.excluded, Some(Exclusion::ArtistRotationBlock));
         assert!(w.artist_blocked, "the panel must be able to say which block fired");
     }
 
-    /// Mid-ramp the weight is partial, and the decomposition must show WHERE on
-    /// the ramp -- "0.5" is not an explanation, "halfway through recovery" is.
     #[test]
     fn a_partly_recovered_track_is_damped_and_says_so() {
         let mut c = candidate();
         let (rot, rec) = (seconds(DEF_ROTATION_TRK), seconds(DEF_RECOVERY_TRK));
         c.track_age_s = Some(rot + rec / 2.0);
-        let w = weigh(&c, ArtistCoupling::default());
+        let w = weigh(&c, &Policy::default());
         assert!((w.track_ramp - 0.5).abs() < 1e-9, "ramp {}", w.track_ramp);
         assert!((w.weight - 0.5).abs() < 1e-9);
     }
 
-    /// The ramp MuLibPlay never ran [SPEC-DIR-117]. A half-recovered artist
-    /// must halve its tracks' weight; the gate-only path is kept only to
-    /// measure the divergence, so both are pinned and cannot blur.
+    /// The ramp MuLibPlay never ran [SPEC-DIR-117].
     #[test]
     fn a_recovering_artist_damps_its_tracks() {
         let mut c = candidate();
         let (rot, rec) = (seconds(DEF_ROTATION_ART), seconds(DEF_RECOVERY_ART));
         c.artist_age_s = Some(rot + rec / 2.0);
 
-        let damped = weigh(&c, ArtistCoupling::default());
+        let damped = weigh(&c, &Policy::default());
         assert!((damped.artist_weight - 0.5).abs() < 1e-9, "artist is half recovered");
-        assert!((damped.weight - 0.5).abs() < 1e-9,
-                "the artist ramp must reach the track weight");
+        assert!((damped.weight - 0.5).abs() < 1e-9, "the artist ramp must reach the track weight");
 
-        let gate_only = weigh(&c, ArtistCoupling::GateOnly);
-        assert!((gate_only.weight - 1.0).abs() < 1e-9,
+        let gate = Policy { coupling: ArtistCoupling::GateOnly, ..Default::default() };
+        assert!((weigh(&c, &gate).weight - 1.0).abs() < 1e-9,
                 "MuLibPlay's shipped behaviour, retained for divergence measurement");
     }
 
-    /// Damping must not become a second block: a barely-recovered artist
-    /// yields a small weight, not an exclusion, so the passage can still win
-    /// the roulette on an otherwise quiet night.
     #[test]
     fn a_barely_recovered_artist_is_damped_not_excluded() {
         let mut c = candidate();
         let (rot, rec) = (seconds(DEF_ROTATION_ART), seconds(DEF_RECOVERY_ART));
         c.artist_age_s = Some(rot + rec * 0.02);
-        let w = weigh(&c, ArtistCoupling::default());
+        let w = weigh(&c, &Policy::default());
         assert!(w.is_eligible(), "still eligible: {:?}", w.excluded);
         assert!(w.weight > MIN_WEIGHT && w.weight < 0.05, "weight {}", w.weight);
     }
 
-    /// The artist ramp reaching the weight must not disturb the cold-start
-    /// guarantee: with no history there is no ramp to apply.
     #[test]
     fn damping_leaves_a_never_played_artist_alone() {
-        let mut c = candidate();
-        c.artist_age_s = None;
-        c.track_age_s = None;
-        assert!((weigh(&c, ArtistCoupling::default()).weight - 1.0).abs() < 1e-9);
+        let c = candidate();
+        assert!((weigh(&c, &Policy::default()).weight - 1.0).abs() < 1e-9);
     }
+
+    // ---------------------------------------------------------------- related
+
+    /// A related recording played inside the rotation window blocks this one:
+    /// hearing the live take should stop the studio take following it.
+    #[test]
+    fn a_recently_played_relation_blocks_the_recording() {
+        let rel = [Related { age_s: Some(seconds(DEF_ROTATION_TRK) - 1.0), strength: 1.0 }];
+        let mut c = candidate();
+        c.related = &rel;
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::RelatedRotationBlock));
+    }
+
+    /// The repair: each relation is judged on ITS OWN age. MuLibPlay passed
+    /// the primary track's age, so a never-played recording with a
+    /// just-recovered relation was damped by its own absent history instead.
+    #[test]
+    fn a_relation_is_judged_on_its_own_age() {
+        let (rot, rec) = (seconds(DEF_ROTATION_TRK), seconds(DEF_RECOVERY_TRK));
+        let rel = [Related { age_s: Some(rot + rec / 2.0), strength: 1.0 }];
+        let mut c = candidate();
+        c.related = &rel;
+        c.track_age_s = None; // this recording has never played
+        let w = weigh(&c, &Policy::default());
+        assert!((w.related_damping - 0.5).abs() < 1e-9, "damping {}", w.related_damping);
+        assert!((w.weight - 0.5).abs() < 1e-9);
+        assert_eq!(w.track_ramp, 1.0, "its own ramp is untouched -- it never played");
+    }
+
+    /// All relations apply, not just the first: three half-recovered relations
+    /// compound. This is what "applies to all related tracks" has to mean.
+    #[test]
+    fn every_relation_damps_not_merely_the_first() {
+        let (rot, rec) = (seconds(DEF_ROTATION_TRK), seconds(DEF_RECOVERY_TRK));
+        let rel = [
+            Related { age_s: Some(rot + rec / 2.0), strength: 1.0 },
+            Related { age_s: Some(rot + rec / 2.0), strength: 1.0 },
+            Related { age_s: Some(rot + rec / 2.0), strength: 1.0 },
+        ];
+        let mut c = candidate();
+        c.related = &rel;
+        let w = weigh(&c, &Policy::default());
+        assert!((w.related_damping - 0.125).abs() < 1e-9, "0.5^3, got {}", w.related_damping);
+    }
+
+    /// Relation strength scales the recovery window, so a weak relation stops
+    /// damping sooner. It does not scale the block: sharing a rotation is the
+    /// point of relating two recordings.
+    #[test]
+    fn a_weak_relation_recovers_sooner_than_a_strong_one() {
+        let (rot, rec) = (seconds(DEF_ROTATION_TRK), seconds(DEF_RECOVERY_TRK));
+        let age = rot + rec * 0.3;
+        let strong = [Related { age_s: Some(age), strength: 1.0 }];
+        let weak = [Related { age_s: Some(age), strength: 0.2 }];
+        let mut c = candidate();
+        c.related = &strong;
+        let s = weigh(&c, &Policy::default()).related_damping;
+        c.related = &weak;
+        let w = weigh(&c, &Policy::default()).related_damping;
+        assert!((s - 0.3).abs() < 1e-9, "strong relation is mid-ramp: {s}");
+        assert_eq!(w, 1.0, "weak relation has already fully recovered");
+    }
+
+    #[test]
+    fn a_never_played_relation_is_inert() {
+        let rel = [Related { age_s: None, strength: 1.0 }];
+        let mut c = candidate();
+        c.related = &rel;
+        assert!((weigh(&c, &Policy::default()).weight - 1.0).abs() < 1e-9);
+    }
+
+    // ------------------------------------------------------------ time scales
+
+    #[test]
+    fn a_time_scale_clamps_rounds_and_survives_nonsense() {
+        assert_eq!(TimeScale::default().get(), 1.0);
+        assert_eq!(TimeScale::new(0.00001).get(), TimeScale::MIN, "below range clamps up");
+        assert_eq!(TimeScale::new(1e9).get(), TimeScale::MAX, "above range clamps down");
+        assert_eq!(TimeScale::new(1.234_56).get(), 1.2346, "rounded to four places");
+        assert_eq!(TimeScale::new(f64::NAN).get(), 1.0, "nonsense must not poison the weight");
+        assert_eq!(TimeScale::new(f64::INFINITY).get(), 1.0);
+    }
+
+    /// Halving the track scale halves the block, so a passage still inside its
+    /// rotation window becomes eligible.
+    #[test]
+    fn halving_the_track_scale_halves_the_block() {
+        let rot = seconds(DEF_ROTATION_TRK);
+        let mut c = candidate();
+        c.track_age_s = Some(rot * 0.6);
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::TrackRotationBlock));
+
+        let faster = Policy { track_scale: TimeScale::new(0.5), ..Default::default() };
+        assert!(weigh(&c, &faster).is_eligible(), "half the block means it has passed");
+    }
+
+    /// Doubling doubles it, and the ramp with it: what was fully recovered at
+    /// 1.0 is only halfway at 2.0.
+    #[test]
+    fn doubling_the_track_scale_stretches_the_ramp() {
+        let (rot, rec) = (seconds(DEF_ROTATION_TRK), seconds(DEF_RECOVERY_TRK));
+        let mut c = candidate();
+        c.track_age_s = Some(rot * 2.0 + rec); // fully recovered at scale 1.0
+        assert!((weigh(&c, &Policy::default()).track_ramp - 1.0).abs() < 1e-9);
+
+        let slower = Policy { track_scale: TimeScale::new(2.0), ..Default::default() };
+        let w = weigh(&c, &slower);
+        assert!(w.track_ramp < 1.0, "still recovering under a doubled scale: {}", w.track_ramp);
+    }
+
+    /// The two scales are independent: a track scale must not move an artist
+    /// block, or the single dial the listener reached for would move two.
+    #[test]
+    fn the_scales_do_not_leak_into_each_other() {
+        let art_rot = seconds(DEF_ROTATION_ART);
+        let mut c = candidate();
+        c.artist_age_s = Some(art_rot * 0.6);
+        let track_only = Policy { track_scale: TimeScale::new(0.5), ..Default::default() };
+        assert_eq!(weigh(&c, &track_only).excluded, Some(Exclusion::ArtistRotationBlock),
+                   "the track scale must not shorten an artist block");
+        let artist_only = Policy { artist_scale: TimeScale::new(0.5), ..Default::default() };
+        assert!(weigh(&c, &artist_only).is_eligible());
+    }
+
+    /// Scales must reach relations too, which share the track's windows.
+    #[test]
+    fn the_track_scale_reaches_related_recordings() {
+        let rot = seconds(DEF_ROTATION_TRK);
+        let rel = [Related { age_s: Some(rot * 0.6), strength: 1.0 }];
+        let mut c = candidate();
+        c.related = &rel;
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::RelatedRotationBlock));
+        let faster = Policy { track_scale: TimeScale::new(0.5), ..Default::default() };
+        assert!(weigh(&c, &faster).is_eligible());
+    }
+
+    /// A scale of 1.0 must be exactly inert -- the default cannot cost anything.
+    #[test]
+    fn a_unit_scale_changes_nothing() {
+        let (rot, rec) = (seconds(DEF_ROTATION_TRK), seconds(DEF_RECOVERY_TRK));
+        let rel = [Related { age_s: Some(rot + rec * 0.4), strength: 0.7 }];
+        let mut c = candidate();
+        c.related = &rel;
+        c.track_age_s = Some(rot + rec * 0.75);
+        c.artist_age_s = Some(seconds(DEF_ROTATION_ART) * 3.0);
+        let explicit = Policy {
+            coupling: ArtistCoupling::Damped,
+            artist_scale: TimeScale::new(1.0),
+            track_scale: TimeScale::new(1.0),
+        };
+        assert_eq!(weigh(&c, &Policy::default()), weigh(&c, &explicit));
+    }
+
+    // ----------------------------------------------------------------- misc
 
     #[test]
     fn restraint_spans_boost_to_suppression() {
         let mut c = candidate();
         c.track.restraint = -0.939; // the observed maximum boost
-        assert!((weigh(&c, ArtistCoupling::default()).weight - 8.687).abs() < 0.01);
+        assert!((weigh(&c, &Policy::default()).weight - 8.687).abs() < 0.01);
         c.track.restraint = 5.0; // "never again"
-        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::BelowMinWeight));
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::BelowMinWeight));
     }
 
     #[test]
@@ -364,32 +592,28 @@ mod tests {
     fn passage_filters_reject_outside_the_playable_range() {
         let mut c = candidate();
         c.length_s = 29.0;
-        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TooShort));
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::TooShort));
         c.length_s = 3601.0;
-        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TooLong));
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::TooLong));
         c.length_s = 180.0;
         c.depth_s = 10801.0;
-        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TooDeep));
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::TooDeep));
     }
 
-    /// The occasion multiplier must remain a separate visible term, not be
-    /// folded into the weight product [SPEC-DIR-130].
     #[test]
     fn the_occasion_multiplier_stays_legible() {
         let mut c = candidate();
         c.occasion = 3.9; // christmasy 0.9 against a 4.2 curve, in December
-        let w = weigh(&c, ArtistCoupling::default());
+        let w = weigh(&c, &Policy::default());
         assert!((w.weight - 3.9).abs() < 1e-9);
         assert_eq!(w.occasion, 3.9, "the panel needs the term, not just the product");
     }
 
-    /// The exclusion test is strictly greater, as shipped -- a weight of
-    /// exactly min_weight does not qualify.
     #[test]
     fn the_minimum_weight_boundary_is_exclusive() {
         let mut c = candidate();
         c.track.restraint = -(MIN_WEIGHT.log10()); // weight lands exactly on 0.001
-        let w = weigh(&c, ArtistCoupling::default());
+        let w = weigh(&c, &Policy::default());
         assert_eq!(w.excluded, Some(Exclusion::BelowMinWeight), "weight was {}", w.weight);
     }
 }

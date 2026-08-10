@@ -48,6 +48,28 @@ They never mix. Frequency produces a weight; character shapes and orders a pool.
 4. Track weight multiplies its artist's weight. Related recordings block and damp too, scaled by relation strength.
 5. Drop below `min_weight` → excluded.
 
+**`[SPEC-DIR-116]` Related recordings share a rotation, and each is judged on its own age.** A live take, a remaster and the compilation appearance are the same song to a listener; hearing one should suppress the others. MuLibPlay intended this and never achieved it, in two independent ways:
+
+```cpp
+QMap<qint32,qreal> relTrk = de.relatedTracks( trackId );
+foreach ( qint32 tid, relTrk )                       // iterates VALUES, not keys
+  if ( tracksMostRecentPlay.contains( tid ) )        // so tid is a truncated strength
+```
+
+Qt's `foreach` over a `QMap` yields values, so `tid` was the relation strength cast to `qint32` — 0 or 1 — and the lookup asked for the play time of track 0. Nothing matched. Even had it matched, the damping call passed `now - tracksMostRecentPlay.value(trackId)`, the *primary* track's age, so a relation would have been judged by the wrong recording's history.
+
+Vaino's rules:
+
+1. **Block** if any related recording played within this recording's rotation window. Strength does not scale the block — sharing a rotation is the point of relating two recordings.
+2. **Damp** by each related recording's own ramp, using **its own age**, over a recovery window scaled by relation strength. A weak relation therefore recovers sooner.
+3. **Every** relation applies, multiplicatively. Three half-recovered relations yield 0.125, not 0.5.
+
+**`[SPEC-DIR-118]` Master time scales.** One multiplier for artists and one for tracks, over every block and ramp *duration*. Floating point, four decimal places, range 0.0001–100.0000, default 1.0000 — at which they are exactly inert.
+
+They exist because per-subject tuning is log-scale `[SPEC-DIR-110]`. "Everything a bit sooner" is a reasonable thing to want and is otherwise inexpressible without editing thousands of rows. At 0.5 every block and ramp is half as long; at 2.0, twice.
+
+They scale **durations, never weights**. That is what keeps frequency and character orthogonal `[SPEC-DIR-100]`: a scale changes *when* a passage becomes eligible, never *how much* it is wanted, and it remains a single legible term in the panel. The two are independent — a track scale must not move an artist block — and the track scale reaches related recordings, which share the track's windows. Stored in `listener_settings` with the range enforced in the schema as well as in code, since an out-of-range stored value would quietly change selection everywhere.
+
 **`[SPEC-DIR-117]` The artist weight never reaches the track weight in MuLibPlay as shipped.** Step 4 above describes the intent. The code does something else, and the difference was found only by transcribing it:
 
 ```cpp
