@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use std::time::{Duration, Instant};
 
-use vaino_player::db::Library;
+use vaino_player::db::{Library, PlayerStore};
 use vaino_player::engine::{Command, Engine};
 use vaino_player::output::Output;
 use vaino_player::queue::{overlap_ms, Queue};
@@ -35,8 +35,29 @@ fn main() {
     };
     println!("library: {} radio passages", lib.count_radio().unwrap_or(0));
 
+    // Where playback left off [REQ-AUD-140]. A missing or unreadable resume
+    // point is not an error -- it is a first run -- so it degrades to a fresh
+    // start rather than refusing to play.
+    let store = PlayerStore::open(&db)
+        .map_err(|e| eprintln!("resume state unavailable ({e}); continuing without it"))
+        .ok();
+    let resume = store.as_ref().and_then(|s| s.load().ok()).flatten();
+
     let mut q = Queue::new(count);
-    match lib.random_radio(count) {
+    // The resumed passage goes first; the rest of the queue fills behind it.
+    let mut resume_ms = 0;
+    if let Some((Some(pid), pos, _)) = resume {
+        match lib.passage(pid) {
+            Ok(e) => {
+                println!("resuming passage {pid} at {:.1}s", pos as f64 / 1000.0);
+                resume_ms = pos;
+                q.push(e);
+            }
+            // The library was rebuilt and the passage renumbered away: start fresh.
+            Err(_) => eprintln!("saved passage {pid} is no longer in the library"),
+        }
+    }
+    match lib.random_radio(count.saturating_sub(q.len())) {
         Ok(entries) => entries.into_iter().for_each(|e| q.push(e)),
         Err(e) => {
             eprintln!("{e}");
@@ -79,6 +100,12 @@ fn main() {
     };
 
     let (mut engine, handle) = Engine::new(out, count);
+    if let Some(s) = store {
+        engine.attach_store(s);
+    }
+    if resume_ms > 0 {
+        engine.resume_at(resume_ms);
+    }
     entries.iter().for_each(|e| engine.enqueue(e.clone()));
     handle.send(Command::Play);
 

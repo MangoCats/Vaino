@@ -11,6 +11,9 @@
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+use std::time::{Duration, Instant};
+
+use crate::db::PlayerStore;
 use crate::decoder::PassageDecoder;
 use crate::fade::{Curve, Fade};
 use crate::mixer::{mix, Stream};
@@ -18,6 +21,11 @@ use crate::output::Output;
 use crate::queue::{should_admit, Queue, QueueEntry};
 use crate::resample::Resampler;
 use crate::BUFFER_FRAMES;
+
+/// How often the resume point reaches the database during steady playback.
+/// Losing at most this much position to a power cut is a fair trade for not
+/// writing to storage thousands of times a second.
+const SAVE_EVERY: Duration = Duration::from_secs(5);
 
 /// A passage currently decoding and/or sounding.
 struct Live {
@@ -27,6 +35,10 @@ struct Live {
     converted: Vec<f32>,
     entry: QueueEntry,
     frames_mixed: u64,
+    /// Where in the passage this decode began. Non-zero only when resuming, so
+    /// reported position stays position-WITHIN-THE-PASSAGE rather than
+    /// restarting at zero and making the next save move backwards.
+    origin_ms: u64,
 }
 
 /// What the UI and the persistence layer read. Cheap to clone.
@@ -34,6 +46,9 @@ struct Live {
 pub struct PlayerState {
     pub playing: bool,
     pub current: Option<QueueEntry>,
+    /// Audible position, not mixed position. The output ring holds ~14 s, so
+    /// what has been mixed runs well ahead of what is being heard; saving the
+    /// mixed figure would resume ~14 s late every time.
     pub position_ms: u64,
     pub queue_len: usize,
     pub active_streams: usize,
@@ -93,6 +108,13 @@ pub struct Engine {
     rx: Receiver<Command>,
     playing: bool,
     shutdown: bool,
+    store: Option<PlayerStore>,
+    /// One-shot: the offset the NEXT admitted passage opens at. Consumed on
+    /// use, so only the resumed passage is seeked and everything after it
+    /// starts where the library says it starts.
+    pending_resume: Option<u64>,
+    last_save: Instant,
+    saved: Option<(i64, bool)>,
 }
 
 impl Engine {
@@ -115,8 +137,23 @@ impl Engine {
             rx,
             playing: false,
             shutdown: false,
+            store: None,
+            pending_resume: None,
+            last_save: Instant::now(),
+            saved: None,
         };
         (engine, EngineHandle { tx, state })
+    }
+
+    /// Persist playback state to `vaino.db` `[REQ-AUD-140]`. Optional: without
+    /// it the engine runs identically and simply forgets across restarts.
+    pub fn attach_store(&mut self, store: PlayerStore) {
+        self.store = Some(store);
+    }
+
+    /// Open the next admitted passage `position_ms` in, for resuming.
+    pub fn resume_at(&mut self, position_ms: u64) {
+        self.pending_resume = Some(position_ms);
     }
 
     pub fn enqueue(&mut self, e: QueueEntry) {
@@ -149,6 +186,7 @@ impl Engine {
         let submitted = if self.playing { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.publish();
+        self.persist(false);
         submitted
     }
 
@@ -195,14 +233,18 @@ impl Engine {
         // `live`, where `live[0]` is what is sounding. Keeping a passage in
         // both places would mean two answers to "what is playing".
         let Some(entry) = self.queue.advance() else { return };
-        match self.open(&entry) {
+        let origin = self.pending_resume.take().unwrap_or(0);
+        match self.open(&entry, origin) {
             Ok(l) => self.live.push(l),
             Err(e) => eprintln!("skipping {}: {e}", entry.path.display()),
         }
     }
 
-    fn open(&self, e: &QueueEntry) -> Result<Live, String> {
-        let dec = PassageDecoder::open(&e.path, e.start_ms, Some(e.end_ms))
+    fn open(&self, e: &QueueEntry, origin_ms: u64) -> Result<Live, String> {
+        // Clamp: a resume point past the end (the passage was re-trimmed since)
+        // must replay the passage, not decode nothing.
+        let origin_ms = origin_ms.min(e.duration_ms().saturating_sub(1));
+        let dec = PassageDecoder::open(&e.path, e.start_ms + origin_ms, Some(e.end_ms))
             .map_err(|err| err.to_string())?;
         let ch = dec.channels;
         let resampler = Resampler::new(dec.sample_rate, self.out_rate, ch)?;
@@ -222,6 +264,7 @@ impl Engine {
             converted: Vec::new(),
             entry: e.clone(),
             frames_mixed: 0,
+            origin_ms,
         })
     }
 
@@ -301,15 +344,52 @@ impl Engine {
         self.live.retain(|l| !l.stream.is_exhausted());
     }
 
+    /// Position within the passage of the audio that has been MIXED. Drives
+    /// crossfade admission, which must lead what is heard by the buffer depth.
     fn played_ms(&self, l: &Live) -> u64 {
-        l.frames_mixed * 1000 / self.out_rate.max(1) as u64
+        l.origin_ms + l.frames_mixed * 1000 / self.out_rate.max(1) as u64
+    }
+
+    /// Position within the passage of the audio being HEARD: mixed, less what
+    /// is still sitting in the output ring. This is what the UI shows and what
+    /// a resume point must record.
+    fn audible_ms(&self, l: &Live) -> u64 {
+        let frames = self.out_buffered_frames() as u64;
+        self.played_ms(l)
+            .saturating_sub(frames * 1000 / self.out_rate.max(1) as u64)
+    }
+
+    fn out_buffered_frames(&self) -> usize {
+        self.out.as_ref().map(|o| o.buffered() / self.out_channels.max(1)).unwrap_or(0)
+    }
+
+    /// Write the resume point. Throttled, because a tick is sub-millisecond and
+    /// an SQLite write per tick would dominate the loop; `force` bypasses it for
+    /// shutdown. Writes immediately when the passage or play state changes, so
+    /// the interesting transitions are never the ones lost to a power cut.
+    fn persist(&mut self, force: bool) {
+        let Some(store) = &self.store else { return };
+        let key = (self.live.first().map(|l| l.entry.passage_id).unwrap_or(-1), self.playing);
+        let changed = self.saved != Some(key);
+        if !force && !changed && self.last_save.elapsed() < SAVE_EVERY {
+            return;
+        }
+        let (id, pos) = match self.live.first() {
+            Some(l) => (Some(l.entry.passage_id), self.audible_ms(l)),
+            None => (None, 0),
+        };
+        if let Err(e) = store.save(id, pos, self.playing) {
+            eprintln!("save player state: {e}");
+        }
+        self.last_save = Instant::now();
+        self.saved = Some(key);
     }
 
     fn publish(&self) {
         if let Ok(mut s) = self.state.lock() {
             s.playing = self.playing;
             s.current = self.live.first().map(|l| l.entry.clone());
-            s.position_ms = self.live.first().map(|l| self.played_ms(l)).unwrap_or(0);
+            s.position_ms = self.live.first().map(|l| self.audible_ms(l)).unwrap_or(0);
             s.queue_len = self.queue.len();
             s.active_streams = self.live.len();
             s.underrun_samples = self.out.as_ref().map(|o| o.diagnostics().0).unwrap_or(0);
@@ -319,6 +399,17 @@ impl Engine {
                 .map(|o| o.buffered())
                 .unwrap_or(0);
         }
+    }
+}
+
+/// Save on the way out, wherever "out" happens to be. Callers exit by several
+/// routes -- a Shutdown command, an empty queue, or simply dropping the engine
+/// -- and putting the final save in each of them would be three chances to
+/// forget one. The periodic save is up to `SAVE_EVERY` stale, so this is what
+/// keeps a clean exit from costing those seconds.
+impl Drop for Engine {
+    fn drop(&mut self) {
+        self.persist(true);
     }
 }
 
@@ -402,6 +493,126 @@ mod tests {
         assert!(s.is_idle(), "empty everything is idle");
         s.output_buffered = 4096;
         assert!(!s.is_idle(), "buffered audio means playback is still in progress");
+    }
+
+    fn store() -> (PlayerStore, PathBuf) {
+        let p = std::env::temp_dir().join(format!(
+            "vaino_eng_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&p);
+        (PlayerStore::open(&p).unwrap(), p)
+    }
+
+    /// Without a store the engine must behave identically, not panic or stall.
+    #[test]
+    fn persistence_is_optional() {
+        let (mut e, h) = Engine::new(None, 1);
+        h.send(Command::Play);
+        e.tick();
+        assert!(h.snapshot().playing);
+    }
+
+    #[test]
+    fn play_state_reaches_the_database_on_change() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(None, 1);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        h.send(Command::Play);
+        e.tick();
+        assert_eq!(st.load().unwrap(), Some((None, 0, true)), "play must be saved at once");
+
+        h.send(Command::Pause);
+        e.tick();
+        assert_eq!(
+            st.load().unwrap(),
+            Some((None, 0, false)),
+            "a state change must not wait for the throttle"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Resuming must report position within the PASSAGE. If it restarted at
+    /// zero, the next save would move backwards and resume would walk to the
+    /// start of the track a restart at a time.
+    #[test]
+    fn resume_reports_position_within_the_passage() {
+        let f = crate::decoder::tests::tmp("resume");
+        let (mut e, h) = Engine::new(None, 1);
+        let mut ent = entry(1, f.to_str().unwrap());
+        ent.end_ms = 5_000;
+        e.resume_at(2_000);
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.tick();
+        let pos = h.snapshot().position_ms;
+        assert!(
+            (2_000..2_400).contains(&pos),
+            "resumed passage reported {pos} ms, expected ~2000"
+        );
+        let _ = std::fs::remove_file(f);
+    }
+
+    /// One-shot: the passage after the resumed one starts where the library
+    /// says, not two seconds in.
+    #[test]
+    fn the_resume_offset_applies_only_once() {
+        let f = crate::decoder::tests::tmp("once");
+        let (mut e, h) = Engine::new(None, 1);
+        let mut a = entry(1, f.to_str().unwrap());
+        a.end_ms = 1_000;
+        let mut b = entry(2, f.to_str().unwrap());
+        b.end_ms = 5_000;
+        e.resume_at(2_000);
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        for _ in 0..400 {
+            e.tick();
+            if h.snapshot().current.as_ref().map(|c| c.passage_id) == Some(2) {
+                break;
+            }
+        }
+        let s = h.snapshot();
+        assert_eq!(s.current.map(|c| c.passage_id), Some(2), "second passage never started");
+        assert!(s.position_ms < 1_000, "second passage inherited the resume offset");
+        let _ = std::fs::remove_file(f);
+    }
+
+    /// A resume point past the end (the passage was re-trimmed since) replays
+    /// the passage rather than decoding nothing.
+    #[test]
+    fn an_out_of_range_resume_point_does_not_strand_the_passage() {
+        let f = crate::decoder::tests::tmp("clamp");
+        let (mut e, h) = Engine::new(None, 1);
+        let mut ent = entry(1, f.to_str().unwrap());
+        ent.end_ms = 3_000;
+        e.resume_at(99_000);
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.tick();
+        assert_eq!(h.snapshot().active_streams, 1, "clamped resume must still open");
+        let _ = std::fs::remove_file(f);
+    }
+
+    /// Exiting by dropping the engine -- the common path when the queue runs
+    /// dry -- must still leave a current resume point.
+    #[test]
+    fn the_final_position_is_saved_on_drop() {
+        let (st, path) = store();
+        {
+            let (mut e, h) = Engine::new(None, 1);
+            e.attach_store(PlayerStore::open(&path).unwrap());
+            h.send(Command::Play);
+            e.tick();
+        }
+        assert_eq!(st.load().unwrap().map(|s| s.2), Some(true), "drop must flush the state");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

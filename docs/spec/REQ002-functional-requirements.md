@@ -18,6 +18,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-AUD-120]`** Play any passage as a span of a larger file — a DAO file holds up to 40 `[GDE-BMK-020]` — without decoding the portions outside it.
 
+**`[REQ-AUD-122]` Passage boundaries are sample-accurate, not packet-accurate.** A decoder seek lands on a container packet and reports where it actually landed; the remainder must be discarded so `start_ms` means `start_ms`. Measured drift when the reported landing was ignored: **648 frames, 14.7 ms**, on every passage with a non-zero start. It is inaudible in isolation, which is precisely the danger — it silently shifts every trim point, and because the passage length is measured from the *requested* start, it drags the end boundary along with it.
+
 **`[REQ-AUD-130]`** Crossfade between consecutive passages using their lead-in/lead-out points and gain `[SPEC-SC-040]`.
 
 **`[REQ-AUD-140]`** Resume playback state across restart, including position within a passage `[SPEC-SC-098]`.

@@ -87,11 +87,13 @@ impl Library {
     }
 }
 
-/// Read-write access for the small amount of state the player owns.
+/// Read-write access to the one row of state the player owns.
 ///
 /// Separate from [`Library`] on purpose: the library is opened read-only so a
-/// player bug cannot corrupt it, and the writable surface stays visibly tiny —
-/// one row of resume state and appended play history.
+/// player bug cannot corrupt it, and the writable surface stays visibly tiny.
+/// Play history will be written here too, but only once `QueueEntry` carries
+/// the recording MBID it must be keyed by `[SPEC-SC-095]` — an untested writer
+/// with no reader would be a claim nothing exercises.
 pub struct PlayerStore {
     conn: Connection,
 }
@@ -150,20 +152,6 @@ impl PlayerStore {
             })
     }
 
-    /// Append a play event. `mbid` is denormalised so history survives a
-    /// rescan that renumbers passages `[SPEC-SC-095]`.
-    pub fn record_play(&self, passage_id: Option<i64>, mbid: Option<&str>)
-        -> Result<(), DbError>
-    {
-        self.conn
-            .execute(
-                "INSERT INTO listener_play_history (played_at, passage_id, mbid)
-                 VALUES (strftime('%s','now'), ?1, ?2)",
-                rusqlite::params![passage_id, mbid],
-            )
-            .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
-    }
 }
 
 #[cfg(test)]

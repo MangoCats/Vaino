@@ -46,6 +46,10 @@ pub struct PassageDecoder {
     scratch: Vec<f32>,
     frames_emitted: u64,
     frame_limit: Option<u64>,
+    /// Frames to discard before the passage truly begins. `format.seek` lands
+    /// on a packet boundary, not a sample, so it can stop short of the request;
+    /// this is the remainder it undershot by.
+    skip_frames: u64,
 }
 
 impl PassageDecoder {
@@ -78,11 +82,18 @@ impl PassageDecoder {
 
         // Seeking is what makes a 40-track DAO file tractable: minute 240 costs
         // the same as minute 1 [REQ-AUD-120].
+        // Seek lands on a PACKET, and returns where it actually landed. Ignoring
+        // that return value leaves every passage start off by up to a packet --
+        // silent, but it shifts trim points and, because frame_limit is measured
+        // from the requested start, drags the end boundary with it. Discard the
+        // shortfall so start_ms means start_ms.
+        let mut skip_frames = 0u64;
         if start_ms > 0 {
             let t = Time::from(std::time::Duration::from_millis(start_ms));
-            format
+            let landed = format
                 .seek(SeekMode::Accurate, SeekTo::Time { time: t, track_id: Some(track_id) })
                 .map_err(DecodeError::Symphonia)?;
+            skip_frames = landed.required_ts.saturating_sub(landed.actual_ts);
         }
 
         let frame_limit = end_ms.map(|e| {
@@ -99,6 +110,7 @@ impl PassageDecoder {
             scratch: Vec::new(),
             frames_emitted: 0,
             frame_limit,
+            skip_frames,
         })
     }
 
@@ -133,6 +145,16 @@ impl PassageDecoder {
                     // scratch is a different field, which is legal where a
                     // `&mut self` method would not be.
                     fill_scratch(&mut self.scratch, self.channels, &buf);
+                    // Drop the post-seek remainder before anything counts it.
+                    if self.skip_frames > 0 {
+                        let have = (self.scratch.len() / self.channels) as u64;
+                        let drop = self.skip_frames.min(have);
+                        self.scratch.drain(..(drop as usize * self.channels));
+                        self.skip_frames -= drop;
+                        if self.scratch.is_empty() {
+                            continue;
+                        }
+                    }
                     let mut n = self.scratch.len() / self.channels;
                     if let Some(limit) = self.frame_limit {
                         let remaining = limit.saturating_sub(self.frames_emitted) as usize;
@@ -188,5 +210,103 @@ fn fill_scratch(scratch: &mut Vec<f32>, ch: usize, buf: &AudioBufferRef<'_>) {
         // Remaining formats are rare in this library; emit silence rather than
         // panicking so playback continues.
         _ => scratch.iter_mut().for_each(|v| *v = 0.0),
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// Write a 44.1 kHz stereo WAV whose every sample encodes its own frame
+    /// index, so a decoded value says exactly where in the file it came from.
+    /// That is what makes a seek testable rather than merely non-crashing.
+    pub(crate) fn ramp_wav(path: &std::path::Path, frames: u32) {
+        let (rate, ch, bits) = (44_100u32, 2u16, 16u16);
+        let data_len = frames * ch as u32 * 2;
+        let mut b: Vec<u8> = Vec::with_capacity(44 + data_len as usize);
+        b.extend(b"RIFF");
+        b.extend(&(36 + data_len).to_le_bytes());
+        b.extend(b"WAVEfmt ");
+        b.extend(&16u32.to_le_bytes());
+        b.extend(&1u16.to_le_bytes()); // PCM
+        b.extend(&ch.to_le_bytes());
+        b.extend(&rate.to_le_bytes());
+        b.extend(&(rate * ch as u32 * 2).to_le_bytes());
+        b.extend(&(ch * bits / 8).to_le_bytes());
+        b.extend(&bits.to_le_bytes());
+        b.extend(b"data");
+        b.extend(&data_len.to_le_bytes());
+        for f in 0..frames {
+            // frame index / 8: unique across the whole fixture, so a decoded
+            // sample identifies its own position to within 8 frames. A modulo
+            // would alias, and an aliased ramp cannot tell a correct seek from
+            // one that is a whole period out.
+            let v = (f / 8) as i16;
+            b.extend(&v.to_le_bytes());
+            b.extend(&v.to_le_bytes());
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    pub(crate) fn tmp(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir()
+            .join(format!("vaino_{}_{}.wav", name, std::process::id()));
+        ramp_wav(&p, 44_100 * 5);
+        p
+    }
+
+    /// The value a frame index should decode to, as a float.
+    fn expect(frame: u64) -> f32 {
+        (frame / 8) as f32 / 32768.0
+    }
+
+    /// Invert `expect`: which frame did this sample come from?
+    fn frame_of(v: f32) -> u64 {
+        (v * 32768.0).round() as u64 * 8
+    }
+
+    #[test]
+    fn decodes_from_the_start() {
+        let f = tmp("start");
+        let mut d = PassageDecoder::open(&f, 0, None).unwrap();
+        let first = d.next().unwrap().unwrap()[0];
+        assert!((first - expect(0)).abs() < 1e-3, "got {first}");
+        let _ = std::fs::remove_file(f);
+    }
+
+    /// The seek must land on the requested millisecond, not the start of the
+    /// file and not the start of the packet that happens to contain it.
+    #[test]
+    fn seeks_to_the_requested_offset() {
+        let f = tmp("seek");
+        let start_ms = 2_000;
+        let mut d = PassageDecoder::open(&f, start_ms, None).unwrap();
+        let first = d.next().unwrap().unwrap()[0];
+        let want = start_ms * 44_100 / 1000;
+        let got = frame_of(first);
+        assert!(
+            got.abs_diff(want) <= 8,
+            "seek to {start_ms} ms landed on frame {got}, wanted {want} \
+             (off by {} frames = {:.1} ms)",
+            got.abs_diff(want),
+            got.abs_diff(want) as f64 * 1000.0 / 44_100.0
+        );
+        let _ = std::fs::remove_file(f);
+    }
+
+    /// A bounded passage must stop at end_ms, not run to end of file --
+    /// otherwise every passage in a multi-track file would play the whole file.
+    #[test]
+    fn stops_at_the_end_boundary() {
+        let f = tmp("bound");
+        let mut d = PassageDecoder::open(&f, 0, Some(1_000)).unwrap();
+        let mut frames = 0u64;
+        while let Some(c) = d.next().unwrap() {
+            frames += (c.len() / 2) as u64;
+        }
+        let want = 44_100;
+        let err = (frames as i64 - want as i64).abs();
+        assert!(err < 4096, "decoded {frames} frames for 1000 ms, wanted ~{want}");
+        let _ = std::fs::remove_file(f);
     }
 }
