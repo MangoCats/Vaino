@@ -42,6 +42,7 @@ pub struct Output {
     pub state: Arc<Mutex<OutputState>>,
     pub sample_rate: u32,
     pub channels: usize,
+    pub device_name: String,
 }
 
 #[derive(Debug)]
@@ -62,14 +63,39 @@ impl std::fmt::Display for OutputError {
 }
 
 impl Output {
-    /// Open the default output device and start streaming silence.
+    /// Open the default output device.
+    pub fn open(ring_capacity_samples: usize) -> Result<Self, OutputError> {
+        Self::open_device(None, ring_capacity_samples)
+    }
+
+    /// Open a named output device, or the default when `name` is `None`.
+    ///
+    /// Named selection exists because the output channel is a deployment
+    /// choice, not a fixed property: an appliance may be built around a
+    /// Bluetooth sink, an I2S DAC HAT, a USB DAC or HDMI, and those differ in
+    /// boot behaviour as well as in device name `[IMPL-AUD-010]`. Matching is a
+    /// case-insensitive substring so a configuration file can say "bluealsa"
+    /// or "hifiberry" without encoding an exact ALSA string.
     ///
     /// `ring_capacity_samples` is the decoupling buffer between the mixer
     /// thread and the callback.
-    pub fn open(ring_capacity_samples: usize) -> Result<Self, OutputError> {
-        let device = cpal::default_host()
-            .default_output_device()
-            .ok_or(OutputError::NoDevice)?;
+    pub fn open_device(name: Option<&str>, ring_capacity_samples: usize)
+        -> Result<Self, OutputError>
+    {
+        let host = cpal::default_host();
+        let device = match name {
+            Some(want) => {
+                let want = want.to_lowercase();
+                host.output_devices()
+                    .map_err(|e| OutputError::Config(e.to_string()))?
+                    .find(|d| {
+                        d.name().map(|n| n.to_lowercase().contains(&want)).unwrap_or(false)
+                    })
+                    .ok_or(OutputError::NoDevice)?
+            }
+            None => host.default_output_device().ok_or(OutputError::NoDevice)?,
+        };
+        let device_name = device.name().unwrap_or_else(|_| "<unnamed>".into());
         let supported = device
             .default_output_config()
             .map_err(|e| OutputError::Config(e.to_string()))?;
@@ -127,7 +153,7 @@ impl Output {
         .map_err(|e| OutputError::Build(e.to_string()))?;
 
         stream.play().map_err(|e| OutputError::Build(e.to_string()))?;
-        Ok(Self { _stream: stream, state, sample_rate, channels })
+        Ok(Self { _stream: stream, state, sample_rate, channels, device_name })
     }
 
     /// Space available in the output ring, in samples.
@@ -138,6 +164,14 @@ impl Output {
     /// Hand mixed audio to the output. Returns samples accepted.
     pub fn submit(&self, samples: &[f32]) -> usize {
         self.state.lock().map(|mut s| s.ring.write(samples)).unwrap_or(0)
+    }
+
+    /// Names of available output devices, for diagnosing a failed match.
+    pub fn list_devices() -> Vec<String> {
+        cpal::default_host()
+            .output_devices()
+            .map(|ds| ds.filter_map(|d| d.name().ok()).collect())
+            .unwrap_or_default()
     }
 
     pub fn diagnostics(&self) -> (u64, u64) {

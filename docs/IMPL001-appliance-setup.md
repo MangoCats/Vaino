@@ -8,20 +8,24 @@ Step-by-step build of a Pi Zero 2W as a Vaino appliance. Implements the hardware
 
 ---
 
-## 1. Bill of Materials
+## 1. Output Profile — Choose First
 
-**`[IMPL-BOM-010]` The Pi Zero 2W has no analog audio output.** Only mini-HDMI and USB. This is the single most consequential hardware fact and it must be settled before flashing, because the audio path determines several later steps.
+**`[IMPL-BOM-010]` The Pi Zero 2W has no analog audio output.** Only mini-HDMI and USB. This is the most consequential hardware fact and it must be settled before flashing.
 
-| Option | Notes |
-| :--- | :--- |
-| **I2S DAC HAT** (recommended) | Best quality, lowest CPU, no USB contention. Needs a device-tree overlay `[IMPL-AUD-020]`. |
-| **USB DAC** | Works, but the Zero 2W has one micro-USB data port — a hub is needed if anything else is attached. |
-| **Bluetooth** | Convenient, but adds latency and a reconnection failure mode. MuLibPlay needed a 5-second startup delay to work around exactly this. |
-| **HDMI** | Only if the amplifier accepts HDMI. |
+**`[IMPL-PROF-010]` The output choice also fixes the boot profile.** They are one decision, not two: a Bluetooth sink must associate before audio can flow, so fast boot and Bluetooth are **alternatives rather than a compromise to be split** `[REQ-HW-114]`.
+
+| Profile | Output | Boot | Extra userspace |
+| :--- | :--- | :--- | :--- |
+| **A — Bluetooth** ⭐ *tested first* | A2DP sink | **slow, accepted** `[REQ-HW-112]` | `bluez`, `bluez-alsa-utils` |
+| **B — I2S DAC HAT** | GPIO DAC | fastest | none |
+| **C — USB DAC** | USB audio | fast | none |
+| **D — HDMI** | mini-HDMI | fast | none |
+
+**`[IMPL-PROF-020]` Profile A is the initially tested channel.** Its startup delay is accepted **for this profile only** and must not become the project's boot standard `[REQ-HW-112]`. MuLibPlay needed a 5-second delay for exactly this reason, so the cost is known and inherent to the channel rather than to Vaino.
+
+**`[IMPL-PROF-030]` Profiles B–D stay supported, not merely possible.** Vaino selects its output by name at runtime (`Output::open_device`), so switching profiles is configuration rather than a rebuild. Anything added for Bluetooth must be conditional: `bluealsa` and the association wait belong to Profile A alone, and enabling them for everyone would impose Bluetooth's boot cost on hardware that does not need it.
 
 Also required: microSD (**A2-rated**, endurance-grade — this runs 24/7), a 5 V ≥2.5 A supply, and the music library.
-
----
 
 ## 2. Operating System
 
@@ -58,11 +62,12 @@ df -h /
 **`[IMPL-TRIM-010]`** Each removal must be justified by the appliance role — this is a single-purpose device with no local user.
 
 ```bash
-sudo systemctl disable --now bluetooth        # ONLY if not using Bluetooth audio
+# Profiles B-D ONLY. Under Profile A this is what makes audio work at all.
+[ "$VAINO_PROFILE" != A ] && sudo systemctl disable --now bluetooth
 sudo systemctl disable --now triggerhappy avahi-daemon
 sudo systemctl disable --now ModemManager wpa_supplicant@wlan1 2>/dev/null
 sudo apt-get purge -y  # nothing to purge on Lite by default; confirm before adding
-sudo systemctl mask systemd-networkd-wait-online.service   # boots faster; see [IMPL-BOOT-010]
+sudo systemctl mask systemd-networkd-wait-online.service   # audio must not wait for Wi-Fi
 ```
 
 **`[IMPL-TRIM-020]` Use zram, not an SD swapfile.** Swapping to SD destroys cards and is slow enough to cause audio dropouts on a 512 MB machine.
@@ -78,11 +83,38 @@ sudo systemctl restart zramswap
 
 ---
 
-## 5. Audio Device
+## 5. Audio — Profile A (Bluetooth)
 
-**`[IMPL-AUD-010]`** Identify the device before configuring anything: `aplay -l`.
+**`[IMPL-AUD-010]`** Identify what exists first: `aplay -l`, and after setup `vaino --list-devices`.
 
-**`[IMPL-AUD-020]` For an I2S DAC HAT**, add the overlay to `/boot/firmware/config.txt` and disable the on-board audio it conflicts with:
+**`[IMPL-AUD-050]` A2DP needs a bridge into ALSA.** Vaino's `cpal` backend speaks ALSA, and BlueZ alone does not expose an A2DP sink as an ALSA PCM. This corrects the "no PulseAudio, ALSA directly" guidance elsewhere in this document — that holds for Profiles B–D, **not** for Bluetooth.
+
+```bash
+sudo apt-get install -y bluez bluez-alsa-utils
+```
+
+`bluez-alsa` (`bluealsa`) is preferred over PipeWire or PulseAudio here purely on footprint: this is a 512 MB machine with a ≤150 MB budget for Vaino `[REQ-HW-100]`.
+
+**`[IMPL-AUD-060]` Pair and trust once**, so later boots reconnect without interaction:
+
+```bash
+bluetoothctl
+> power on
+> agent on
+> scan on            # note the speaker's MAC
+> pair    AA:BB:CC:DD:EE:FF
+> trust   AA:BB:CC:DD:EE:FF     # trust is what makes reconnection automatic
+> connect AA:BB:CC:DD:EE:FF
+> quit
+```
+
+**`[IMPL-AUD-070]` Vaino waits for the sink rather than systemd doing it.** The unit must not block on Bluetooth `[IMPL-SVC-020]`; instead Vaino retries `open_device(Some("bluealsa"))` until the sink appears, then starts audio. Two reasons: the web UI and database come up during the wait rather than after it, and the delay stays contained in Profile A's configuration instead of the service definition.
+
+> **Verify:** `aplay -D bluealsa /usr/share/sounds/alsa/Front_Center.wav` plays through the speaker. Record **power-on to first audio** — that number is Profile A's accepted cost `[REQ-HW-112]`, and the figure Profiles B–D are measured against.
+
+### Profiles B–D
+
+**`[IMPL-AUD-020]` I2S DAC HAT.** In `/boot/firmware/config.txt`, and no extra userspace:
 
 ```
 dtparam=audio=off
@@ -96,11 +128,7 @@ defaults.pcm.card 0
 defaults.ctl.card 0
 ```
 
-> **Verify:** `speaker-test -c2 -twav -l1` produces audible sound from the intended output. Do this **before** installing Vaino — otherwise a silent Vaino is ambiguous between "no audio configured" and "player broken".
-
-**`[IMPL-AUD-040]`** Vaino's `cpal` backend uses ALSA directly. PulseAudio and PipeWire are unnecessary; if present, they add latency and another failure mode. Leave them uninstalled on Lite.
-
----
+**`[IMPL-AUD-040]`** For Profiles B–D, install neither PulseAudio nor PipeWire: `cpal` uses ALSA directly, and each additional layer adds latency and a failure mode. Disable Bluetooth entirely to claim the faster boot `[REQ-HW-114]`.
 
 ## 6. Storage Layout
 
@@ -124,19 +152,24 @@ defaults.ctl.card 0
 
 **`[IMPL-SVC-010]`** Deploy the aarch64 binary built per [build/README.md](../build/README.md) to `/usr/local/bin/vaino`.
 
-**`[IMPL-SVC-020]`** `/etc/systemd/system/vaino.service` — the unit exists to satisfy `[REQ-HW-110]` (reach audio quickly) and `[REQ-HW-120]` (survive power loss):
+**`[IMPL-SVC-020]`** `/etc/systemd/system/vaino.service`. The unit is **identical across all four profiles** — the output difference lives in Vaino's configuration, not here `[IMPL-PROF-030]`. That is deliberate: putting a Bluetooth wait into the unit would impose it on hardware that does not need it.
 
 ```ini
 [Unit]
 Description=Vaino
-# Deliberately NOT After=network-online.target: audio must start without
-# waiting for Wi-Fi association [REQ-HW-110]. The web UI binds later.
+# Deliberately NOT After=network-online.target, and NOT After=bluetooth:
+# audio must start without waiting for Wi-Fi, and under Profile A the wait for
+# the A2DP sink belongs inside Vaino [IMPL-AUD-070] so the web UI and database
+# come up during it rather than after it.
 After=sound.target
 Wants=sound.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/vaino --db /var/lib/vaino/vaino.db --music /srv/music
+# --output selects the profile: "bluealsa" (A), "hifiberry" (B), a USB DAC
+# name (C), or omitted for the system default (D).
+ExecStart=/usr/local/bin/vaino --db /var/lib/vaino/vaino.db --music /srv/music           --output ${VAINO_OUTPUT}
+EnvironmentFile=/etc/vaino.conf
 Restart=always
 RestartSec=2
 User=vaino
@@ -162,7 +195,8 @@ WantedBy=multi-user.target
 | Check | Requirement | Target |
 | :--- | :--- | :--- |
 | Peak RSS during playback | `[REQ-HW-100]` | ≤150 MB |
-| Power-on to first audio | `[REQ-HW-110]` | measure, then set a target |
+| Power-on to first audio, Profile A | `[REQ-HW-112]` | measure; accepted as-is |
+| Power-on to first audio, Profiles B-D | `[REQ-HW-114]` | measure; must beat Profile A |
 | 10 hard power cuts, no corruption | `[REQ-HW-120]` | database opens every time |
 | Skip latency | `[REQ-AUD-110]` | ≤500 ms |
 | 72 h unattended | `[GDE-PHS-020]` | no leak, no drift, no dropout |
@@ -174,6 +208,7 @@ WantedBy=multi-user.target
 
 ## 9. Open
 
-1. **`[IMPL-OPN-010]`** Which audio output — the choice in `[IMPL-BOM-010]` is unmade, and it changes §5 entirely.
+1. ~~**`[IMPL-OPN-010]`** Which audio output~~ — **DECIDED: Profile A (Bluetooth) is tested first** `[IMPL-PROF-020]`, with B–D kept supported and configurable `[IMPL-PROF-030]`. Its boot delay is accepted for that profile alone.
+2. **`[IMPL-OPN-040]`** Whether `bluez-alsa` is packaged and sound on Bookworm arm64, and whether PipeWire would in practice cost less than expected. Chosen on footprint reasoning, not measurement.
 2. **`[IMPL-OPN-020]`** Whether 64-bit is right at 512 MB. It matches the verified build, but 32-bit uses less memory for pointer-heavy work. Vaino's footprint is buffer-dominated, so the difference should be small — worth measuring both if the margin proves tight.
 3. **`[IMPL-OPN-030]`** Where the class-D export goes off-device `[SPEC-DF-094]`, since on-card backups die with the card.
