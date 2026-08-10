@@ -174,6 +174,16 @@ CREATE TABLE listener_preferences (           -- MuLibPlay's rotation/recovery/r
 
 ---
 
+## 6b. Player State
+
+**`[SPEC-SC-098]`** A single row holding the resume point `[REQ-AUD-140]`: passage, position, playing flag, volume.
+
+Deliberately **not** `listener_`-prefixed. It is operational state, not listener history — losing it costs one track position — so it is excluded from the class-D export `[SPEC-DF-090]`, which exists for data that cannot be reconstructed. Mixing it in would dilute the one guarantee that export makes.
+
+`playing` is a boolean because playback has exactly two states `[REQ-AUD-142]`. Pausing halts the consumer only; producers keep filling buffers, so there is no third "stopped" mode to represent.
+
+---
+
 ## 7. Visibility
 
 **`[SPEC-SC-100]`** `ingest_decisions` records what each Sampo stage decided, at what confidence, and what it rejected — a durable record, not a log line `[SPEC-SA-085]`. `selection_decisions` records the Program Director's weight decomposition per choice, which is what the "Why this track?" panel reads `[GDE-CHT-030]`.

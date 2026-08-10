@@ -87,6 +87,85 @@ impl Library {
     }
 }
 
+/// Read-write access for the small amount of state the player owns.
+///
+/// Separate from [`Library`] on purpose: the library is opened read-only so a
+/// player bug cannot corrupt it, and the writable surface stays visibly tiny —
+/// one row of resume state and appended play history.
+pub struct PlayerStore {
+    conn: Connection,
+}
+
+impl PlayerStore {
+    pub fn open(path: &std::path::Path) -> Result<Self, DbError> {
+        let conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS player_state (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 passage_id INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
+                 playing INTEGER NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 1.0,
+                 updated_at TEXT NOT NULL);",
+        )
+        .map_err(|e| DbError::Open(e.to_string()))?;
+        Ok(Self { conn })
+    }
+
+    /// Save the resume point `[REQ-AUD-140]`.
+    pub fn save(&self, passage_id: Option<i64>, position_ms: u64, playing: bool)
+        -> Result<(), DbError>
+    {
+        self.conn
+            .execute(
+                "INSERT INTO player_state (id, passage_id, position_ms, playing, updated_at)
+                 VALUES (1, ?1, ?2, ?3, datetime('now'))
+                 ON CONFLICT(id) DO UPDATE SET
+                     passage_id = excluded.passage_id,
+                     position_ms = excluded.position_ms,
+                     playing = excluded.playing,
+                     updated_at = excluded.updated_at",
+                rusqlite::params![passage_id, position_ms as i64, playing as i64],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// The saved resume point, or `None` on a first run.
+    pub fn load(&self) -> Result<Option<(Option<i64>, u64, bool)>, DbError> {
+        self.conn
+            .query_row(
+                "SELECT passage_id, position_ms, playing FROM player_state WHERE id = 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<i64>>(0)?,
+                        r.get::<_, i64>(1)?.max(0) as u64,
+                        r.get::<_, i64>(2)? != 0,
+                    ))
+                },
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(DbError::Query(other.to_string())),
+            })
+    }
+
+    /// Append a play event. `mbid` is denormalised so history survives a
+    /// rescan that renumbers passages `[SPEC-SC-095]`.
+    pub fn record_play(&self, passage_id: Option<i64>, mbid: Option<&str>)
+        -> Result<(), DbError>
+    {
+        self.conn
+            .execute(
+                "INSERT INTO listener_play_history (played_at, passage_id, mbid)
+                 VALUES (strftime('%s','now'), ?1, ?2)",
+                rusqlite::params![passage_id, mbid],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +217,22 @@ mod tests {
         let picked = lib.random_radio(10).unwrap();
         assert_eq!(picked.len(), 1, "the album passage must not be selectable");
         assert_eq!(picked[0].passage_id, 2);
+    }
+
+    #[test]
+    fn resume_state_round_trips() {
+        let dir = std::env::temp_dir().join(format!("vaino_ps_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+        assert!(st.load().unwrap().is_none(), "first run has no resume point");
+        st.save(Some(42), 61_500, true).unwrap();
+        assert_eq!(st.load().unwrap(), Some((Some(42), 61_500, true)));
+        // saving again must UPDATE, not accumulate rows
+        st.save(Some(43), 100, false).unwrap();
+        assert_eq!(st.load().unwrap(), Some((Some(43), 100, false)));
+        let n: i64 = st.conn.query_row("SELECT COUNT(*) FROM player_state", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "resume state is a single row");
+        let _ = std::fs::remove_file(&dir);
     }
 
     #[test]

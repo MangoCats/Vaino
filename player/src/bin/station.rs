@@ -84,7 +84,7 @@ fn main() {
 
     let started = Instant::now();
     let mut last_id = -1i64;
-    while !engine.is_stopped() {
+    while !engine.is_shutdown() {
         let submitted = engine.tick();
         let s = handle.snapshot();
         if let Some(c) = &s.current {

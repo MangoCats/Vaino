@@ -85,7 +85,7 @@ fn main() {
 
     let t0 = Instant::now();
     let mut submitted: u64 = 0;
-    while !engine.is_stopped() {
+    while !engine.is_shutdown() {
         let n = engine.tick();
         submitted += n as u64;
         let s = handle.snapshot();

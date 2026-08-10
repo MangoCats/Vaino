@@ -240,6 +240,25 @@ CREATE TABLE IF NOT EXISTS selection_decisions (
 );
 CREATE INDEX IF NOT EXISTS selection_decisions_time ON selection_decisions(selected_at);
 
+-- ============================================================ player state
+
+-- Resume point across restart [REQ-AUD-140]. Single row.
+--
+-- Deliberately NOT listener_*: this is operational state, not listener history.
+-- Losing it costs one track position, so it is excluded from the class-D
+-- export [SPEC-DF-090], which exists for data that cannot be reconstructed.
+--
+-- Playback has two states only, playing and paused [REQ-AUD-142]; there is no
+-- "stopped", so `playing` is a boolean rather than an enum.
+CREATE TABLE IF NOT EXISTS player_state (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    passage_id   INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
+    position_ms  INTEGER NOT NULL DEFAULT 0,
+    playing      INTEGER NOT NULL DEFAULT 0,
+    volume       REAL    NOT NULL DEFAULT 1.0,
+    updated_at   TEXT    NOT NULL
+);
+
 -- ================================================================== metadata
 
 CREATE TABLE IF NOT EXISTS schema_meta (

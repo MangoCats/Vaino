@@ -52,6 +52,10 @@ impl PlayerState {
     }
 }
 
+/// Playback has exactly **two** states, playing and paused. There is no
+/// "stopped": pausing halts only the *consumer*, while decoders keep filling
+/// their buffers, so resuming is instant and the pipeline stays primed after
+/// the initial power-on fill.
 #[derive(Debug)]
 pub enum Command {
     Play,
@@ -59,7 +63,9 @@ pub enum Command {
     /// Drop the playing passage and start the next immediately.
     Skip,
     Enqueue(QueueEntry),
-    Stop,
+    /// Terminate the process. Deliberately NOT a playback state -- it ends the
+    /// engine rather than putting playback into a third mode.
+    Shutdown,
 }
 
 pub struct EngineHandle {
@@ -86,7 +92,7 @@ pub struct Engine {
     state: Arc<Mutex<PlayerState>>,
     rx: Receiver<Command>,
     playing: bool,
-    stopped: bool,
+    shutdown: bool,
 }
 
 impl Engine {
@@ -108,7 +114,7 @@ impl Engine {
             state: Arc::clone(&state),
             rx,
             playing: false,
-            stopped: false,
+            shutdown: false,
         };
         (engine, EngineHandle { tx, state })
     }
@@ -119,8 +125,10 @@ impl Engine {
     pub fn shortfall(&self) -> usize {
         self.queue.shortfall()
     }
-    pub fn is_stopped(&self) -> bool {
-        self.stopped
+    /// The engine has been told to terminate. Distinct from paused, which is a
+    /// playback state and leaves the pipeline running.
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown
     }
 
     /// One pump iteration: commands, admission, decode, mix, submit, publish.
@@ -129,11 +137,15 @@ impl Engine {
     /// device applying back-pressure.
     pub fn tick(&mut self) -> usize {
         self.drain_commands();
-        if self.stopped {
+        if self.shutdown {
             return 0;
         }
         self.admit_due();
+        // Producers run in BOTH states. Pausing stops the consumer only, so
+        // buffers stay full and resuming does not re-incur a fill.
         self.top_up_decoders();
+        // Submitting while paused would be audible -- the callback drains
+        // continuously -- so only the consumer side is gated.
         let submitted = if self.playing { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.publish();
@@ -147,8 +159,8 @@ impl Engine {
                 Ok(Command::Pause) => self.playing = false,
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
-                Ok(Command::Stop) | Err(TryRecvError::Disconnected) => {
-                    self.stopped = true;
+                Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
+                    self.shutdown = true;
                     return;
                 }
                 Err(TryRecvError::Empty) => return,
@@ -334,15 +346,27 @@ mod tests {
         h.send(Command::Pause);
         e.tick();
         assert!(!h.snapshot().playing);
-        assert!(!e.is_stopped(), "pause must not stop the engine");
+        assert!(!e.is_shutdown(), "pause must not shut the engine down");
     }
 
     #[test]
-    fn stop_ends_the_loop() {
+    fn shutdown_ends_the_loop() {
         let (mut e, h) = Engine::new(None, 3);
-        h.send(Command::Stop);
+        h.send(Command::Shutdown);
         e.tick();
-        assert!(e.is_stopped());
+        assert!(e.is_shutdown());
+    }
+
+    /// The two-state model: pausing must not drain or halt the producers.
+    #[test]
+    fn pausing_keeps_the_producers_running() {
+        let (mut e, h) = Engine::new(None, 3);
+        h.send(Command::Pause);
+        for _ in 0..3 {
+            e.tick();
+        }
+        assert!(!h.snapshot().playing);
+        assert!(!e.is_shutdown(), "pause is a playback state, not a shutdown");
     }
 
     #[test]
@@ -350,7 +374,7 @@ mod tests {
         let (mut e, h) = Engine::new(None, 3);
         drop(h);
         e.tick();
-        assert!(e.is_stopped(), "a vanished controller must not leave it running");
+        assert!(e.is_shutdown(), "a vanished controller must not leave it running");
     }
 
     #[test]
@@ -361,7 +385,7 @@ mod tests {
         e.tick();
         assert_eq!(h.snapshot().queue_len, 0, "bad passage must leave the queue");
         assert_eq!(h.snapshot().active_streams, 0, "and must not become live");
-        assert!(!e.is_stopped(), "and must not stop playback");
+        assert!(!e.is_shutdown(), "and must not end playback");
     }
 
     #[test]
