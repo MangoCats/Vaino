@@ -35,11 +35,15 @@ impl std::fmt::Display for DbError {
 
 /// The one place the passage/file join is written. Every loader below selects
 /// these columns in this order, so `row_to_entry` can stay a single function.
-const SELECT: &str = "SELECT p.passage_id, f.path, p.start_ms, p.end_ms, \
-                      p.lead_in_ms, p.lead_out_ms, p.gain_db \
-                      FROM passages p JOIN files f USING (file_id)";
+/// Kept as columns and source separately so the Program Director can select
+/// these columns *plus its own* and still map the row with [`row_to_entry`].
+/// A second hand-written copy of this join would be a second place to get the
+/// fade columns wrong.
+pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, \
+                               p.lead_in_ms, p.lead_out_ms, p.gain_db";
+pub(crate) const FROM: &str = "FROM passages p JOIN files f USING (file_id)";
 
-fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
+pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
     Ok(QueueEntry {
         passage_id: row.get(0)?,
         path: PathBuf::from(row.get::<_, String>(1)?),
@@ -65,19 +69,26 @@ impl Library {
 
     pub fn passage(&self, passage_id: i64) -> Result<QueueEntry, DbError> {
         self.conn
-            .query_row(&format!("{SELECT} WHERE p.passage_id = ?1"), [passage_id], row_to_entry)
+            .query_row(&format!("SELECT {COLS} {FROM} WHERE p.passage_id = ?1"), [passage_id], row_to_entry)
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
     /// Radio passages in random order — a stand-in until the Program Director
     /// is wired in `[SPEC009]`. Radio only, per `[REQ-PD-120]`.
     pub fn random_radio(&self, limit: usize) -> Result<Vec<QueueEntry>, DbError> {
-        let sql = format!("{SELECT} WHERE p.kind = 'radio' ORDER BY RANDOM() LIMIT ?1");
+        let sql = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio' ORDER BY RANDOM() LIMIT ?1");
         let mut stmt = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
         let rows = stmt
             .query_map([limit as i64], row_to_entry)
             .map_err(|e| DbError::Query(e.to_string()))?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Load the Program Director from this same library `[SPEC009]`.
+    /// Keeps the connection private -- selection reads the library, it does
+    /// not get its own handle on the file.
+    pub fn director(&self) -> Result<crate::director::library::Director, DbError> {
+        crate::director::library::Director::load(&self.conn)
     }
 
     pub fn count_radio(&self) -> Result<i64, DbError> {

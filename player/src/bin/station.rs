@@ -1,8 +1,8 @@
 //! Play passages from `vaino.db` on the terminal — the headless sibling of
 //! `vaino`, useful where a browser is not.
 //!
-//! Selection is random radio passages for now; the Program Director `[SPEC009]`
-//! replaces that without touching anything below.
+//! Selection is the Program Director `[SPEC009]`, Stage A -- frequency alone,
+//! until flavor distance lands and stages B and C can shape the pool.
 //!
 //! Usage:  station <vaino.db> [count] [--list]
 
@@ -53,6 +53,19 @@ fn main() {
             }
         }
     };
+
+    // Why the pool is the size it is [SPEC-DIR-190] -- where a station that has
+    // gone quiet is diagnosed. Taken BEFORE priming, deliberately: queueing
+    // updates the Director's history, so a census afterwards would describe the
+    // pool minus what was just queued, which is a different question.
+    if let Some(c) = session.census() {
+        println!("pool: {} eligible, total weight {:.1}", c.eligible, c.total_weight);
+        println!("      blocked: {} artist, {} track, {} related | {} under min weight, {} filtered",
+                 c.artist_blocked, c.track_blocked, c.related_blocked,
+                 c.below_min_weight, c.filtered);
+    } else {
+        println!("pool: program director unavailable; random selection");
+    }
 
     let (mut engine, handle) = Engine::new(out, count);
     session.prime(&mut engine);

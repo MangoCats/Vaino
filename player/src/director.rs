@@ -14,3 +14,4 @@
 //! `[SPEC-FD-040]`, and D needs a settled pool size `[SPEC-DIR-200]`.
 
 pub mod frequency;
+pub mod library;

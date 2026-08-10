@@ -8,7 +8,15 @@
 use std::path::Path;
 
 use crate::db::{DbError, Library, PlayerStore};
+use crate::director::library::{Director, Rng};
 use crate::engine::Engine;
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 pub struct Session {
     pub lib: Library,
@@ -17,6 +25,8 @@ pub struct Session {
     pub resume_ms: u64,
     resume_id: Option<i64>,
     depth: usize,
+    director: Option<Director>,
+    rng: Rng,
 }
 
 impl Session {
@@ -33,7 +43,24 @@ impl Session {
             Some((Some(id), pos, _)) => (Some(id), pos),
             _ => (None, 0),
         };
-        Ok(Self { lib, store, resume_ms, resume_id, depth })
+        // Selection degrades rather than fails: a library without the Program
+        // Director's tables still plays, just uniformly at random.
+        let director = match lib.director() {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("program director unavailable ({e}); selecting at random");
+                None
+            }
+        };
+        Ok(Self {
+            lib,
+            store,
+            resume_ms,
+            resume_id,
+            depth,
+            director,
+            rng: Rng::from_clock(),
+        })
     }
 
     /// Hand the engine its store, its resume offset, and a full queue.
@@ -58,15 +85,46 @@ impl Session {
     /// Top the queue back up to `depth`. Called every tick in a continuous
     /// station; a no-op when the queue is already full, so it is cheap enough
     /// to call unconditionally rather than guessing when it is needed.
-    pub fn refill(&self, engine: &mut Engine) {
+    ///
+    /// Picks one at a time, telling the Director about each as it goes. Asking
+    /// for five at once would weigh all five against the same stale history and
+    /// could queue five tracks by one artist `[SPEC-DIR-115]`.
+    pub fn refill(&mut self, engine: &mut Engine) {
         let short = engine.shortfall();
         if short == 0 {
             return;
         }
-        match self.lib.random_radio(short) {
-            Ok(entries) => entries.into_iter().for_each(|e| engine.enqueue(e)),
-            Err(e) => eprintln!("refill: {e}"),
+        let now = unix_now();
+        let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
+        let mut chosen: Vec<i64> = queued;
+
+        if let Some(d) = &mut self.director {
+            for _ in 0..short {
+                let Some(entry) = d.choose_excluding(now, &mut self.rng, &chosen) else {
+                    // Everything eligible is blocked. Falling back keeps the
+                    // radio playing, which [REQ-PD-100] requires; silence would
+                    // be a worse answer than a repeat.
+                    break;
+                };
+                d.note_queued(entry.passage_id, now);
+                chosen.push(entry.passage_id);
+                engine.enqueue(entry);
+            }
         }
+
+        let still_short = engine.shortfall();
+        if still_short > 0 {
+            match self.lib.random_radio(still_short) {
+                Ok(entries) => entries.into_iter().for_each(|e| engine.enqueue(e)),
+                Err(e) => eprintln!("refill: {e}"),
+            }
+        }
+    }
+
+    /// How the pool looks right now — for the panel, and for diagnosing a
+    /// station that has gone quiet `[SPEC-DIR-190]`.
+    pub fn census(&self) -> Option<crate::director::library::Census> {
+        self.director.as_ref().map(|d| d.census(unix_now()))
     }
 
     pub fn depth(&self) -> usize {
