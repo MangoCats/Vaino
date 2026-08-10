@@ -12,6 +12,7 @@
 
 pub mod db;
 pub mod decoder;
+pub mod engine;
 pub mod fade;
 pub mod mixer;
 pub mod output;

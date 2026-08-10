@@ -8,8 +8,13 @@
 
 use std::path::PathBuf;
 
+use std::time::{Duration, Instant};
+
 use vaino_player::db::Library;
+use vaino_player::engine::{Command, Engine};
+use vaino_player::output::Output;
 use vaino_player::queue::{overlap_ms, Queue};
+use vaino_player::BUFFER_FRAMES;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -55,5 +60,49 @@ fn main() {
     if list_only {
         return;
     }
-    println!("\n(playback wiring lands with the engine loop; --list shows the schedule)");
+    // Real device unless asked otherwise. A null sink cannot detect a
+    // sample-rate fault [REQ-HW-147], so it must be opt-in, never the default.
+    let out = if std::env::var("VAINO_NULL_OUTPUT").is_ok() {
+        println!("\noutput: null sink");
+        None
+    } else {
+        match Output::open(BUFFER_FRAMES * 2) {
+            Ok(o) => {
+                println!("\noutput: {} @ {} Hz, {} ch", o.device_name, o.sample_rate, o.channels);
+                Some(o)
+            }
+            Err(e) => {
+                eprintln!("\nno audio device ({e}); using null sink");
+                None
+            }
+        }
+    };
+
+    let (mut engine, handle) = Engine::new(out, count);
+    entries.iter().for_each(|e| engine.enqueue(e.clone()));
+    handle.send(Command::Play);
+
+    let started = Instant::now();
+    let mut last_id = -1i64;
+    while !engine.is_stopped() {
+        let submitted = engine.tick();
+        let s = handle.snapshot();
+        if let Some(c) = &s.current {
+            if c.passage_id != last_id {
+                last_id = c.passage_id;
+                println!(">> {}", c.path.file_name().unwrap_or_default().to_string_lossy());
+            }
+        }
+        if s.is_idle() {
+            break;
+        }
+        // Without a device there is no back-pressure, so pace the loop rather
+        // than spinning a core flat out.
+        if submitted == 0 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let s = handle.snapshot();
+    println!("\nfinished in {:.1}s | underrun samples: {}",
+             started.elapsed().as_secs_f64(), s.underrun_samples);
 }

@@ -166,6 +166,11 @@ impl Output {
         self.state.lock().map(|mut s| s.ring.write(samples)).unwrap_or(0)
     }
 
+    /// Samples submitted but not yet consumed by the device.
+    pub fn buffered(&self) -> usize {
+        self.state.lock().map(|s| s.ring.len()).unwrap_or(0)
+    }
+
     /// Names of available output devices, for diagnosing a failed match.
     pub fn list_devices() -> Vec<String> {
         cpal::default_host()
