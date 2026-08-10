@@ -161,7 +161,35 @@ remove → fixlength → remove → enumerate → {select|normalize|remove}
 
 **Two corrections to `[GDE-FEX-065]` above.** There is **no PCA stage** in any of the 18 — the pipeline was described as `remove → select → normalize → PCA → SVM` and the PCA does not exist. And the descriptor names are stored in full (`.lowlevel.silence_rate_20dB.max`, `.lowlevel.spectral_decrease.dmean`, …), matching the extractor's JSON keys exactly, so the `remove`/`select` steps need no guessing at all.
 
-What remains is reconstructing the libsvm model — support vectors and coefficients — which is the bulk of each file (0.7–24 MB). That is bounded work against a known format, and it is **exactly verifiable**: 658 AcousticBrainz lowlevel JSONs are on disk beside their published highlevel outputs, so the reimplementation can be checked against the reference on its own inputs `[GDE-FEX-090]`.
+#### `[GDE-FEX-068]` The SVM models need no reverse engineering — they are libsvm text
+
+The part that looked hardest is not serialised at all. Gaia stores each model under a `modelData` parameter as **the contents of a libsvm model file**, in the documented text format:
+
+```
+svm_type c_svc      kernel_type rbf     gamma 0.000488281
+nr_class 2          total_sv 76         rho 2.52051
+label 1 0           probA -3.10782      probB 0.304241
+nr_sv 36 40
+SV
+245.3712498333288 1:0.45952198 2:0.51523113 …
+```
+
+All 18 extract cleanly, and **their class counts independently confirm they are the right models** — matching `[SPEC-FD-010]`'s table exactly:
+
+| Classifier | classes | SVs | | Classifier | classes | SVs |
+| :--- | ---: | ---: | :-- | :--- | ---: | ---: |
+| `genre_dortmund` | 9 | 1,457 | | `moods_mirex` | 5 | 240 |
+| `genre_tzanetakis` | 10 | 762 | | `genre_electronic` | 5 | 188 |
+| `ismir04_rhythm` | 10 | 608 | | 12 binaries | 2 | 68–1,569 |
+| `genre_rosamerica` | 8 | 329 | | | | |
+
+Every model carries `probA`/`probB`, so the 0–1 values AcousticBrainz publishes are libsvm's Platt-scaled probability estimates — reproducible from the stored coefficients rather than needing to be inferred.
+
+**One trap:** `danceability` uses a **polynomial** kernel while the other seventeen use RBF, and its `.param` file says RBF. Trust the model, not the parameter file.
+
+Support-vector counts are small (68–1,569), so prediction costs nothing next to the ~27 s extraction that precedes it.
+
+What remains for route 2 is applying the chain: the `remove`/`select` descriptor lists (already legible), the `normalize` and `cleaner` coefficients, and libsvm RBF/polynomial prediction with pairwise coupling for the multi-class cases. It is **exactly verifiable**: 658 AcousticBrainz lowlevel JSONs are on disk beside their published highlevel outputs, so the reimplementation can be checked against the reference on its own inputs `[GDE-FEX-090]`.
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
 

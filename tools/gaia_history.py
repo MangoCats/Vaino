@@ -110,6 +110,38 @@ def parse(path: Path, verbose: bool = False) -> dict:
     return info
 
 
+def extract_svm_model(path: Path) -> str | None:
+    """The libsvm model, as text.
+
+    Gaia stores it under the `modelData` parameter as the *contents of a libsvm
+    model file* — the documented text format, not a bespoke serialisation. So
+    the hardest-looking part of route 2 needs no reverse engineering at all:
+    find it and read forward while the bytes stay printable.
+    """
+    d = path.read_bytes()
+    i = d.find(b"svm_type")
+    if i < 0:
+        return None
+    j = i
+    n = len(d)
+    while j < n and (32 <= d[j] < 127 or d[j] in (9, 10, 13)):
+        j += 1
+    return d[i:j].decode("ascii")
+
+
+def svm_summary(model: str) -> dict:
+    """Header fields of a libsvm model. Everything after `SV` is data."""
+    out: dict = {}
+    for line in model.splitlines():
+        if line.startswith("SV"):
+            break
+        parts = line.split()
+        if len(parts) >= 2:
+            out[parts[0]] = " ".join(parts[1:])
+    out["sv_lines"] = sum(1 for _ in model.splitlines()) - len(out) - 1
+    return out
+
+
 KNOWN = {
     "remove",
     "select",
