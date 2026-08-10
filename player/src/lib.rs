@@ -13,6 +13,7 @@
 pub mod decoder;
 pub mod fade;
 pub mod mixer;
+pub mod output;
 
 /// Frames of audio buffered per passage. 15 s at 44.1 kHz.
 ///

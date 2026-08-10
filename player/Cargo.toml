@@ -8,10 +8,15 @@ license = "MIT"
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
 rubato = "0.15"
+cpal = "0.15"
 
 [[bin]]
 name = "memcheck"
 path = "src/bin/memcheck.rs"
+
+[[bin]]
+name = "play"
+path = "src/bin/play.rs"
 
 [profile.release]
 opt-level = 3

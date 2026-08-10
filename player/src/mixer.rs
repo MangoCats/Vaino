@@ -121,42 +121,33 @@ impl Stream {
     }
 }
 
-/// Sums active streams into the output block.
+/// Sum active streams into `out`, returning how many samples had a contributor.
+///
+/// A free function, not a struct: the mixer needs no state, and making it own
+/// its streams forced callers to hand ownership away just to mix -- which made
+/// feeding a decoder into an already-mixing stream impossible. Streams stay
+/// with whoever is filling them; mixing borrows them for a block.
 ///
 /// Holds no gain, no curves and no timing policy: those belong to the fader and
-/// the queue respectively. Keeping this dumb is what makes crossfade behaviour
-/// testable in one place.
-#[derive(Default)]
-pub struct Mixer {
-    pub streams: Vec<Stream>,
+/// the queue. Keeping it this dumb is what makes crossfade testable in one place.
+/// Takes any iterator of `&mut Stream` rather than a slice, so callers that
+/// keep a stream beside its decoder can pass `.iter_mut().map(|(_, s)| s)`
+/// instead of shuffling ownership to satisfy the signature.
+pub fn mix<'a, I>(streams: I, out: &mut [f32]) -> usize
+where
+    I: IntoIterator<Item = &'a mut Stream>,
+{
+    out.iter_mut().for_each(|s| *s = 0.0);
+    let mut filled = 0;
+    for s in streams {
+        filled = filled.max(s.ring.mix_into(out));
+    }
+    filled
 }
 
-impl Mixer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn add(&mut self, s: Stream) {
-        self.streams.push(s);
-    }
-
-    /// Fill `out` with the sum of all streams. Returns the number of samples
-    /// that had at least one contributor; the remainder is left silent.
-    ///
-    /// Drops exhausted streams, so an idle mixer holds nothing.
-    pub fn fill(&mut self, out: &mut [f32]) -> usize {
-        out.iter_mut().for_each(|s| *s = 0.0);
-        let mut filled = 0;
-        for s in &mut self.streams {
-            filled = filled.max(s.ring.mix_into(out));
-        }
-        self.streams.retain(|s| !s.is_exhausted());
-        filled
-    }
-
-    pub fn active(&self) -> usize {
-        self.streams.len()
-    }
+/// Drop streams that have finished and drained.
+pub fn retain_active(streams: &mut Vec<Stream>) {
+    streams.retain(|s| !s.is_exhausted());
 }
 
 #[cfg(test)]
@@ -187,30 +178,31 @@ mod tests {
     }
 
     #[test]
-    fn mixer_sums_two_streams() {
-        let mut m = Mixer::new();
-        for v in [0.25f32, 0.5] {
-            let mut s = Stream::new(16, 2, Fade::none());
-            s.push(&mut vec![v; 8]);
-            s.finished = true;
-            m.add(s);
-        }
+    fn mix_sums_two_streams() {
+        let mut streams: Vec<Stream> = [0.25f32, 0.5]
+            .iter()
+            .map(|v| {
+                let mut s = Stream::new(16, 2, Fade::none());
+                s.push(&mut vec![*v; 8]);
+                s.finished = true;
+                s
+            })
+            .collect();
         let mut out = [0.0; 8];
-        assert_eq!(m.fill(&mut out), 8);
+        assert_eq!(mix(streams.iter_mut(), &mut out), 8);
         assert!(out.iter().all(|x| (*x - 0.75).abs() < 1e-6), "got {out:?}");
     }
 
     #[test]
     fn exhausted_streams_are_dropped() {
-        let mut m = Mixer::new();
         let mut s = Stream::new(8, 2, Fade::none());
         s.push(&mut vec![1.0; 4]);
         s.finished = true;
-        m.add(s);
-        assert_eq!(m.active(), 1);
+        let mut streams = vec![s];
         let mut out = [0.0; 8];
-        m.fill(&mut out);
-        assert_eq!(m.active(), 0, "drained stream must not linger");
+        mix(streams.iter_mut(), &mut out);
+        retain_active(&mut streams);
+        assert!(streams.is_empty(), "drained stream must not linger");
     }
 
     #[test]
@@ -226,9 +218,8 @@ mod tests {
 
     #[test]
     fn silence_where_no_stream_contributes() {
-        let mut m = Mixer::new();
         let mut out = [9.9; 4];
-        assert_eq!(m.fill(&mut out), 0);
+        assert_eq!(mix(std::iter::empty(), &mut out), 0);
         assert!(out.iter().all(|s| *s == 0.0), "must clear, not leave stale audio");
     }
 }
