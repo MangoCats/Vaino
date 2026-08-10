@@ -74,6 +74,10 @@ CREATE INDEX passages_file ON passages(file_id);
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 ```
 
+**`[SPEC-SC-043]` Lead durations are normally milliseconds, deliberately.** Across the migrated library the lead-in median is **5 ms** and the lead-out median **946 ms**. The ramps exist primarily to mask the short, occasionally loud artifacts at a track's start and end, which needs only a few milliseconds; audible crossfade is the uncommon case, wanted where a track genuinely fades slowly and the alternative is a long near-silent gap. Near-zero overlap `[SPEC-DIR-*]` is therefore the intended behaviour, and these values should not be inflated to "enable crossfading".
+
+Revisiting them is a future editing-UI question `[SPEC-SA-080]`, not a data defect.
+
 **`[SPEC-SC-045]` `boundary_src` distinguishing `manual` is what makes override durable** `[SPEC-SA-080]`. Recomputation must never overwrite a `manual` row; conflict resolution ranks provenance before recency `[SPEC-DF-070]`.
 
 **`[SPEC-SC-050]` Passage → recording is many-to-many with weights**, because a passage may contain a medley and a recording may appear in many files. Unidentified passages simply have no rows here — legal, and playable `[ENT-MP-035]`.

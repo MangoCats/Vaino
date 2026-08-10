@@ -49,7 +49,11 @@ else
 fi
 
 echo "== C: host (Windows or Linux) =="
-( cd "$ROOT/player" && cargo test --release 2>&1 | grep -E "^test result: ok\.|FAILED" | head -1 ) || fail=$((fail+1))
+# `env -u CC`: a globally-set CC (e.g. CC=C:\mingw64in\gcc.exe) makes the cc
+# crate compile bundled SQLite with MinGW while rustc links with MSVC, which
+# fails on ___chkstk_ms. Unset, the cc crate finds MSVC itself and it builds.
+# Cleared here so the result does not depend on the developer's environment.
+( cd "$ROOT/player" && env -u CC cargo test --release 2>&1     | grep -E "^test result: ok\.|FAILED" | head -1 ) || fail=$((fail+1))
 
 echo
 if [ "$fail" -eq 0 ]; then

@@ -9,10 +9,17 @@ license = "MIT"
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
 rubato = "0.15"
 cpal = "0.15"
+# bundled: compiles SQLite from source rather than needing libsqlite3-dev for
+# every target. Costs build time, buys a working cross-compile [REQ-HW-145].
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [[bin]]
 name = "memcheck"
 path = "src/bin/memcheck.rs"
+
+[[bin]]
+name = "station"
+path = "src/bin/station.rs"
 
 [[bin]]
 name = "play"

@@ -10,6 +10,7 @@
 //! (~15 s, ~5.3 MB at 44.1 kHz stereo f32) `[GDE-ARC-050]`, so memory is a
 //! function of how many passages are open, never of how long they are.
 
+pub mod db;
 pub mod decoder;
 pub mod fade;
 pub mod mixer;

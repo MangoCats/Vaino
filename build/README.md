@@ -31,3 +31,30 @@ The Pi currently running MuLibPlay (`bose.lan`) is **armv7l, 32-bit**, not aarch
 If that machine is the deployment target rather than a 64-bit Pi Zero 2W, the
 triple is `armv7-unknown-linux-gnueabihf` and needs its own probe -- the same
 Dockerfile pattern applies with `gcc-arm-linux-gnueabihf` and `libasound2-dev:armhf`.
+
+
+## Host builds on Windows
+
+If `CC` is set globally to a MinGW compiler, bundled SQLite is compiled with
+MinGW while rustc links with MSVC, and the build fails on an unresolved
+`___chkstk_ms`. With `CC` unset the `cc` crate locates MSVC itself:
+
+```
+env -u CC cargo test --release
+```
+
+`build/verify-targets.sh` clears it, so verification does not depend on the
+developer's environment. Nothing is wrong with the MinGW toolchain — it is
+simply the wrong compiler for an `x86_64-pc-windows-msvc` target.
+
+## Verifying every target
+
+```
+sh build/verify-targets.sh
+```
+
+Runs the suite on Linux x86_64, Linux aarch64 (cross-compiled then executed
+under emulation) and the host. It deliberately reports what it cannot cover:
+playback through a real audio device. A null sink reports no device rate, so it
+cannot detect a sample-rate fault -- which is exactly how unresampled playback
+survived until a real device was used `[REQ-HW-147]`.
