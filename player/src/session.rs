@@ -5,10 +5,12 @@
 //! once here so `station` and `vaino` cannot drift apart on what "start
 //! playing" means — they differ only in whether a browser is watching.
 
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use crate::db::{DbError, Library, PlayerStore};
-use crate::director::library::{Director, Rng};
+use crate::director::library::{Director, Explanation, Rng};
 use crate::engine::Engine;
 
 fn unix_now() -> i64 {
@@ -16,6 +18,42 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Why each recently chosen passage was chosen, shared with the web UI.
+///
+/// The engine thread writes, the server reads. Kept in memory rather than read
+/// back from the database on every push: the answer is already in hand at the
+/// moment of choosing, and a request path that re-queries for it would be a
+/// second source of truth for the same fact.
+pub type Explanations = Arc<Mutex<ExplanationLog>>;
+
+/// Bounded on purpose. Only the queue and what is playing can be asked about,
+/// so a handful is plenty and an unbounded map would grow for the life of the
+/// process.
+const KEEP_EXPLANATIONS: usize = 32;
+
+#[derive(Default)]
+pub struct ExplanationLog {
+    by_passage: HashMap<i64, Explanation>,
+    order: VecDeque<i64>,
+}
+
+impl ExplanationLog {
+    pub fn get(&self, passage_id: i64) -> Option<&Explanation> {
+        self.by_passage.get(&passage_id)
+    }
+    fn insert(&mut self, why: Explanation) {
+        let id = why.passage_id;
+        if self.by_passage.insert(id, why).is_none() {
+            self.order.push_back(id);
+        }
+        while self.order.len() > KEEP_EXPLANATIONS {
+            if let Some(old) = self.order.pop_front() {
+                self.by_passage.remove(&old);
+            }
+        }
+    }
 }
 
 pub struct Session {
@@ -27,6 +65,11 @@ pub struct Session {
     depth: usize,
     director: Option<Director>,
     rng: Rng,
+    /// A second connection, because `prime` hands the resume store to the
+    /// engine. Two handles on one SQLite file is the cheaper answer than
+    /// sharing one across a thread boundary for a write this rare.
+    decisions: Option<PlayerStore>,
+    explanations: Explanations,
 }
 
 impl Session {
@@ -60,6 +103,8 @@ impl Session {
             depth,
             director,
             rng: Rng::from_clock(),
+            decisions: PlayerStore::open(db).ok(),
+            explanations: Explanations::default(),
         })
     }
 
@@ -100,14 +145,31 @@ impl Session {
 
         if let Some(d) = &mut self.director {
             for _ in 0..short {
-                let Some(entry) = d.choose_excluding(now, &mut self.rng, &chosen) else {
+                let Some(decision) = d.decide(now, &mut self.rng, &chosen) else {
                     // Everything eligible is blocked. Falling back keeps the
                     // radio playing, which [REQ-PD-100] requires; silence would
                     // be a worse answer than a repeat.
                     break;
                 };
+                let entry = decision.entry;
                 d.note_queued(entry.passage_id, now);
                 chosen.push(entry.passage_id);
+
+                // Recording the reasoning must never be able to stop the
+                // music, so both sinks are best-effort [SPEC-DIR-190].
+                if let Some(store) = &self.decisions {
+                    match serde_json::to_string(&decision.why) {
+                        Ok(json) => {
+                            if let Err(e) = store.record_decision(now, entry.passage_id, &json) {
+                                eprintln!("record decision: {e}");
+                            }
+                        }
+                        Err(e) => eprintln!("encode decision: {e}"),
+                    }
+                }
+                if let Ok(mut log) = self.explanations.lock() {
+                    log.insert(decision.why);
+                }
                 engine.enqueue(entry);
             }
         }
@@ -125,6 +187,11 @@ impl Session {
     /// station that has gone quiet `[SPEC-DIR-190]`.
     pub fn census(&self) -> Option<crate::director::library::Census> {
         self.director.as_ref().map(|d| d.census(unix_now()))
+    }
+
+    /// Share the reasoning with a UI. Cloning the handle, not the data.
+    pub fn explanations(&self) -> Explanations {
+        Arc::clone(&self.explanations)
     }
 
     pub fn depth(&self) -> usize {

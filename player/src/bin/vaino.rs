@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use vaino_player::engine::Engine;
 use vaino_player::output::Output;
-use vaino_player::session::Session;
+use vaino_player::session::{Explanations, Session};
 use vaino_player::web;
 use vaino_player::BUFFER_FRAMES;
 
@@ -45,13 +45,14 @@ async fn main() {
         .spawn(move || engine_thread(db, depth, tx))
         .expect("spawn engine thread");
 
-    let handle = match rx.recv() {
-        Ok(h) => Arc::new(h),
+    let (handle, why) = match rx.recv() {
+        Ok((h, why)) => (Arc::new(h), why),
         Err(_) => {
             eprintln!("engine failed to start");
             std::process::exit(1);
         }
     };
+    let ui = web::Ui { handle, why };
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port as u16));
     let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -62,7 +63,7 @@ async fn main() {
         }
     };
     println!("web UI on http://localhost:{port}/");
-    if let Err(e) = axum::serve(listener, web::router(handle)).await {
+    if let Err(e) = axum::serve(listener, web::router(ui)).await {
         eprintln!("server: {e}");
     }
 }
@@ -70,7 +71,7 @@ async fn main() {
 fn engine_thread(
     db: PathBuf,
     depth: usize,
-    tx: std::sync::mpsc::SyncSender<vaino_player::engine::EngineHandle>,
+    tx: std::sync::mpsc::SyncSender<(vaino_player::engine::EngineHandle, Explanations)>,
 ) {
     let mut session = match Session::open(&db, depth) {
         Ok(s) => s,
@@ -96,7 +97,7 @@ fn engine_thread(
 
     let (mut engine, handle) = Engine::new(out, session.depth());
     session.prime(&mut engine);
-    if tx.send(handle).is_err() {
+    if tx.send((handle, session.explanations())).is_err() {
         return; // nobody left to control it
     }
 

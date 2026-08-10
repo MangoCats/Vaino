@@ -66,7 +66,9 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 
 **`[REQ-VIS-100]` Why this track?** Every automatic selection exposes its full weight decomposition — artist weight, rotation block state, position on the recovery ramp, occasion multiplier, length bonus, distance to each seed, final rank, roulette position — **and the runners-up that lost**.
 
-> **Status:** blocked on the Program Director `[SPEC009]`, which is what produces the decomposition. Selection is currently random, so there is nothing truthful to show. The web UI carries the panel and says so; the wire format carries `why` as an explicit null rather than omitting it, so the panel reports "not yet available" instead of silently rendering nothing. Stubbing plausible-looking weights here would be the one failure mode this requirement exists to prevent.
+> **Status: the frequency half is delivered.** Every Director-chosen passage carries its full Stage-A decomposition — each term separately, never just the product — plus the five heaviest runners-up it beat, its share of the pool, and the pool's size and total weight. Written durably to `selection_decisions` and shown in the web UI. Terms sitting at ×1.0000 are dimmed rather than hidden: "this did not apply" is part of the answer.
+>
+> **Still missing:** distance to each seed, Taste effect, flow distance and roulette rank, all of which belong to stages B–D and need flavor distance `[SPEC-FD-040]`. Each stored record states which stages ran, so a decision recorded now cannot later be mistaken for a shaped one. A passage the Director did not choose — a resumed one, or one queued before the log began — reports that plainly rather than borrowing another passage's reasoning.
 
 **`[REQ-VIS-110]` How was this identified?** Every ingest decision is a durable record: which stage matched, at what confidence, which candidates were rejected `[SPEC-SA-085]`. This is what converts an undocumented ritual `[GDE-BMK-050]` into a reviewable process.
 

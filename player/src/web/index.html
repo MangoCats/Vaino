@@ -29,6 +29,17 @@
   h2 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
        color: var(--dim); font-weight: 600; margin: 0 0 .6rem; }
   #why { font-size: .875rem; color: var(--dim); }
+  h3 { font-size: .8125rem; color: var(--dim); font-weight: 600; margin: 1.1rem 0 .4rem; }
+  #terms { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  #terms td { padding: .22rem 0; border-bottom: 1px solid var(--line); }
+  #terms td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  #terms tr.total td { font-weight: 600; border-bottom: none; color: var(--fg); }
+  #terms td:first-child { color: var(--dim); }
+  #terms .inert td { opacity: .45; }
+  #losers ol { margin: 0; padding-left: 1.2rem; font-size: .875rem; color: var(--dim); }
+  #losers li { padding: .12rem 0; }
+  #losers .w { font-variant-numeric: tabular-nums; opacity: .75; }
+  #stages { font-size: .75rem; color: var(--dim); opacity: .7; margin: 1rem 0 0; }
   #link { opacity: .55; font-size: .8125rem; margin-top: 2rem; }
 </style>
 
@@ -52,10 +63,15 @@
 
   <section>
     <h2>Why this track?</h2>
-    <div id="why">
-      Selection is random until the Program Director is implemented, so there is
-      no decomposition to show yet.
+    <div id="why">Waiting for a selection…</div>
+    <table id="terms" hidden>
+      <tbody></tbody>
+    </table>
+    <div id="losers" hidden>
+      <h3>It beat</h3>
+      <ol></ol>
     </div>
+    <p id="stages"></p>
   </section>
 
   <div id="link">Connecting…</div>
@@ -82,7 +98,65 @@
     $('state').textContent = s.playing ? 'playing' : 'paused';
     $('queue').textContent = s.queue_len;
     $('under').textContent = s.underrun_samples;
-    if (s.why) $('why').textContent = JSON.stringify(s.why);
+    renderWhy(s.why);
+  }
+
+  // Each term is shown separately, never just the product: a single number
+  // cannot be argued with, and arguing with it is the point [SPEC-DIR-190].
+  // Terms sitting at 1.0 did nothing, and are dimmed rather than hidden --
+  // "this did not apply" is itself part of the answer.
+  const TERMS = [
+    ['Artist recovery',  w => w.artist_weight],
+    ['Track restraint',  w => w.track_restraint],
+    ['Track recovery',   w => w.track_ramp],
+    ['Related damping',  w => w.related_damping],
+    ['Length bonus',     w => w.length_bonus],
+    ['Occasion',         w => w.occasion],
+  ];
+
+  function renderWhy(w) {
+    const terms = $('terms'), losers = $('losers');
+    if (!w) {
+      $('why').textContent =
+        'This passage was not chosen by the Program Director — it was resumed, ' +
+        'or queued before the log began.';
+      terms.hidden = losers.hidden = true;
+      $('stages').textContent = '';
+      return;
+    }
+    $('why').textContent =
+      `Weight ${w.weight.toFixed(3)} of ${w.pool_weight.toFixed(1)} across ` +
+      `${w.pool_size.toLocaleString()} eligible passages — a ` +
+      `${w.share_pct.toFixed(2)}% chance of being picked.`;
+
+    const body = terms.querySelector('tbody');
+    body.textContent = '';
+    for (const [label, get] of TERMS) {
+      const v = get(w);
+      const tr = body.insertRow();
+      if (Math.abs(v - 1) < 1e-9) tr.className = 'inert';
+      tr.insertCell().textContent = label;
+      tr.insertCell().textContent = '×' + v.toFixed(4);
+    }
+    const tot = body.insertRow();
+    tot.className = 'total';
+    tot.insertCell().textContent = 'Final weight';
+    tot.insertCell().textContent = w.weight.toFixed(4);
+    terms.hidden = false;
+
+    const ol = losers.querySelector('ol');
+    ol.textContent = '';
+    for (const r of w.runners_up ?? []) {
+      const li = document.createElement('li');
+      li.textContent = r.title + ' ';
+      const span = document.createElement('span');
+      span.className = 'w';
+      span.textContent = `(${r.weight.toFixed(3)})`;
+      li.appendChild(span);
+      ol.appendChild(li);
+    }
+    losers.hidden = ol.children.length === 0;
+    $('stages').textContent = w.stages ?? '';
   }
 
   // Reconnect rather than go stale: the player outlives any one page load,

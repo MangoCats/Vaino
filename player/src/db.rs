@@ -142,6 +142,22 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// The durable record of one selection `[SPEC-DIR-190]`.
+    ///
+    /// `detail` is the full decomposition as JSON. A failure here must never
+    /// stop the music: the record is for explaining a choice afterwards, not
+    /// for making it.
+    pub fn record_decision(&self, at: i64, passage_id: i64, detail: &str) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO selection_decisions (selected_at, passage_id, detail)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![at, passage_id, detail],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// The saved resume point, or `None` on a first run.
     pub fn load(&self) -> Result<Option<(Option<i64>, u64, bool)>, DbError> {
         self.conn

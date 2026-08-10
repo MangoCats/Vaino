@@ -22,6 +22,15 @@ use axum::Router;
 use serde::Serialize;
 
 use crate::engine::{Command, EngineHandle, PlayerState};
+use crate::session::Explanations;
+
+/// What the server needs to answer a request: the control surface, and why the
+/// current passage was chosen.
+#[derive(Clone)]
+pub struct Ui {
+    pub handle: Arc<EngineHandle>,
+    pub why: Explanations,
+}
 
 /// How often a connected browser is sent a snapshot. Fast enough that the
 /// position counter moves smoothly, slow enough to cost nothing on a Pi.
@@ -37,9 +46,10 @@ pub struct Snapshot {
     pub duration_ms: u64,
     pub queue_len: usize,
     pub underrun_samples: u64,
-    /// Absent until the Program Director can explain itself `[REQ-VIS-100]`.
-    /// Present and null, rather than omitted, so the panel can say "not yet
-    /// available" instead of silently rendering nothing.
+    /// The full weight decomposition for what is playing `[REQ-VIS-100]`.
+    /// Null when the passage was not chosen by the Director -- a resumed
+    /// passage, or one queued before the log was populated -- so the panel can
+    /// say so rather than render an explanation that was never computed.
     pub why: Option<serde_json::Value>,
 }
 
@@ -47,13 +57,7 @@ impl From<&PlayerState> for Snapshot {
     fn from(s: &PlayerState) -> Self {
         Snapshot {
             playing: s.playing,
-            title: s.current.as_ref().map(|e| {
-                e.path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            }),
+            title: s.current.as_ref().map(|e| e.title()),
             position_ms: s.position_ms,
             duration_ms: s.current.as_ref().map(|e| e.duration_ms()).unwrap_or(0),
             queue_len: s.queue_len,
@@ -63,28 +67,34 @@ impl From<&PlayerState> for Snapshot {
     }
 }
 
-pub fn router(handle: Arc<EngineHandle>) -> Router {
+pub fn router(ui: Ui) -> Router {
     Router::new()
         .route("/", get(|| async { Html(INDEX) }))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
-        .with_state(handle)
+        .with_state(ui)
 }
 
-async fn ws_upgrade(
-    State(h): State<Arc<EngineHandle>>,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| push_state(socket, h))
+async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| push_state(socket, ui))
+}
+
+/// Attach the reasoning for whatever is playing now.
+fn explain(ui: &Ui, snap: &mut Snapshot, state: &PlayerState) {
+    let Some(id) = state.current.as_ref().map(|e| e.passage_id) else { return };
+    let Ok(log) = ui.why.lock() else { return };
+    snap.why = log.get(id).and_then(|w| serde_json::to_value(w).ok());
 }
 
 /// Push snapshots until the browser goes away. Each is independent, so a
 /// dropped frame costs nothing and a reconnecting client needs no replay.
-async fn push_state(mut socket: WebSocket, h: Arc<EngineHandle>) {
+async fn push_state(mut socket: WebSocket, ui: Ui) {
     let mut tick = tokio::time::interval(PUSH_EVERY);
     loop {
         tick.tick().await;
-        let snap = Snapshot::from(&h.snapshot());
+        let state = ui.handle.snapshot();
+        let mut snap = Snapshot::from(&state);
+        explain(&ui, &mut snap, &state);
         let Ok(text) = serde_json::to_string(&snap) else { continue };
         if socket.send(Message::Text(text)).await.is_err() {
             return; // client gone
@@ -94,7 +104,11 @@ async fn push_state(mut socket: WebSocket, h: Arc<EngineHandle>) {
 
 /// Controls are named rather than numbered so the wire stays readable and an
 /// unknown name is a clean 404 rather than a silently wrong action.
-async fn command(State(h): State<Arc<EngineHandle>>, axum::extract::Path(name): axum::extract::Path<String>) -> StatusCode {
+async fn command(
+    State(ui): State<Ui>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> StatusCode {
+    let h = &ui.handle;
     match name.as_str() {
         "play" => h.send(Command::Play),
         "pause" => h.send(Command::Pause),

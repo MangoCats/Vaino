@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use rusqlite::Connection;
+use serde::Serialize;
 
 use super::frequency::{
     weigh, Candidate, Exclusion, Policy, Related, TimeScale, Tuning, Weighing,
@@ -59,6 +60,55 @@ impl Rng {
         // 53 bits: the most an f64 can represent exactly.
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
+}
+
+/// How many losing candidates the record keeps.
+///
+/// `[SPEC-DIR-190]` asks for "the runners-up that lost". All 8,000 of them is
+/// not an explanation, it is a data dump; the heaviest few are what answer
+/// "why not something else?".
+const RUNNERS_UP: usize = 5;
+
+/// A complete answer to "why this track?" `[REQ-VIS-100]`.
+///
+/// Every term separately, never just the product -- a single number cannot be
+/// argued with, and arguing with it is the point.
+#[derive(Debug, Clone, Serialize)]
+pub struct Explanation {
+    pub passage_id: i64,
+    pub title: String,
+    pub weight: f64,
+    pub artist_weight: f64,
+    pub artist_blocked: bool,
+    pub track_restraint: f64,
+    pub track_ramp: f64,
+    pub related_damping: f64,
+    pub length_bonus: f64,
+    pub occasion: f64,
+    /// Eligible candidates it beat.
+    pub pool_size: usize,
+    pub pool_weight: f64,
+    /// This passage's share of the total weight, as a percentage — the honest
+    /// statement of how likely it was, as opposed to how good it is.
+    pub share_pct: f64,
+    pub runners_up: Vec<RunnerUp>,
+    /// Stages B and C have not run: there is no flavor shaping yet
+    /// `[SPEC-FD-040]`. Stated in the record so a stored decision is not later
+    /// mistaken for a shaped one.
+    pub stages: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RunnerUp {
+    pub passage_id: i64,
+    pub title: String,
+    pub weight: f64,
+}
+
+/// A chosen passage and the reasoning behind it.
+pub struct Decision {
+    pub entry: QueueEntry,
+    pub why: Explanation,
 }
 
 pub struct Director {
@@ -296,7 +346,12 @@ impl Director {
     /// honest increment -- frequency alone already beats uniform random -- and
     /// the seam is exactly where the shaped pool will be inserted.
     pub fn choose(&self, now: i64, rng: &mut Rng) -> Option<QueueEntry> {
-        self.choose_excluding(now, rng, &[])
+        self.decide(now, rng, &[]).map(|d| d.entry)
+    }
+
+    /// As [`Director::decide`], discarding the reasoning.
+    pub fn choose_excluding(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<QueueEntry> {
+        self.decide(now, rng, skip).map(|d| d.entry)
     }
 
     /// As [`Director::choose`], skipping passages already in the queue.
@@ -305,7 +360,7 @@ impl Director {
     /// making it its own rotation block. This is the structural guarantee for
     /// the rest: an unidentified passage has no MBID to block on, and must
     /// still not appear twice in one queue.
-    pub fn choose_excluding(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<QueueEntry> {
+    pub fn decide(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<Decision> {
         let weighed = self.weigh_all(now);
         let live = |(e, w): &(&QueueEntry, Weighing)| {
             w.is_eligible() && !skip.contains(&e.passage_id)
@@ -315,19 +370,57 @@ impl Director {
             return None;
         }
         let mut target = rng.unit() * total;
+        let mut winner: Option<&(&QueueEntry, Weighing)> = None;
         for pair in &weighed {
             if !live(pair) {
                 continue;
             }
-            let (entry, w) = pair;
-            target -= w.weight;
+            target -= pair.1.weight;
             if target <= 0.0 {
-                return Some((*entry).clone());
+                winner = Some(pair);
+                break;
             }
         }
         // Floating-point drift can leave a hair of `target` after the loop.
-        // Returning the last eligible passage is correct, not a fallback.
-        weighed.iter().rev().find(|x| live(x)).map(|(e, _)| (*e).clone())
+        // Taking the last eligible passage is correct, not a fallback.
+        let (entry, w) = winner.or_else(|| weighed.iter().rev().find(|x| live(x)))?;
+
+        // The heaviest losers, which is what "why not something else?" means.
+        let mut rest: Vec<&(&QueueEntry, Weighing)> = weighed
+            .iter()
+            .filter(|x| live(x) && x.0.passage_id != entry.passage_id)
+            .collect();
+        rest.sort_by(|a, b| b.1.weight.partial_cmp(&a.1.weight).unwrap_or(std::cmp::Ordering::Equal));
+
+        let pool_size = weighed.iter().filter(|x| live(x)).count();
+        Some(Decision {
+            entry: (*entry).clone(),
+            why: Explanation {
+                passage_id: entry.passage_id,
+                title: entry.title(),
+                weight: w.weight,
+                artist_weight: w.artist_weight,
+                artist_blocked: w.artist_blocked,
+                track_restraint: w.track_restraint,
+                track_ramp: w.track_ramp,
+                related_damping: w.related_damping,
+                length_bonus: w.length_bonus,
+                occasion: w.occasion,
+                pool_size,
+                pool_weight: total,
+                share_pct: if total > 0.0 { w.weight / total * 100.0 } else { 0.0 },
+                runners_up: rest
+                    .iter()
+                    .take(RUNNERS_UP)
+                    .map(|(e, rw)| RunnerUp {
+                        passage_id: e.passage_id,
+                        title: e.title(),
+                        weight: rw.weight,
+                    })
+                    .collect(),
+                stages: "frequency only; no flavor shaping yet [SPEC-FD-040]",
+            },
+        })
     }
 
     /// Why the pool is the size it is — for the panel, and for diagnosing a
@@ -512,6 +605,38 @@ mod tests {
         c.execute("INSERT INTO listener_settings VALUES (1, 1.0, 0.5, 't')", []).unwrap();
         assert_eq!(Director::load(&c).unwrap().census(NOW).track_blocked, 0,
                    "half the rotation means the block has expired");
+    }
+
+    /// The record must be able to answer "why not something else?", so the
+    /// losers travel with the winner.
+    #[test]
+    fn a_decision_carries_its_decomposition_and_its_losers() {
+        let d = Director::load(&fixture()).unwrap();
+        let dec = d.decide(NOW, &mut Rng::seeded(11), &[]).unwrap();
+        assert_eq!(dec.why.pool_size, 3);
+        assert!((dec.why.pool_weight - 3.0).abs() < 1e-9);
+        assert!((dec.why.share_pct - 33.333).abs() < 0.01, "share {}", dec.why.share_pct);
+        assert_eq!(dec.why.runners_up.len(), 2, "the other two eligible passages");
+        assert!(dec.why.runners_up.iter().all(|r| r.passage_id != dec.why.passage_id),
+                "the winner must not be listed among those it beat");
+        assert!(!dec.why.title.is_empty());
+    }
+
+    /// Runners-up are the HEAVIEST losers, not an arbitrary five.
+    #[test]
+    fn runners_up_are_ordered_by_weight() {
+        let c = fixture();
+        c.execute("INSERT INTO listener_preferences VALUES ('recording','rec-c',NULL,NULL,-1.0)", [])
+            .unwrap();
+        let d = Director::load(&c).unwrap();
+        // rec-c is 10x; whenever it does not win it must head the losers.
+        for seed in 0..20 {
+            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[]).unwrap();
+            if dec.why.passage_id != 3 {
+                assert_eq!(dec.why.runners_up[0].passage_id, 3,
+                           "the heaviest loser must be listed first");
+            }
+        }
     }
 
     #[test]

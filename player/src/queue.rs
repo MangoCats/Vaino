@@ -48,6 +48,16 @@ impl QueueEntry {
     pub fn duration_ms(&self) -> u64 {
         self.end_ms.saturating_sub(self.start_ms)
     }
+
+    /// A human label for this passage.
+    ///
+    /// The filename stem, until Sampo supplies real titles `[SPEC-SA-100]`.
+    /// Here rather than in each display path so the browser, the decision
+    /// record and the terminal all name a passage the same way — and so the
+    /// filesystem path stays inside the process.
+    pub fn title(&self) -> String {
+        self.path.file_stem().unwrap_or_default().to_string_lossy().to_string()
+    }
 }
 
 /// Overlap between two consecutive passages — the whole of SPEC002's timing.
