@@ -60,12 +60,37 @@ if ( eligibleArtists.contains( artistId ) )
 
 The inner declaration shadows the outer, so the multiplication by the artist weight is dead. `eligibleTracks.insert(trackId, weight)` sits inside that inner block. **An artist rotation block still excludes the track — that gate is a map lookup, unaffected — but a partially recovered artist does not damp its tracks at all.** The artist recovery ramp has, in six years of production, done nothing.
 
-Two consequences, and they pull in opposite directions:
+**Resolved: Vaino implements the ramp.** MuLibPlay is a proven baseline, not a ceiling — six years of satisfactory listening shows the *design* is sound, which is not the same as showing every behaviour of the binary is worth keeping. Artist recovery exists so that hearing one track by an artist gently damps the rest until it recovers; that is the intent, and it is better than what ran.
 
-- `[REQ-PD-110]` and the P3 acceptance test require reproducing MuLibPlay's selections. A faithful port must reproduce this, or the test can never pass.
-- The intended behaviour is almost certainly better. Artist recovery exists so that hearing one track by an artist gently damps the rest, and that has never happened.
+The `ArtistCoupling` enum is named for behaviour rather than provenance, because the choice is now Vaino's:
 
-Implemented as an explicit `ArtistCoupling` switch — `AsShipped` and `AsSpecified` — with both pinned by test so neither can drift into the other unnoticed. **Reproduction runs `AsShipped`; the default for listening is a decision to make once reproduction is demonstrated**, alongside `[SPEC-DIR-210]`. Note that the same block contains a second instance of the pattern: related-track recovery damping passes the *primary* track's age rather than the related track's, so it too is largely inert.
+| | Effect | Purpose |
+| :--- | :--- | :--- |
+| **`Damped`** (default) | artist ramp multiplies into the track weight | Vaino's behaviour |
+| `GateOnly` | artist can block, never damps | measuring divergence only `[REQ-PD-110]` |
+
+Both are pinned by test so neither can drift into the other. `GateOnly` is retained to *measure* how far Vaino departs from six years of observed behaviour — diagnostic, never a listening mode and never a gate.
+
+**Measured divergence.** Against the migrated library — 8,079 radio passages, 37,134 plays, 428 artists with history of which 329 carry tuned preferences — evaluated at the instant the play history ends:
+
+| | |
+| :--- | ---: |
+| eligible under `GateOnly` | 2,421 |
+| weight changed by the artist ramp | **1,897 (78.4%)** |
+| median damping factor | **0.179** (≈5.6× suppression) |
+| damping range | 0.0025 – 0.9985 |
+| newly excluded below `min_weight` | 69 (2.9%) |
+
+This is not a marginal correction. On four passages in five the corrected ramp changes the weight, and at the median it suppresses a recently-heard artist more than five-fold — which is precisely the artist spacing the mechanism was designed to provide and has never delivered.
+
+Two cautions on the number. It is a **single-instant snapshot at the end of the history**, the most crowded possible moment, so treat 78.4% as an upper region rather than a steady-state rate. And the same shadowing suppressed artist **restraint** as well as the ramp — separated here, restraint independently affects the same 1,897 passages with a median of 1.0023 but a range of 0.0625–4.4978, so the "much more / never again" knob has been inert at the artist level too. Both are restored by the same fix.
+
+Two consequences to watch:
+
+1. **The artist ramp is now load-bearing, so its defaults are too.** Artist rotation 1.0 and recovery 1.0 `[SPEC-DIR-120]` mean an artist blocks for 10 hours and then damps across the following 10. That second window has never had any effect and has therefore never been tuned by anyone. Treat the artist defaults as unvalidated until observed.
+2. **Damping can now push a weight under `min_weight`**, excluding a passage early in the artist's recovery where it would previously have been eligible at full weight. This slightly extends the effective block. It is a consequence of the fix, not a separate decision.
+
+**Still open:** the same block contains a second instance of the pattern — related-track recovery damping passes the *primary* track's age rather than the related track's, so it too is largely inert. Related recordings are not yet modelled in Stage A; fix it when they are, rather than porting the defect forward.
 
 **`[SPEC-DIR-120]` Defaults matter more than they look.** Only 2,918 of 8,116 MuLibPlay tracks (36%) ever received tuned values `[GDE-BMK-020]`, so most selection runs on defaults:
 

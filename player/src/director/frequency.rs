@@ -63,22 +63,23 @@ impl Tuning {
     }
 }
 
-/// Whether the artist's recovery weight multiplies into the track's.
+/// How far the artist pass reaches into the track weight.
 ///
-/// It reads as an implementation detail and is not one. MuLibPlay's shipped
-/// code declares a second `weight` inside the artist-eligibility block, which
-/// shadows the outer one; the line that multiplies in the artist weight writes
-/// to a variable never read again. So **as shipped, the artist ramp does not
-/// affect the track weight at all** -- an artist blocks, but a partially
-/// recovered artist does not damp. See `[SPEC-DIR-117]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Named for what it does, not where it came from, because the choice is now
+/// Vaino's rather than an inheritance `[SPEC-DIR-117]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ArtistCoupling {
-    /// Reproduce the shipped behaviour, bug included. Required by the P3
-    /// acceptance test `[REQ-PD-110]`: a faithful port must be faithful.
-    AsShipped,
-    /// The documented intent `[SPEC-DIR-115]` step 4: a recovering artist damps
-    /// its tracks. Almost certainly what was meant, never what ran.
-    AsSpecified,
+    /// **Vaino's behaviour.** A partially recovered artist damps its tracks in
+    /// proportion to its own ramp, so hearing one track by an artist gently
+    /// suppresses the rest until the artist recovers `[SPEC-DIR-115]` step 4.
+    #[default]
+    Damped,
+    /// The artist acts only as a gate: it can block, but never damps. This is
+    /// MuLibPlay as shipped -- a variable shadowing meant its artist ramp never
+    /// reached the track weight in six years of production. Retained solely to
+    /// measure how far Vaino diverges from it `[REQ-PD-110]`, never as a
+    /// listening mode.
+    GateOnly,
 }
 
 /// Everything that produced the weight, kept as separate terms.
@@ -194,7 +195,7 @@ pub fn weigh(c: &Candidate, coupling: ArtistCoupling) -> Weighing {
     let length_bonus = length_bonus(c.length_s);
 
     let mut weight = track_restraint * track_ramp * length_bonus * c.occasion;
-    if coupling == ArtistCoupling::AsSpecified {
+    if coupling == ArtistCoupling::Damped {
         weight *= artist_weight;
     }
 
@@ -266,7 +267,7 @@ mod tests {
     /// a fresh library is not uniform random but silently biased.
     #[test]
     fn a_never_played_library_is_uniform() {
-        let w = weigh(&candidate(), ArtistCoupling::AsShipped);
+        let w = weigh(&candidate(), ArtistCoupling::default());
         assert!(w.is_eligible());
         assert!((w.weight - 1.0).abs() < 1e-9, "weight was {}", w.weight);
         assert_eq!(w.track_ramp, 1.0, "no history means no ramp to be on");
@@ -276,14 +277,14 @@ mod tests {
     fn a_recent_play_blocks_the_track() {
         let mut c = candidate();
         c.track_age_s = Some(seconds(DEF_ROTATION_TRK) - 1.0);
-        assert_eq!(weigh(&c, ArtistCoupling::AsShipped).excluded, Some(Exclusion::TrackRotationBlock));
+        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TrackRotationBlock));
     }
 
     #[test]
     fn a_recent_play_by_the_artist_blocks_the_track() {
         let mut c = candidate();
         c.artist_age_s = Some(seconds(DEF_ROTATION_ART) - 1.0);
-        let w = weigh(&c, ArtistCoupling::AsShipped);
+        let w = weigh(&c, ArtistCoupling::default());
         assert_eq!(w.excluded, Some(Exclusion::ArtistRotationBlock));
         assert!(w.artist_blocked, "the panel must be able to say which block fired");
     }
@@ -295,36 +296,60 @@ mod tests {
         let mut c = candidate();
         let (rot, rec) = (seconds(DEF_ROTATION_TRK), seconds(DEF_RECOVERY_TRK));
         c.track_age_s = Some(rot + rec / 2.0);
-        let w = weigh(&c, ArtistCoupling::AsShipped);
+        let w = weigh(&c, ArtistCoupling::default());
         assert!((w.track_ramp - 0.5).abs() < 1e-9, "ramp {}", w.track_ramp);
         assert!((w.weight - 0.5).abs() < 1e-9);
     }
 
-    /// The shadowing bug, pinned. As shipped a half-recovered ARTIST leaves the
-    /// track weight untouched; as specified it halves it. Both are asserted so
-    /// neither can drift into the other unnoticed [SPEC-DIR-117].
+    /// The ramp MuLibPlay never ran [SPEC-DIR-117]. A half-recovered artist
+    /// must halve its tracks' weight; the gate-only path is kept only to
+    /// measure the divergence, so both are pinned and cannot blur.
     #[test]
-    fn the_artist_ramp_reaches_the_track_only_as_specified() {
+    fn a_recovering_artist_damps_its_tracks() {
         let mut c = candidate();
         let (rot, rec) = (seconds(DEF_ROTATION_ART), seconds(DEF_RECOVERY_ART));
         c.artist_age_s = Some(rot + rec / 2.0);
 
-        let shipped = weigh(&c, ArtistCoupling::AsShipped);
-        assert!((shipped.artist_weight - 0.5).abs() < 1e-9, "artist is half recovered");
-        assert!((shipped.weight - 1.0).abs() < 1e-9,
-                "as shipped the artist ramp does not reach the track weight");
+        let damped = weigh(&c, ArtistCoupling::default());
+        assert!((damped.artist_weight - 0.5).abs() < 1e-9, "artist is half recovered");
+        assert!((damped.weight - 0.5).abs() < 1e-9,
+                "the artist ramp must reach the track weight");
 
-        let intended = weigh(&c, ArtistCoupling::AsSpecified);
-        assert!((intended.weight - 0.5).abs() < 1e-9, "as specified it damps the track");
+        let gate_only = weigh(&c, ArtistCoupling::GateOnly);
+        assert!((gate_only.weight - 1.0).abs() < 1e-9,
+                "MuLibPlay's shipped behaviour, retained for divergence measurement");
+    }
+
+    /// Damping must not become a second block: a barely-recovered artist
+    /// yields a small weight, not an exclusion, so the passage can still win
+    /// the roulette on an otherwise quiet night.
+    #[test]
+    fn a_barely_recovered_artist_is_damped_not_excluded() {
+        let mut c = candidate();
+        let (rot, rec) = (seconds(DEF_ROTATION_ART), seconds(DEF_RECOVERY_ART));
+        c.artist_age_s = Some(rot + rec * 0.02);
+        let w = weigh(&c, ArtistCoupling::default());
+        assert!(w.is_eligible(), "still eligible: {:?}", w.excluded);
+        assert!(w.weight > MIN_WEIGHT && w.weight < 0.05, "weight {}", w.weight);
+    }
+
+    /// The artist ramp reaching the weight must not disturb the cold-start
+    /// guarantee: with no history there is no ramp to apply.
+    #[test]
+    fn damping_leaves_a_never_played_artist_alone() {
+        let mut c = candidate();
+        c.artist_age_s = None;
+        c.track_age_s = None;
+        assert!((weigh(&c, ArtistCoupling::default()).weight - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn restraint_spans_boost_to_suppression() {
         let mut c = candidate();
         c.track.restraint = -0.939; // the observed maximum boost
-        assert!((weigh(&c, ArtistCoupling::AsShipped).weight - 8.687).abs() < 0.01);
+        assert!((weigh(&c, ArtistCoupling::default()).weight - 8.687).abs() < 0.01);
         c.track.restraint = 5.0; // "never again"
-        assert_eq!(weigh(&c, ArtistCoupling::AsShipped).excluded, Some(Exclusion::BelowMinWeight));
+        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::BelowMinWeight));
     }
 
     #[test]
@@ -339,12 +364,12 @@ mod tests {
     fn passage_filters_reject_outside_the_playable_range() {
         let mut c = candidate();
         c.length_s = 29.0;
-        assert_eq!(weigh(&c, ArtistCoupling::AsShipped).excluded, Some(Exclusion::TooShort));
+        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TooShort));
         c.length_s = 3601.0;
-        assert_eq!(weigh(&c, ArtistCoupling::AsShipped).excluded, Some(Exclusion::TooLong));
+        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TooLong));
         c.length_s = 180.0;
         c.depth_s = 10801.0;
-        assert_eq!(weigh(&c, ArtistCoupling::AsShipped).excluded, Some(Exclusion::TooDeep));
+        assert_eq!(weigh(&c, ArtistCoupling::default()).excluded, Some(Exclusion::TooDeep));
     }
 
     /// The occasion multiplier must remain a separate visible term, not be
@@ -353,7 +378,7 @@ mod tests {
     fn the_occasion_multiplier_stays_legible() {
         let mut c = candidate();
         c.occasion = 3.9; // christmasy 0.9 against a 4.2 curve, in December
-        let w = weigh(&c, ArtistCoupling::AsShipped);
+        let w = weigh(&c, ArtistCoupling::default());
         assert!((w.weight - 3.9).abs() < 1e-9);
         assert_eq!(w.occasion, 3.9, "the panel needs the term, not just the product");
     }
@@ -364,7 +389,7 @@ mod tests {
     fn the_minimum_weight_boundary_is_exclusive() {
         let mut c = candidate();
         c.track.restraint = -(MIN_WEIGHT.log10()); // weight lands exactly on 0.001
-        let w = weigh(&c, ArtistCoupling::AsShipped);
+        let w = weigh(&c, ArtistCoupling::default());
         assert_eq!(w.excluded, Some(Exclusion::BelowMinWeight), "weight was {}", w.weight);
     }
 }
