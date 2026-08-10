@@ -173,7 +173,25 @@ Note that `[K]` was never seasonal at all — a flat ×0.000001 on 140 children'
 - **Dislike-Taste acts as an exclusion filter**: passages within `dislike_radius` of it are removed from the pool before gathering. This is McRhythm's own suggested use `[LD-LIKE-021]`, and it is the half that needs no tuning to be useful.
 - **Like-Taste acts as an additional seed**, weighted `like_seed_weight` relative to programme seeds.
 
+> **Taste is implemented but unexercised.** `listener_likes` is empty in the migrated library, so both halves have unit tests and no field data behind them. `dislike_radius` and `like_seed_weight` remain **new and unvalidated** `[SPEC-DIR-195]` — there is nothing to tune them against until the listener records a Like.
+
 Rationale: Taste is a *character* signal, so it belongs in the stage that shapes character, leaving frequency untouched `[SPEC-DIR-100]`. Treating a Like as "just another way of naming a song that defines a mood" also keeps it in the same idiom as programmes.
+
+**`[SPEC-DIR-157]` Implemented 2026-08-10, and it is visible in what plays.** The same library at three times of day, six passages each:
+
+| Programme | Queue | Mean length |
+| :--- | :--- | ---: |
+| **Prog** 19:00 | Steely Dan *Aja*, Traffic, Rush *Jacob's Ladder*, Led Zeppelin, Genesis *Squonk* | ~440 s |
+| **Groove** 15:00 | Genesis *Los Endos*, Fatboy Slim, U2, Paula Abdul (dance mix), Massive Attack | ~270 s |
+| **Light** 10:00 | Genesis *Invisible Touch*, Beatles *Lovely Rita*, Tom Petty, Heart | ~200 s |
+
+Genesis appears in all three, and a *different* Genesis each time — *Squonk* and *Los Endos* for Prog and Groove, *Invisible Touch* for Light. That is the property the whole metric exists for: similarity by sound rather than by artist. Track length was never an input to shaping; it separates because prog is long and pop is short.
+
+Three implementation decisions worth keeping:
+
+- **"Most unlike every seed" is distance to the *nearest* seed.** A programme is a handful of exemplars, not one centre, so a passage close to any one seed belongs even if far from the rest.
+- **Gathering is per seed, not a global top-N.** A global list would let one seed in a dense region supply the whole pool and silently drop the rest of the programme.
+- **A passage with no flavor is kept, not dropped.** Unmeasured is not unsuitable; excluding them would make a half-scanned library play only the half it had scanned.
 
 **`[SPEC-DIR-155]` Taste never blocks and never boosts frequency.** A disliked passage is removed from the *pool*; its rotation and restraint are unchanged. If the user later removes the Dislike, behaviour returns exactly to baseline with no residue.
 

@@ -89,6 +89,46 @@ impl Flavor {
     }
 }
 
+/// The weighted mean of several vectors — a Taste centroid `[SPEC-DIR-150]`.
+///
+/// Averaging distributions class-by-class yields a distribution, so a centroid
+/// is an ordinary flavor vector and takes part in [`distance`] unchanged. A
+/// characteristic is present if **any** member has it, and averages only over
+/// those that do: a member missing a characteristic should not drag it toward
+/// zero, which would read "unmeasured" as "none of this".
+pub fn centroid(schema: &FlavorSchema, members: &[(&Flavor, f64)]) -> Option<Flavor> {
+    if members.is_empty() {
+        return None;
+    }
+    let mut values = vec![0.0f32; schema.total];
+    let mut present = 0u64;
+    for c in 0..schema.names.len() {
+        let (o, w) = (schema.offset[c], schema.width[c]);
+        let mut total = 0.0f64;
+        let mut acc = vec![0.0f64; w];
+        for (f, weight) in members {
+            if !f.has(c) || *weight <= 0.0 {
+                continue;
+            }
+            for k in 0..w {
+                acc[k] += f.values[o + k] as f64 * weight;
+            }
+            total += weight;
+        }
+        if total <= 0.0 {
+            continue;
+        }
+        for k in 0..w {
+            values[o + k] = (acc[k] / total) as f32;
+        }
+        present |= 1u64 << c;
+    }
+    if present == 0 {
+        return None;
+    }
+    Some(Flavor { values, present })
+}
+
 /// Total variation between one characteristic of two vectors.
 ///
 /// `½·Σ|a−b|`, bounded [0,1]. For K=2 this is exactly `|Δp|` — the binary case

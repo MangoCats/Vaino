@@ -17,7 +17,10 @@ use serde::Serialize;
 use super::frequency::{
     weigh, Candidate, Exclusion, Policy, Related, TimeScale, Tuning, Weighing,
 };
+use super::flavor::{centroid, Flavor, FlavorIndex};
 use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
+use super::program::Programs;
+use super::shape::{shape, Seed, Shaping, LIKE_SEED_WEIGHT};
 use crate::db::{row_to_entry, DbError, COLS, FROM};
 use crate::queue::QueueEntry;
 
@@ -87,6 +90,12 @@ pub struct Explanation {
     pub length_bonus: f64,
     pub occasion: f64,
     /// Eligible candidates it beat.
+    /// The programme in force `[SPEC-DIR-180]`, if any.
+    pub program: Option<String>,
+    /// What pool shaping did `[SPEC-DIR-145]`.
+    pub shaping: Shaping,
+    /// Distance to each seed, in seed order `[SPEC-DIR-190]`.
+    pub seed_distances: Vec<f64>,
     pub pool_size: usize,
     pub pool_weight: f64,
     /// This passage's share of the total weight, as a percentage — the honest
@@ -123,6 +132,12 @@ pub struct Director {
     artist_last_played: HashMap<String, i64>,
     relations: HashMap<String, Vec<(String, f64)>>,
     occasions: Occasions,
+    flavor: FlavorIndex,
+    programs: Programs,
+    /// Centroids of liked and disliked flavor `[SPEC-DIR-150]`. Built once:
+    /// they change only when the listener does.
+    like: Option<Flavor>,
+    dislike: Option<Flavor>,
 }
 
 impl Director {
@@ -222,6 +237,9 @@ impl Director {
         }
 
         let occasions = load_occasions(conn)?;
+        let flavor = FlavorIndex::load(conn)?;
+        let programs = Programs::load(conn)?;
+        let (like, dislike) = load_taste(conn, &flavor);
 
         // Absent settings are the defaults, not an error: a library that has
         // never been tuned must still play [SPEC-DIR-158].
@@ -248,6 +266,10 @@ impl Director {
             artist_last_played,
             relations,
             occasions,
+            flavor,
+            programs,
+            like,
+            dislike,
         })
     }
 
@@ -265,6 +287,32 @@ impl Director {
     }
     pub fn occasion_count(&self) -> usize {
         self.occasions.curve_count()
+    }
+    pub fn programs(&self) -> &Programs {
+        &self.programs
+    }
+    pub fn programs_mut(&mut self) -> &mut Programs {
+        &mut self.programs
+    }
+    pub fn flavor(&self) -> &FlavorIndex {
+        &self.flavor
+    }
+
+    /// The seeds shaping the pool right now: the active programme's, plus
+    /// Like-Taste as an additional seed `[SPEC-DIR-150]`.
+    fn seeds_now(&self, now: i64) -> Vec<Seed<'_>> {
+        let mut out: Vec<Seed<'_>> = Vec::new();
+        if let Some(p) = self.programs.active(now) {
+            for mbid in self.programs.seeds_for(p.id, &self.artist_of, &self.last_played) {
+                if let Some(f) = self.flavor.get(&mbid) {
+                    out.push(Seed { flavor: f, weight: 1.0 });
+                }
+            }
+        }
+        if let Some(l) = &self.like {
+            out.push(Seed { flavor: l, weight: LIKE_SEED_WEIGHT });
+        }
+        out
     }
 
     fn age(&self, map: &HashMap<String, i64>, key: &str, now: i64) -> Option<f64> {
@@ -373,8 +421,29 @@ impl Director {
     /// still not appear twice in one queue.
     pub fn decide(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<Decision> {
         let weighed = self.weigh_all(now);
+
+        // Stage B shapes WHICH passages are in the running; it never touches a
+        // weight [SPEC-DIR-100]. Survivors carry their Stage-A weights forward
+        // unchanged, so frequency and character stay separable in the panel.
+        let seeds = self.seeds_now(now);
+        let mut shaping = Shaping::default();
+        let candidates: Vec<(i64, Option<&Flavor>)> = weighed
+            .iter()
+            .filter(|(e, w)| w.is_eligible() && !skip.contains(&e.passage_id))
+            .map(|(e, _)| (e.passage_id, self.flavor_of(e.passage_id)))
+            .collect();
+        let shaped: std::collections::HashSet<i64> = shape(
+            &self.flavor.schema,
+            &candidates,
+            &seeds,
+            self.dislike.as_ref(),
+            &mut shaping,
+        )
+        .into_iter()
+        .collect();
+
         let live = |(e, w): &(&QueueEntry, Weighing)| {
-            w.is_eligible() && !skip.contains(&e.passage_id)
+            w.is_eligible() && !skip.contains(&e.passage_id) && shaped.contains(&e.passage_id)
         };
         let total: f64 = weighed.iter().filter(|x| live(x)).map(|(_, w)| w.weight).sum();
         if !(total > 0.0) {
@@ -419,6 +488,12 @@ impl Director {
                 occasion: w.occasion,
                 pool_size,
                 pool_weight: total,
+                program: self
+                    .programs
+                    .active(now)
+                    .map(|p| p.name.clone()),
+                shaping: shaping.clone(),
+                seed_distances: self.seed_distances(entry.passage_id, &seeds),
                 share_pct: if total > 0.0 { w.weight / total * 100.0 } else { 0.0 },
                 runners_up: rest
                     .iter()
@@ -432,6 +507,22 @@ impl Director {
                 stages: "frequency only; no flavor shaping yet [SPEC-FD-040]",
             },
         })
+    }
+
+    /// The flavor of whatever recording a passage carries.
+    fn flavor_of(&self, passage_id: i64) -> Option<&Flavor> {
+        let row = self.rows.iter().find(|r| r.entry.passage_id == passage_id)?;
+        self.flavor.get(row.mbid.as_deref()?)
+    }
+
+    /// Distance from the chosen passage to each seed, for the panel
+    /// `[SPEC-DIR-190]`.
+    fn seed_distances(&self, passage_id: i64, seeds: &[Seed<'_>]) -> Vec<f64> {
+        let Some(f) = self.flavor_of(passage_id) else { return Vec::new() };
+        seeds
+            .iter()
+            .filter_map(|s| super::flavor::distance(&self.flavor.schema, f, s.flavor))
+            .collect()
     }
 
     /// Why the pool is the size it is — for the panel, and for diagnosing a
@@ -543,6 +634,37 @@ fn load_occasions(conn: &Connection) -> Result<Occasions, DbError> {
         }
     }
     Ok(Occasions::new(curves, values))
+}
+
+/// Like- and Dislike-Taste centroids `[SPEC-DIR-150]`.
+///
+/// Weighted centroids of the flavor of liked and disliked recordings. A
+/// negative weight is a dislike; its magnitude is how strongly. Returns
+/// `(like, dislike)`, either of which may be absent.
+///
+/// **Unexercised:** `listener_likes` is empty in the migrated library, so this
+/// path has unit tests and no field data behind it.
+fn load_taste(conn: &Connection, flavor: &FlavorIndex) -> (Option<Flavor>, Option<Flavor>) {
+    let mut likes: Vec<(&Flavor, f64)> = Vec::new();
+    let mut dislikes: Vec<(&Flavor, f64)> = Vec::new();
+    let Ok(mut stmt) = conn.prepare("SELECT mbid, weight FROM listener_likes") else {
+        return (None, None);
+    };
+    let rows: Vec<(String, f64)> = match stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+    }) {
+        Ok(it) => it.flatten().collect(),
+        Err(_) => return (None, None),
+    };
+    for (mbid, w) in &rows {
+        let Some(f) = flavor.get(mbid) else { continue };
+        if *w >= 0.0 {
+            likes.push((f, *w));
+        } else {
+            dislikes.push((f, -*w));
+        }
+    }
+    (centroid(&flavor.schema, &likes), centroid(&flavor.schema, &dislikes))
 }
 
 fn map_query(conn: &Connection, sql: &str) -> Result<HashMap<String, String>, DbError> {

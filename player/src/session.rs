@@ -194,6 +194,12 @@ impl Session {
         Arc::clone(&self.explanations)
     }
 
+    /// The programme in force `[SPEC-DIR-180]`.
+    pub fn program(&self) -> Option<String> {
+        let d = self.director.as_ref()?;
+        d.programs().active(unix_now()).map(|p| p.name.clone())
+    }
+
     pub fn depth(&self) -> usize {
         self.depth
     }
