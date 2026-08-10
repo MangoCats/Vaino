@@ -58,3 +58,16 @@ under emulation) and the host. It deliberately reports what it cannot cover:
 playback through a real audio device. A null sink reports no device rate, so it
 cannot detect a sample-rate fault -- which is exactly how unresampled playback
 survived until a real device was used `[REQ-HW-147]`.
+
+## Before testing on hardware, build the binaries
+
+```
+cargo build --release        # NOT cargo test
+```
+
+`cargo test` builds test harnesses into `target/release/deps/`; it leaves
+`target/release/station.exe` untouched. Running hardware tests straight after a
+test run therefore exercises whatever binary was there last time. This has
+already cost one debugging session: a feature appeared not to work at all, and
+the "bug" was a binary four minutes older than the source. If a change seems to
+have no effect on hardware, check the binary's timestamp before its logic.
