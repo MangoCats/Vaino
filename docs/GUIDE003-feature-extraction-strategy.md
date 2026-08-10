@@ -211,7 +211,23 @@ Resolve the framing later if it becomes necessary. It is not necessary yet.
 
 All **658** lowlevel JSONs have published highlevel beside them in `data/flavor-sample.db`, across all 18 characteristics. Note that recordings carry **multiple submissions** (0, 1, 2 …) with different values, and the lowlevel file is one specific submission — so a comparison must establish *which*, rather than assume submission 0. Comparing against every submission and reporting the best match will show it.
 
-What remains for route 2 is applying the chain: the `cleaner` parameters, and libsvm RBF/polynomial prediction with pairwise coupling for the six multi-class cases. It is **exactly verifiable** against that set, on the reference's own inputs `[GDE-FEX-090]`.
+#### `[GDE-FEX-091]` First end-to-end run: close, and **not** correct
+
+`tools/gaia_predict.py` applies the chain and compares against the reference in one tool, deliberately — a subtly wrong chain still emits plausible probabilities, so "it ran" is evidence of nothing. libsvm prediction is implemented: RBF and polynomial kernels, and the Platt sigmoid matching libsvm's own `sigmoid_predict`.
+
+First run on `tonal_atonal` (2 classes, 76 SVs, one normalize step), 8 recordings:
+
+| descriptor order | median abs error | best | worst |
+| :--- | ---: | ---: | ---: |
+| as-read | **0.0593** | 0.0087 | 0.3171 |
+| sorted | 0.1055 | 0.0039 | 0.2614 |
+| reversed | 0.1055 | 0.0039 | 0.2614 |
+
+**This is not a match.** A correct reimplementation should agree to within floating-point noise, not 0.06. But it is also clearly not noise — random guessing against values in [0,1] would sit near 0.35 — so the chain is substantially right and specifically wrong.
+
+**The concrete lead: the vector is 372 dimensions and the SVM's highest support-vector index is 380.** Eight dimensions are missing, so every distance is computed in the wrong space. The `enumerate` step converts string descriptors to numbers, and the lowlevel files carry exactly four musical strings — `tonal.key_key`, `tonal.key_scale`, `tonal.chords_key`, `tonal.chords_scale` — which accounts for four, not eight. Note also that the errors are generous by construction: the harness takes the best over both label orientations and all submissions, so the true error is at least this large.
+
+Resolving those eight dimensions is the next step, and the harness will say when it is right. What remains after that is the `cleaner` parameters and pairwise coupling for the six multi-class classifiers.
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
 
