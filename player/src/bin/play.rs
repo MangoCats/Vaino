@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use vaino_player::decoder::PassageDecoder;
 use vaino_player::fade::{Curve, Fade};
 use vaino_player::mixer::{mix, Stream};
+use vaino_player::queue::{should_admit, QueueEntry};
 use vaino_player::output::Output;
 use vaino_player::BUFFER_FRAMES;
 
@@ -71,7 +72,7 @@ fn main() {
     let out_channels = out.as_ref().map(|o| o.channels).unwrap_or(2);
 
     // Open every decoder up front so a bad path fails before audio starts.
-    let mut sources: Vec<(PassageDecoder, Fade, Fade, u64)> = Vec::new();
+    let mut sources: Vec<(PassageDecoder, Fade, Fade, QueueEntry)> = Vec::new();
     for c in &cues {
         let d = match PassageDecoder::open(&c.path, c.start_ms, c.end_ms) {
             Ok(d) => d,
@@ -90,10 +91,16 @@ fn main() {
                  c.start_ms,
                  c.end_ms.map(|e| format!("{e}ms")).unwrap_or_else(|| "EOF".into()),
                  d.sample_rate, d.channels);
-        let frames_total = c.end_ms
-            .map(|e| (e.saturating_sub(c.start_ms) as f64 * sr as f64 / 1000.0) as u64)
-            .unwrap_or(u64::MAX);
-        sources.push((d, fi, fo, frames_total));
+        let entry = QueueEntry {
+            passage_id: sources.len() as i64,
+            path: c.path.clone(),
+            start_ms: c.start_ms,
+            end_ms: c.end_ms.unwrap_or(c.start_ms + 1000 * 60 * 60),
+            lead_in_ms: (c.fade_in_s * 1000.0) as u64,
+            lead_out_ms: (c.fade_out_s * 1000.0) as u64,
+            gain_db: 0.0,
+        };
+        sources.push((d, fi, fo, entry));
     }
 
     let block = 2048 * out_channels;
@@ -111,26 +118,28 @@ fn main() {
     struct Live {
         dec: PassageDecoder,
         stream: Stream,
-        frames_total: u64,
         frames_mixed: u64,
+        entry: QueueEntry,
     }
     let mut live: Vec<Live> = Vec::new();
     let mut pending = sources.into_iter();
     let mut next = pending.next();
 
-    // Start the first passage; the second joins while the first still has audio
-    // buffered, which is all a crossfade is [XFD-BEH-C1-020].
-    let overlap_frames = (overlap * 44_100.0) as u64;
-
     loop {
-        // Admit the next passage once the current one is inside its overlap.
+        // Admission uses the shared rule, not a local copy of it: overlap is
+        // min(lead_out(A), lead_in(B)) and applies here exactly as it will in
+        // the engine [XFD-BEH-C1-020]. A second implementation would be a
+        // second thing to get wrong.
         let should_admit = match (&next, live.last()) {
-            (Some(_), Some(l)) => l.frames_total.saturating_sub(l.frames_mixed) <= overlap_frames,
+            (Some((_, _, _, nb)), Some(l)) => {
+                let played_ms = l.frames_mixed * 1000 / 44_100;
+                should_admit(&l.entry, played_ms, nb)
+            }
             (Some(_), None) => true,
             _ => false,
         };
         if should_admit {
-            if let Some((dec, fade_in, _, frames_total)) = next.take() {
+            if let Some((dec, fade_in, _, entry)) = next.take() {
                 let ch = dec.channels;
                 if !live.is_empty() {
                     println!("crossfading over {overlap:.1}s");
@@ -138,8 +147,8 @@ fn main() {
                 live.push(Live {
                     stream: Stream::new(BUFFER_FRAMES * ch, ch, fade_in),
                     dec,
-                    frames_total,
                     frames_mixed: 0,
+                    entry,
                 });
                 next = pending.next();
             }

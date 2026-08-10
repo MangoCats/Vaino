@@ -209,6 +209,6 @@ WantedBy=multi-user.target
 ## 9. Open
 
 1. ~~**`[IMPL-OPN-010]`** Which audio output~~ — **DECIDED: Profile A (Bluetooth) is tested first** `[IMPL-PROF-020]`, with B–D kept supported and configurable `[IMPL-PROF-030]`. Its boot delay is accepted for that profile alone.
-2. **`[IMPL-OPN-040]`** Whether `bluez-alsa` is packaged and sound on Bookworm arm64, and whether PipeWire would in practice cost less than expected. Chosen on footprint reasoning, not measurement.
+2. ~~**`[IMPL-OPN-040]`** bluez-alsa vs PipeWire~~ — **DECIDED: `bluez-alsa`**, on footprint for a 512 MB host.
 2. **`[IMPL-OPN-020]`** Whether 64-bit is right at 512 MB. It matches the verified build, but 32-bit uses less memory for pointer-heavy work. Vaino's footprint is buffer-dominated, so the difference should be small — worth measuring both if the margin proves tight.
 3. **`[IMPL-OPN-030]`** Where the class-D export goes off-device `[SPEC-DF-094]`, since on-card backups die with the card.
