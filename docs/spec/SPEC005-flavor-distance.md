@@ -127,7 +127,34 @@ Read honestly: **most of the gain comes from using all 18 characteristics** (+3.
 
 **`[SPEC-FD-070]` Limitation — this validates robustness, not perceptual similarity.** The test measures whether a metric recognizes the same recording through a different encoding. That is necessary but not sufficient for "finds the most similar-sounding track": a metric could score well here and still rank perceptually unrelated songs as close.
 
-**`[SPEC-FD-080]` Planned perceptual validation.** MuLibPlay's eight programs each carry 6–8 hand-picked seed tracks `[GDE-PD-040]` — direct human judgments that these songs belong together. A sound metric should place same-program seeds closer than cross-program seeds. Roughly 50 tracks across 8 programs is a small sample, but it is genuine perceptual signal from the actual user. Run once dump coverage of the seed tracks is available.
+**`[SPEC-FD-080]` Perceptual validation — run 2026-08-10. The metric agrees with the listener.** MuLibPlay's eight programmes each carry 6–8 hand-picked seeds `[GDE-PD-040]` — direct human judgments that these songs belong together. All 49 have flavor.
+
+| | mean distance | pairs |
+| :--- | ---: | ---: |
+| within programme | 0.9895 | 128 |
+| across programmes | 1.1931 | 1,048 |
+| **ratio** | **0.829** | |
+
+**Same-programme seeds sit 17.1% closer than cross-programme seeds.** This is the first evidence that the metric tracks *perceptual* similarity rather than merely recognising a re-encode `[SPEC-FD-070]`, and it was obtained on 11 binary characteristics alone.
+
+**`[SPEC-FD-082]` The per-programme spread is the more useful result**, because it points at what is missing:
+
+| Programme | seeds | mean d | vs library mean |
+| :--- | ---: | ---: | ---: |
+| Loud | 6 | 0.784 | 66% |
+| Soft | 6 | 0.841 | 71% |
+| Mellow | 6 | 0.877 | 74% |
+| Prog | 6 | 0.890 | 75% |
+| Fun | 6 | 1.033 | 87% |
+| Cool | 5 | 1.093 | 92% |
+| Groove | 8 | 1.137 | 95% |
+| Light | 6 | 1.168 | 98% |
+
+The programmes that cohere are the ones the 11 binaries can express — *Loud* is largely `mood_aggressive` and `timbre`, *Soft* and *Mellow* largely `mood_relaxed` and `mood_acoustic`. The programmes that barely cohere at all — *Light* at 98% of the library mean, *Groove* at 95% — are the ones defined by **genre and rhythm**, which is precisely what the six absent complex characteristics carry `[SPEC-FD-085]`.
+
+This is a concrete, testable prediction: extracting `genre_*`, `ismir04_rhythm` and `moods_mirex` should tighten *Light* and *Groove* markedly, and *Loud* and *Soft* comparatively little. Re-run this measurement after extraction; it is the cheapest available check on whether extraction bought anything.
+
+**Caveat as before:** 49 seeds over 8 programmes is a small sample, and one listener's groupings are not a general perceptual standard. Treat 0.829 as encouraging, not as a validated figure.
 
 ---
 

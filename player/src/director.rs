@@ -17,3 +17,4 @@ pub mod flavor;
 pub mod frequency;
 pub mod library;
 pub mod occasion;
+pub mod program;

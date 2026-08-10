@@ -206,6 +206,11 @@ CREATE TABLE IF NOT EXISTS listener_settings (
                       CHECK (artist_time_scale BETWEEN 0.0001 AND 100.0),
     track_time_scale  REAL NOT NULL DEFAULT 1.0
                       CHECK (track_time_scale  BETWEEN 0.0001 AND 100.0),
+    -- Programme start times are wall-clock [SPEC-DIR-180]: a 22:00 programme
+    -- means ten at night where the listener is. std has no timezone, so the
+    -- appliance stores its offset rather than the player guessing.
+    utc_offset_minutes INTEGER NOT NULL DEFAULT 0
+                      CHECK (utc_offset_minutes BETWEEN -1440 AND 1440),
     updated_at        TEXT NOT NULL
 );
 
