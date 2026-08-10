@@ -124,9 +124,10 @@
       $('stages').textContent = '';
       return;
     }
+    const prog = w.program ? `${w.program}: ` : '';
     $('why').textContent =
-      `Weight ${w.weight.toFixed(3)} of ${w.pool_weight.toFixed(1)} across ` +
-      `${w.pool_size.toLocaleString()} eligible passages — a ` +
+      `${prog}weight ${w.decayed_weight.toFixed(3)} of ${w.pool_weight.toFixed(1)} across ` +
+      `${w.pool_size.toLocaleString()} candidates — a ` +
       `${w.share_pct.toFixed(2)}% chance of being picked.`;
 
     const body = terms.querySelector('tbody');
@@ -140,8 +141,30 @@
     }
     const tot = body.insertRow();
     tot.className = 'total';
-    tot.insertCell().textContent = 'Final weight';
+    tot.insertCell().textContent = 'Frequency weight';
     tot.insertCell().textContent = w.weight.toFixed(4);
+
+    // Stage B/C terms: how it FIT, kept visually apart from how OFTEN it may
+    // play. The two stories stay separate all the way to the screen.
+    const add = (label, text) => {
+      const tr = body.insertRow();
+      tr.insertCell().textContent = label;
+      tr.insertCell().textContent = text;
+    };
+    if (w.shaping && !w.shaping.bypassed) {
+      add('Pool shaping', `${w.shaping.eligible_in.toLocaleString()} eligible → ` +
+                         `${w.shaping.gathered} gathered, ${w.shaping.seeds_used} seeds`);
+      if (w.shaping.disliked_out) add('Disliked out', String(w.shaping.disliked_out));
+    }
+    if (w.seed_distances && w.seed_distances.length) {
+      add('Distance to seeds', w.seed_distances.map(d => d.toFixed(2)).join(', '));
+    }
+    if (w.flow_distance != null) add('Follows previous by', w.flow_distance.toFixed(3));
+    add('Flow rank', `#${w.rank + 1}`);
+    const decayed = body.insertRow();
+    decayed.className = 'total';
+    decayed.insertCell().textContent = 'Roulette weight';
+    decayed.insertCell().textContent = w.decayed_weight.toFixed(4);
     terms.hidden = false;
 
     const ol = losers.querySelector('ol');

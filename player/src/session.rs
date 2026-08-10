@@ -145,7 +145,11 @@ impl Session {
 
         if let Some(d) = &mut self.director {
             for _ in 0..short {
-                let Some(decision) = d.decide(now, &mut self.rng, &chosen) else {
+                // The tail is what this passage will follow, so flow is
+                // measured from it [SPEC-DIR-160]. On the very first pick of a
+                // session there is nothing queued and no flow order.
+                let tail = chosen.last().copied();
+                let Some(decision) = d.decide(now, &mut self.rng, &chosen, tail) else {
                     // Everything eligible is blocked. Falling back keeps the
                     // radio playing, which [REQ-PD-100] requires; silence would
                     // be a worse answer than a repeat.

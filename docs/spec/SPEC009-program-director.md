@@ -205,6 +205,17 @@ Three implementation decisions worth keeping:
 
 **`[SPEC-DIR-165]` Roulette.** Take the top `rand_pool`, apply rank decay `w *= decay^rank`, then pick weighted-random. Selection is by weight, not by rank — a lower-ranked passage can win, which is where the surprise lives.
 
+**`[SPEC-DIR-167]` Both implemented 2026-08-10, and both measurable.**
+
+*Flow works.* Across eight consecutive selections on the real library, mean distance between a passage and the one it followed was **0.432**, against a library median of 1.052 `[SPEC-FD-085]` — consecutive passages are **59% closer than random pairs**. That is the whole claim of `[SPEC-DIR-160]`, and it is the reason a hard programme switch is tolerable.
+
+*The roulette stays a roulette.* Winning ranks across those eight: **5, 10, 17, 24, 31, 50, 61, 99**. Decay favours the low end without making it certain — one passage won from rank 99 at a roulette weight of 0.006. A director that always returned rank 0 would be evidence of a bug, not of good taste.
+
+Two decisions:
+
+- **Rank decay applies only when there is a flow order.** With nothing queued to follow, rank is whatever order the scan happened to visit, and decaying by it would silently favour the first passage examined. The first pick of a session therefore uses undecayed weights, and the record says so.
+- **Runners-up are ranked by *decayed* weight.** "Why not something else?" is a question about what nearly won the roulette, which is the decayed figure, not the frequency weight.
+
 ---
 
 ## 6. Programme Selection

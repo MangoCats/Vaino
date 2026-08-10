@@ -20,7 +20,7 @@ use super::frequency::{
 use super::flavor::{centroid, Flavor, FlavorIndex};
 use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
 use super::program::Programs;
-use super::shape::{shape, Seed, Shaping, LIKE_SEED_WEIGHT};
+use super::shape::{shape, Seed, Shaping, LIKE_SEED_WEIGHT, RAND_POOL};
 use crate::db::{row_to_entry, DbError, COLS, FROM};
 use crate::queue::QueueEntry;
 
@@ -73,6 +73,11 @@ impl Rng {
 /// "why not something else?".
 const RUNNERS_UP: usize = 5;
 
+/// Rank decay `[SPEC-DIR-165]`. Applied over the flow-ordered pool, so the
+/// passages that follow the queue tail best are favoured — without ever
+/// becoming certain. At rank 100 this is ×0.017.
+pub const RANK_DECAY: f64 = 0.96;
+
 /// A complete answer to "why this track?" `[REQ-VIS-100]`.
 ///
 /// Every term separately, never just the product -- a single number cannot be
@@ -82,6 +87,14 @@ pub struct Explanation {
     pub passage_id: i64,
     pub title: String,
     pub weight: f64,
+    /// The weight the roulette actually used: `weight × decay^rank`
+    /// `[SPEC-DIR-165]`.
+    pub decayed_weight: f64,
+    /// Position in the flow order, 0 being the best follow-on.
+    pub rank: usize,
+    /// Flavor distance to the passage this one follows `[SPEC-DIR-160]`.
+    pub flow_distance: Option<f64>,
+    pub roulette_target: f64,
     pub artist_weight: f64,
     pub artist_blocked: bool,
     pub track_restraint: f64,
@@ -405,12 +418,12 @@ impl Director {
     /// honest increment -- frequency alone already beats uniform random -- and
     /// the seam is exactly where the shaped pool will be inserted.
     pub fn choose(&self, now: i64, rng: &mut Rng) -> Option<QueueEntry> {
-        self.decide(now, rng, &[]).map(|d| d.entry)
+        self.decide(now, rng, &[], None).map(|d| d.entry)
     }
 
     /// As [`Director::decide`], discarding the reasoning.
     pub fn choose_excluding(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<QueueEntry> {
-        self.decide(now, rng, skip).map(|d| d.entry)
+        self.decide(now, rng, skip, skip.last().copied()).map(|d| d.entry)
     }
 
     /// As [`Director::choose`], skipping passages already in the queue.
@@ -419,7 +432,18 @@ impl Director {
     /// making it its own rotation block. This is the structural guarantee for
     /// the rest: an unidentified passage has no MBID to block on, and must
     /// still not appear twice in one queue.
-    pub fn decide(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<Decision> {
+    /// `after` is the passage this one will follow — the queue tail. Flow
+    /// ordering is measured from it `[SPEC-DIR-160]`. Passed explicitly rather
+    /// than taken as the last of `skip`, because "do not pick these" and "this
+    /// is what plays before" are different questions that happen to share a
+    /// list today.
+    pub fn decide(
+        &self,
+        now: i64,
+        rng: &mut Rng,
+        skip: &[i64],
+        after: Option<i64>,
+    ) -> Option<Decision> {
         let weighed = self.weigh_all(now);
 
         // Stage B shapes WHICH passages are in the running; it never touches a
@@ -442,43 +466,94 @@ impl Director {
         .into_iter()
         .collect();
 
-        let live = |(e, w): &(&QueueEntry, Weighing)| {
+        let live = |(e, w): &&(&QueueEntry, Weighing)| {
             w.is_eligible() && !skip.contains(&e.passage_id) && shaped.contains(&e.passage_id)
         };
-        let total: f64 = weighed.iter().filter(|x| live(x)).map(|(_, w)| w.weight).sum();
+
+        // --- Stage C: flow [SPEC-DIR-160] ---
+        // Re-sort by distance to the passage already queued, so consecutive
+        // passages blend. This is also what makes a hard programme switch
+        // acceptable [SPEC-DIR-180]: continuity comes from here, not from
+        // blending programmes.
+        let anchor = after.and_then(|id| self.flavor_of(id));
+        let mut ranked: Vec<(&QueueEntry, &Weighing, Option<f64>)> = weighed
+            .iter()
+            .filter(live)
+            .map(|(e, w)| {
+                let d = anchor.and_then(|a| {
+                    self.flavor_of(e.passage_id)
+                        .and_then(|f| super::flavor::distance(&self.flavor.schema, f, a))
+                });
+                (*e, w, d)
+            })
+            .collect();
+        if ranked.is_empty() {
+            return None;
+        }
+        let flowed = anchor.is_some();
+        if flowed {
+            // Unmeasured passages sort last rather than being dropped: they can
+            // still play, they simply cannot claim to follow well.
+            ranked.sort_by(|a, b| match (a.2, b.2) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            });
+        }
+
+        // --- Stage D: rank decay, then weighted roulette [SPEC-DIR-165] ---
+        // Decay only makes sense over a MEANINGFUL rank. With no queue tail
+        // there is no flow order, so rank would be arbitrary and decay would
+        // favour whatever the scan happened to visit first.
+        let take = if flowed { RAND_POOL } else { ranked.len() };
+        let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> = ranked
+            .into_iter()
+            .take(take)
+            .enumerate()
+            .map(|(rank, (e, w, d))| {
+                let decayed =
+                    if flowed { w.weight * RANK_DECAY.powi(rank as i32) } else { w.weight };
+                (e, w, d, decayed)
+            })
+            .collect();
+
+        let total: f64 = pool.iter().map(|x| x.3).sum();
         if !(total > 0.0) {
             return None;
         }
-        let mut target = rng.unit() * total;
-        let mut winner: Option<&(&QueueEntry, Weighing)> = None;
-        for pair in &weighed {
-            if !live(pair) {
-                continue;
-            }
-            target -= pair.1.weight;
+        let roulette_target = rng.unit() * total;
+        let mut target = roulette_target;
+        let mut hit: Option<usize> = None;
+        for (i, x) in pool.iter().enumerate() {
+            target -= x.3;
             if target <= 0.0 {
-                winner = Some(pair);
+                hit = Some(i);
                 break;
             }
         }
         // Floating-point drift can leave a hair of `target` after the loop.
-        // Taking the last eligible passage is correct, not a fallback.
-        let (entry, w) = winner.or_else(|| weighed.iter().rev().find(|x| live(x)))?;
+        // Taking the last candidate is correct, not a fallback.
+        let idx = hit.unwrap_or(pool.len() - 1);
+        let (entry, w, flow_distance, decayed) = pool[idx];
 
-        // The heaviest losers, which is what "why not something else?" means.
-        let mut rest: Vec<&(&QueueEntry, Weighing)> = weighed
-            .iter()
-            .filter(|x| live(x) && x.0.passage_id != entry.passage_id)
-            .collect();
-        rest.sort_by(|a, b| b.1.weight.partial_cmp(&a.1.weight).unwrap_or(std::cmp::Ordering::Equal));
+        // The heaviest losers AFTER decay -- "why not something else?" is about
+        // what nearly won, which is the decayed weight, not the raw one.
+        let mut rest: Vec<&(&QueueEntry, &Weighing, Option<f64>, f64)> =
+            pool.iter().filter(|x| x.0.passage_id != entry.passage_id).collect();
+        rest.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
-        let pool_size = weighed.iter().filter(|x| live(x)).count();
+        let pool_size = pool.len();
         Some(Decision {
             entry: (*entry).clone(),
             why: Explanation {
                 passage_id: entry.passage_id,
                 title: entry.title(),
                 weight: w.weight,
+                decayed_weight: decayed,
+                rank: idx,
+                flow_distance,
+                roulette_target,
                 artist_weight: w.artist_weight,
                 artist_blocked: w.artist_blocked,
                 track_restraint: w.track_restraint,
@@ -498,13 +573,17 @@ impl Director {
                 runners_up: rest
                     .iter()
                     .take(RUNNERS_UP)
-                    .map(|(e, rw)| RunnerUp {
-                        passage_id: e.passage_id,
-                        title: e.title(),
-                        weight: rw.weight,
+                    .map(|x| RunnerUp {
+                        passage_id: x.0.passage_id,
+                        title: x.0.title(),
+                        weight: x.3,
                     })
                     .collect(),
-                stages: "frequency only; no flavor shaping yet [SPEC-FD-040]",
+                stages: if flowed {
+                    "frequency, shaping, flow, rank decay"
+                } else {
+                    "frequency, shaping; no flow -- nothing queued to follow"
+                },
             },
         })
     }
@@ -829,7 +908,7 @@ mod tests {
     #[test]
     fn a_decision_carries_its_decomposition_and_its_losers() {
         let d = Director::load(&fixture()).unwrap();
-        let dec = d.decide(NOW, &mut Rng::seeded(11), &[]).unwrap();
+        let dec = d.decide(NOW, &mut Rng::seeded(11), &[], None).unwrap();
         assert_eq!(dec.why.pool_size, 3);
         assert!((dec.why.pool_weight - 3.0).abs() < 1e-9);
         assert!((dec.why.share_pct - 33.333).abs() < 0.01, "share {}", dec.why.share_pct);
@@ -848,7 +927,7 @@ mod tests {
         let d = Director::load(&c).unwrap();
         // rec-c is 10x; whenever it does not win it must head the losers.
         for seed in 0..20 {
-            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[]).unwrap();
+            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[], None).unwrap();
             if dec.why.passage_id != 3 {
                 assert_eq!(dec.why.runners_up[0].passage_id, 3,
                            "the heaviest loser must be listed first");
@@ -917,6 +996,88 @@ mod tests {
         let d = Director::load(&c).unwrap();
         assert_eq!(d.occasion_count(), 0);
         assert!(d.weigh_all(NOW).iter().all(|(_, x)| x.occasion == 1.0));
+    }
+
+    /// Give the three recordings flavor spread along one characteristic, so
+    /// distance is a known function of which is which.
+    fn with_flavor(c: &Connection) {
+        for (mbid, v) in [("rec-a", 0.0f64), ("rec-b", 0.4), ("rec-c", 1.0)] {
+            for (class, val) in [("hi", v), ("lo", 1.0 - v)] {
+                c.execute(
+                    "INSERT INTO flavor VALUES ('recording',?1,'x',?2,?3,'test',NULL)",
+                    rusqlite::params![mbid, class, val],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    /// Stage C: the pool is ordered by distance to the passage already queued,
+    /// so consecutive passages blend [SPEC-DIR-160]. rec-b (0.4) is nearer to
+    /// rec-a (0.0) than rec-c (1.0) is, so it must always rank first.
+    #[test]
+    fn flow_orders_by_distance_to_the_queue_tail() {
+        let c = fixture();
+        with_flavor(&c);
+        let d = Director::load(&c).unwrap();
+        for seed in 0..30 {
+            // passage 1 is the tail: skip it, and follow it
+            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            match dec.why.passage_id {
+                2 => assert_eq!(dec.why.rank, 0, "rec-b is nearer the tail"),
+                3 => assert_eq!(dec.why.rank, 1, "rec-c is further"),
+                other => panic!("unexpected winner {other}"),
+            }
+            assert!(dec.why.flow_distance.is_some(), "a followed passage has a flow distance");
+        }
+    }
+
+    /// Stage D: the roulette weight is exactly weight x decay^rank
+    /// [SPEC-DIR-165].
+    #[test]
+    fn rank_decay_is_applied_to_the_roulette_weight() {
+        let c = fixture();
+        with_flavor(&c);
+        let d = Director::load(&c).unwrap();
+        for seed in 0..30 {
+            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            let expect = dec.why.weight * RANK_DECAY.powi(dec.why.rank as i32);
+            assert!(
+                (dec.why.decayed_weight - expect).abs() < 1e-12,
+                "rank {} decayed {} expected {expect}",
+                dec.why.rank,
+                dec.why.decayed_weight
+            );
+        }
+    }
+
+    /// A lower-ranked passage must still be able to win -- selection is by
+    /// weight, not by rank, and that is where the surprise lives
+    /// [SPEC-DIR-165]. A pool that always returned rank 0 would be a bug.
+    #[test]
+    fn a_lower_ranked_passage_can_still_win() {
+        let c = fixture();
+        with_flavor(&c);
+        let d = Director::load(&c).unwrap();
+        let mut ranks = std::collections::HashSet::new();
+        for seed in 0..200 {
+            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            ranks.insert(dec.why.rank);
+        }
+        assert!(ranks.len() > 1, "only rank {:?} ever won", ranks);
+    }
+
+    /// With nothing queued there is no flow order, so rank would be arbitrary
+    /// and decay would favour whatever the scan visited first. Neither applies.
+    #[test]
+    fn without_a_queue_tail_there_is_no_flow_or_decay() {
+        let c = fixture();
+        with_flavor(&c);
+        let d = Director::load(&c).unwrap();
+        let dec = d.decide(NOW, &mut Rng::seeded(3), &[], None).unwrap();
+        assert!(dec.why.flow_distance.is_none());
+        assert_eq!(dec.why.decayed_weight, dec.why.weight, "no rank means no decay");
+        assert!(dec.why.stages.contains("no flow"), "the record must say so: {}", dec.why.stages);
     }
 
     #[test]
