@@ -13,6 +13,7 @@
 //! Only Stage A exists so far. Stages B and C need flavor distance
 //! `[SPEC-FD-040]`, and D needs a settled pool size `[SPEC-DIR-200]`.
 
+pub mod flavor;
 pub mod frequency;
 pub mod library;
 pub mod occasion;

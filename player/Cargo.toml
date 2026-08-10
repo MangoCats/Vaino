@@ -24,6 +24,10 @@ name = "vaino"
 path = "src/bin/vaino.rs"
 
 [[bin]]
+name = "flavorcheck"
+path = "src/bin/flavorcheck.rs"
+
+[[bin]]
 name = "memcheck"
 path = "src/bin/memcheck.rs"
 

@@ -172,7 +172,27 @@ Note this also removes the awkwardness in `[SPEC-FD-120]`: with uniform provenan
 
 ## 6. Implementation Notes
 
-**`[SPEC-FD-090]`** `β_c` and `w_c` are corpus constants, computed once per flavor source and stored alongside it — not recomputed per query.
+**`[SPEC-FD-085]` Implemented 2026-08-10** in `player/src/director/flavor.rs`, measured by `flavorcheck`. Four findings, three of them limits on what the metric can currently do.
+
+*Cost is not a constraint.* 7,897 subjects load in 0.14 s; a distance costs **0.1 µs**. Stage B weighing the whole library against five seeds is ~4 ms, so the pool parameters `[SPEC-DIR-200]` can be re-derived on merit rather than on budget. Vectors are stored flat with a `u64` presence bitmask; a map lookup per class would have dominated.
+
+*`[SPEC-FD-100]` verified on the library itself* — 0 malformed characteristic instances, where the spec had previously verified only the sample dump.
+
+*The six complex characteristics are absent from the library.* They have constants but **no values**: the migrated flavor is MuLibPlay's 11 binaries plus 4 user characteristics. So `[SPEC-FD-055]`'s headline — that including the complex characteristics is the single largest available improvement — **cannot be exercised until Sampo extracts them**. The schema is built from the data rather than the constants table, so they will appear automatically when it does, with no code change. Until then the metric runs on the same information MuLibPlay had, keeping only the scale-normalisation and reliability weighting worth ~+1.6 pp of the measured +5.3.
+
+*User-defined characteristics record only their positives, so they cannot yet contribute* `[SPEC-FD-110]`. Every holder of `user.christmas` has `christmasy = 1.0`; among its 41 holders it never varies, so its measured β is 0 and it is excluded — correctly, since a characteristic with no between-recording variation carries no discriminative information. **To participate in distance, non-members must carry an explicit 0.0.** As stored they are usable as occasion values `[SPEC-DIR-130]`, where only the positives matter, and unusable as flavor. 37 recordings carry *only* user characteristics and are therefore incomparable to the rest — reported as incomparable rather than as distant, per `[SPEC-FD-040]`.
+
+**`[SPEC-FD-087]` Neighbour inspection, the only perceptual check available before `[SPEC-FD-080]`.** On 11 binary characteristics the nearest neighbours are already plausible:
+
+| Query | Nearest |
+| :--- | :--- |
+| Fatboy Slim — *Santa Cruz* | Sneaker Pimps (0.314), Moby (0.328) |
+| America — *Muskrat Love* | Springsteen — *I'm on Fire* (0.245), Peter, Paul & Mary (0.269) |
+| Radiohead — *You* | Metallica — *Fuel* (0.194), Alice in Chains — *Would?* (0.205) |
+
+The third is the interesting one: *You* is among Radiohead's heaviest early tracks, and the metric places it with hard rock rather than with the rest of their catalogue. That is the behaviour wanted — similarity by sound, not by artist. Distances span 0.221–2.391 with a median of 1.052. This is not evidence of perceptual validity, which `[SPEC-FD-080]` is for; it is evidence that nothing is obviously broken.
+
+**`[SPEC-FD-090]`** `β_c` and `w_c` are corpus constants, computed once per flavor source and stored alongside it — not recomputed per query. A characteristic with no measured constant has `w_c = 1.0` and β estimated from a bounded sample of pairs **drawn from the subjects that carry it** — sampling the whole library would almost never draw two holders of a characteristic that sits on a few dozen recordings.
 
 **`[SPEC-FD-100]`** Characteristics whose classes fail to sum to 1.0 ± 1e-4 are flagged, per McRhythm's `[MFL-DEF-040]`. Verified clean on 21,636 of 21,636 characteristic instances in the sample dump.
 
