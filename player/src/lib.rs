@@ -11,6 +11,7 @@
 //! function of how many passages are open, never of how long they are.
 
 pub mod db;
+pub mod director;
 pub mod decoder;
 pub mod engine;
 pub mod fade;

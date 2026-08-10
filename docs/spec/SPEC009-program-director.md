@@ -48,6 +48,25 @@ They never mix. Frequency produces a weight; character shapes and orders a pool.
 4. Track weight multiplies its artist's weight. Related recordings block and damp too, scaled by relation strength.
 5. Drop below `min_weight` → excluded.
 
+**`[SPEC-DIR-117]` The artist weight never reaches the track weight in MuLibPlay as shipped.** Step 4 above describes the intent. The code does something else, and the difference was found only by transcribing it:
+
+```cpp
+qreal weight = pow(10.0,-restraint);          // outer
+if ( eligibleArtists.contains( artistId ) )
+  { weight *= eligibleArtists.value( artistId );   // writes the OUTER weight
+    qreal restraint = ...;
+    qreal weight = pow(10.0,-restraint);           // SHADOWS it; outer never read again
+```
+
+The inner declaration shadows the outer, so the multiplication by the artist weight is dead. `eligibleTracks.insert(trackId, weight)` sits inside that inner block. **An artist rotation block still excludes the track — that gate is a map lookup, unaffected — but a partially recovered artist does not damp its tracks at all.** The artist recovery ramp has, in six years of production, done nothing.
+
+Two consequences, and they pull in opposite directions:
+
+- `[REQ-PD-110]` and the P3 acceptance test require reproducing MuLibPlay's selections. A faithful port must reproduce this, or the test can never pass.
+- The intended behaviour is almost certainly better. Artist recovery exists so that hearing one track by an artist gently damps the rest, and that has never happened.
+
+Implemented as an explicit `ArtistCoupling` switch — `AsShipped` and `AsSpecified` — with both pinned by test so neither can drift into the other unnoticed. **Reproduction runs `AsShipped`; the default for listening is a decision to make once reproduction is demonstrated**, alongside `[SPEC-DIR-210]`. Note that the same block contains a second instance of the pattern: related-track recovery damping passes the *primary* track's age rather than the related track's, so it too is largely inert.
+
 **`[SPEC-DIR-120]` Defaults matter more than they look.** Only 2,918 of 8,116 MuLibPlay tracks (36%) ever received tuned values `[GDE-BMK-020]`, so most selection runs on defaults:
 
 | | default | = | observed tuned median |

@@ -123,6 +123,14 @@ This is deliberately **not** an absolute target, because the audio output channe
 
 **`[REQ-NEG-110]`** Sampo does **not** play audio, run on the appliance, or hold listener state `[SPEC-SA-100]`.
 
+**`[REQ-NEG-120]` Neither Vaino nor Sampo integrates with personal-cloud accounts.** No Google Drive, Gmail, Calendar, or equivalent from any vendor — not for storage, not for scheduling, not for identity. This is a scope boundary, not an unimplemented feature.
+
+> Three reasons it stays closed. **Playback must not depend on a reachable service** `[REQ-NEG-100]`; an appliance that cannot play music because a token expired has failed at its only job. **Network cost is justified per data class** `[SPEC006 §B]` — identification earns its lookups because MBIDs cannot be derived locally; nothing in playback, selection, or flavor can make that case. **Listener history is the user's** `[SPEC-DF-090]`, which is why class-D export exists at all; routing it through a third-party account inverts that.
+>
+> The near-miss worth naming: occasion weighting `[REQ-PD-050]` is seasonal, computed from month and day against the system clock `[SPEC003 §3.3]`. It is *not* a calendar integration and must not become one — reading real appointments would make selection fail when a remote service is unreachable.
+>
+> Off-machine backup of a class-D export to cloud storage is a legitimate thing a **user** may choose to do with a file Vaino has already written. Vaino does not do it for them, and nothing in the system may assume it happened.
+
 ---
 
 ## 8. Coverage Gaps
