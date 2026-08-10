@@ -146,6 +146,16 @@ def read_variant(r: Reader, depth: int = 0):
     raise ValueError(f"unhandled QVariant type {t} at {r.p}")
 
 
+# NOTE: the record framing is only understood as far as the first step
+# [GDE-FEX-070a]. Each record begins QString name, QString applier, then TWO
+# QVariantMaps -- but after those comes an empty map and a region that could be
+# a QByteArray of applier state or a mis-framed string, and choosing between
+# them by inspection is guesswork. A sequential reader built on a guess would
+# associate parameters with the wrong steps and still produce numbers that look
+# fine. So the extractors below locate parameters BY NAME and occurrence, and
+# the 658-pair verification is what confirms the association is right.
+
+
 def read_param_at(path: Path, name: str, occurrence: int = 0):
     """Read the QVariant that follows the parameter named `name`.
 

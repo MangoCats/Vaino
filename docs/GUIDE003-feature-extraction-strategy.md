@@ -199,7 +199,19 @@ All 18 parse, at 372–875 dimensions each.
 
 **A trap caught before it shipped:** six of the eighteen — `genre_dortmund`, `genre_electronic`, `mood_relaxed`, `moods_mirex`, `timbre`, `voice_instrumental` — normalize **twice**, once at step five and again before the SVM. An API returning "the" coefficients hands back the wrong step for a third of the classifiers, and the output still looks like reasonable numbers. `normalize_coeffs` therefore returns a **list** in chain order.
 
-What remains for route 2 is applying the chain: the `cleaner` parameters, and libsvm RBF/polynomial prediction with pairwise coupling for the six multi-class cases. It is **exactly verifiable**: 658 AcousticBrainz lowlevel JSONs are on disk beside their published highlevel outputs, so the reimplementation can be checked against the reference on its own inputs `[GDE-FEX-090]`.
+#### `[GDE-FEX-070a]` The record framing is *not* fully understood — and that is deliberate
+
+An attempt at a sequential reader failed on all 18. The header is `magic, version, count, reserved`, and each record opens `QString name, QString applier`, then **two** `QVariantMap`s — not one. After those comes an empty map and then a region that could be a `QByteArray` of applier state or a mis-framed string.
+
+Choosing between those by inspection is guesswork, and a sequential reader built on a guess would associate parameters with the **wrong steps** while still producing numbers that look entirely reasonable. That is the failure this whole exercise is most exposed to, so the reader was **removed rather than shipped**. Extraction locates parameters by name and occurrence instead, which works for all 18, and the 658-pair verification is what confirms the association is right.
+
+Resolve the framing later if it becomes necessary. It is not necessary yet.
+
+#### `[GDE-FEX-090a]` The verification set is complete
+
+All **658** lowlevel JSONs have published highlevel beside them in `data/flavor-sample.db`, across all 18 characteristics. Note that recordings carry **multiple submissions** (0, 1, 2 …) with different values, and the lowlevel file is one specific submission — so a comparison must establish *which*, rather than assume submission 0. Comparing against every submission and reporting the best match will show it.
+
+What remains for route 2 is applying the chain: the `cleaner` parameters, and libsvm RBF/polynomial prediction with pairwise coupling for the six multi-class cases. It is **exactly verifiable** against that set, on the reference's own inputs `[GDE-FEX-090]`.
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
 
