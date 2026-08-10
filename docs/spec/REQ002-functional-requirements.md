@@ -99,6 +99,12 @@ This is deliberately **not** an absolute target, because the audio output channe
 
 **`[REQ-HW-130]`** The player is portable and reaches ARM. Sampo need not `[SPEC-SA-018]`.
 
+**`[REQ-HW-140]` Desktop and server hosts are first-class targets, not a by-product of the appliance.** Vaino runs on Windows, Linux and macOS as an ordinary application `[GDE-CHT-045]`. The Pi Zero 2W is the *constraining* target, not the only one.
+
+**`[REQ-HW-145]` Every supported target is tested, not merely compiled.** `build/verify-targets.sh` runs the suite on Linux x86_64, Linux aarch64 (under emulation) and the host. Compiling is not testing: an audit found aarch64 had only ever been *built*, Linux x86_64 never built at all, and the suite only ever *run* on Windows.
+
+**`[REQ-HW-147]` At least one verification must use a real audio device.** A null sink reports no device rate and therefore cannot detect a sample-rate fault. This is not hypothetical: playback ran **8.8% fast — about 1.5 semitones sharp** — because a 48 kHz device met a 44.1 kHz library with the resampler unwired, and every prior test had used a null sink.
+
 ## 7. Non-Requirements
 
 **`[REQ-NEG-100]`** Vaino does **not** stream audio to remote devices `[REQ-AUD-150]`, require any live external service at playback time, or modify audio data `[REQ-AUD-100]`.

@@ -1,0 +1,6 @@
+# Native Linux build/test image. x86_64 by default; also runs under
+# --platform linux/arm64 emulation to exercise the aarch64 target for real
+# rather than only compiling it.
+FROM rust:1.90-bookworm
+RUN apt-get update && apt-get install -y libasound2-dev pkg-config && rm -rf /var/lib/apt/lists/*
+WORKDIR /w

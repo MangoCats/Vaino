@@ -18,6 +18,7 @@ use vaino_player::decoder::PassageDecoder;
 use vaino_player::fade::{Curve, Fade};
 use vaino_player::mixer::{mix, Stream};
 use vaino_player::queue::{should_admit, QueueEntry};
+use vaino_player::resample::Resampler;
 use vaino_player::output::Output;
 use vaino_player::BUFFER_FRAMES;
 
@@ -70,6 +71,7 @@ fn main() {
         }
     };
     let out_channels = out.as_ref().map(|o| o.channels).unwrap_or(2);
+    let out_rate = out.as_ref().map(|o| o.sample_rate).unwrap_or(44_100);
 
     // Open every decoder up front so a bad path fails before audio starts.
     let mut sources: Vec<(PassageDecoder, Fade, Fade, QueueEntry)> = Vec::new();
@@ -81,7 +83,9 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let sr = d.sample_rate as f32;
+        // Fades are measured in output frames, since the fade is applied after
+        // conversion.
+        let sr = out_rate as f32;
         let fi = Fade { curve: Curve::Exponential, frames: (c.fade_in_s * sr) as u64,
                         fade_in: true };
         let fo = Fade { curve: Curve::Exponential, frames: (c.fade_out_s * sr) as u64,
@@ -120,6 +124,14 @@ fn main() {
         stream: Stream,
         frames_mixed: u64,
         entry: QueueEntry,
+        /// File rate to device rate. A device commonly opens at 48 kHz while the
+        /// library is 44.1 kHz; without this the audio plays 8.8% fast, about
+        /// 1.5 semitones sharp. A null sink hides it completely, which is why
+        /// this was missed until a real device was used.
+        resampler: Resampler,
+        /// Resampled output awaiting the stream, reused to avoid per-packet
+        /// allocation.
+        converted: Vec<f32>,
     }
     let mut live: Vec<Live> = Vec::new();
     let mut pending = sources.into_iter();
@@ -132,7 +144,7 @@ fn main() {
         // second thing to get wrong.
         let should_admit = match (&next, live.last()) {
             (Some((_, _, _, nb)), Some(l)) => {
-                let played_ms = l.frames_mixed * 1000 / 44_100;
+                let played_ms = l.frames_mixed * 1000 / out_rate as u64;
                 should_admit(&l.entry, played_ms, nb)
             }
             (Some(_), None) => true,
@@ -144,11 +156,23 @@ fn main() {
                 if !live.is_empty() {
                     println!("crossfading over {overlap:.1}s");
                 }
+                let resampler = match Resampler::new(dec.sample_rate, out_rate, ch) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("resampler: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                if !resampler.is_passthrough() {
+                    println!("  resampling {} Hz -> {} Hz", dec.sample_rate, out_rate);
+                }
                 live.push(Live {
                     stream: Stream::new(BUFFER_FRAMES * ch, ch, fade_in),
                     dec,
                     frames_mixed: 0,
                     entry,
+                    resampler,
+                    converted: Vec::new(),
                 });
                 next = pending.next();
             }
@@ -161,8 +185,18 @@ fn main() {
             }
             match l.dec.next() {
                 Ok(Some(chunk)) => {
-                    let mut owned = chunk.to_vec();
-                    l.stream.push(&mut owned);
+                    // Convert to the device rate BEFORE the fade, so fade
+                    // durations stay in output frames and the stream sees one
+                    // rate throughout.
+                    l.converted.clear();
+                    if let Err(e) = l.resampler.process(chunk, &mut l.converted) {
+                        eprintln!("resample: {e}");
+                        l.stream.finished = true;
+                    } else {
+                        let mut owned = std::mem::take(&mut l.converted);
+                        l.stream.push(&mut owned);
+                        l.converted = owned;
+                    }
                 }
                 Ok(None) => l.stream.finished = true,
                 Err(e) => {
@@ -207,6 +241,6 @@ fn main() {
         println!("underrun samples: {under}, lock failures: {locks}");
     }
     println!("submitted {:.1}s of audio in {:.1}s wall",
-             submitted as f64 / (44_100.0 * out_channels as f64),
+             submitted as f64 / (out_rate as f64 * out_channels as f64),
              t0.elapsed().as_secs_f64());
 }
