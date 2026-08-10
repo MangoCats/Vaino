@@ -148,6 +148,23 @@ No SVM-capable binary was ever published — the released extractors emit lowlev
 
 Route 3 is recommended, with route 2 as the fallback if distillation plateaus. Both are verified identically `[GDE-FEX-090]`, and the data to attempt route 3 is already local.
 
+#### `[GDE-FEX-067]` Route 2 surveyed 2026-08-10 — the chains are legible, and route 2 is the only route that reaches all 18
+
+Route 3 was pursued and produced models for **11 binary characteristics only**. The six complex ones — `genre_dortmund`, `genre_electronic`, `genre_rosamerica`, `genre_tzanetakis`, `ismir04_rhythm`, `moods_mirex` — have no distilled model, and the one attempt on record sits at 1.87× the reproducibility floor `[LOG-NEXT-010]`. Those six are exactly what `[SPEC-FD-082]` predicts the library most needs.
+
+All 18 Gaia `.history` files are on disk. `tools/gaia_history.py` reads them: a `QDataStream` with magic `0x6AEA723D` and length-prefixed UTF-16BE strings. Every chain is the same ten steps, varying only at step five:
+
+```
+remove → fixlength → remove → enumerate → {select|normalize|remove}
+       → select → cleaner → normalize → svmtrain → select
+```
+
+**Two corrections to `[GDE-FEX-065]` above.** There is **no PCA stage** in any of the 18 — the pipeline was described as `remove → select → normalize → PCA → SVM` and the PCA does not exist. And the descriptor names are stored in full (`.lowlevel.silence_rate_20dB.max`, `.lowlevel.spectral_decrease.dmean`, …), matching the extractor's JSON keys exactly, so the `remove`/`select` steps need no guessing at all.
+
+What remains is reconstructing the libsvm model — support vectors and coefficients — which is the bulk of each file (0.7–24 MB). That is bounded work against a known format, and it is **exactly verifiable**: 658 AcousticBrainz lowlevel JSONs are on disk beside their published highlevel outputs, so the reimplementation can be checked against the reference on its own inputs `[GDE-FEX-090]`.
+
+**Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
+
 ### `[GDE-FEX-070]` Tier 2 — Approximate, only for what Tier 1 cannot reach
 
 If Tier 1 proves impossible for some classifiers, fall back to modern embeddings (MusicNN, EffNet-Discogs) with heads fitted **against the harvested ground truth** `[GDE-FEX-050]` — which is exactly what v1 lacked. Same iteration protocol `[GDE-FEX-100]`, same provenance and accuracy labelling `[GDE-ARC-030]`.
