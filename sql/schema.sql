@@ -209,6 +209,32 @@ CREATE TABLE IF NOT EXISTS listener_settings (
     updated_at        TEXT NOT NULL
 );
 
+-- Seasonal curves [SPEC-DIR-130]. Data, not code: a new occasion is rows here
+-- plus flavor values, with no edit to the engine. MuLibPlay hardcoded four
+-- ([C] [W] [S] [K]) into a switch, which is why it had exactly four.
+-- The value side lives in `flavor` -- an occasion IS a user characteristic.
+CREATE TABLE IF NOT EXISTS listener_occasions (
+    characteristic  TEXT NOT NULL,          -- e.g. 'user.christmas'
+    class           TEXT NOT NULL,          -- e.g. 'christmasy'
+    interp          TEXT NOT NULL DEFAULT 'step'
+                    CHECK (interp IN ('step','linear')),
+    PRIMARY KEY (characteristic, class)
+) WITHOUT ROWID;
+
+-- Control points around a wrapped year. Multiplier must be positive: zero or
+-- below would be a suppression the weight product cannot recover from, and
+-- negative would invert it.
+CREATE TABLE IF NOT EXISTS listener_occasion_points (
+    characteristic  TEXT    NOT NULL,
+    class           TEXT    NOT NULL,
+    month           INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    day             INTEGER NOT NULL CHECK (day BETWEEN 1 AND 31),
+    multiplier      REAL    NOT NULL CHECK (multiplier > 0.0),
+    PRIMARY KEY (characteristic, class, month, day),
+    FOREIGN KEY (characteristic, class)
+        REFERENCES listener_occasions(characteristic, class) ON DELETE CASCADE
+) WITHOUT ROWID;
+
 -- A programme is a list of exemplar passages, not tuned parameters
 -- [SPEC-DIR-140].
 CREATE TABLE IF NOT EXISTS listener_programs (

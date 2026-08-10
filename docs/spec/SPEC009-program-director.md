@@ -138,6 +138,25 @@ So `user.christmas.christmasy = 0.9` on 21 December with a curve value of 4.2 yi
 
 Curves are data, not code: a new occasion is a new characteristic plus a curve, with no edit to the engine.
 
+**`[SPEC-DIR-132]` Curve representation.** A curve is control points around a **wrapped** year — January follows December — plus an interpolation mode:
+
+| Mode | Behaviour | Use |
+| :--- | :--- | :--- |
+| `step` | hold the previous point's value | month-granular curves, as MuLibPlay's `[W]`/`[S]`/`[K]` were |
+| `linear` | interpolate in **log** space | smooth curves, as `[C]` effectively was |
+
+Interpolation is logarithmic because these are *ratios*: halfway between ×0.5 and ×2.0 is ×1.0, not ×1.25, and a linear blend of 0.000001 and 10 would sit near 5 for half the gap.
+
+Leap years are deliberately ignored — 29 February shares an ordinal with 1 March. A season is not accurate to the day, and honouring it would shift every curve by a day in three years out of four.
+
+The multiplier is clamped at zero. A characteristic value above 1.0 against a curve below 1.0 would otherwise drive it negative and *invert* the weight; "never right now" is the strongest thing a season may say.
+
+**`[SPEC-DIR-134]` The inherited four are data, and the data already exists.** MuLibPlay's `[C]`, `[W]`, `[S]`, `[K]` migrate to `user.christmas`, `user.winter`, `user.summer`, `user.childrens` — already present in the migrated library as **binary characteristics**, `christmasy` paired with `not_christmasy`. The curve attaches to the positive class; the negative class carries no curve and is ignored.
+
+Verified on the migrated library: with the Christmas curve loaded, 81 christmasy recordings (82 radio passages) drop below `min_weight` out of season, and the rest of the pool is untouched. A partial characteristic value damps rather than excludes, which is the point of scaling by value rather than testing a tag.
+
+Note that `[K]` was never seasonal at all — a flat ×0.000001 on 140 children's recordings. It expresses fine as a single-point curve, which is a fair test of whether "curves are data" actually holds.
+
 ---
 
 ## 4. Stage B — Pool Shaping

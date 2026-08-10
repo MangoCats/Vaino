@@ -17,6 +17,7 @@ use serde::Serialize;
 use super::frequency::{
     weigh, Candidate, Exclusion, Policy, Related, TimeScale, Tuning, Weighing,
 };
+use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
 use crate::db::{row_to_entry, DbError, COLS, FROM};
 use crate::queue::QueueEntry;
 
@@ -121,6 +122,7 @@ pub struct Director {
     last_played: HashMap<String, i64>,
     artist_last_played: HashMap<String, i64>,
     relations: HashMap<String, Vec<(String, f64)>>,
+    occasions: Occasions,
 }
 
 impl Director {
@@ -219,6 +221,8 @@ impl Director {
             relations.entry(a).or_default().push((b, s));
         }
 
+        let occasions = load_occasions(conn)?;
+
         // Absent settings are the defaults, not an error: a library that has
         // never been tuned must still play [SPEC-DIR-158].
         let scales = conn
@@ -243,6 +247,7 @@ impl Director {
             last_played,
             artist_last_played,
             relations,
+            occasions,
         })
     }
 
@@ -258,6 +263,9 @@ impl Director {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+    pub fn occasion_count(&self) -> usize {
+        self.occasions.curve_count()
+    }
 
     fn age(&self, map: &HashMap<String, i64>, key: &str, now: i64) -> Option<f64> {
         // A play stamped in the future -- clock skew, or a restored backup --
@@ -270,6 +278,11 @@ impl Director {
     /// selection can be replayed against a frozen history `[REQ-PD-110]`.
     pub fn weigh_all(&self, now: i64) -> Vec<(&QueueEntry, Weighing)> {
         let mut related_buf: Vec<Related> = Vec::new();
+        // The day is resolved once per pass, not per passage: every candidate is
+        // weighed against the same "today", which is also what keeps a selection
+        // replayable from a frozen `now`.
+        let (_, month, day) = civil_from_unix(now);
+        let today = ordinal(month, day);
         self.rows
             .iter()
             .map(|row| {
@@ -305,9 +318,7 @@ impl Director {
                     artist_age_s: artist_id
                         .and_then(|a| self.age(&self.artist_last_played, a, now)),
                     related: &related_buf,
-                    // Occasion curves are not implemented yet [SPEC-DIR-130];
-                    // 1.0 is the correct neutral, not a placeholder to forget.
-                    occasion: 1.0,
+                    occasion: self.occasions.multiplier(mbid, today),
                 };
                 (&row.entry, weigh(&c, &self.policy))
             })
@@ -455,6 +466,85 @@ pub struct Census {
     pub total_weight: f64,
 }
 
+/// Curves and the per-subject values they apply to `[SPEC-DIR-130]`.
+///
+/// Missing tables are not an error: a library with no occasions defined simply
+/// has no seasons, and every multiplier is 1.0.
+fn load_occasions(conn: &Connection) -> Result<Occasions, DbError> {
+    let mut modes: HashMap<(String, String), Interp> = HashMap::new();
+    let mut pts: HashMap<(String, String), Vec<(u16, f64)>> = HashMap::new();
+
+    let Ok(mut stmt) = conn.prepare("SELECT characteristic, class, interp FROM listener_occasions")
+    else {
+        return Ok(Occasions::default());
+    };
+    if let Ok(rows) = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+    }) {
+        for row in rows.flatten() {
+            modes.insert((row.0, row.1), Interp::parse(&row.2));
+        }
+    }
+    drop(stmt);
+    if modes.is_empty() {
+        return Ok(Occasions::default());
+    }
+
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT characteristic, class, month, day, multiplier FROM listener_occasion_points",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u32>(2)?,
+                r.get::<_, u32>(3)?,
+                r.get::<_, f64>(4)?,
+            ))
+        }) {
+            for (ch, cl, m, d, mult) in rows.flatten() {
+                pts.entry((ch, cl)).or_default().push((ordinal(m, d), mult));
+            }
+        }
+    }
+
+    let mut curves = HashMap::new();
+    for (key, points) in pts {
+        let interp = modes.get(&key).copied().unwrap_or(Interp::Step);
+        // A registered occasion with no control points has no curve and is
+        // dropped: silently neutral is how a mis-entered occasion would go
+        // unnoticed for a year.
+        if let Some(c) = Curve::new(interp, points) {
+            curves.insert(key, c);
+        }
+    }
+
+    // Only characteristics that ARE occasions. `flavor` also holds 71
+    // dimensions of musical flavor, and none of those are seasonal.
+    let mut values: HashMap<String, Vec<((String, String), f64)>> = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT subject_id, characteristic, class, value FROM flavor \
+         WHERE subject_kind = 'recording'",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?,
+            ))
+        }) {
+            for (subject, ch, cl, v) in rows.flatten() {
+                let key = (ch, cl);
+                if curves.contains_key(&key) {
+                    values.entry(subject).or_default().push((key, v));
+                }
+            }
+        }
+    }
+    Ok(Occasions::new(curves, values))
+}
+
 fn map_query(conn: &Connection, sql: &str) -> Result<HashMap<String, String>, DbError> {
     let q = |e: rusqlite::Error| DbError::Query(e.to_string());
     let mut stmt = conn.prepare(sql).map_err(q)?;
@@ -491,6 +581,11 @@ mod tests {
                  played_at INTEGER, passage_id INTEGER, mbid TEXT);
              CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
                  artist_time_scale REAL, track_time_scale REAL, updated_at TEXT);
+             CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT);
+             CREATE TABLE listener_occasion_points (characteristic TEXT, class TEXT,
+                 month INTEGER, day INTEGER, multiplier REAL);
+             CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,
+                 class TEXT, value REAL, source TEXT, accuracy REAL);
              INSERT INTO files VALUES (1, '/m/a.mp3');
              -- three 180 s radio passages, one album passage that must never appear
              INSERT INTO passages VALUES (1,1,'radio',0,180000,0,0,0.0);
@@ -637,6 +732,69 @@ mod tests {
                            "the heaviest loser must be listed first");
             }
         }
+    }
+
+    /// July, with a Christmas curve: the seasonal term must suppress the
+    /// christmasy recording and leave the others alone.
+    #[test]
+    fn an_out_of_season_occasion_suppresses_only_its_own() {
+        let c = fixture();
+        c.execute_batch(
+            "INSERT INTO listener_occasions VALUES ('user.christmas','christmasy','step');
+             INSERT INTO listener_occasion_points VALUES
+                 ('user.christmas','christmasy',1,1,0.000001),
+                 ('user.christmas','christmasy',12,1,5.0);
+             INSERT INTO flavor VALUES ('recording','rec-a','user.christmas','christmasy',
+                 1.0,'user',NULL);",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        assert_eq!(d.occasion_count(), 1);
+
+        let july = 1_782_000_000; // 21 June 2026 onwards -- high summer
+        let w = d.weigh_all(july);
+        let (_, a) = w.iter().find(|(e, _)| e.passage_id == 1).unwrap();
+        let (_, b) = w.iter().find(|(e, _)| e.passage_id == 2).unwrap();
+        assert!(a.occasion < 0.001, "christmasy out of season: {}", a.occasion);
+        assert_eq!(a.excluded, Some(Exclusion::BelowMinWeight));
+        assert_eq!(b.occasion, 1.0, "a track with no occasion value is untouched");
+        assert!(b.is_eligible());
+    }
+
+    /// In season the same recording is boosted, scaled by its value.
+    #[test]
+    fn an_in_season_occasion_boosts() {
+        let c = fixture();
+        c.execute_batch(
+            "INSERT INTO listener_occasions VALUES ('user.christmas','christmasy','step');
+             INSERT INTO listener_occasion_points VALUES
+                 ('user.christmas','christmasy',1,1,0.000001),
+                 ('user.christmas','christmasy',12,1,5.0);
+             INSERT INTO flavor VALUES ('recording','rec-a','user.christmas','christmasy',
+                 0.5,'user',NULL);",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        let dec = 1_796_904_000; // 10 December 2026
+        let w = d.weigh_all(dec);
+        let (_, a) = w.iter().find(|(e, _)| e.passage_id == 1).unwrap();
+        // value 0.5 against a x5.0 curve: 1 + 0.5*(5-1) = 3.0
+        assert!((a.occasion - 3.0).abs() < 1e-9, "occasion {}", a.occasion);
+    }
+
+    /// Ordinary flavor characteristics are not seasons and must not be taken
+    /// for them -- `flavor` holds 71 dimensions that are nothing of the kind.
+    #[test]
+    fn flavor_that_is_not_an_occasion_is_ignored() {
+        let c = fixture();
+        c.execute_batch(
+            "INSERT INTO flavor VALUES ('recording','rec-a','mood_happy','happy',
+                 0.9,'dump',NULL);",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        assert_eq!(d.occasion_count(), 0);
+        assert!(d.weigh_all(NOW).iter().all(|(_, x)| x.occasion == 1.0));
     }
 
     #[test]
