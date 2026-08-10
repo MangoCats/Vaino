@@ -12,6 +12,16 @@ cpal = "0.15"
 # bundled: compiles SQLite from source rather than needing libsqlite3-dev for
 # every target. Costs build time, buys a working cross-compile [REQ-HW-145].
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Web UI. Default features only, and tokio limited to what the server needs --
+# on a 512 MB Pi Zero 2W every dependency is a memory decision [REQ-HW-140].
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "vaino"
+path = "src/bin/vaino.rs"
 
 [[bin]]
 name = "memcheck"

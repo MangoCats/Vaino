@@ -83,14 +83,21 @@ pub enum Command {
     Shutdown,
 }
 
+/// The control surface, safe to share across threads.
+///
+/// `tx` is behind a mutex so the handle is `Sync` and can sit in an `Arc` that
+/// every web request holds. An `mpsc::Sender` is `Send` but not `Sync`, and
+/// commands arrive at human rates, so the lock is never contended.
 pub struct EngineHandle {
-    tx: Sender<Command>,
+    tx: Mutex<Sender<Command>>,
     pub state: Arc<Mutex<PlayerState>>,
 }
 
 impl EngineHandle {
     pub fn send(&self, c: Command) {
-        let _ = self.tx.send(c);
+        if let Ok(tx) = self.tx.lock() {
+            let _ = tx.send(c);
+        }
     }
     pub fn snapshot(&self) -> PlayerState {
         self.state.lock().map(|s| s.clone()).unwrap_or_default()
@@ -115,6 +122,12 @@ pub struct Engine {
     pending_resume: Option<u64>,
     last_save: Instant,
     saved: Option<(i64, bool)>,
+    /// Underruns that happened while PLAYING. Under the two-state model the
+    /// device callback drains continuously, so a paused player underruns
+    /// forever -- counting those would bury the fault this number exists to
+    /// expose [REQ-AUD-142].
+    underruns_playing: u64,
+    last_raw_underruns: u64,
 }
 
 impl Engine {
@@ -141,8 +154,10 @@ impl Engine {
             pending_resume: None,
             last_save: Instant::now(),
             saved: None,
+            underruns_playing: 0,
+            last_raw_underruns: 0,
         };
-        (engine, EngineHandle { tx, state })
+        (engine, EngineHandle { tx: Mutex::new(tx), state })
     }
 
     /// Persist playback state to `vaino.db` `[REQ-AUD-140]`. Optional: without
@@ -158,6 +173,12 @@ impl Engine {
 
     pub fn enqueue(&mut self, e: QueueEntry) {
         self.queue.push(e);
+    }
+    /// What is queued ahead, in play order. The engine's queue is the only
+    /// answer to "what plays next"; a caller that drew its own preview from
+    /// the library would be describing a different evening.
+    pub fn queued(&self) -> impl Iterator<Item = &QueueEntry> {
+        self.queue.iter()
     }
     pub fn shortfall(&self) -> usize {
         self.queue.shortfall()
@@ -193,8 +214,8 @@ impl Engine {
     fn drain_commands(&mut self) {
         loop {
             match self.rx.try_recv() {
-                Ok(Command::Play) => self.playing = true,
-                Ok(Command::Pause) => self.playing = false,
+                Ok(Command::Play) => self.set_playing(true),
+                Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
@@ -203,6 +224,16 @@ impl Engine {
                 }
                 Err(TryRecvError::Empty) => return,
             }
+        }
+    }
+
+    /// Stopping the consumer means stopping the DEVICE, not just declining to
+    /// submit: the output ring would otherwise play on for its full depth.
+    /// Producers are untouched, so the buffers stay primed [REQ-AUD-142].
+    fn set_playing(&mut self, on: bool) {
+        self.playing = on;
+        if let Some(o) = &self.out {
+            o.set_playing(on);
         }
     }
 
@@ -385,14 +416,22 @@ impl Engine {
         self.saved = Some(key);
     }
 
-    fn publish(&self) {
+    fn publish(&mut self) {
+        // Attribute the increment before publishing: silence during a pause is
+        // expected, silence during playback is the bug worth reporting.
+        let raw = self.out.as_ref().map(|o| o.diagnostics().0).unwrap_or(0);
+        let delta = raw.saturating_sub(self.last_raw_underruns);
+        self.last_raw_underruns = raw;
+        if self.playing {
+            self.underruns_playing += delta;
+        }
         if let Ok(mut s) = self.state.lock() {
             s.playing = self.playing;
             s.current = self.live.first().map(|l| l.entry.clone());
             s.position_ms = self.live.first().map(|l| self.audible_ms(l)).unwrap_or(0);
             s.queue_len = self.queue.len();
             s.active_streams = self.live.len();
-            s.underrun_samples = self.out.as_ref().map(|o| o.diagnostics().0).unwrap_or(0);
+            s.underrun_samples = self.underruns_playing;
             s.output_buffered = self
                 .out
                 .as_ref()
@@ -613,6 +652,18 @@ mod tests {
         }
         assert_eq!(st.load().unwrap().map(|s| s.2), Some(true), "drop must flush the state");
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Silence while paused is the design, not a fault. If it counted, the
+    /// metric would be dominated by idle time and could never flag a real one.
+    #[test]
+    fn underruns_while_paused_are_not_counted() {
+        let (mut e, h) = Engine::new(None, 1);
+        h.send(Command::Pause);
+        for _ in 0..5 {
+            e.tick();
+        }
+        assert_eq!(h.snapshot().underrun_samples, 0);
     }
 
     #[test]

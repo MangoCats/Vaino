@@ -26,6 +26,10 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-AUD-142]` Playback has exactly two states: playing and paused.** There is no "stopped". Pausing halts only the *consumer*; decoders keep filling their buffers, so resuming is instant and the pipeline stays primed after the initial power-on fill. A brief underrun at first start is therefore expected and acceptable; if it proves audible, the remedy is to prime the output before commencing, not to add a third state.
 
+> **Halting the consumer means stopping the output device, not merely declining to submit.** The ring holds ~14 s and the device callback drains it regardless, so a pause that only stops submission leaves the music playing for another fourteen seconds — observed directly: reported position climbed 49.7 s → 51.7 s while paused. Stopping the stream leaves the ring full, which is what makes resuming instant. Where a backend cannot pause, the caller must be told rather than assume silence.
+>
+> **Underruns are counted only while playing.** A paused player underruns continuously by design; counting those buries the fault the number exists to expose. Before this distinction the idle figure reached 479,232 samples (~5 s); measured during real playback it is 0.
+
 **`[REQ-AUD-150]`** Audio output is **co-located with the server**. Remote devices control; they do not receive streams.
 
 > **Verification:** `[REQ-AUD-110]` and `[REQ-AUD-120]` are gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency `[GDE-ARC-050]`.
@@ -53,6 +57,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 
 **`[REQ-VIS-100]` Why this track?** Every automatic selection exposes its full weight decomposition — artist weight, rotation block state, position on the recovery ramp, occasion multiplier, length bonus, distance to each seed, final rank, roulette position — **and the runners-up that lost**.
+
+> **Status:** blocked on the Program Director `[SPEC009]`, which is what produces the decomposition. Selection is currently random, so there is nothing truthful to show. The web UI carries the panel and says so; the wire format carries `why` as an explicit null rather than omitting it, so the panel reports "not yet available" instead of silently rendering nothing. Stubbing plausible-looking weights here would be the one failure mode this requirement exists to prevent.
 
 **`[REQ-VIS-110]` How was this identified?** Every ingest decision is a durable record: which stage matched, at what confidence, which candidates were rejected `[SPEC-SA-085]`. This is what converts an undocumented ritual `[GDE-BMK-050]` into a reviewable process.
 

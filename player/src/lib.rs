@@ -17,6 +17,8 @@ pub mod fade;
 pub mod mixer;
 pub mod output;
 pub mod queue;
+pub mod session;
+pub mod web;
 pub mod resample;
 
 /// Frames of audio buffered per passage. 15 s at 44.1 kHz.

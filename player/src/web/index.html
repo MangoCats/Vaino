@@ -1,0 +1,99 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaino</title>
+<style>
+  :root { color-scheme: light dark; --fg: #111; --dim: #667; --bg: #fbfbfa; --line: #dcdcd8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #eee; --dim: #99a; --bg: #141416; --line: #2c2c30; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: 2rem 1.25rem; }
+  h1 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
+       color: var(--dim); font-weight: 600; margin: 0 0 1.5rem; }
+  #title { font-size: 1.4rem; font-weight: 600; min-height: 2.1rem;
+           overflow-wrap: anywhere; }
+  #bar { height: 4px; background: var(--line); border-radius: 2px; margin: .9rem 0 .4rem; }
+  #fill { height: 100%; width: 0; background: currentColor; border-radius: 2px;
+          transition: width .5s linear; }
+  #time { font-variant-numeric: tabular-nums; color: var(--dim); font-size: .875rem; }
+  .controls { display: flex; gap: .5rem; margin: 1.5rem 0; }
+  button { font: inherit; padding: .5rem 1.1rem; border: 1px solid var(--line);
+           background: transparent; color: inherit; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: .3rem 1rem;
+       font-size: .875rem; color: var(--dim); margin: 0; }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  section { border-top: 1px solid var(--line); margin-top: 1.75rem; padding-top: 1.25rem; }
+  h2 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
+       color: var(--dim); font-weight: 600; margin: 0 0 .6rem; }
+  #why { font-size: .875rem; color: var(--dim); }
+  #link { opacity: .55; font-size: .8125rem; margin-top: 2rem; }
+</style>
+
+<main>
+  <h1>Vaino</h1>
+  <div id="title">—</div>
+  <div id="bar"><div id="fill"></div></div>
+  <div id="time">0:00 / 0:00</div>
+
+  <div class="controls">
+    <button data-cmd="play">Play</button>
+    <button data-cmd="pause">Pause</button>
+    <button data-cmd="skip">Skip</button>
+  </div>
+
+  <dl>
+    <dt>State</dt><dd id="state">—</dd>
+    <dt>Queue</dt><dd id="queue">—</dd>
+    <dt>Underruns</dt><dd id="under">—</dd>
+  </dl>
+
+  <section>
+    <h2>Why this track?</h2>
+    <div id="why">
+      Selection is random until the Program Director is implemented, so there is
+      no decomposition to show yet.
+    </div>
+  </section>
+
+  <div id="link">Connecting…</div>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const clock = ms => {
+    const t = Math.max(0, Math.round(ms / 1000));
+    return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  };
+
+  for (const b of document.querySelectorAll('button[data-cmd]')) {
+    b.onclick = () => fetch(`/command/${b.dataset.cmd}`, { method: 'POST' });
+  }
+
+  // Each message is a complete snapshot, so rendering is a pure function of
+  // the last one received. No accumulated client state means no drift.
+  function render(s) {
+    $('title').textContent = s.title ?? '—';
+    $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
+    $('fill').style.width =
+      s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
+    $('state').textContent = s.playing ? 'playing' : 'paused';
+    $('queue').textContent = s.queue_len;
+    $('under').textContent = s.underrun_samples;
+    if (s.why) $('why').textContent = JSON.stringify(s.why);
+  }
+
+  // Reconnect rather than go stale: the player outlives any one page load,
+  // and a silently dead socket looks exactly like paused playback.
+  (function connect() {
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onmessage = e => render(JSON.parse(e.data));
+    ws.onopen = () => ($('link').textContent = 'Connected');
+    ws.onclose = () => {
+      $('link').textContent = 'Reconnecting…';
+      setTimeout(connect, 1000);
+    };
+  })();
+</script>

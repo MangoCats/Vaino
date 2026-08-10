@@ -37,8 +37,9 @@ impl OutputState {
 }
 
 pub struct Output {
-    // Held to keep the stream alive; dropping it stops playback.
-    _stream: cpal::Stream,
+    // Also the pause control: the callback drains whether or not we are
+    // submitting, so stopping the CONSUMER means stopping this stream.
+    stream: cpal::Stream,
     pub state: Arc<Mutex<OutputState>>,
     pub sample_rate: u32,
     pub channels: usize,
@@ -153,7 +154,31 @@ impl Output {
         .map_err(|e| OutputError::Build(e.to_string()))?;
 
         stream.play().map_err(|e| OutputError::Build(e.to_string()))?;
-        Ok(Self { _stream: stream, state, sample_rate, channels, device_name })
+        Ok(Self { stream, state, sample_rate, channels, device_name })
+    }
+
+    /// Start or stop the device callback.
+    ///
+    /// Pausing playback by merely not submitting is not enough: the ring holds
+    /// roughly fourteen seconds, and the callback keeps draining it, so the
+    /// music would play on for that long after the button was pressed. Stopping
+    /// the stream leaves the ring full, which is what makes resuming instant
+    /// `[REQ-AUD-142]`.
+    ///
+    /// Returns false if the backend refuses -- not all of them can pause -- so
+    /// the caller can fall back rather than assume silence.
+    pub fn set_playing(&self, on: bool) -> bool {
+        // play() and pause() return different error types, so normalise early
+        // rather than let that detail leak into the caller.
+        let r = if on {
+            self.stream.play().map_err(|e| e.to_string())
+        } else {
+            self.stream.pause().map_err(|e| e.to_string())
+        };
+        if let Err(e) = &r {
+            eprintln!("output {}: {e}", if on { "play" } else { "pause" });
+        }
+        r.is_ok()
     }
 
     /// Space available in the output ring, in samples.
