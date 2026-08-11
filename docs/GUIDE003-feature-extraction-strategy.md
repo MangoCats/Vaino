@@ -499,6 +499,28 @@ Full verification, 60 archived recordings each, against AcousticBrainz's publish
 
 **The bookend worth keeping.** `[GDE-FEX-095]` warned that a verification tool which *flatters* is worse than none, because it gets believed. This was the mirror: a harness that was too **harsh** made a correct implementation look broken for six commits, and sent me looking for faults in chain structure that was right all along. Both failures are the same underlying error — trusting the comparison more than the thing compared. The check needs checking too.
 
+#### `[GDE-FEX-103]` Class names are stored too, and the production path runs
+
+`classMapping` is a plain `QStringList` beside `className` — index i is model
+label value i, the mapping whose positional guess caused `[GDE-FEX-102]`. All 18
+read cleanly, and all are already in sorted order, which retroactively confirms
+the `sorted()` assumption the verification relied on.
+
+`tools/gaia_classify.py` is the production path: load the 18 chains once (~5 s),
+then classify any lowlevel JSON. Run against **our own beta2 extraction** rather
+than the archive:
+
+```
+danceability not_danceable 0.857   mood_aggressive aggressive 0.987
+genre_dortmund electronic  0.446   mood_happy      happy      0.998
+tonal_atonal   atonal      0.925   voice_instrumental voice   0.980
+```
+
+Coherent, and named. **586 ms per track for all 18 classifiers** — so classifying
+the whole 5,590-file library costs under an hour, negligible beside the ~27 s per
+track the lowlevel extraction itself takes `[GDE-FEX-062]`. Extraction remains the
+only expensive step, and it is the one that caches `[SPEC-SC-080]`.
+
 **What Vaino can now do:** run all 18 AcousticBrainz classifiers locally, over any audio, from the published extractor and models, with values verified against AcousticBrainz's own output. That is uniform local provenance `[SPEC-FD-145]` with no accuracy penalty and no approximation — the outcome `[SPEC-FD-150]` argued for and could not previously reach.
 
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".

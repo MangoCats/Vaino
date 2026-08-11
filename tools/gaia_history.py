@@ -176,6 +176,17 @@ def read_param_at(path: Path, name: str, occurrence: int = 0):
     return read_variant(r)
 
 
+def class_mapping(path: Path) -> list[str]:
+    """The classifier's class names, in label order `[GDE-FEX-103]`.
+
+    Stored plainly as a `classMapping` QStringList beside `className`. Index i
+    is model label value i -- which is the mapping that, guessed positionally,
+    made six classifiers look broken.
+    """
+    v = read_param_at(path, "classMapping")
+    return v if isinstance(v, list) else []
+
+
 def gaussianize_tables(path: Path) -> dict[str, list[float]]:
     """The `gaussianize` step's per-component distribution tables.
 
