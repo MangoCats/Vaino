@@ -90,6 +90,12 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 
 **`[REQ-LIB-140]`** Never re-decode audio to improve a classifier. Lowlevel features are cached permanently `[SPEC-SC-080]`.
 
+**`[REQ-LIB-145]` Repair `duration_ms` from the decoded length at ingest, wherever it disagrees.** `[SPEC-SC-030]` already specifies "decoded, not header-claimed", and the migrated library violates it: **29.2% of files differ from their decoded length by more than 5 s**, 3.2% *over*-state it, and one overstates by **38.4 minutes** `[GDE-FEX-106]`.
+
+> This is not cosmetic. Segmentation used the inflated value to create a **phantom passage** in a tail that does not exist, and the player uses `duration_ms` for lead-out timing. A field this load-bearing being wrong on a quarter of the library will keep producing symptoms that look like unrelated bugs — the extraction failure that surfaced it looked at first like an ffmpeg fault.
+>
+> Repair it where it disagrees, rather than always: `ffprobe` costs ~50 ms, but rewriting a correct value is churn. Passages already derived from a wrong duration need re-checking, not just the file row.
+
 **`[REQ-LIB-150]`** Relocate a moved or renamed library by content, not path `[SPEC-SC-035]`.
 
 ## 5. Portability — `PORT`

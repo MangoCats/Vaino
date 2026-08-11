@@ -34,7 +34,7 @@ CREATE TABLE files (
     size_bytes   INTEGER NOT NULL,
     mtime        REAL    NOT NULL,          -- cheap change detection only
     format       TEXT    NOT NULL,
-    duration_ms  INTEGER NOT NULL,          -- decoded, not header-claimed
+    duration_ms  INTEGER NOT NULL,          -- decoded, not header-claimed [REQ-LIB-145]
     first_seen   TEXT    NOT NULL,
     last_seen    TEXT    NOT NULL
 );
