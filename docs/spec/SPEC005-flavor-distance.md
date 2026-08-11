@@ -156,6 +156,39 @@ This is a concrete, testable prediction: extracting `genre_*`, `ismir04_rhythm` 
 
 **Caveat as before:** 49 seeds over 8 programmes is a small sample, and one listener's groupings are not a general perceptual standard. Treat 0.829 as encouraging, not as a validated figure.
 
+**`[SPEC-FD-083]` Tested 2026-08-11 with the complex characteristics present — the prediction was right about *Light* and wrong overall.**
+
+55 programme seeds were extracted locally and classified through all 18 reproduced Gaia chains `[GDE-FEX-102]`; 35 have both inherited and local flavor, so the comparison holds the seed set fixed and varies only the features.
+
+| feature set | within | cross | ratio |
+| :--- | ---: | ---: | ---: |
+| inherited, 11 characteristics | 0.9957 | 1.2162 | **0.8187** |
+| local, 18 characteristics | 0.9764 | 1.1387 | **0.8575** |
+
+**Aggregate separation got worse, not better.** But the per-programme breakdown shows why, and it is not a flat refutation:
+
+| programme | n | inherited 11 | local 18 | local, complex only |
+| :--- | ---: | ---: | ---: | ---: |
+| **Light** | 6 | 1.168 | 0.973 | **0.788** |
+| Fun | 6 | 1.033 | 0.946 | 0.822 |
+| Cool | 5 | 1.093 | 1.057 | 0.938 |
+| Prog | 4 | 0.728 | 0.679 | 0.631 |
+| Loud | 2 | 1.075 | 1.038 | 0.948 |
+| **Mellow** | 6 | 0.877 | 1.088 | **1.388** |
+| **Soft** | 5 | 0.914 | 0.953 | **1.155** |
+
+*Light* — the worst-cohering programme, and the specific case `[SPEC-FD-082]` named — tightened from 1.168 to 0.788 on the complex characteristics alone. *Fun*, *Cool*, *Prog* and *Loud* improved too. **The aggregate fell because *Mellow* and *Soft* degraded sharply**, and those are precisely the programmes the mood binaries express well and genre/rhythm does not.
+
+The honest reading: **the complex characteristics are not uniformly better, they are differently informative.** A metric weighting all 18 equally trades away what mood captures to gain what genre captures.
+
+Three caveats, the second serious enough to require work before this is treated as settled:
+
+1. **Small n** — 35 seeds, 2–6 per programme. *Loud* rests on a single pair.
+2. **The constants are wrong for this data.** `β_c` and `w_c` were measured on *dump* values `[SPEC-FD-052]`, and `[SPEC-FD-090]` states they are per flavor source. They are applied here to *locally extracted* values, so every complex characteristic is scaled by a β measured on a different corpus. That alone could produce the *Mellow*/*Soft* degradation, and it must be re-derived on local values before the comparison means anything.
+3. **The baseline is confounded** — inherited-11 versus local-18 differs in provenance as well as in feature count, so it is not a clean "more characteristics" test.
+
+**Consequence for `[SPEC-DIR-200]`:** re-deriving the pool parameters should wait until the constants are re-derived, not merely until the vector grows.
+
 ---
 
 ## 5. Provenance Consistency Outranks Per-Track Accuracy
