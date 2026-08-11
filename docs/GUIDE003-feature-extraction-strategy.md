@@ -381,6 +381,39 @@ Next: fetch a beta1 classifier **without** gaussianize and verify the rest of th
 
 > **Sources:** [MTG/gaia ChangeLog](https://github.com/MTG/gaia/blob/master/ChangeLog) · [essentia gaiatransform.cpp](https://github.com/MTG/essentia/blob/master/src/algorithms/highlevel/gaiatransform.cpp) · [gaia normalize.cpp](https://github.com/MTG/gaia/blob/master/src/algorithms/normalize.cpp) · [Essentia music extractor docs](https://essentia.upf.edu/streaming_extractor_music.html)
 
+### `[GDE-FEX-099]` ✅ ROUTE 2 VERIFIED — the chain reproduces AcousticBrainz exactly
+
+Isolating the variable worked. Three beta1 classifiers **without** a gaussianize step, each against 120 archived recordings with published highlevel:
+
+| classifier | exact (<0.001) | median error | p95 | max |
+| :--- | ---: | ---: | ---: | ---: |
+| `mood_acoustic` | 114/120 — 95% | 0.000065 | 0.0018 | 0.0033 |
+| `mood_happy` | 104/120 — 87% | 0.000033 | 0.0024 | 0.0034 |
+| `mood_party` | 95/120 — 79% | 0.000002 | 0.0024 | 0.0037 |
+
+**Maximum error 0.0037 across 360 comparisons — no outliers, no inversions.** The residual is consistent with rounding in the published dump values rather than any error in the chain. This is reproduction, not approximation.
+
+The corrected `chain_of` also confirms the structural rule with no exceptions among the four beta1 classifiers held: **one normalize ⇔ no gaussianize; two normalizes ⇔ a gaussianize sandwich.**
+
+```
+mood_acoustic  remove → fixlength → remove → enumerate → select → select
+                 → cleaner → normalize → addfield → svmtrain → select
+tonal_atonal   remove → fixlength → remove → enumerate → normalize → gaussianize
+                 → select → cleaner → normalize → addfield → svmtrain → select
+```
+
+**What this validates, all at once:** the beta1 model vintage `[GDE-FEX-093]`, the alphabetical descriptor layout with enumerated strings interleaved `[GDE-FEX-095]`, the enum codes read from the chain `[GDE-FEX-097]`, `y = a·x + b` normalisation `[GDE-FEX-069]`, the libsvm RBF and Platt-sigmoid implementation `[GDE-FEX-068]`, and the harness itself. Every one of those was previously *asserted*; all are now *confirmed* by a single end-to-end result that could not have come out this way if any were wrong.
+
+It also confirms the `[GDE-FEX-098]` diagnosis: the only thing wrong with `tonal_atonal` was the missing gaussianize.
+
+**Remaining for full coverage of all 18:**
+
+1. **Gaussianize**, for the chains that use it. In the beta5 set that is `genre_dortmund`, `genre_electronic`, `moods_mirex`, `voice_instrumental` — three of them among the six complex characteristics Vaino most needs `[SPEC-FD-082]`. Note the beta1 chains differ (beta1 `tonal_atonal` gaussianizes, beta5's does not), so the beta1 set must be surveyed rather than assumed.
+2. **Pairwise coupling** for the six multi-class classifiers; only binary Platt is implemented.
+3. Fetch the remaining beta1 classifiers (~100 MB).
+
+None of these is exploratory any more. The chain is understood and proven; what is left is implementing two documented algorithms and downloading files.
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.

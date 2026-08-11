@@ -310,21 +310,17 @@ def chain_of(path: Path) -> list[str]:
     recognise is worse than no summary: it reads as complete.
     """
     info = parse(path)
-    out: list[tuple[int, str]] = []
-    for s in info["steps"]:
-        n = s["name"]
-        if n in KNOWN or (n.isalpha() and n.islower() and 4 <= len(n) <= 16
-                          and n not in APPLIERS and not n.startswith(".")):
-            if n not in APPLIERS:
-                out.append((s["offset"], n))
-    # One entry per position: a step name appears immediately before its applier.
-    seen: list[str] = []
-    last = -1
-    for off, n in out:
-        if off > last:
-            seen.append(n if n in KNOWN else f"{n}(?)")
-            last = off
-    return seen
+    names = info["steps"]
+    out: list[str] = []
+    for i in range(len(names) - 1):
+        name, nxt = names[i]["name"], names[i + 1]["name"]
+        # A step is always immediately followed by its applier. That adjacency
+        # is the reliable signal; matching on a vocabulary of step names is what
+        # hid `gaussianize`, and matching on "looks like a word" floods the
+        # output with descriptor components like `barkbands` and `dmean`.
+        if nxt in APPLIERS or nxt.endswith("applier"):
+            out.append(name if name in KNOWN else f"{name}(?)")
+    return out
 
 
 def survey(directory: Path) -> None:
