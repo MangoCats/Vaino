@@ -268,10 +268,16 @@ def svm_summary(model: str) -> dict:
     return out
 
 
+# Transformation names seen in these chains. This set must NEVER be used to
+# filter what is reported: an earlier version did exactly that, and a
+# `gaussianize` step -- the one transformation that actually mattered -- was
+# silently absent from every printed chain for six commits `[GDE-FEX-098]`.
+# Unknown names are the interesting ones; they are flagged, not dropped.
 KNOWN = {
     "remove",
     "select",
     "normalize",
+    "gaussianize",
     "pca",
     "svmtrain",
     "gaiatransform",
@@ -279,7 +285,46 @@ KNOWN = {
     "cleaner",
     "removevl",
     "enumerate",
+    "addfield",
+    "copy",
 }
+
+# Appliers, which follow each step name and are not steps themselves.
+APPLIERS = {
+    "removedesc",
+    "enumerateapplier",
+    "distribute",
+    "dotproduct",
+    "svmpredict",
+    "addfieldapplier",
+    "selectdesc",
+    "cleanerapplier",
+    "matmult",
+}
+
+
+def chain_of(path: Path) -> list[str]:
+    """Every transformation name in the file, in order, including unknown ones.
+
+    Reported without filtering. A chain summary that hides what it does not
+    recognise is worse than no summary: it reads as complete.
+    """
+    info = parse(path)
+    out: list[tuple[int, str]] = []
+    for s in info["steps"]:
+        n = s["name"]
+        if n in KNOWN or (n.isalpha() and n.islower() and 4 <= len(n) <= 16
+                          and n not in APPLIERS and not n.startswith(".")):
+            if n not in APPLIERS:
+                out.append((s["offset"], n))
+    # One entry per position: a step name appears immediately before its applier.
+    seen: list[str] = []
+    last = -1
+    for off, n in out:
+        if off > last:
+            seen.append(n if n in KNOWN else f"{n}(?)")
+            last = off
+    return seen
 
 
 def survey(directory: Path) -> None:

@@ -358,6 +358,29 @@ The generous metric improved (worst 0.267 → 0.176) while the strict median mov
 2. `.tonal.hpcp` and similar vector descriptors are 36-wide — whether their components are ordered as stored, and whether `fixlength` reorders them, is untested.
 3. The first `remove` and `fixlength` steps are assumed inert because the normalize coefficients define the surviving set; that assumption has not been checked.
 
+#### `[GDE-FEX-098]` The divergence, found in the literature: a **gaussianize** step my tooling was hiding
+
+MTG's Gaia provides a `gaussianize` transformation, and its ChangeLog discusses serialising gaussianize histories — a transformation I had never accounted for. It is present in the chain, at offset 242175:
+
+```
+remove → fixlength → remove → enumerate → normalize → GAUSSIANIZE
+  → select → cleaner → normalize → svmtrain → select
+```
+
+Applier `distribute`; `descriptorNames = ['lowlevel.*']`; parameter `distribution`, a **per-component** table keyed `.lowlevel.zerocrossingrate.var[0]`. The ~709 KB between it and the following `select` is that table — the bulk of the file.
+
+Gaussianize maps each component through the training set's empirical distribution, so it is **non-linear and per-component**. It covers `lowlevel.*`, which is most of the vector. Omitting it leaves the majority of dimensions transformed by the wrong function entirely — which is precisely the observed signature: broad, decorrelated error, a few recordings near-right by luck, and no amount of fixing indices or codes moving the median.
+
+**This also corrects `[GDE-FEX-094]`.** The "two normalize steps that compose" are the signature of a **gaussianize sandwich**: `normalize → gaussianize → normalize`. Composing the two normalises directly, as that entry concluded, silently deletes the non-linear middle. The classifiers with two normalizes are a superset of those with gaussianize, which is why the pattern looked like a normalisation quirk.
+
+**How it stayed hidden for six commits is the more useful lesson.** `chain_summary` filtered step names against a `KNOWN` set, so any transformation not already in my vocabulary was omitted from every chain I printed — and the omitted one was the transformation that mattered. Refusing to guess at *values* `[GDE-FEX-070a]`, `[GDE-FEX-096]` was right and repeatedly paid off; assuming my *vocabulary* was complete was the same error wearing different clothes, and it was never checked because the output looked plausible. `chain_of` now reports every step and flags unrecognised ones rather than dropping them.
+
+**Only 4 of 18 beta5 chains gaussianize** — `genre_dortmund`, `genre_electronic`, `moods_mirex`, `voice_instrumental` — and `tonal_atonal` is not among them there. But the **beta1** `tonal_atonal` is. Picking the smallest, simplest-looking classifier as the first test target happened to pick one carrying the extra non-linear step.
+
+Next: fetch a beta1 classifier **without** gaussianize and verify the rest of the chain against it. That isolates the variable — if the linear path is otherwise correct it should reproduce to floating-point noise, which would confirm both the layout and the remaining machinery before gaussianize is implemented at all.
+
+> **Sources:** [MTG/gaia ChangeLog](https://github.com/MTG/gaia/blob/master/ChangeLog) · [essentia gaiatransform.cpp](https://github.com/MTG/essentia/blob/master/src/algorithms/highlevel/gaiatransform.cpp) · [gaia normalize.cpp](https://github.com/MTG/gaia/blob/master/src/algorithms/normalize.cpp) · [Essentia music extractor docs](https://essentia.upf.edu/streaming_extractor_music.html)
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
