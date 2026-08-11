@@ -277,7 +277,26 @@ That failure is worth naming precisely because of how it presented: a constant o
 
 **Current state — still not correct.** With composition applied, `tonal_atonal` over 12 recordings gives a median absolute error of **0.0956**, best **0.0003**, worst **0.267**. Predictions now vary, and some recordings match nearly exactly, which the constant version could never have done. But a correct reimplementation matches to floating-point noise throughout, and this does not.
 
-The outstanding lead is the **four enumerated string dimensions** (666 built against 670 expected): their integer codes and their positions in the index order are still unknown, and every index after the first of them may be shifted.
+#### `[GDE-FEX-095]` The layout is solved; the values are still wrong
+
+The four enumerated dimensions were found without guessing. Scanning the support vectors for indices whose values are **integers greater than 1** — impossible for a normalised feature — returns exactly two: **547** and **664**, each carrying 0–11, which is twelve pitch classes. Sorting all 161 descriptors alphabetically and accumulating widths places `.tonal.chords_key` at **547** and `.tonal.key_key` at **664**, totalling **670**. Three independent facts agree, so the ordering is alphabetical over the union of numeric and string descriptors, and the enumerated dimensions are **not normalised** — the support vectors hold raw codes at those positions.
+
+Vector dimensions now match the model exactly: 670 against 670.
+
+**And it is still wrong.** Over 25 recordings with a fixed label orientation:
+
+```
+median 0.3660   exact (<0.001) 0/25   range 0.004 … 1.000
+```
+
+Errors reaching **1.000** are confident inversions, not numerical drift. A brief earlier reading of "best 0.0000" was an artefact of the harness taking the best over *both* label orientations as well as all submissions — generosity that flattered the result and hid this distribution. **The harness needs tightening before it is trusted further**: the label-to-class-name mapping should be resolved from the chain rather than tried both ways.
+
+Two candidate causes, untested:
+
+1. **The `cleaner` step is not implemented.** It sits between `select` and `normalize` in every chain and presumably drops or repairs degenerate descriptors. If it removes any, every subsequent index shifts — which fits a distribution of a few near-hits among many confident misses.
+2. **The label-to-class mapping.** `label 1 0` says which model class is first, not whether "1" means `tonal` or `atonal`.
+
+Neither is speculative work: both are readable from the chain.
 
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 

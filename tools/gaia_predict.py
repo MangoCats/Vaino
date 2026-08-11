@@ -55,8 +55,43 @@ def flatten(doc: dict) -> dict[str, list[float]]:
     return out
 
 
+def flatten_strings(doc: dict) -> dict[str, str]:
+    """String descriptors, for the enumerate step."""
+    out: dict[str, str] = {}
+
+    def walk(node, path: str) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, f"{path}.{k}")
+        elif isinstance(node, str):
+            out[path] = node
+
+    walk(doc, "")
+    return out
+
+
+# Gaia's `enumerate` step turns string descriptors into integers. The codes are
+# not stored in the chain, but they are visible in the support vectors: indices
+# 547 and 664 of `tonal_atonal` carry integers 0-11, which is twelve pitch
+# classes. Alphabetical order of the note names is the reading being tested
+# `[GDE-FEX-095]`.
+KEY_CODES = {k: i for i, k in enumerate(
+    ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"]
+)}
+SCALE_CODES = {"major": 0, "minor": 1}
+
+
+def enumerate_string(name: str, value: str) -> float:
+    if name.endswith("_scale"):
+        return float(SCALE_CODES.get(value, 0))
+    return float(KEY_CODES.get(value, 0))
+
+
 def build_vector(
-    features: dict[str, list[float]], steps: list[dict], order: list[str]
+    features: dict[str, list[float]],
+    steps: list[dict],
+    order: list[str],
+    strings: dict[str, str] | None = None,
 ) -> list[float]:
     """Normalised feature vector, in `order`.
 
@@ -73,15 +108,22 @@ def build_vector(
     """
     vec: list[float] = []
     for name in order:
-        widths = len(steps[0][name]["a"])
+        comp0 = steps[0].get(name)
+        if comp0 is None:
+            # An enumerated string descriptor: one dimension, an integer code,
+            # and NOT normalised -- the support vectors carry raw 0-11 at these
+            # positions, so the normalize steps never touched them.
+            raw = strings.get(name) if strings else None
+            vec.append(enumerate_string(name, raw) if raw is not None else 0.0)
+            continue
         xs = features.get(name)
-        for i in range(widths):
+        for i in range(len(comp0["a"])):
             v = xs[i] if xs and i < len(xs) else 0.0
             for c in steps:
-                comp = c.get(name)
-                if comp is None:
+                cc = c.get(name)
+                if cc is None:
                     continue
-                a, b = comp["a"], comp["b"]
+                a, b = cc["a"], cc["b"]
                 j = i if i < len(a) else 0
                 v = a[j] * v + b[j]
             vec.append(v)
@@ -194,6 +236,24 @@ def reference(mbid: str, characteristic: str) -> dict[int, dict[str, float]]:
     return out
 
 
+def enumerated_descriptors(hist: Path) -> list[str]:
+    """The string descriptors the `enumerate` step converts.
+
+    Taken from the chain rather than hardcoded: beta1 converts four, beta5
+    eight `[GDE-FEX-092]`, and the difference is exactly the version trap.
+    """
+    coeffs = gh.normalize_coeffs(hist)[0]
+    for i in range(14):
+        v = gh.read_param_at(hist, "descriptorNames", occurrence=i)
+        if v is None:
+            break
+        if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
+            extra = [x for x in v if x.startswith(".") and x not in coeffs]
+            if extra and len(extra) <= 12 and set(v) >= set(coeffs):
+                return sorted(extra)
+    return []
+
+
 def verify(classifier: str, limit: int = 8) -> None:
     hist = SVM_DIR / f"{classifier}.history"
     coeff_steps = gh.normalize_coeffs(hist)
@@ -203,12 +263,12 @@ def verify(classifier: str, limit: int = 8) -> None:
     print(f"{classifier}: {len(coeffs)} descriptors, kernel {model.kernel}, "
           f"{len(model.sv)} SVs, classes {model.label}, {len(coeff_steps)} normalize step(s)")
 
-    orders = {
-        "as-read": list(coeffs.keys()),
-        "sorted": sorted(coeffs.keys()),
-        "reversed": list(reversed(list(coeffs.keys()))),
-    }
-    dims = sum(len(v["a"]) for v in coeffs.values())
+    # The enumerated string descriptors take part in the ordering, and the
+    # index positions they land at under a sorted order match the integer
+    # columns found in the support vectors [GDE-FEX-095].
+    enum_names = enumerated_descriptors(hist)
+    orders = {"sorted-with-enums": sorted(list(coeffs.keys()) + enum_names)}
+    dims = sum(len(v["a"]) for v in coeffs.values()) + len(enum_names)
     max_idx = max(max(sv.keys()) for sv in model.sv)
     print(f"vector dimensions {dims}, highest SV index {max_idx}")
 
@@ -217,7 +277,7 @@ def verify(classifier: str, limit: int = 8) -> None:
         errs: list[float] = []
         for f in files:
             doc = json.load(open(f, encoding="utf-8"))
-            x = build_vector(flatten(doc), coeff_steps, order)
+            x = build_vector(flatten(doc), coeff_steps, order, flatten_strings(doc))
             probs = model.probability_binary(x)
             ref = reference(f.stem, classifier)
             if not ref:
