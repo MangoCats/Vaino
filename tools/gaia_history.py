@@ -176,6 +176,51 @@ def read_param_at(path: Path, name: str, occurrence: int = 0):
     return read_variant(r)
 
 
+def gaussianize_tables(path: Path) -> dict[str, list[float]]:
+    """The `gaussianize` step's per-component distribution tables.
+
+    Keyed `.descriptor[i]`, one entry per component. Each is a `QByteArray`
+    holding **little-endian float32** — a raw memory dump inside an otherwise
+    big-endian stream — sorted ascending and ending at 1.0: the training set's
+    values for that component, after the preceding normalize. There is no count
+    prefix; the first four bytes are the first value.
+
+    Empty when the chain has no gaussianize step `[GDE-FEX-098]`.
+    """
+    data = path.read_bytes()
+    marker = struct.pack(">I", 22) + "gaussianize".encode("utf-16-be")
+    if data.find(marker) < 0:
+        return {}
+    out: dict[str, list[float]] = {}
+    pos = 0
+    # Component keys look like `.something[0]`; find each and read the blob.
+    needle = "[".encode("utf-16-be")
+    while True:
+        pos = data.find(needle, pos + 1)
+        if pos < 0:
+            break
+        # Walk back to the length prefix of the enclosing QString.
+        start = data.rfind(b"\x00\x00\x00", max(0, pos - 300), pos)
+        if start < 0:
+            continue
+        for back in range(pos - 4, max(0, pos - 300), -2):
+            n = struct.unpack_from(">I", data, back)[0] if back + 4 <= len(data) else 0
+            if 8 <= n <= 300 and n % 2 == 0 and back + 4 + n > pos:
+                raw = data[back + 4 : back + 4 + n]
+                if all(raw[i] == 0 for i in range(0, n, 2)):
+                    key = raw.decode("utf-16-be")
+                    p = back + 4 + n
+                    if struct.unpack_from(">I", data, p)[0] != 12:
+                        break
+                    ln = struct.unpack_from(">I", data, p + 5)[0]
+                    if ln % 4 or ln > 4_000_000:
+                        break
+                    blob = data[p + 9 : p + 9 + ln]
+                    out[key] = list(struct.unpack("<%df" % (ln // 4), blob))
+                break
+    return out
+
+
 def enum_maps(path: Path) -> dict[str, dict[str, int]]:
     """The `enumerate` step's string → integer codes, as stored.
 

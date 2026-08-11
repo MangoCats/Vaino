@@ -446,6 +446,31 @@ One transcription note kept because it is the kind of thing that silently corrup
 
 **Remaining: gaussianize, for the seven chains that use it** — including the other three complex characteristics.
 
+#### `[GDE-FEX-101]` Gaussianize transcribed from Gaia's source — 12 of 18
+
+Two guesses at the semantics were made and both were wrong: quantile-to-uniform made `tonal_atonal` worse (0.43 → 0.64), and quantile-through-inverse-normal-CDF worse again (0.82). Reading MTG's `distribute` applier settled it:
+
+```
+rank    = lower_bound(distribution, v)
+rank    = clamp(rank, outliers, nPoints - outliers)
+normIdx = rank / nPoints
+out     = erfinv(2*normIdx - 1)
+```
+
+`erfinv(2q−1)` is the inverse normal CDF **scaled by 1/√2** — the factor both guesses missed, and one that matters greatly to an RBF kernel. Python has no `erfinv`; it is written through `NormalDist.inv_cdf`, which is the same function.
+
+The stored tables are per component, keyed `.descriptor[i]`: **little-endian float32 inside a big-endian stream** — a raw memory dump — sorted ascending, with no count prefix. 484 components for most chains.
+
+**`mood_sad` now reproduces**: 30/40 exact, median 0.000128, max 0.0030 — the same signature as the other verified classifiers. So the algorithm is right.
+
+**Six do not**: `tonal_atonal`, `voice_instrumental`, `timbre`, `genre_dortmund`, `genre_electronic`, `genre_rosamerica`, all sitting near median 0.8.
+
+The puzzle is sharp, which is the useful part. `mood_sad` and `tonal_atonal` are **structurally identical** on every axis checked: same chain (`normalize → gaussianize → select → cleaner → normalize`), same gaussianize scope (`lowlevel.*`), same 484 tables, same 157 descriptors in both normalize steps, and the two normalize steps cover the *same* descriptor set in each. Whatever differs is not the chain shape.
+
+Next candidate: the `select` and `cleaner` steps between gaussianize and the second normalize are still unmodelled, and are assumed inert because the two normalizes cover identical sets. That assumption is now the least-tested thing standing — `mood_sad` may simply be the case where those steps happen to be no-ops.
+
+> **Source:** [gaia `distribute` applier](https://github.com/MTG/gaia/blob/master/src/algorithms/distribute.cpp)
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.

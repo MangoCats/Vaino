@@ -12,12 +12,16 @@ Usage:
 
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import os
 import sqlite3
 import sys
 from pathlib import Path
+
+_NORM = __import__("statistics").NormalDist()
+_SQRT2 = math.sqrt(2.0)
 
 sys.path.insert(0, str(Path(__file__).parent))
 import gaia_history as gh  # noqa: E402
@@ -87,6 +91,7 @@ def build_vector(
     order: list[str],
     strings: dict[str, str] | None = None,
     enums: dict | None = None,
+    gauss: dict[str, list[float]] | None = None,
 ) -> list[float]:
     """Normalised feature vector, in `order`.
 
@@ -114,15 +119,43 @@ def build_vector(
         xs = features.get(name)
         for i in range(len(comp0["a"])):
             v = xs[i] if xs and i < len(xs) else 0.0
-            for c in steps:
+            for si, c in enumerate(steps):
                 cc = c.get(name)
-                if cc is None:
-                    continue
-                a, b = cc["a"], cc["b"]
-                j = i if i < len(a) else 0
-                v = a[j] * v + b[j]
+                if cc is not None:
+                    a, b = cc["a"], cc["b"]
+                    j = i if i < len(a) else 0
+                    v = a[j] * v + b[j]
+                # gaussianize sits BETWEEN the two normalizes [GDE-FEX-098].
+                if si == 0 and gauss:
+                    table = gauss.get(f"{name}[{i}]")
+                    if table:
+                        v = gaussianize_value(v, table)
             vec.append(v)
     return vec
+
+
+# Outlier clamp from Gaia's `distribute` applier. The rank is bounded away from
+# both ends before mapping, which is also what keeps erfinv finite.
+GAUSS_OUTLIERS = 1
+
+
+def gaussianize_value(v: float, table: list[float]) -> float:
+    """Gaia's `distribute` applier, transcribed `[GDE-FEX-101]`.
+
+        rank    = lower_bound(distribution, v)
+        rank    = clamp(rank, outliers, nPoints - outliers)
+        normIdx = rank / nPoints
+        out     = erfinv(2*normIdx - 1)
+
+    `erfinv(2q-1)` is the inverse normal CDF scaled by 1/sqrt(2), which is the
+    factor two earlier guesses missed. Python has no `erfinv`, so it is written
+    through `NormalDist.inv_cdf`, which is the same function.
+    """
+    n = len(table)
+    rank = bisect.bisect_left(table, v)
+    lo, hi = GAUSS_OUTLIERS, n - GAUSS_OUTLIERS
+    rank = lo if rank < lo else (hi if rank > hi else rank)
+    return _NORM.inv_cdf(rank / n) / _SQRT2
 
 
 def multiclass_probability(k: int, r: list[list[float]], iters: int = 100) -> list[float]:
