@@ -227,7 +227,34 @@ First run on `tonal_atonal` (2 classes, 76 SVs, one normalize step), 8 recording
 
 **The concrete lead: the vector is 372 dimensions and the SVM's highest support-vector index is 380.** Eight dimensions are missing, so every distance is computed in the wrong space. The `enumerate` step converts string descriptors to numbers, and the lowlevel files carry exactly four musical strings — `tonal.key_key`, `tonal.key_scale`, `tonal.chords_key`, `tonal.chords_scale` — which accounts for four, not eight. Note also that the errors are generous by construction: the harness takes the best over both label orientations and all submissions, so the true error is at least this large.
 
-Resolving those eight dimensions is the next step, and the harness will say when it is right. What remains after that is the `cleaner` parameters and pairwise coupling for the six multi-class classifiers.
+#### `[GDE-FEX-092]` The eight dimensions are found — and they reveal a version mismatch that blocks route 2
+
+The SVM's input list is **133 descriptors**: the 125 with normalize coefficients (372 dims) plus **8 enumerated string descriptors** (1 dim each) = **380**, matching the highest support-vector index exactly. The eight are:
+
+```
+.tonal.chords_key            .tonal.key_edma.key         .tonal.key_krumhansl.key
+.tonal.chords_scale          .tonal.key_edma.scale       .tonal.key_krumhansl.scale
+                             .tonal.key_temperley.key    .tonal.key_temperley.scale
+```
+
+`key_edma`, `key_krumhansl` and `key_temperley` are the **three-profile key estimation** of later Essentia. Neither input we have produces them:
+
+| Artefact | Essentia version | Key descriptors emitted |
+| :--- | :--- | :--- |
+| AcousticBrainz's published highlevel | 2.1-**beta1** | `key_key`, `key_scale` only |
+| The downloadable extractor `[GDE-FEX-062]` | 2.1-**beta2** | `key_key`, `key_scale` only |
+| The downloadable SVM models | v2.1_**beta5** | **requires all eight** |
+
+Measured: 0 of 40 archived lowlevel files carry `key_edma`, and neither do our own 12 extractions. **Six of the 380 input dimensions cannot be supplied by any data we can produce.**
+
+Two consequences, and the second is worse than the first:
+
+1. **Exact reproduction of AcousticBrainz's published values is impossible with these models.** They are a later vintage than the pipeline that produced the dumps, so `[GDE-FEX-090]`'s verification can never reach zero error. The 0.059 residual `[GDE-FEX-091]` is at least partly this.
+2. **The models cannot be run correctly on our own library either**, because our extractor is beta2 and also lacks the three-profile keys. This is not a verification problem; it is an input problem.
+
+**Route 2 is blocked pending a version question**, and the cheap test is whether AcousticBrainz published an earlier `svm_models` release matching the beta1/beta2 extractor — the URL pattern in `[GDE-FEX-062]` is known and the beta5 tarball was found by browsing that directory.
+
+Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
 
