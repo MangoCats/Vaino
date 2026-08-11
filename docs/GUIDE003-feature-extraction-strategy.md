@@ -521,6 +521,29 @@ the whole 5,590-file library costs under an hour, negligible beside the ~27 s pe
 track the lowlevel extraction itself takes `[GDE-FEX-062]`. Extraction remains the
 only expensive step, and it is the one that caches `[SPEC-SC-080]`.
 
+#### `[GDE-FEX-104]` Throughput measured on this library
+
+`tools/extract_library.py` runs both stages: audio → extractor → `lowlevel_cache`,
+then cache → 18 chains → `flavor`, tagged `source = local:essentia-2.1-beta2+gaia-beta1`.
+
+| | |
+| :--- | ---: |
+| extraction rate | **6.4 s per audio-minute** (26.6–27.0 s for a 4.2-minute track) |
+| library | 5,590 files, **585 audio-hours** |
+| full extraction | **62.4 core-hours** |
+| classification | 586 ms/track — about 1 hour for the library |
+
+The per-track figure matches `[GDE-FEX-062]`'s ~27 s independently. A first
+4-file smoke test suggested 155 hours; that was unrepresentative — too small a
+sample, containing a long file. **Measure on a median-length track, not on
+whatever the first query returns.**
+
+One inefficiency worth recording: extraction runs on **whole files**, so a
+passage inside a 191-minute DAO file costs the whole file. The 49 programme
+seeds span 55 recordings but 1,144 audio-minutes for that reason. Per-passage
+extraction via the extractor's start/end profile would cut the library total
+substantially, and is worth doing before the full run.
+
 **What Vaino can now do:** run all 18 AcousticBrainz classifiers locally, over any audio, from the published extractor and models, with values verified against AcousticBrainz's own output. That is uniform local provenance `[SPEC-FD-145]` with no accuracy penalty and no approximation — the outcome `[SPEC-FD-150]` argued for and could not previously reach.
 
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
