@@ -298,6 +298,32 @@ Two candidate causes, untested:
 
 Neither is speculative work: both are readable from the chain.
 
+#### `[GDE-FEX-096]` Chain order resolved; the enumeration maps are stored, and unread
+
+Ordering the steps by file offset settles the sequence:
+
+```
+remove(16) → fixlength(29730) → remove(112618) → enumerate(153388)
+  → normalize(162678) → select(951377) → cleaner(972078)
+  → normalize(982013) → svmtrain(1071587) → select(1889620)
+```
+
+`cleaner` uses the `removedesc` applier, so it does drop descriptors — but **both** normalize steps carry 157, so nothing is dropped in this chain and cause (1) above is eliminated. Composing the two normalizes across the intervening `select`/`cleaner` is correct.
+
+Immediately before `svmtrain` the chain stores, explicitly, **the enumeration maps and the class field**:
+
+```
+.tonal.key_scale     minor, major
+.tonal.key_key       G#, G, F#, F, E, D#, D, C#, C, B, A#, A
+.tonal.chords_scale  minor, major
+.tonal.chords_key    G#, G, F#, F, E, D#, D, C#, C, B, A#, A
+className            highlevel.tonal_atonal
+```
+
+**This contradicts the codes currently in the tool.** `[GDE-FEX-095]` assumed alphabetical (`A=0 … G#=11`); the stored order is descending. Reading the maps properly needs QVariant types **12** and **32**, which `read_variant` refuses rather than guesses — the same discipline that kept the container framing honest `[GDE-FEX-070a]`.
+
+`gaia_predict.KEY_CODES` is therefore marked unverified in the source, and **no output of that module should be used until the stored maps are read**. Identifying those two type ids against the Qt version Gaia was built with is the next step, and it also yields the label-to-class mapping, since `className` sits in the same region.
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.

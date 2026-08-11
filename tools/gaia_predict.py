@@ -70,11 +70,16 @@ def flatten_strings(doc: dict) -> dict[str, str]:
     return out
 
 
-# Gaia's `enumerate` step turns string descriptors into integers. The codes are
-# not stored in the chain, but they are visible in the support vectors: indices
-# 547 and 664 of `tonal_atonal` carry integers 0-11, which is twelve pitch
-# classes. Alphabetical order of the note names is the reading being tested
-# `[GDE-FEX-095]`.
+# !! UNVERIFIED AND PROBABLY WRONG !! `[GDE-FEX-096]`
+#
+# Gaia's `enumerate` step turns string descriptors into integers, and the maps
+# ARE stored in the chain immediately before `svmtrain` — but reading them needs
+# QVariant types 12 and 32, which `read_variant` refuses rather than guesses.
+#
+# The stored order is `G#, G, F#, F, E, D#, D, C#, C, B, A#, A` — descending,
+# NOT the alphabetical order assumed here. These codes are a placeholder that
+# the harness has not confirmed and the evidence contradicts. Do not use this
+# module's output for anything until the stored maps are read.
 KEY_CODES = {k: i for i, k in enumerate(
     ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"]
 )}
