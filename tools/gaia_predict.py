@@ -125,6 +125,39 @@ def build_vector(
     return vec
 
 
+def multiclass_probability(k: int, r: list[list[float]], iters: int = 100) -> list[float]:
+    """Wu, Lin and Weng (2004) pairwise coupling, as libsvm implements it.
+
+    Transcribed rather than derived: the update is a coordinate step on a
+    quadratic, and an approximation that merely looked convergent would produce
+    a plausible distribution over classes -- exactly the failure the whole
+    harness exists to catch.
+    """
+    p = [1.0 / k] * k
+    Q = [[0.0] * k for _ in range(k)]
+    for t in range(k):
+        Q[t][t] = sum(r[j][t] * r[j][t] for j in range(k) if j != t)
+        for j in range(k):
+            if j != t:
+                Q[t][j] = -r[j][t] * r[t][j]
+    for _ in range(iters):
+        Qp = [sum(Q[t][j] * p[j] for j in range(k)) for t in range(k)]
+        pQp = sum(p[t] * Qp[t] for t in range(k))
+        if max(abs(Qp[t] - pQp) for t in range(k)) < 0.005 / k:
+            break
+        for t in range(k):
+            if Q[t][t] <= 0:
+                continue
+            diff = (-Qp[t] + pQp) / Q[t][t]
+            p[t] += diff
+            pQp = (pQp + diff * (diff * Q[t][t] + 2 * Qp[t])) / (1 + diff) ** 2
+            for j in range(k):
+                Qp[j] = (Qp[j] + diff * Q[t][j]) / (1 + diff)
+                p[j] /= 1 + diff
+    total = sum(p)
+    return [v / total for v in p] if total else [1.0 / k] * k
+
+
 # ----------------------------------------------------------------- the model
 
 
@@ -207,6 +240,59 @@ class SvmModel:
     def decision_binary(self, x: list[float]) -> float:
         k = [self.kernel_value(sv, x) for sv in self.sv]
         return sum(c[0] * kv for c, kv in zip(self.sv_coef, k)) - self.rho[0]
+
+    def decision_values(self, x: list[float]) -> list[float]:
+        """One decision value per class pair, as libsvm's `svm_predict_values`.
+
+        Support vectors are grouped by class, and the pair (i, j) uses
+        `sv_coef[j-1]` over class i's block and `sv_coef[i]` over class j's.
+        That asymmetry is the part worth transcribing carefully rather than
+        reconstructing from intuition.
+        """
+        kv = [self.kernel_value(sv, x) for sv in self.sv]
+        start, acc = [], 0
+        for c in self.nr_sv:
+            start.append(acc)
+            acc += c
+        out: list[float] = []
+        p = 0
+        for i in range(self.nr_class):
+            for j in range(i + 1, self.nr_class):
+                si, sj = start[i], start[j]
+                ci, cj = self.nr_sv[i], self.nr_sv[j]
+                # sv_coef is stored here as [support_vector][coefficient],
+                # transposed from libsvm's C layout of [coefficient][sv]. The
+                # indices below are swapped accordingly.
+                s = sum(self.sv_coef[si + k][j - 1] * kv[si + k] for k in range(ci))
+                s += sum(self.sv_coef[sj + k][i] * kv[sj + k] for k in range(cj))
+                out.append(s - self.rho[p])
+                p += 1
+        return out
+
+    @staticmethod
+    def _sigmoid(d: float, a: float, b: float) -> float:
+        f = d * a + b
+        return math.exp(-f) / (1.0 + math.exp(-f)) if f >= 0 else 1.0 / (1.0 + math.exp(f))
+
+    def probability(self, x: list[float]) -> dict[int, float]:
+        """Class probabilities. Binary uses Platt directly; multi-class uses
+        libsvm's `multiclass_probability` — the Wu–Lin–Weng pairwise coupling.
+        """
+        if self.nr_class == 2:
+            return self.probability_binary(x)
+        dec = self.decision_values(x)
+        k = self.nr_class
+        # Pairwise probabilities, clamped exactly as libsvm does.
+        r = [[0.0] * k for _ in range(k)]
+        p = 0
+        for i in range(k):
+            for j in range(i + 1, k):
+                v = min(max(self._sigmoid(dec[p], self.probA[p], self.probB[p]), 1e-7), 1 - 1e-7)
+                r[i][j] = v
+                r[j][i] = 1 - v
+                p += 1
+        probs = multiclass_probability(k, r)
+        return {self.label[i]: probs[i] for i in range(k)}
 
     def probability_binary(self, x: list[float]) -> dict[int, float]:
         """P(label) via libsvm's Platt sigmoid, matching `sigmoid_predict`."""

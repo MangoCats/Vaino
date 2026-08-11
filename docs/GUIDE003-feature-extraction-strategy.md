@@ -414,6 +414,38 @@ It also confirms the `[GDE-FEX-098]` diagnosis: the only thing wrong with `tonal
 
 None of these is exploratory any more. The chain is understood and proven; what is left is implementing two documented algorithms and downloading files.
 
+#### `[GDE-FEX-100]` 11 of 18 classifiers reproduce, including three complex ones
+
+All 18 beta1 models fetched (83 MB). The full survey:
+
+| | needs gaussianize | multi-class |
+| :--- | :--- | :--- |
+| **7** | `genre_dortmund`, `genre_electronic`, `genre_rosamerica`, `mood_sad`, `timbre`, `tonal_atonal`, `voice_instrumental` | |
+| **6** | | `genre_dortmund`, `genre_electronic`, `genre_rosamerica`, `genre_tzanetakis`, `ismir04_rhythm`, `moods_mirex` |
+
+**Eight binary classifiers, 60 recordings each** — both kernels, since `danceability`, `mood_aggressive` and `mood_happy` are polynomial:
+
+```
+danceability 55/60   gender 44/60   mood_acoustic 59/60   mood_aggressive 56/60
+mood_electronic 55/60   mood_happy 51/60   mood_party 45/60   mood_relaxed 56/60
+median error 1.3e-5 … 7.4e-5      max across all eight: 0.0037
+```
+
+**Three multi-class classifiers**, via Wu–Lin–Weng pairwise coupling as libsvm implements it:
+
+```
+genre_tzanetakis  60/60 exact    ismir04_rhythm  60/60 exact    moods_mirex  60/60 exact
+median 0.000000                  max 0.0000
+```
+
+The multi-class results are *exact* where the binary ones carry a ~0.003 residual, which supports the residual being rounding in the published values rather than anything in the chain.
+
+**Three of the six complex characteristics — `genre_tzanetakis`, `ismir04_rhythm`, `moods_mirex` — are now reproducible**, and they are precisely what `[SPEC-FD-082]` predicts *Light* and *Groove* need.
+
+One transcription note kept because it is the kind of thing that silently corrupts: `sv_coef` is stored here as `[support_vector][coefficient]`, transposed from libsvm's `[coefficient][support_vector]`. In `decision_values` the pair (i, j) uses `sv_coef[·][j-1]` over class i's block and `sv_coef[·][i]` over class j's — an asymmetry worth transcribing rather than reconstructing from intuition. It raised an `IndexError` rather than quietly producing wrong numbers, which was luck as much as design.
+
+**Remaining: gaussianize, for the seven chains that use it** — including the other three complex characteristics.
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
