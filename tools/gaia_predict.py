@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import gaia_history as gh  # noqa: E402
 
-SVM_DIR = Path("data/essentia/svm/essentia-extractor-svm_models-v2.1_beta5")
+SVM_DIR = Path(os.environ.get("GAIA_SVM_DIR", "data/essentia/svm/essentia-extractor-svm_models-v2.1_beta5"))
 LOWLEVEL_DIR = Path("data/essentia/ab_lowlevel")
 REFERENCE_DB = Path("data/flavor-sample.db")
 
@@ -54,21 +55,36 @@ def flatten(doc: dict) -> dict[str, list[float]]:
     return out
 
 
-def build_vector(features: dict[str, list[float]], coeffs: dict, order: list[str]) -> list[float]:
+def build_vector(
+    features: dict[str, list[float]], steps: list[dict], order: list[str]
+) -> list[float]:
     """Normalised feature vector, in `order`.
 
-    Normalisation is `y = a·x + b` per component `[GDE-FEX-069]`. A descriptor
-    the file lacks contributes zeros rather than aborting: partial input is a
-    real case, and the verification will show if it matters.
+    Each normalize step is `y = a·x + b` per component `[GDE-FEX-069]`, and
+    where a chain has **two** they **compose in sequence** — they are not
+    alternatives to choose between. `.lowlevel.spectral_spread.var` reads
+    2.197e12 raw; step 0 takes it to 0.0064 and step 1 to 0.5016, which is
+    inside the support vectors' observed [0, 11]. Applying only the second to
+    the raw value yields 5.6e11, every kernel value underflows to zero, and the
+    classifier returns a constant — which is exactly what it did.
+
+    A descriptor the file lacks contributes zeros rather than aborting: partial
+    input is a real case, and the verification will show if it matters.
     """
     vec: list[float] = []
     for name in order:
-        c = coeffs[name]
-        a, b = c["a"], c["b"]
+        widths = len(steps[0][name]["a"])
         xs = features.get(name)
-        for i in range(len(a)):
-            x = xs[i] if xs and i < len(xs) else 0.0
-            vec.append(a[i] * x + b[i])
+        for i in range(widths):
+            v = xs[i] if xs and i < len(xs) else 0.0
+            for c in steps:
+                comp = c.get(name)
+                if comp is None:
+                    continue
+                a, b = comp["a"], comp["b"]
+                j = i if i < len(a) else 0
+                v = a[j] * v + b[j]
+            vec.append(v)
     return vec
 
 
@@ -181,12 +197,11 @@ def reference(mbid: str, characteristic: str) -> dict[int, dict[str, float]]:
 def verify(classifier: str, limit: int = 8) -> None:
     hist = SVM_DIR / f"{classifier}.history"
     coeff_steps = gh.normalize_coeffs(hist)
-    # The last normalize is the one immediately before the SVM, so its output
-    # is the space the support vectors live in.
-    coeffs = coeff_steps[-1]
+    # ALL normalize steps, composed in order [GDE-FEX-093].
+    coeffs = coeff_steps[0]
     model = SvmModel(gh.extract_svm_model(hist))
     print(f"{classifier}: {len(coeffs)} descriptors, kernel {model.kernel}, "
-          f"{len(model.sv)} SVs, classes {model.label}")
+          f"{len(model.sv)} SVs, classes {model.label}, {len(coeff_steps)} normalize step(s)")
 
     orders = {
         "as-read": list(coeffs.keys()),
@@ -202,7 +217,7 @@ def verify(classifier: str, limit: int = 8) -> None:
         errs: list[float] = []
         for f in files:
             doc = json.load(open(f, encoding="utf-8"))
-            x = build_vector(flatten(doc), coeffs, order)
+            x = build_vector(flatten(doc), coeff_steps, order)
             probs = model.probability_binary(x)
             ref = reference(f.stem, classifier)
             if not ref:

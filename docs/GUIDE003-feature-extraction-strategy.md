@@ -254,6 +254,31 @@ Two consequences, and the second is worse than the first:
 
 **Route 2 is blocked pending a version question**, and the cheap test is whether AcousticBrainz published an earlier `svm_models` release matching the beta1/beta2 extractor — the URL pattern in `[GDE-FEX-062]` is known and the beta5 tarball was found by browsing that directory.
 
+#### `[GDE-FEX-093]` Unblocked: the beta1 models exist, in a different directory
+
+`data.metabrainz.org/pub/musicbrainz/acousticbrainz/**svm_models/**` — a sibling of `extractors/`, not inside it — holds a second, **earlier** set of the same 18 classifiers, stamped `accuracies_v2.1_beta1.html`. Different file sizes throughout (`tonal_atonal` 2 MB against the beta5 copy's 0.7 MB), so these are genuinely different models.
+
+Measured on `tonal_atonal`, against one archived lowlevel file:
+
+| | descriptors needed | present in the lowlevel | vector dims | highest SV index |
+| :--- | ---: | ---: | ---: | ---: |
+| beta5 (on disk) | 125 | **81 — 44 missing** | 372 | 380 |
+| **beta1** (fetched) | 157 | **157 — 0 missing** | 666 | 670 |
+
+The beta1 model's enumerated strings are exactly `.tonal.chords_key`, `.tonal.chords_scale`, `.tonal.key_key`, `.tonal.key_scale` — the four that both the archived lowlevel **and our own beta2 extractor** emit. The vintage matches. Route 2 is viable.
+
+#### `[GDE-FEX-094]` The two normalize steps **compose**; they are not alternatives
+
+`[GDE-FEX-069]` recorded that six chains normalize twice and treated the question as *which* to use. That was wrong: they apply **in sequence**.
+
+`.lowlevel.spectral_spread.var` reads `2.197e12` raw. Step 0 (`a=3.10e-15, b=-4.29e-4`) takes it to `0.0064`; step 1 (`a=0.2565, b=+0.5`) takes that to `0.5016` — inside the support vectors' observed range of [0, 11]. Applying only step 1 to the raw value gives `5.6e11`, which makes `‖x‖²` about `3e23`, so every RBF kernel value underflows to zero and the classifier returns `-rho` for **every input**.
+
+That failure is worth naming precisely because of how it presented: a constant output identical across all three candidate descriptor orderings. A constant classifier still produces a probability, and a plausible one — 0.8366 here.
+
+**Current state — still not correct.** With composition applied, `tonal_atonal` over 12 recordings gives a median absolute error of **0.0956**, best **0.0003**, worst **0.267**. Predictions now vary, and some recordings match nearly exactly, which the constant version could never have done. But a correct reimplementation matches to floating-point noise throughout, and this does not.
+
+The outstanding lead is the **four enumerated string dimensions** (666 built against 670 expected): their integer codes and their positions in the index order are still unknown, and every index after the first of them may be shifted.
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
