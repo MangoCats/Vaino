@@ -368,60 +368,58 @@ def enumerated_descriptors(hist: Path) -> list[str]:
     return []
 
 
-def verify(classifier: str, limit: int = 8) -> None:
+def verify(classifier: str, limit: int = 60) -> tuple[int, int, float, float]:
+    """Predict and compare against the reference. Returns (exact, n, median, max).
+
+    Class names map to model labels **by value, not by position**: the class
+    sorted at index i corresponds to model label `i`. Comparing against
+    `label[i]` instead made every classifier whose labels read `[1, 0]` appear
+    catastrophically wrong -- six of them -- while the chain was correct
+    `[GDE-FEX-102]`.
+    """
     hist = SVM_DIR / f"{classifier}.history"
-    coeff_steps = gh.normalize_coeffs(hist)
-    # ALL normalize steps, composed in order [GDE-FEX-093].
-    coeffs = coeff_steps[0]
-    model = SvmModel(gh.extract_svm_model(hist))
-    print(f"{classifier}: {len(coeffs)} descriptors, kernel {model.kernel}, "
-          f"{len(model.sv)} SVs, classes {model.label}, {len(coeff_steps)} normalize step(s)")
-
-    # The enumerated string descriptors take part in the ordering, and the
-    # index positions they land at under a sorted order match the integer
-    # columns found in the support vectors [GDE-FEX-095].
-    enum_names = enumerated_descriptors(hist)
+    steps = gh.normalize_coeffs(hist)
+    coeffs = steps[0]
     enums = gh.enum_maps(hist)
-    orders = {"sorted-with-enums": sorted(list(coeffs.keys()) + enum_names)}
-    dims = sum(len(v["a"]) for v in coeffs.values()) + len(enum_names)
-    max_idx = max(max(sv.keys()) for sv in model.sv)
-    print(f"vector dimensions {dims}, highest SV index {max_idx}")
+    enames = enumerated_descriptors(hist)
+    gauss = gh.gaussianize_tables(hist)
+    order = sorted(list(coeffs.keys()) + enames)
+    model = SvmModel(gh.extract_svm_model(hist))
 
-    files = sorted(LOWLEVEL_DIR.glob("*.json"))[:limit]
-    for label, order in orders.items():
-        errs: list[float] = []
-        for f in files:
-            doc = json.load(open(f, encoding="utf-8"))
-            x = build_vector(flatten(doc), coeff_steps, order, flatten_strings(doc), enums)
-            probs = model.probability_binary(x)
-            ref = reference(f.stem, classifier)
-            if not ref:
-                continue
-            # Two unknowns are resolved by taking the best case, deliberately:
-            # which SUBMISSION the lowlevel file is [GDE-FEX-090a], and which
-            # model label maps to which class name. Taking the best is the
-            # generous reading -- if even that is far off, the chain is wrong,
-            # which is the question being asked.
-            names = sorted(next(iter(ref.values())).keys())
-            candidates = [probs[model.label[0]], probs[model.label[1]]]
-            errs.append(
-                min(
-                    abs(cls[names[0]] - p)
-                    for cls in ref.values()
-                    for p in candidates
-                )
+    errs: list[float] = []
+    for f in sorted(LOWLEVEL_DIR.glob("*.json"))[:limit]:
+        doc = json.load(open(f, encoding="utf-8"))
+        x = build_vector(flatten(doc), steps, order, flatten_strings(doc), enums, gauss)
+        pr = model.probability(x)
+        ref = reference(f.stem, classifier)
+        if not ref:
+            continue
+        names = sorted(next(iter(ref.values())).keys())
+        # Best over submissions: which one a lowlevel file is remains unknown.
+        errs.append(
+            min(
+                max(abs(cls[names[i]] - pr.get(i, 0.0)) for i in range(len(names)))
+                for cls in ref.values()
             )
-        if errs:
-            errs.sort()
-            print(f"  order {label:<9} n={len(errs):>3}  median abs err {errs[len(errs)//2]:.4f}"
-                  f"  best {errs[0]:.4f}  worst {errs[-1]:.4f}")
+        )
+    if not errs:
+        return (0, 0, float("nan"), float("nan"))
+    errs.sort()
+    return (sum(1 for e in errs if e < 0.001), len(errs), errs[len(errs) // 2], errs[-1])
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print(__doc__)
-        return 2
-    verify(sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 8)
+    names = sys.argv[1:] or sorted(p.stem for p in SVM_DIR.glob("*.history"))
+    print("%-20s %-9s %10s %10s" % ("classifier", "exact", "median", "max"))
+    bad = 0
+    for n in names:
+        ex, tot, med, mx = verify(n)
+        flag = "" if mx < 0.01 else "   <-- FAIL"
+        if mx >= 0.01:
+            bad += 1
+        print("%-20s %4d/%-4d %10.6f %10.4f%s" % (n, ex, tot, med, mx, flag))
+    print()
+    print(f"{len(names) - bad}/{len(names)} reproduce")
     return 0
 
 

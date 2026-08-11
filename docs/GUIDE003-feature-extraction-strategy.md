@@ -471,6 +471,36 @@ Next candidate: the `select` and `cleaner` steps between gaussianize and the sec
 
 > **Source:** [gaia `distribute` applier](https://github.com/MTG/gaia/blob/master/src/algorithms/distribute.cpp)
 
+### `[GDE-FEX-102]` ✅ ALL 18 CLASSIFIERS REPRODUCE — route 2 is complete
+
+The six that appeared broken were a **harness** fault, not a chain fault. Class names map to model labels **by value, not by position**: the class sorted at index `i` corresponds to model label `i`. I compared against `label[i]`. Where a model's labels read `[0, 1]` the two coincide and everything verified; where they read `[1, 0]` every prediction was scored against the wrong class:
+
+```
+tonal_atonal        0.812 → 0.000633      voice_instrumental  0.810 → 0.000739
+timbre              0.776 → 0.000273
+```
+
+Full verification, 60 archived recordings each, against AcousticBrainz's published highlevel:
+
+| classifier | exact | median | max | | classifier | exact | median | max |
+| :--- | ---: | ---: | ---: | :-- | :--- | ---: | ---: | ---: |
+| `genre_tzanetakis` | 60/60 | 0.000000 | 0.0000 | | `mood_electronic` | 55/60 | 0.000074 | 0.0029 |
+| `ismir04_rhythm` | 60/60 | 0.000000 | 0.0000 | | `mood_aggressive` | 56/60 | 0.000013 | 0.0025 |
+| `moods_mirex` | 60/60 | 0.000000 | 0.0000 | | `mood_relaxed` | 56/60 | 0.000046 | 0.0029 |
+| `genre_electronic` | 60/60 | 0.000043 | 0.0003 | | `mood_happy` | 51/60 | 0.000042 | 0.0034 |
+| `mood_acoustic` | 59/60 | 0.000064 | 0.0025 | | `genre_rosamerica` | 51/60 | 0.000561 | 0.0024 |
+| `genre_dortmund` | 57/60 | 0.000009 | 0.0019 | | `mood_sad` | 48/60 | 0.000149 | 0.0034 |
+| `mood_aggressive` | 56/60 | 0.000013 | 0.0025 | | `timbre` | 48/60 | 0.000283 | 0.0024 |
+| `danceability` | 55/60 | 0.000044 | 0.0031 | | `mood_party` | 45/60 | 0.000014 | 0.0037 |
+| `gender` | 44/60 | 0.000039 | 0.0027 | | `tonal_atonal` | 35/60 | 0.000672 | 0.0072 |
+| | | | | | `voice_instrumental` | 36/60 | 0.000659 | 0.0070 |
+
+**Maximum error across all eighteen: 0.0072.** Three reproduce exactly. `[GDE-FEX-065]`'s remaining gap — the one deterministic function from 436+ lowlevel scalars to 71 highlevel dimensions — is closed.
+
+**The bookend worth keeping.** `[GDE-FEX-095]` warned that a verification tool which *flatters* is worse than none, because it gets believed. This was the mirror: a harness that was too **harsh** made a correct implementation look broken for six commits, and sent me looking for faults in chain structure that was right all along. Both failures are the same underlying error — trusting the comparison more than the thing compared. The check needs checking too.
+
+**What Vaino can now do:** run all 18 AcousticBrainz classifiers locally, over any audio, from the published extractor and models, with values verified against AcousticBrainz's own output. That is uniform local provenance `[SPEC-FD-145]` with no accuracy penalty and no approximation — the outcome `[SPEC-FD-150]` argued for and could not previously reach.
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
