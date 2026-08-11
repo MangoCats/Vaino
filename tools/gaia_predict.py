@@ -70,26 +70,15 @@ def flatten_strings(doc: dict) -> dict[str, str]:
     return out
 
 
-# !! UNVERIFIED AND PROBABLY WRONG !! `[GDE-FEX-096]`
-#
-# Gaia's `enumerate` step turns string descriptors into integers, and the maps
-# ARE stored in the chain immediately before `svmtrain` — but reading them needs
-# QVariant types 12 and 32, which `read_variant` refuses rather than guesses.
-#
-# The stored order is `G#, G, F#, F, E, D#, D, C#, C, B, A#, A` — descending,
-# NOT the alphabetical order assumed here. These codes are a placeholder that
-# the harness has not confirmed and the evidence contradicts. Do not use this
-# module's output for anything until the stored maps are read.
-KEY_CODES = {k: i for i, k in enumerate(
-    ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"]
-)}
-SCALE_CODES = {"major": 0, "minor": 1}
+def enumerate_string(maps: dict, name: str, value: str) -> float:
+    """The stored code for a string value `[GDE-FEX-097]`.
 
-
-def enumerate_string(name: str, value: str) -> float:
-    if name.endswith("_scale"):
-        return float(SCALE_CODES.get(value, 0))
-    return float(KEY_CODES.get(value, 0))
+    The maps are read from the chain, never assumed. They are arbitrary and
+    differ per descriptor -- `key_key` codes G# as 0 and A# as 4, while
+    `chords_key` codes A# as 11 -- so no ordering rule would have produced
+    them. An unknown value falls back to 0 rather than aborting.
+    """
+    return float(maps.get(name, {}).get(value, 0))
 
 
 def build_vector(
@@ -97,6 +86,7 @@ def build_vector(
     steps: list[dict],
     order: list[str],
     strings: dict[str, str] | None = None,
+    enums: dict | None = None,
 ) -> list[float]:
     """Normalised feature vector, in `order`.
 
@@ -119,7 +109,7 @@ def build_vector(
             # and NOT normalised -- the support vectors carry raw 0-11 at these
             # positions, so the normalize steps never touched them.
             raw = strings.get(name) if strings else None
-            vec.append(enumerate_string(name, raw) if raw is not None else 0.0)
+            vec.append(enumerate_string(enums or {}, name, raw) if raw is not None else 0.0)
             continue
         xs = features.get(name)
         for i in range(len(comp0["a"])):
@@ -272,6 +262,7 @@ def verify(classifier: str, limit: int = 8) -> None:
     # index positions they land at under a sorted order match the integer
     # columns found in the support vectors [GDE-FEX-095].
     enum_names = enumerated_descriptors(hist)
+    enums = gh.enum_maps(hist)
     orders = {"sorted-with-enums": sorted(list(coeffs.keys()) + enum_names)}
     dims = sum(len(v["a"]) for v in coeffs.values()) + len(enum_names)
     max_idx = max(max(sv.keys()) for sv in model.sv)
@@ -282,7 +273,7 @@ def verify(classifier: str, limit: int = 8) -> None:
         errs: list[float] = []
         for f in files:
             doc = json.load(open(f, encoding="utf-8"))
-            x = build_vector(flatten(doc), coeff_steps, order, flatten_strings(doc))
+            x = build_vector(flatten(doc), coeff_steps, order, flatten_strings(doc), enums)
             probs = model.probability_binary(x)
             ref = reference(f.stem, classifier)
             if not ref:

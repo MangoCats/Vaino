@@ -176,6 +176,45 @@ def read_param_at(path: Path, name: str, occurrence: int = 0):
     return read_variant(r)
 
 
+def enum_maps(path: Path) -> dict[str, dict[str, int]]:
+    """The `enumerate` step's string → integer codes, as stored.
+
+    Not a `QVariant`: a bare `quint32` count followed by that many
+    `(QString, quint32)` pairs. Reading it as a variant is what made the codes
+    look unreadable `[GDE-FEX-096]`.
+
+    Taken from the LAST occurrence of each descriptor, which is the copy
+    immediately preceding `svmtrain` — the one the model was trained against.
+    """
+    data = path.read_bytes()
+    out: dict[str, dict[str, int]] = {}
+    for name in (
+        ".tonal.key_key",
+        ".tonal.key_scale",
+        ".tonal.chords_key",
+        ".tonal.chords_scale",
+    ):
+        key = name.encode("utf-16-be")
+        needle = struct.pack(">I", len(key)) + key
+        pos = data.rfind(needle)
+        if pos < 0:
+            continue
+        r = Reader(data)
+        r.p = pos + 4 + len(key)
+        try:
+            n = r.u32()
+            if not 0 < n <= 64:
+                continue
+            m: dict[str, int] = {}
+            for _ in range(n):
+                s = r.qstring()
+                m[s] = r.u32()
+            out[name] = m
+        except (ValueError, struct.error):
+            continue
+    return out
+
+
 def normalize_coeffs(path: Path) -> list[dict[str, dict]]:
     """Every `normalize` step's per-descriptor `a` and `b` vectors, in order.
 

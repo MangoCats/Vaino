@@ -324,6 +324,40 @@ className            highlevel.tonal_atonal
 
 `gaia_predict.KEY_CODES` is therefore marked unverified in the source, and **no output of that module should be used until the stored maps are read**. Identifying those two type ids against the Qt version Gaia was built with is the next step, and it also yields the label-to-class mapping, since `className` sits in the same region.
 
+#### `[GDE-FEX-097]` The enumeration maps are read — and the codes are arbitrary
+
+The maps are **not** `QVariant`-framed, which is why the reader balked. They are a bare `quint32` count followed by that many `(QString, quint32)` pairs:
+
+```
+00 00 00 02   count = 2
+00 00 00 0a "minor"  00 00 00 00      minor = 0
+00 00 00 0a "major"  00 00 00 01      major = 1
+```
+
+Read properly, the codes are **arbitrary and differ per descriptor**:
+
+| descriptor | codes |
+| :--- | :--- |
+| `.tonal.key_key` | G#=0, F=1, G=2, C=3, A#=4, A=5, E=6, C#=7, B=8, D=9, F#=10, D#=11 |
+| `.tonal.chords_key` | G#=0, F=1, G=2, C=3, E=4, D=5, A=6, F#=7, B=8, C#=9, D#=10, A#=11 |
+| both `_scale` | minor=0, major=1 |
+
+The same twelve notes map differently in the two descriptors, so **no ordering rule would have produced them** — not alphabetical, not chromatic, not the order they appear in the file. Both of my guesses were wrong: `[GDE-FEX-095]`'s alphabetical keys, and a `major=0, minor=1` scale mapping that was exactly inverted. `gaia_history.enum_maps` now reads them from the chain.
+
+**And the chain still does not reproduce.** With correct codes, over 25 recordings at a fixed orientation:
+
+```
+median 0.4289   exact (<0.001) 0/25   range 0.020 … 1.000
+```
+
+The generous metric improved (worst 0.267 → 0.176) while the strict median moved the wrong way. That combination says the residual error is **not** the enumerated dimensions — they are now right, and something larger is still wrong. A global label flip does not explain it either: the distribution is broad rather than bimodal, so predictions are decorrelated from truth for a substantial fraction rather than systematically inverted.
+
+**Remaining candidates**, in the order worth testing:
+
+1. The `select` step after `svmtrain` and the `addfield` step before it are unmodelled; `addfield` declares `className = highlevel.tonal_atonal`, so the label-to-class mapping lives there.
+2. `.tonal.hpcp` and similar vector descriptors are 36-wide — whether their components are ordered as stored, and whether `fixlength` reorders them, is untested.
+3. The first `remove` and `fixlength` steps are assumed inert because the normalize coefficients define the surviving set; that assumption has not been checked.
+
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
 
 **Route 2 is therefore promoted from fallback to the recommended path for the six complex characteristics.** Route 3's models remain the right answer for the 11 binaries they already cover.
