@@ -544,6 +544,39 @@ seeds span 55 recordings but 1,144 audio-minutes for that reason. Per-passage
 extraction via the extractor's start/end profile would cut the library total
 substantially, and is worth doing before the full run.
 
+#### `[GDE-FEX-105]` Per-passage extraction — a correctness fix, not an efficiency one
+
+I expected this to cut the 62 core-hours substantially. It does not:
+
+| | audio | core-hours |
+| :--- | ---: | ---: |
+| whole-file | 585 h | 62.4 |
+| passage-only | 572 h | 61.0 **+3.4 decode = 64.4** |
+
+Passages cover nearly all of their files, so per-passage extraction is slightly
+**more** expensive. The reason to do it is different and stronger.
+
+**5,402 of 5,590 files hold one passage; 188 hold 2,677 between them**, up to 40
+in a single file. For those, one whole-file feature vector describes *the average
+of forty different songs*, and every passage inside inherits it. That is 34% of
+the library's audio carrying wrong flavor. Demonstrated on `Synchronicity.mp3`:
+
+| passage | genre | moods_mirex | aggressive |
+| :--- | :--- | :--- | ---: |
+| Synchronicity I | pop 0.40 | Cluster5 | **0.47** |
+| Walking in Your Footsteps | rhy 0.68 | Cluster3 | **0.01** |
+| O My God | hip 0.27 | Cluster5 | 0.39 |
+
+**How to slice matters.** The extractor takes `startTime`/`endTime` in a profile,
+but on a 192-minute MP3 that cost **169–230 s** for a four-minute window and
+**failed outright at non-zero offsets** (rc=1, rc=4). Decoding the window with
+ffmpeg first takes **1.5 s**, and the extractor then sees a short file: **32.5 s
+total**, and reliable. Whole-file passages skip the decode entirely, which is
+5,402 of 5,590 files.
+
+`lowlevel_cache` was already keyed `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]`,
+so the schema anticipated this before the pipeline did.
+
 **What Vaino can now do:** run all 18 AcousticBrainz classifiers locally, over any audio, from the published extractor and models, with values verified against AcousticBrainz's own output. That is uniform local provenance `[SPEC-FD-145]` with no accuracy penalty and no approximation — the outcome `[SPEC-FD-150]` argued for and could not previously reach.
 
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
