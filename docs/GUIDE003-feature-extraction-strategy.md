@@ -577,6 +577,39 @@ total**, and reliable. Whole-file passages skip the decode entirely, which is
 `lowlevel_cache` was already keyed `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]`,
 so the schema anticipated this before the pipeline did.
 
+#### `[GDE-FEX-106]` The failure rate explained: a timeout artefact, plus a data bug
+
+Early runs failed at 25–33%. Both causes are now identified and neither is intrinsic.
+
+**Cause 1 — the timeout, which was mine.** Whole-file extraction with a 300 s cap fails on anything over ~47 audio-minutes at 6.4 s/minute. The seed run predicted **12** such files and lost **14**. Library-wide that is **1,910 of 8,079 passages (23.6%)**.
+
+Per-passage extraction removes it, because the unit of work becomes one song:
+
+| | passages timing out |
+| :--- | ---: |
+| 300 s cap, whole-file | 1,910 (23.6%) |
+| 600 s cap, per-passage | **0** |
+
+Passage lengths: median 4.0 min (26 s), p99 9.9 min, max 43.5 min (278 s) — 2.2× headroom against the 600 s cap.
+
+**Measured after the fix: 79 of 80 random passages succeeded (99%).**
+
+**Cause 2 — stored durations are unreliable, which is a data bug.** Probing 400 files against ffprobe:
+
+| | |
+| :--- | ---: |
+| duration differs from decoded by >5 s | **117 (29.2%)** |
+| duration *over*-states the file | 13 (3.2%), median 0.3 min |
+| worst case | **38.4 minutes** |
+
+That worst case is the single probe failure. `WhosNext.mp3` is recorded as 191.73 min and is actually **153.37**; its last "passage" runs 153.38–191.58, entirely past the end of the audio. Both fast and accurate ffmpeg seek correctly return nothing, because there is nothing there. It is a **phantom passage**, and segmentation created it in a tail that does not exist.
+
+Rarity, from a 545-passage sample: **0 phantom**, 13 (2.4%) merely *truncated* — end past the real duration but start valid, which extracts fine and simply yields what is there. Library-wide projection: ~0 phantom, ~193 truncated and harmless.
+
+**The fix.** `probe_duration_ms` asks ffprobe (~50 ms, cached per file, against ~27 s of extraction), then skips passages starting past the real end and clamps ends to it. Verified: the phantom passage is now skipped cleanly and its valid siblings still extract.
+
+**Expected failure rate for the full run: well under 1%**, and what remains is reported as a skip rather than a silent loss. The stored `duration_ms` should be repaired from the decoded value during ingest — a 29% error rate on a field this load-bearing is worth its own fix `[SPEC-SC-*]`.
+
 **What Vaino can now do:** run all 18 AcousticBrainz classifiers locally, over any audio, from the published extractor and models, with values verified against AcousticBrainz's own output. That is uniform local provenance `[SPEC-FD-145]` with no accuracy penalty and no approximation — the outcome `[SPEC-FD-150]` argued for and could not previously reach.
 
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".

@@ -37,11 +37,38 @@ import gaia_classify as gc  # noqa: E402
 
 EXTRACTOR = Path("data/essentia/streaming_extractor_music.exe").resolve()
 FFMPEG = shutil.which("ffmpeg")
+FFPROBE = shutil.which("ffprobe")
 SOURCE = "local:essentia-2.1-beta2+gaia-beta1"
 
 # A passage covering all but this much of its file is treated as the whole file,
 # skipping the decode. Trim points are seconds, not minutes.
 WHOLE_FILE_SLACK_MS = 5_000
+
+
+_DURATION_CACHE: dict[str, float | None] = {}
+
+
+def probe_duration_ms(path: str) -> float | None:
+    """Decoded duration in ms, from ffprobe. Cached; `None` if unavailable.
+
+    Costs ~50 ms and is read once per file, against ~27 s of extraction.
+    """
+    if path in _DURATION_CACHE:
+        return _DURATION_CACHE[path]
+    out = None
+    if FFPROBE:
+        try:
+            r = subprocess.run(
+                [FFPROBE, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "json", path],
+                capture_output=True, timeout=60,
+            )
+            if r.returncode == 0:
+                out = float(json.loads(r.stdout)["format"]["duration"]) * 1000
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError, OSError):
+            out = None
+    _DURATION_CACHE[path] = out
+    return out
 
 
 def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
@@ -59,6 +86,17 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
     src = Path(path)
     if not src.exists():
         return None
+
+    # The stored duration can be badly wrong on VBR MP3 -- 29% of files differ
+    # from the decoded length by more than 5 s, and one file overstates by 38
+    # MINUTES, leaving a "passage" entirely past the end of the audio
+    # `[GDE-FEX-106]`. Ask the file, and skip what is not there.
+    real_ms = probe_duration_ms(str(src))
+    if real_ms and end_ms > 0:
+        if start_ms >= real_ms - 1000:
+            return None  # phantom passage: nothing to extract
+        end_ms = min(end_ms, real_ms)
+        duration_ms = real_ms
     tag = f"{os.getpid()}_{abs(hash((path, start_ms, end_ms)))}"
     tmp_json = Path(tempfile.gettempdir()) / f"ll_{tag}.json"
     tmp_wav: Path | None = None
