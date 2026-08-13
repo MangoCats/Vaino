@@ -225,6 +225,32 @@ The library is now uniformly local: **8,073 of 8,079 passages** extracted per pa
 
 *Light* — `[SPEC-FD-082]`'s named prediction — improved most, from worst-cohering to mid-pack. *Mellow* is the sole regression and remains unexplained.
 
+**`[SPEC-FD-086]` Full-library picture, 2026-08-13.** `flavorcheck` over the extracted library:
+
+| | before (inherited 11) | after (local 18) |
+| :--- | ---: | ---: |
+| subjects | 7,897 | **7,911** |
+| **incomparable pairs** | 74 | **0** |
+| malformed instances | 0 | 0 |
+| median distance | 1.052 | 0.972 |
+
+**Incomparable pairs fall to zero.** Previously 37 recordings carried only user characteristics and could not be compared to anything `[SPEC-FD-085]`; every recording now has the full vector, so no passage is unreachable by similarity. That is a plain correctness gain independent of any accuracy argument.
+
+All 49 seeds now have flavor, against 35 with both provenances:
+
+| programme | mean d | vs library | *(was, inherited 11)* |
+| :--- | ---: | ---: | ---: |
+| Loud | 0.725 | 70% | *0.784 — 66%* |
+| Prog | 0.759 | 73% | *0.890 — 75%* |
+| Soft | 0.811 | 78% | *0.841 — 71%* |
+| **Light** | **0.849** | **82%** | *1.168 — 98%* |
+| Fun | 0.855 | 83% | *1.033 — 87%* |
+| Cool | 0.940 | 91% | *1.093 — 92%* |
+| Mellow | 0.973 | 94% | *0.877 — 74%* |
+| Groove | 1.051 | 102% | *1.137 — 95%* |
+
+*Light* moves from worst-cohering to fourth. *Mellow* and *Groove* are the two that worsen relative to the library mean, and neither is explained.
+
 **Caveat that bounds all of this: n = 48.** A P@1 difference of 0.083 is four seeds. The direction is consistent across three measures and the mechanism is understood, but this is not a statistically strong result, and `[SPEC-FD-080]`'s caveat stands — one listener's groupings are not a general perceptual standard.
 
 ---
