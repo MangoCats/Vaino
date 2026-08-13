@@ -189,6 +189,44 @@ Three caveats, the second serious enough to require work before this is treated 
 
 **Consequence for `[SPEC-DIR-200]`:** re-deriving the pool parameters should wait until the constants are re-derived, not merely until the vector grows.
 
+**`[SPEC-FD-084]` Resolved 2026-08-13 on the fully extracted library — and the ratio was the wrong measure.**
+
+The library is now uniformly local: **8,073 of 8,079 passages** extracted per passage and classified through all 18 reproduced chains `[GDE-FEX-102]`, 7,894 recordings, 0.07% loss.
+
+*The constants were re-derived on local values* `[SPEC-FD-090]`, using the 163 recordings that appear in more than one passage as the test–retest set. **Local reliability is higher for every one of the 18:**
+
+| | mean `w_c` | range |
+| :--- | ---: | :--- |
+| dump-derived `[SPEC-FD-052]` | 0.60 | 0.45 – 0.74 |
+| **local** | **0.77** | 0.67 – 0.88 |
+
+`timbre` 0.482 → 0.792, `mood_electronic` 0.454 → 0.746, `genre_tzanetakis` 0.517 → 0.669. This is `[GDE-FEX-028]`'s argument measured directly: the dump's low self-consistency came from ~77 submissions per recording across many rips `[GDE-FEX-057]`; one pipeline over our own files has far less within-recording variance. **Uniform local provenance is not merely equal to the dump — it is measurably more self-consistent.**
+
+*The comparison, on the 48 seeds present in both, isolating each change:*
+
+| | within | cross | ratio | **P@1** | **P@3** | **MRR** |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| inherited 11 + dump constants | 0.9924 | 1.1987 | 0.8279 | 0.188 | 0.236 | 0.406 |
+| local 18 + dump constants | 0.9551 | 1.1235 | 0.8502 | **0.271** | 0.229 | **0.458** |
+| local 18 + local constants | 0.8876 | 1.0362 | 0.8566 | **0.271** | **0.243** | 0.451 |
+
+**The two measures disagree, and the ratio is the one to discard.** It worsens monotonically while retrieval improves by 44% relative on P@1 (chance is 0.106). The reason is visible in the columns: within-programme distance improved 10.6% and cross-programme improved 13.6%, so the *ratio* fell even though everything cohered better. A metric that compresses the whole space uniformly looks worse by ratio and is not worse.
+
+**Retrieval is the measure that matches the consumer.** Stage B gathers the passages nearest each seed `[SPEC-DIR-145]`; it never computes a within/cross ratio. `[SPEC-FD-080]`'s ratio was a reasonable first proxy and should now be read alongside P@1/MRR rather than alone.
+
+*Per programme, absolute cohesion, inherited → local+local:* seven of eight improved.
+
+| | inh+dump | loc+local | | | inh+dump | loc+local |
+| :--- | ---: | ---: | :-- | :--- | ---: | ---: |
+| **Light** | 1.168 | **0.849** | | Prog | 0.876 | 0.715 |
+| Groove | 1.137 | 1.051 | | Loud | 0.784 | 0.725 |
+| Cool | 1.093 | 0.940 | | Soft | 0.841 | 0.811 |
+| Fun | 1.033 | 0.855 | | **Mellow** | 0.877 | **0.973** |
+
+*Light* — `[SPEC-FD-082]`'s named prediction — improved most, from worst-cohering to mid-pack. *Mellow* is the sole regression and remains unexplained.
+
+**Caveat that bounds all of this: n = 48.** A P@1 difference of 0.083 is four seeds. The direction is consistent across three measures and the mechanism is understood, but this is not a statistically strong result, and `[SPEC-FD-080]`'s caveat stands — one listener's groupings are not a general perceptual standard.
+
 ---
 
 ## 5. Provenance Consistency Outranks Per-Track Accuracy
