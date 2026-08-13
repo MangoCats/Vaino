@@ -157,6 +157,19 @@ Verified on the migrated library: with the Christmas curve loaded, 81 christmasy
 
 Note that `[K]` was never seasonal at all — a flat ×0.000001 on 140 children's recordings. It expresses fine as a single-point curve, which is a fair test of whether "curves are data" actually holds.
 
+**`[SPEC-DIR-136]` Loaded 2026-08-13** by `tools/load_occasions.py`, transcribed from `occasionWeight()` in the inherited `musicdirector.cpp`:
+
+| occasion | class | interp | points | peak | reach |
+| :--- | :--- | :--- | ---: | :--- | ---: |
+| `user.christmas` | `christmasy` | linear | 11 | **×10 on 25 Dec** | 41 passages |
+| `user.winter` | `wintry` | step | 6 | ×2 in December | 2 |
+| `user.summer` | `summery` | step | 6 | ×2 in June | 1 |
+| `user.childrens` | `for_children` | step | 1 | ×0.000001 all year | **149** |
+
+Measured effect in August: eligible passages fall **8,038 → 7,851**, with 187 more dropping under `min_weight` — the christmas and children's tracks, suppressed out of season. The mechanism had been complete and inert since it was written; the library already carried the characteristic values from six years of MuLibPlay tagging, so loading the curves is what made that tagging act again.
+
+> **The children's weight deserves a decision rather than a default.** MuLibPlay's shipped `kidSongWeight` is 0.000001, which is not a de-emphasis but an effective ban, and here it removes **149 radio passages — 1.8% of the library — permanently, in every season**. It is transcribed faithfully because that is what ran for six years, but it is a parameter: `--kids 0.5` merely damps them, and the value is a row rather than a constant.
+
 ---
 
 ## 4. Stage B — Pool Shaping
