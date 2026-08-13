@@ -610,6 +610,28 @@ Rarity, from a 545-passage sample: **0 phantom**, 13 (2.4%) merely *truncated* �
 
 **Expected failure rate for the full run: well under 1%**, and what remains is reported as a skip rather than a silent loss. The stored `duration_ms` should be repaired from the decoded value during ingest — a 29% error rate on a field this load-bearing is worth its own fix `[SPEC-SC-*]`.
 
+#### `[GDE-FEX-107]` The extractor's own limit: ~20 minutes per analysis
+
+The full run reached **8,073 of 8,079 passages (99.93%)**. Six remain, and neither remaining cause is a pipeline fault.
+
+**One is the phantom passage** `[GDE-FEX-106]` — `WhosNext.mp3` 153.4–191.6 min against a real duration of 153.4. Correctly skipped; there is nothing there to extract.
+
+**Five hit a hard limit in the extractor.** Bisected on `Thick as a Brick`:
+
+| window | WAV size | result |
+| ---: | ---: | :--- |
+| 10 min | 106 MB | rc=0, 59 s |
+| 20 min | 212 MB | rc=0, 119 s |
+| **25 min** | **265 MB** | **rc=3** |
+
+The published Windows build is **`win-i686` — 32-bit** `[GDE-FEX-062]`, so this is an address-space ceiling rather than a defect. It is not a timeout: at one job these fail in ~79 s. The five affected passages run 28.3–43.5 minutes and are genuine single works (`Thick as a Brick` really is one 43-minute piece), not segmentation errors.
+
+Three options, none requiring more reverse engineering:
+
+1. **Leave them unmeasured.** `[REQ-PD-160]` and `[SPEC-DIR-145]` already degrade gracefully — an unmeasured passage stays in the pool and simply cannot be *gathered* by similarity. Cost: five long works never surface as "similar to" anything. 0.06% of the library.
+2. **Analyse a 20-minute window**, tagged with distinct provenance so the approximation is visible per `[REQ-VIS-120]`. Cheap and immediate.
+3. **Run the `linux-x86_64` build** under WSL or Docker for these five. Removes the ceiling properly, at the cost of a second toolchain — which `[GDE-FEX-062]` was pleased to avoid.
+
 **What Vaino can now do:** run all 18 AcousticBrainz classifiers locally, over any audio, from the published extractor and models, with values verified against AcousticBrainz's own output. That is uniform local provenance `[SPEC-FD-145]` with no accuracy penalty and no approximation — the outcome `[SPEC-FD-150]` argued for and could not previously reach.
 
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
