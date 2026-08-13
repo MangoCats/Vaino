@@ -157,14 +157,14 @@ impl Director {
     pub fn load(conn: &Connection) -> Result<Self, DbError> {
         let q = |e: rusqlite::Error| DbError::Query(e.to_string());
 
-        let sql = format!(
-            "SELECT {COLS}, pr.mbid {FROM} \
-             LEFT JOIN passage_recordings pr USING (passage_id) \
-             WHERE p.kind = 'radio'"
-        );
+        let sql = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio'");
         let mut stmt = conn.prepare(&sql).map_err(q)?;
         let rows = stmt
-            .query_map([], |r| Ok(Row { entry: row_to_entry(r)?, mbid: r.get(7)? }))
+            .query_map([], |r| {
+                let entry = row_to_entry(r)?;
+                let mbid = entry.mbid.clone();
+                Ok(Row { entry, mbid })
+            })
             .map_err(q)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(q)?;
@@ -773,7 +773,7 @@ mod tests {
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,
                  kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
                  lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL);
-             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
              CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT);
              CREATE TABLE recording_relations (mbid TEXT, related_mbid TEXT, strength REAL);
              CREATE TABLE listener_preferences (subject_kind TEXT, subject_id TEXT,
@@ -793,7 +793,7 @@ mod tests {
              INSERT INTO passages VALUES (2,1,'radio',0,180000,0,0,0.0);
              INSERT INTO passages VALUES (3,1,'radio',0,180000,0,0,0.0);
              INSERT INTO passages VALUES (4,1,'album',0,180000,0,0,0.0);
-             INSERT INTO passage_recordings VALUES (1,'rec-a'),(2,'rec-b'),(3,'rec-c');
+             INSERT INTO passage_recordings VALUES (1,'rec-a',1.0),(2,'rec-b',1.0),(3,'rec-c',1.0);
              INSERT INTO recording_artists VALUES ('rec-a','art-1'),('rec-b','art-2'),
                                                   ('rec-c','art-3');",
         )

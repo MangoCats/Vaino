@@ -44,6 +44,7 @@ fn main() {
                 lead_in_ms: lin,
                 lead_out_ms: lout,
                 gain_db: 0.0,
+                mbid: None,
             });
         };
         if a.len() >= 6 {

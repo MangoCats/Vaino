@@ -50,6 +50,14 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-PD-118]` Two master time scales — one for artists, one for tracks** — multiply every block and ramp duration `[SPEC-DIR-118]`. Range 0.0001–100.0000 to four decimal places, default 1.0000, at which they are exactly inert. They scale durations only, never weights, so *when* a passage becomes eligible is adjustable without touching *how much* it is wanted.
 
+**`[REQ-PD-112]` Record every play, keyed by recording MBID.** Rotation is meaningless without it: an unrecorded play leaves a track as eligible as it was before, so a long session repeats what the algorithm exists to space out.
+
+> Recorded at the **start** of playback, not on completion. Rotation spaces out what the listener has *encountered*, and a track skipped after ten seconds has been encountered — suppressing it for a while is the wanted behaviour. This also matches MuLibPlay, whose own note says the history structures update "as each new track finishes playing (or is put in the play queue)".
+>
+> Stored with `passage_id` **and** `mbid` `[SPEC-SC-095]`: the passage id is the convenience, the MBID is what survives a rescan that renumbers passages. An unidentified passage still records a play with a null MBID — it simply cannot contribute to rotation.
+>
+> A passage may legally hold a medley of several recordings, so the query selects the heaviest by a scalar subquery rather than a join, which would return that passage twice in every pool.
+
 **`[REQ-PD-120]`** Select from **`radio` passages only** `[GDE-BMK-030]`.
 
 **`[REQ-PD-130]`** Shape candidates by flavor distance `[SPEC-FD-040]` in two stages — prune against programme seeds, then order by similarity to the passage already queued — and apply randomness **last**, over the shaped pool `[GDE-PD-050]`.

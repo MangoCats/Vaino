@@ -42,6 +42,10 @@ pub struct QueueEntry {
     /// Full-to-silence at the end; 0 means end abruptly.
     pub lead_out_ms: u64,
     pub gain_db: f32,
+    /// The recording this passage is, for play history `[SPEC-SC-095]`.
+    /// `None` when unidentified — such a passage still plays, it simply
+    /// cannot contribute to rotation.
+    pub mbid: Option<String>,
 }
 
 impl QueueEntry {
@@ -166,6 +170,7 @@ mod tests {
             lead_in_ms: lead_in,
             lead_out_ms: lead_out,
             gain_db: 0.0,
+            mbid: None,
         }
     }
 

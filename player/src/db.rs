@@ -40,7 +40,10 @@ impl std::fmt::Display for DbError {
 /// A second hand-written copy of this join would be a second place to get the
 /// fade columns wrong.
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, \
-                               p.lead_in_ms, p.lead_out_ms, p.gain_db";
+                               p.lead_in_ms, p.lead_out_ms, p.gain_db, \
+                               (SELECT pr.mbid FROM passage_recordings pr \
+                                WHERE pr.passage_id = p.passage_id \
+                                ORDER BY pr.weight DESC, pr.mbid LIMIT 1)";
 pub(crate) const FROM: &str = "FROM passages p JOIN files f USING (file_id)";
 
 pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
@@ -55,6 +58,10 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         lead_in_ms: row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64,
         lead_out_ms: row.get::<_, Option<i64>>(5)?.unwrap_or(0).max(0) as u64,
         gain_db: row.get::<_, Option<f64>>(6)?.unwrap_or(0.0) as f32,
+        // A scalar subquery rather than a join: a passage may legally hold a
+        // medley of several recordings `[SPEC-SC-*]`, and a join would silently
+        // return that passage twice. Highest weight wins, mbid breaks ties.
+        mbid: row.get::<_, Option<String>>(7)?,
     })
 }
 
@@ -158,6 +165,22 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// Record that a passage played `[REQ-PD-110]`.
+    ///
+    /// `mbid` is stored alongside `passage_id` because six years of history
+    /// must survive a rescan that renumbers passages `[SPEC-SC-095]`; the
+    /// passage id is the convenience, the MBID is the durable key.
+    pub fn record_play(&self, passage_id: i64, mbid: Option<&str>) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO listener_play_history (played_at, passage_id, mbid) \
+                 VALUES (strftime('%s','now'), ?1, ?2)",
+                rusqlite::params![passage_id, mbid],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// The saved resume point, or `None` on a first run.
     pub fn load(&self) -> Result<Option<(Option<i64>, u64, bool)>, DbError> {
         self.conn
@@ -196,9 +219,14 @@ mod tests {
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,
                  kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
                  lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT,
+                 weight REAL DEFAULT 1.0, source TEXT);
              INSERT INTO files VALUES (1,'md5','/m/a.mp3',1,1.0,'mp3',300000,'t','t');
              INSERT INTO passages VALUES (1,1,'album',0,300000,NULL,NULL,NULL,'src');
-             INSERT INTO passages VALUES (2,1,'radio',1200,298000,3000,4000,-2.5,'src');",
+             INSERT INTO passages VALUES (2,1,'radio',1200,298000,3000,4000,-2.5,'src');
+             -- passage 2 is a medley: two recordings, the heavier one wins
+             INSERT INTO passage_recordings VALUES (2,'rec-light',0.3,'s'),
+                                                   (2,'rec-main',0.9,'s');",
         )
         .unwrap();
         c
@@ -232,6 +260,50 @@ mod tests {
         let picked = lib.random_radio(10).unwrap();
         assert_eq!(picked.len(), 1, "the album passage must not be selectable");
         assert_eq!(picked[0].passage_id, 2);
+    }
+
+    /// A medley passage has several recordings; the query must return ONE row
+    /// and pick deterministically, or the passage appears twice in every pool.
+    #[test]
+    fn a_medley_passage_yields_one_row_and_the_heaviest_recording() {
+        let lib = Library { conn: fixture() };
+        let e = lib.passage(2).unwrap();
+        assert_eq!(e.mbid.as_deref(), Some("rec-main"), "highest weight wins");
+        assert_eq!(lib.random_radio(10).unwrap().len(), 1, "one row, not two");
+    }
+
+    #[test]
+    fn an_unidentified_passage_has_no_mbid() {
+        let lib = Library { conn: fixture() };
+        assert_eq!(lib.passage(1).unwrap().mbid, None);
+    }
+
+    /// Play history is what the next selection reads `[REQ-PD-110]`, and it is
+    /// keyed by MBID so it survives a rescan that renumbers passages.
+    #[test]
+    fn a_play_is_recorded_with_its_mbid() {
+        let p = std::env::temp_dir().join(format!("vaino_ph_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let st = PlayerStore::open(&p).unwrap();
+        st.conn
+            .execute_batch(
+                "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                     played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);",
+            )
+            .unwrap();
+        st.record_play(7, Some("rec-main")).unwrap();
+        st.record_play(8, None).unwrap();
+        let rows: Vec<(i64, Option<String>)> = st
+            .conn
+            .prepare("SELECT passage_id, mbid FROM listener_play_history ORDER BY play_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows, vec![(7, Some("rec-main".into())), (8, None)],
+                   "an unidentified passage still records a play");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

@@ -122,6 +122,9 @@ pub struct Engine {
     pending_resume: Option<u64>,
     last_save: Instant,
     saved: Option<(i64, bool)>,
+    /// The last passage written to play history, so a passage is recorded
+    /// once however many ticks it sounds for.
+    recorded: Option<i64>,
     /// Underruns that happened while PLAYING. Under the two-state model the
     /// device callback drains continuously, so a paused player underruns
     /// forever -- counting those would bury the fault this number exists to
@@ -154,6 +157,7 @@ impl Engine {
             pending_resume: None,
             last_save: Instant::now(),
             saved: None,
+            recorded: None,
             underruns_playing: 0,
             last_raw_underruns: 0,
         };
@@ -206,6 +210,7 @@ impl Engine {
         // continuously -- so only the consumer side is gated.
         let submitted = if self.playing { self.mix_and_submit() } else { 0 };
         self.retire_finished();
+        self.record_play();
         self.publish();
         self.persist(false);
         submitted
@@ -416,6 +421,35 @@ impl Engine {
         self.saved = Some(key);
     }
 
+    /// Write a play to history the moment a passage begins sounding
+    /// `[REQ-PD-110]`.
+    ///
+    /// At the START of playback, not on completion. Rotation exists to space
+    /// out what the listener has *encountered*, and a track skipped after ten
+    /// seconds has been encountered — suppressing it for a while is the wanted
+    /// behaviour, not a bug. It also matches MuLibPlay, whose own note says the
+    /// history structures update "as each new track finishes playing (or is put
+    /// in the play queue)".
+    ///
+    /// A failure here must never interrupt playback: history is what the next
+    /// selection reads, not what this one depends on.
+    fn record_play(&mut self) {
+        if !self.playing {
+            return;
+        }
+        let Some(live) = self.live.first() else { return };
+        let id = live.entry.passage_id;
+        if self.recorded == Some(id) {
+            return;
+        }
+        self.recorded = Some(id);
+        if let Some(store) = &self.store {
+            if let Err(e) = store.record_play(id, live.entry.mbid.as_deref()) {
+                eprintln!("record play: {e}");
+            }
+        }
+    }
+
     fn publish(&mut self) {
         // Attribute the increment before publishing: silence during a pause is
         // expected, silence during playback is the bug worth reporting.
@@ -466,6 +500,7 @@ mod tests {
             lead_in_ms: 0,
             lead_out_ms: 0,
             gain_db: 0.0,
+            mbid: None,
         }
     }
 
