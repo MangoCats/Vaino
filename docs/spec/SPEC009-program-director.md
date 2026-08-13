@@ -246,10 +246,27 @@ The orthogonality of `[SPEC-DIR-100]` is what makes this legible: the panel show
 | `max_seeds` | 5 | Proven |
 | min / max length, max depth | 30 s / 3600 s / 10800 s | Proven |
 | length bonus midpoint, cap | 180 s, 4.0 | Proven |
-| `excl_pool` | 1000 | **Re-derive** `[SPEC-DIR-200]` |
-| `rand_pool` | 100 | **Re-derive** |
-| rank `decay` | 0.96 | **Re-derive** |
+| `excl_pool` | 1000 | **Verified** `[SPEC-DIR-205]` |
+| `rand_pool` | 100 | **Verified** |
+| rank `decay` | 0.96 | **Verified** |
 | `dislike_radius`, `like_seed_weight` | — | **New, unvalidated** |
+
+**`[SPEC-DIR-205]` Re-derived 2026-08-13 — and the answer is to keep them.** Measured by `tools/pool_params.py` over the fully extracted library, comparing where each pool boundary falls in distance terms under both metrics:
+
+| | rank 10 | rank 200 (*gather*) | rank 1000 (*excl_pool*) | median nearest seed |
+| :--- | ---: | ---: | ---: | ---: |
+| local 18 — *Cool* | 0.295 | 0.415 | **0.515** | 0.689 |
+| inherited 11 — *Cool* | 0.219 | 0.377 | **0.502** | 0.692 |
+| local 18 — *Mellow* | 0.313 | 0.451 | **0.554** | 0.730 |
+| inherited 11 — *Mellow* | 0.167 | 0.282 | **0.454** | 0.766 |
+
+**The boundaries land in the same place.** `excl_pool = 1000` cuts at a normalised distance of ~0.50–0.55 under both metrics, and the median nearest-seed distance is within a few percent. The concern in `[SPEC-DIR-200]` was that 71 weighted dimensions would shift the distance distribution enough to invalidate values tuned on 11 unweighted ones. Measured, it does not: the *shape* of the neighbourhood these parameters select is preserved.
+
+**The one real difference is at the head, and it favours the new metric.** Passages within half the `excl_pool` boundary distance — the near-duplicate zone — drop from 16–59 under the inherited metric to **4** under the local one. With 18 characteristics it is harder for two recordings to be close on all of them, so extreme similarity is rarer and the gathered pool is less dominated by near-identical tracks. That is an improvement in pool quality that needs no parameter change to collect.
+
+**`decay = 0.96` also stands.** Over `rand_pool = 100` it runs ×1.000 at rank 0, ×0.130 at rank 50, ×0.018 at rank 99 — a strong preference for the head without foreclosing the tail, which is what the observed winning ranks of 5, 10, 17, 24, 31, 50, 61, 99 show in practice `[SPEC-DIR-167]`.
+
+**So the parameters are no longer marked "re-derive".** They were tuned on this library's own distance distribution `[SPEC-FD-053]`, and that distribution survived the change of metric. Revisit only if the library's composition changes substantially, not because the vector grew.
 
 **`[SPEC-DIR-200]` The pool parameters were tuned for 8,116 passages over 11 unweighted dimensions.** Vaino uses 71 dimensions with scale normalization and reliability weighting `[SPEC-FD-040]`, which changes the distance distribution — measured between-recording spread already varies 3× across characteristics `[SPEC-FD-050]`. Carrying 1000/100/0.96 across unchanged is an assumption, not an inheritance. Re-derive against the retrieval harness before treating them as settled.
 
