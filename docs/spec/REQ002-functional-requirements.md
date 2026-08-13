@@ -95,6 +95,20 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 > This is not cosmetic. Segmentation used the inflated value to create a **phantom passage** in a tail that does not exist, and the player uses `duration_ms` for lead-out timing. A field this load-bearing being wrong on a quarter of the library will keep producing symptoms that look like unrelated bugs — the extraction failure that surfaced it looked at first like an ffmpeg fault.
 >
 > Repair it where it disagrees, rather than always: `ffprobe` costs ~50 ms, but rewriting a correct value is churn. Passages already derived from a wrong duration need re-checking, not just the file row.
+>
+> **Done 2026-08-13** by `tools/repair_durations.py`, over all 5,590 files:
+>
+> | | |
+> | :--- | ---: |
+> | durations wrong by >1 s | **1,621 (29.0%)** |
+> | …over-stating the file | 270 |
+> | error: median / p95 / max | **35.0 s** / 234.6 s / 2301.3 s |
+> | passage ends past the real audio, clamped | **453** |
+> | phantom passages deleted | 1 |
+>
+> A **median error of 35 seconds** is not encoder rounding. The 29.0% measured over the whole library matches the 29.2% sample estimate `[GDE-FEX-106]` exactly.
+>
+> One consequence worth recording: `lowlevel_cache` is keyed `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]`, so clamping an end **orphans that passage's cached features**. The features were still correct — extraction had already clamped the range before analysing — so 212 rows were **re-keyed rather than re-extracted**, each matching exactly one cache row on `(audio_md5, start_ms)`. Radio-passage coverage is now **8,078 of 8,078**. Any repair that moves a passage boundary must consider the cache key, or it silently discards work.
 
 **`[REQ-LIB-150]`** Relocate a moved or renamed library by content, not path `[SPEC-SC-035]`.
 
