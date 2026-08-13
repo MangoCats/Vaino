@@ -632,6 +632,14 @@ Three options, none requiring more reverse engineering:
 2. **Analyse a 20-minute window**, tagged with distinct provenance so the approximation is visible per `[REQ-VIS-120]`. Cheap and immediate.
 3. **Run the `linux-x86_64` build** under WSL or Docker for these five. Removes the ceiling properly, at the cost of a second toolchain — which `[GDE-FEX-062]` was pleased to avoid.
 
+#### `[GDE-FEX-108]` Promoted 2026-08-13 — and a schema trap worth naming
+
+`data/vaino_new.db` is now the fully extracted, uniformly local library: **8,078 radio passages, 8,078 cached, 7,911 recordings** with 18 local characteristics and locally-derived constants. The 37,134 rows of play history — the only irreplaceable data in the system `[SPEC-SC-020]` — are unchanged. The prior database is preserved alongside it.
+
+**The trap:** the promoted database predated four tables — `listener_settings`, `listener_occasions`, `listener_occasion_points`, `player_state`. Every reader treats a missing table as *absent data* rather than as an error, by design `[SPEC-DIR-158]`, so the master time scales `[SPEC-DIR-118]` and the occasion curves `[SPEC-DIR-130]` would have been **silently inert** — not defaulted, simply never consulted. Applying `sql/schema.sql` (all `IF NOT EXISTS`) fixes it, and `listener_settings` now holds its defaults row.
+
+Graceful degradation and silent inertness are the same mechanism seen from two sides. A migrated or restored database should have the current schema applied before use, and a feature that reads only from a `listener_*` table has no way to distinguish "not configured" from "table never created".
+
 **What Vaino can now do:** run all 18 AcousticBrainz classifiers locally, over any audio, from the published extractor and models, with values verified against AcousticBrainz's own output. That is uniform local provenance `[SPEC-FD-145]` with no accuracy penalty and no approximation — the outcome `[SPEC-FD-150]` argued for and could not previously reach.
 
 Note what is *not* required: matching AcousticBrainz. `[SPEC-FD-145]` wants **uniform provenance**, not fidelity to an external reference. If a beta5-compatible extractor could be obtained instead, running it over the whole library would be equally acceptable — the constraint is that every track be scored the same way, not that the way match the dumps. That reframes the question from "reproduce AB" to "find any matched extractor/model pair we can run over everything".
