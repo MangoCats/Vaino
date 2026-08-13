@@ -44,6 +44,14 @@ SOURCE = "local:essentia-2.1-beta2+gaia-beta1"
 # skipping the decode. Trim points are seconds, not minutes.
 WHOLE_FILE_SLACK_MS = 5_000
 
+# The published Windows extractor is a 32-bit build, and dies with rc=3 on a
+# WAV over roughly 265 MB -- about 25 minutes of stereo 44.1 kHz
+# `[GDE-FEX-107]`. A longer passage is analysed as a CENTRED window of this
+# length, and tagged distinctly so the approximation is visible `[REQ-VIS-120]`
+# rather than passing as a full-length measurement.
+MAX_ANALYSIS_MS = 20 * 60 * 1000
+WINDOW_SUFFIX = "+window20m"
+
 
 _DURATION_CACHE: dict[str, float | None] = {}
 
@@ -72,7 +80,7 @@ def probe_duration_ms(path: str) -> float | None:
 
 
 def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
-                duration_ms: int = 0) -> dict | None:
+                duration_ms: int = 0) -> tuple[dict, bool] | None:
     """Extract lowlevel features for one passage. `None` if it fails.
 
     A passage that is not the whole file is **decoded to a temporary WAV first**
@@ -82,6 +90,9 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
     window in 1.5 s and the extractor then sees a short file: 32.5 s total.
 
     Whole-file passages skip the decode entirely, which is 5,402 of 5,590 files.
+
+    Returns `(features, windowed)`; `windowed` is true when the passage exceeded
+    `MAX_ANALYSIS_MS` and only a centred window was analysed.
     """
     src = Path(path)
     if not src.exists():
@@ -97,6 +108,15 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
             return None  # phantom passage: nothing to extract
         end_ms = min(end_ms, real_ms)
         duration_ms = real_ms
+
+    # Cap over-long passages to a centred window. Centred rather than leading:
+    # a 43-minute work opens and closes unrepresentatively often enough that
+    # the middle is the better single sample.
+    windowed = False
+    if end_ms > 0 and end_ms - start_ms > MAX_ANALYSIS_MS:
+        mid = (start_ms + end_ms) // 2
+        start_ms, end_ms = mid - MAX_ANALYSIS_MS // 2, mid + MAX_ANALYSIS_MS // 2
+        windowed = True
     tag = f"{os.getpid()}_{abs(hash((path, start_ms, end_ms)))}"
     tmp_json = Path(tempfile.gettempdir()) / f"ll_{tag}.json"
     tmp_wav: Path | None = None
@@ -125,7 +145,7 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
                            capture_output=True, timeout=600)
         if r.returncode != 0 or not tmp_json.exists():
             return None
-        return json.loads(tmp_json.read_text(encoding="utf-8", errors="replace"))
+        return json.loads(tmp_json.read_text(encoding="utf-8", errors="replace")), windowed
     except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
         return None
     finally:
@@ -175,10 +195,12 @@ def main() -> int:
         pending = {pool.submit(extract_one, r[1], r[3], r[4], r[5]): r for r in todo}
         for i, fut in enumerate(futures.as_completed(pending), 1):
             md5, path, mbid, start_ms, end_ms, _dur = pending[fut]
-            doc = fut.result()
-            if doc is None:
+            result = fut.result()
+            if result is None:
                 fail += 1
                 continue
+            doc, windowed = result
+            source = SOURCE + (WINDOW_SUFFIX if windowed else "")
             con.execute(
                 "INSERT OR REPLACE INTO lowlevel_cache VALUES (?,?,?,?,?,datetime('now'))",
                 (md5, start_ms, end_ms, zlib.compress(json.dumps(doc).encode()),
@@ -188,7 +210,7 @@ def main() -> int:
                 for cls, val in classes.items():
                     con.execute(
                         "INSERT OR REPLACE INTO flavor VALUES ('recording',?,?,?,?,?,NULL)",
-                        (mbid, ch, cls, val, SOURCE),
+                        (mbid, ch, cls, val, source),
                     )
             ok += 1
             if i % 10 == 0:

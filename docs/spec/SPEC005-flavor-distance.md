@@ -294,6 +294,26 @@ Note this also removes the awkwardness in `[SPEC-FD-120]`: with uniform provenan
 
 ---
 
+## 5a. Future Direction — Entry and Exit Flavor
+
+**`[SPEC-FD-170]` Not the current target. Recorded so it is not lost.**
+
+Flow ordering `[SPEC-DIR-160]` currently matches the **whole-track** flavor of a candidate against the **whole-track** flavor of the passage already queued. But a handover is not a whole-track event: what the listener actually hears is the *end* of one passage against the *start* of the next, and many tracks differ markedly at their edges — a quiet intro, a fade, a long outro, a false ending, a track that opens sparse and closes dense.
+
+The proposal: alongside the whole-track vector, characterise the **first three minutes** and the **last three minutes** of each passage (where the passage is long enough to have them), and let flow match `exit(previous) → entry(next)` instead of `whole(previous) → whole(next)`.
+
+That is a better model of the thing being optimised. Whole-track similarity answers "do these two belong in the same programme"; edge similarity answers "does this transition work", and Stage C is asking the second question with an instrument built for the first.
+
+**Three things to know before attempting it:**
+
+1. **It roughly triples extraction cost.** Lowlevel features are *aggregates* over the analysed window, so an entry vector cannot be derived from a whole-track extraction — it needs its own run. At `[GDE-FEX-104]`'s 6.4 s per audio-minute, adding two 3-minute windows per passage takes the library from ~64 to roughly ~190 core-hours. The `lowlevel_cache` key `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]` already accommodates the extra rows without schema change.
+2. **`flavor.subject_kind` needs a third value**, or a segment discriminator. It currently allows `recording` and `passage`; entry/exit are neither.
+3. **Short passages have no edges.** A 2-minute track is its own entry and exit, so the metric must fall back to whole-track rather than compare a 3-minute window against a 2-minute one. `[SPEC-FD-040]`'s intersection rule handles the shape of this, but the fallback should be explicit.
+
+**Current design target remains a single flavor vector per passage.** This entry is a direction, not a commitment: it should be attempted only once whole-track flow is in listening use and the transitions it produces can be judged against the ones edge-matching would produce.
+
+---
+
 ## 6. Implementation Notes
 
 **`[SPEC-FD-085]` Implemented 2026-08-10** in `player/src/director/flavor.rs`, measured by `flavorcheck`. Four findings, three of them limits on what the metric can currently do.

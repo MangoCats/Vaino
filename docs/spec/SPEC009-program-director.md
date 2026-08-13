@@ -203,6 +203,8 @@ Three implementation decisions worth keeping:
 
 **`[SPEC-DIR-160]` Flow.** Re-sort the pool by flavor distance to the **last passage already queued**, so consecutive passages blend `[GDE-PD-050]`. This is also what makes a hard programme switch acceptable `[SPEC-DIR-180]`: continuity is supplied here, not by blending programmes.
 
+> **Future direction `[SPEC-FD-170]`:** flow currently matches whole-track flavor to whole-track flavor, but a handover is heard as the *end* of one passage against the *start* of the next. Characterising the first and last three minutes separately, and matching `exit → entry`, models the transition rather than the pairing. Not the current target — it roughly triples extraction cost and needs a segment discriminator in `flavor`.
+
 **`[SPEC-DIR-165]` Roulette.** Take the top `rand_pool`, apply rank decay `w *= decay^rank`, then pick weighted-random. Selection is by weight, not by rank — a lower-ranked passage can win, which is where the surprise lives.
 
 **`[SPEC-DIR-167]` Both implemented 2026-08-10, and both measurable.**
