@@ -143,7 +143,7 @@ def score_all(rows, album_tag: str | None, oldest: int | None):
     """Score every candidate, best first. `rows` are the release columns."""
     out = []
     for r in rows:
-        rid, title, date, status, primary, secondary, track_count = r
+        rid, title, date, status, primary, secondary, track_count, group = r
         name = name_match(album_tag or "", title or "")
         kind = kind_score(primary, secondary)
         stat = status_score(status)
@@ -155,7 +155,8 @@ def score_all(rows, album_tag: str | None, oldest: int | None):
             age = max(0.0, 1.0 - (y - oldest) / 30.0)
         total = (W_NAME * name + W_KIND * kind + W_STATUS * stat + W_DATE * age)
         out.append({
-            "release": rid, "title": title, "date": date, "status": status,
+            "release": rid, "release_group": group,
+            "title": title, "date": date, "status": status,
             "primary_type": primary, "secondary_types": secondary,
             "track_count": track_count,
             "name_similarity": round(name, 3), "kind": round(kind, 2),
@@ -195,6 +196,31 @@ def score_all(rows, album_tag: str | None, oldest: int | None):
             # Neither known. Rank by everything at once and record a thin
             # margin, which is the signal that a human should look.
             tier = sorted(out, key=lambda d: (-d["score"], d["date"] or "9999"))
+    # One decision per ALBUM, not per pressing `[AM-MB-020]`. Five identical
+    # 1982 pressings of Rio are one record in five territories; ranking them
+    # against each other is a tie broken by sort order, which is not a choice.
+    # Collapsing to the group first means the ordering above decides between
+    # different albums, and only then between editions of the winner -- where
+    # the earliest official pressing is the one wanted.
+    seen: dict[str, dict] = {}
+    collapsed = []
+    for d in tier:
+        key = d.get("release_group")
+        if not key:
+            collapsed.append(d)
+            continue
+        if key not in seen:
+            seen[key] = d
+            collapsed.append(d)
+        else:
+            # Within a group, prefer the earliest official pressing.
+            best = seen[key]
+            mine = ((d["status"] != "Official"), year(d["date"]) or 9999)
+            theirs = ((best["status"] != "Official"), year(best["date"]) or 9999)
+            if mine < theirs:
+                collapsed[collapsed.index(best)] = d
+                seen[key] = d
+    tier = collapsed
     chosen_ids = {id(d) for d in tier}
     rest = sorted((d for d in out if id(d) not in chosen_ids),
                   key=lambda d: (-d["score"], d["date"] or "9999"))
@@ -216,6 +242,27 @@ def main() -> int:
         conn.execute("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    # Release groups can be recovered from responses already cached, so a
+    # library fetched before the column existed does not have to ask again.
+    try:
+        conn.execute("ALTER TABLE releases ADD COLUMN release_group TEXT")
+    except sqlite3.OperationalError:
+        pass
+    if conn.execute("SELECT COUNT(*) FROM releases WHERE release_group IS NULL"
+                    ).fetchone()[0]:
+        filled = 0
+        for (raw,) in conn.execute("SELECT response FROM musicbrainz_cache"):
+            for rel in (json.loads(raw).get("releases") or []):
+                gid = (rel.get("release-group") or {}).get("id")
+                if gid and rel.get("id"):
+                    filled += conn.execute(
+                        "UPDATE releases SET release_group = ?1 "
+                        " WHERE mbid = ?2 AND release_group IS NULL",
+                        (gid, rel["id"])).rowcount
+        conn.commit()
+        if filled:
+            print(f"recovered {filled} release group(s) from the cache")
+
     conn.execute("""CREATE TABLE IF NOT EXISTS ingest_decisions (
         decision_id INTEGER PRIMARY KEY, audio_md5 TEXT, stage TEXT,
         outcome TEXT, confidence REAL, detail TEXT, decided_at INTEGER)""")
@@ -232,7 +279,8 @@ def main() -> int:
     for mbid in mbids:
         rows = conn.execute(
             "SELECT rel.mbid, rel.title, rel.release_date, rel.status, "
-            "       rel.primary_type, rel.secondary_types, rel.track_count "
+            "       rel.primary_type, rel.secondary_types, rel.track_count, "
+            "       rel.release_group "
             "  FROM release_recordings rr JOIN releases rel ON rel.mbid = rr.release_mbid "
             " WHERE rr.mbid = ?1", (mbid,)).fetchall()
         if not rows:

@@ -45,6 +45,12 @@ PAGE = 100
 # rather than in Vaino's schema because these are Sampo's to fill: the player
 # only ever reads `releases.title` [SPEC-SA-015].
 EXTRA_DDL = [
+    # The release GROUP is MusicBrainz's own answer to "these are the same
+    # album": every territorial pressing, remaster and reissue of a record
+    # shares one. McRhythm had to infer that grouping from track counts and
+    # duration signatures `[AM-MB-020]` because it was searching by name and
+    # had no identifier to lean on. We do, so we lean on it.
+    "ALTER TABLE releases ADD COLUMN release_group TEXT",
     "ALTER TABLE releases ADD COLUMN status TEXT",
     "ALTER TABLE releases ADD COLUMN primary_type TEXT",
     "ALTER TABLE releases ADD COLUMN secondary_types TEXT",
@@ -133,10 +139,10 @@ def store(conn, mbid: str, doc: dict) -> int:
         media = rel.get("media") or []
         conn.execute(
             "INSERT OR REPLACE INTO releases "
-            "  (mbid, title, release_date, source, status, primary_type, "
-            "   secondary_types, country, track_count) "
-            "VALUES (?1, ?2, ?3, 'musicbrainz', ?4, ?5, ?6, ?7, ?8)",
-            (rid, rel.get("title"), rel.get("date"), rel.get("status"),
+            "  (mbid, title, release_date, source, release_group, status, "
+            "   primary_type, secondary_types, country, track_count) "
+            "VALUES (?1, ?2, ?3, 'musicbrainz', ?4, ?5, ?6, ?7, ?8, ?9)",
+            (rid, rel.get("title"), rel.get("date"), group.get("id"), rel.get("status"),
              group.get("primary-type"),
              # A comma-separated list because it is read for scoring, never
              # joined against: "Compilation" and "Live" are what disqualify a
