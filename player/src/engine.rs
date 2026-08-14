@@ -300,7 +300,7 @@ impl Engine {
                     }
                 }
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
-                Ok(Command::EnqueueNext(e)) => self.queue.push_after_current(e),
+                Ok(Command::EnqueueNext(e)) => self.queue.push_front(e),
                 Ok(Command::EnqueueMany(entries, place)) => {
                     if !entries.is_empty() {
                         match place {
@@ -308,12 +308,13 @@ impl Engine {
                                 self.queue.insert_at(0, entries);
                                 self.skip();
                             }
-                            // After the current passage, not at the front:
-                            // "next" must leave what is playing alone.
-                            Placement::Next => {
-                                let at = usize::from(!self.queue.is_empty());
-                                self.queue.insert_at(at, entries);
-                            }
+                            // Position ONE of the queue, which is the top of
+                            // "Coming up". The queue holds only what is still
+                            // to come -- the sounding passage lives in `live`
+                            // and is not in it -- so index 0 is already after
+                            // the current one. Inserting at 1 to "leave what is
+                            // playing alone" put everything one place too late.
+                            Placement::Next => self.queue.insert_at(0, entries),
                             Placement::Last => {
                                 for e in entries {
                                     self.queue.push(e);
@@ -811,19 +812,33 @@ mod tests {
     }
 
     #[test]
-    /// A browsed passage goes NEXT, not last: browsing to something and
-    /// waiting five passages for it is indistinguishable from the button not
-    /// working `[REQ-VIS-180]`.
+    /// A browsed passage goes to the TOP of the queue, which is the next thing
+    /// heard `[REQ-VIS-180]`. It went in second for a while, on the mistaken
+    /// idea that the sounding passage occupied slot zero -- it does not; it is
+    /// in `live` and out of the queue entirely.
     #[test]
-    fn enqueue_next_puts_a_passage_after_the_current_one() {
+    fn enqueue_next_puts_a_passage_first_in_the_queue() {
         let (mut e, h) = Engine::new(None, 3);
         e.enqueue(entry(1, "a.mp3"));
         e.enqueue(entry(2, "b.mp3"));
-        e.enqueue(entry(3, "c.mp3"));
         h.send(Command::EnqueueNext(entry(99, "browsed.mp3")));
         e.drain_commands();
         let ids: Vec<i64> = e.queued().map(|q| q.passage_id).collect();
-        assert_eq!(ids, vec![1, 99, 2, 3], "browsed passage lands second");
+        assert_eq!(ids, vec![99, 1, 2], "browsed passage is next up");
+    }
+
+    /// The same for a batch, in the order it was given.
+    #[test]
+    fn a_batch_queued_next_goes_to_the_top_in_order() {
+        let (mut e, h) = Engine::new(None, 3);
+        e.enqueue(entry(1, "a.mp3"));
+        h.send(Command::EnqueueMany(
+            vec![entry(10, "x.mp3"), entry(11, "y.mp3")],
+            Placement::Next,
+        ));
+        e.drain_commands();
+        let ids: Vec<i64> = e.queued().map(|q| q.passage_id).collect();
+        assert_eq!(ids, vec![10, 11, 1]);
     }
 
     #[test]

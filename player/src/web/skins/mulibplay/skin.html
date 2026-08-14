@@ -17,26 +17,28 @@
   <div class="elapsed"><span id="plays"></span> &nbsp; <span id="time">0:00 / 0:00</span></div>
 
   <div class="panes">
-    <div class="queue">
-      <h3>Coming up</h3>
-      <div id="queue"></div>
+    <div class="leftcol">
+      <div class="queue">
+        <h3>Coming up</h3>
+        <div id="queue"></div>
+      </div>
+      <div class="browseby">
+        <h3>Browse by:</h3>
+        <div class="browserow">
+          <a href="/browse?kind=artists"><button class="button">Artist</button></a>
+          <a href="/browse?kind=albums"><button class="button">Album</button></a>
+          <a href="/browse?kind=tracks"><button class="button">Track</button></a>
+        </div>
+      </div>
     </div>
     <div class="stations">
       <h3>Programme</h3>
       <div id="stations"></div>
-      <p><input type="checkbox" id="autoclock"><label for="autoclock">Autoselect by clock time</label></p>
+      <p class="autoclock"><input type="checkbox" id="autoclock"><label for="autoclock">Autoselect by clock time</label></p>
     </div>
   </div>
 
   <hr/>
-  <div class="why" id="why"></div>
-
-  <div class="panes"><div></div><div class="stations">
-    <h3>Browse by:</h3>
-    <a href="/browse?kind=artists"><button class="button">Artist</button></a>
-    <a href="/browse?kind=albums"><button class="button">Album</button></a>
-    <a href="/browse?kind=tracks"><button class="button">Track</button></a>
-  </div></div>
 
   <div class="skinbar">
     <label for="skinpick">Skin</label> <select id="skinpick" data-skins></select>

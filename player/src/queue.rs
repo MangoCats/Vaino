@@ -230,11 +230,11 @@ impl Queue {
     }
 
     /// Insert immediately after the playing passage — a user "play next".
-    /// Put a passage at the very front, ahead of everything waiting.
+    /// Put a passage at the top of the queue.
     ///
-    /// Distinct from `push_after_current`, which leaves the next passage next.
-    /// This is what "play this now" needs: the front of the queue is what Skip
-    /// reaches for.
+    /// The queue holds only what is still to come: the sounding passage lives
+    /// in `live` and is not in here. So the front IS the next thing heard, and
+    /// it is what Skip reaches for.
     pub fn push_front(&mut self, e: QueueEntry) {
         self.entries.push_front(e);
     }
@@ -269,10 +269,6 @@ impl Queue {
         true
     }
 
-    pub fn push_after_current(&mut self, e: QueueEntry) {
-        let at = if self.entries.is_empty() { 0 } else { 1 };
-        self.entries.insert(at, e);
-    }
 
     /// Remove and return the head, as it finishes or is skipped.
     pub fn advance(&mut self) -> Option<QueueEntry> {
@@ -336,16 +332,16 @@ mod tests {
         assert!(!q.shift(99, -1), "a passage not queued cannot move");
     }
 
-    /// "Play this now" needs the very front, where Skip reaches. After the
-    /// current passage is where "next" goes, and the two must not be confused.
+    /// The front of the queue is the next thing heard, because the sounding
+    /// passage is not in the queue at all. Both "now" and "next" therefore go
+    /// to index 0; only "now" also skips.
     #[test]
-    fn push_front_goes_ahead_of_push_after_current() {
+    fn the_front_of_the_queue_is_what_plays_next() {
         let mut q = Queue::new(3);
         q.push(entry(1, 1000, 0, 0));
         q.push(entry(2, 1000, 0, 0));
-        q.push_after_current(entry(50, 1000, 0, 0));
         q.push_front(entry(99, 1000, 0, 0));
-        assert_eq!(ids(&q), vec![99, 1, 50, 2]);
+        assert_eq!(ids(&q), vec![99, 1, 2]);
     }
 
     /// The trap this method exists for: inserting three passages one at a time
@@ -505,14 +501,19 @@ mod tests {
         assert_eq!(q.shortfall(), 0, "deep enough must ask for nothing");
     }
 
+    /// This test used to assert the opposite, with the comment "playing passage
+    /// must stay at the head" -- and that belief is where the bug came from.
+    /// The head of the queue is not the playing passage; the playing passage is
+    /// in `live` and not in the queue at all, so inserting after the head put
+    /// everything one place too late.
     #[test]
-    fn push_after_current_does_not_interrupt_playback() {
+    fn the_queue_holds_only_what_is_still_to_come() {
         let mut q = Queue::new(3);
         q.push(entry(1, 1000, 0, 0));
         q.push(entry(2, 1000, 0, 0));
-        q.push_after_current(entry(99, 1000, 0, 0));
+        q.push_front(entry(99, 1000, 0, 0));
         let ids: Vec<i64> = q.iter().map(|e| e.passage_id).collect();
-        assert_eq!(ids, vec![1, 99, 2], "playing passage must stay at the head");
+        assert_eq!(ids, vec![99, 1, 2], "the front is the next thing heard");
     }
 
     #[test]

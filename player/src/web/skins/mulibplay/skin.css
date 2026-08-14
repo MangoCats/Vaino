@@ -59,8 +59,18 @@ body { background-color: black; color: #ccc; }
 .nowplaying i { font-weight: normal; color: #888; }
 .elapsed { color: #888; }
 
-.panes { display: flex; width: 100%; gap: 2rem; text-align: left; margin-top: 1rem; }
-.panes > div:first-child { flex: 1; }
+/* Two columns that reach the same floor, so Browse by and the autoselect
+   checkbox sit at one level just above the rule. `margin-top: auto` on the
+   last item of each column is what presses them down. */
+.panes { display: flex; width: 100%; gap: 2rem; text-align: left;
+         margin-top: 1rem; align-items: stretch; }
+.leftcol { flex: 1; display: flex; flex-direction: column; }
+.stations { display: flex; flex-direction: column; }
+.browseby, .stations .autoclock { margin-top: auto; margin-bottom: 0; }
+.browseby h3 { margin: 1rem 0 .3rem; }
+/* One row, not a stack: three destinations, not a menu of programmes. */
+.browserow { display: flex; gap: .5rem; }
+.browserow .button { font-size: 18px; padding: 8px 16px; }
 .stations { text-align: right; }
 .stations h3 { margin: 0 0 .3rem; }
 .stations .button, .stations .buttonOn {

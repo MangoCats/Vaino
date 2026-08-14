@@ -256,11 +256,13 @@ Ordering is by disc, then track number, then title. **Unnumbered tracks sort aft
 | verb | what it does |
 |---|---|
 | **Now** | to the front of the queue, then skip into it — the only one that interrupts |
-| **Next** | after the current passage |
+| **Next** | position 1 of the queue — the top of "Coming up" |
 | **Last** | behind everything already waiting |
 | **↑ / ↓** | one place sooner or later, clamped at the ends |
 | **×** | out of the queue |
 
+> **The queue holds only what is still to come.** The sounding passage is in `live` and is not in the queue at all, so index 0 *is* the next thing heard. Next shipped inserting at index 1 — one place too late — on the belief that the head of the queue was the playing passage. A test asserted that belief in as many words ("playing passage must stay at the head"), which is how it survived; that test now asserts the opposite and says why.
+>
 > **Now means the front, not "after the current".** Skip reaches for the front of the queue, so anything less would play whatever was already next instead — the passage the listener did not ask for.
 >
 > **Shifting clamps rather than wraps.** Nudging the first passage "sooner" does nothing, which is what is expected; wrapping it to last would be a surprise indistinguishable from a bug.
