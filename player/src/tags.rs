@@ -169,6 +169,7 @@ pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), 
     }
     let started = std::time::Instant::now();
     let mut art = 0usize;
+    let mut unstored = 0usize;
     for (i, (file_id, path)) in files.iter().enumerate() {
         let t = read(path);
         let has_art = artwork(path).is_some();
@@ -176,7 +177,14 @@ pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), 
             art += 1;
         }
         if let Err(e) = lib.put_tags(*file_id, &t, has_art) {
-            eprintln!("store tags for {file_id}: {e}");
+            // The scan is incremental by "has no row yet", so a row that fails
+            // to store is not retried by the next run either -- it is a
+            // permanent hole. Counted and reported rather than logged once and
+            // forgotten `[REQ-VIS-180]`.
+            unstored += 1;
+            if unstored <= 5 {
+                eprintln!("store tags for {file_id}: {e}");
+            }
         }
         // A silent minute looks like a hang `[REQ-VIS-140]`.
         if announce && (i % 500 == 499 || i + 1 == files.len()) {
@@ -193,6 +201,12 @@ pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), 
             "tag scan complete: {} files, {art} with cover art, {:.1}s",
             files.len(),
             started.elapsed().as_secs_f32()
+        );
+    }
+    if unstored > 0 {
+        eprintln!(
+            "WARNING: {unstored} file(s) could not be stored and will not be retried; \
+             re-run `tagscan --all` to rebuild the index"
         );
     }
     Ok((files.len(), art))

@@ -121,6 +121,25 @@ impl std::fmt::Display for OutputError {
     }
 }
 
+/// Resolution of the precomputed fade envelope `[REQ-AUD-162]`.
+///
+/// 1024 steps over any fade length: at the 10 s maximum that is one entry per
+/// ~10 ms, and the curve moves by well under the ~1 dB anyone can hear across
+/// a step. The point is to keep `powf` off the output lock entirely.
+const FADE_TABLE: usize = 1024;
+
+fn fade_table(curve: Curve, frames: u64) -> Vec<f32> {
+    let fade = Fade { curve, frames: FADE_TABLE as u64, fade_in: false };
+    (0..FADE_TABLE).map(|i| fade.gain_at(i as u64)).collect()
+}
+
+fn gain_index(frame: u64, frames: u64) -> usize {
+    if frames == 0 {
+        return 0;
+    }
+    ((frame * FADE_TABLE as u64) / frames).min(FADE_TABLE as u64 - 1) as usize
+}
+
 impl Output {
     /// Open the default output device.
     pub fn open(ring_capacity_samples: usize) -> Result<Self, OutputError> {
@@ -294,12 +313,24 @@ impl Output {
         // Span the fade over what is actually there. Holding it to the
         // requested length when the ring is shallower -- at startup, say --
         // would cut off part-way down the curve, at an audible step.
-        let fade = Fade { curve, frames: (kept / ch) as u64, fade_in: false };
+        let frames = (kept / ch) as u64;
+        // The envelope is looked up, not computed, because this runs with the
+        // output lock held and the callback only ever TRIES for that lock. A
+        // 10 s fade is ~441k frames; two `powf` each would be tens of
+        // milliseconds under the lock, and every callback that fails to take it
+        // emits silence -- a click at the exact moment of a skip. A table of
+        // `FADE_TABLE` entries is built once, off the lock, and indexed here.
+        let table = fade_table(curve, frames);
         {
             let (front, back) = s.ring.as_mut_slices();
-            fade.apply(front, ch, 0);
-            let wrapped_at = (front.len() / ch) as u64;
-            fade.apply(back, ch, wrapped_at);
+            let mut frame = 0u64;
+            for run in [front, back] {
+                for f in run.chunks_mut(ch) {
+                    let g = table[gain_index(frame, frames)];
+                    f.iter_mut().for_each(|x| *x *= g);
+                    frame += 1;
+                }
+            }
         }
         let placed = s.ring.mix_at(lead_samples, overlay);
         (kept, placed)

@@ -119,6 +119,9 @@ pub struct Snapshot {
     pub program_manual: bool,
     pub programs: Vec<ProgramItem>,
     pub underrun_samples: u64,
+    /// Output-lock contention `[REQ-VIS-140]`. Non-zero means the callback was
+    /// kept waiting, which sounds like a click rather than a gap.
+    pub lock_failures: u64,
     /// The full weight decomposition for what is playing `[REQ-VIS-100]`.
     /// Null when the passage was not chosen by the Director -- a resumed
     /// passage, or one queued before the log was populated -- so the panel can
@@ -167,6 +170,7 @@ impl From<&PlayerState> for Snapshot {
             program_manual: false,
             programs: Vec::new(),
             underrun_samples: s.underrun_samples,
+            lock_failures: s.lock_failures,
             why: None,
         }
     }

@@ -57,6 +57,17 @@ const DESCRIBE: &str = "    SELECT (SELECT r.title FROM recordings r WHERE r.mbi
 /// table, so a missing one is not an empty result but a failed query** -- the
 /// first version shipped without this and every browse page came up blank on a
 /// library that had never been scanned.
+/// How long a connection waits for a writer to finish before giving up.
+///
+/// Three writers share this file -- the resume row every second, the tag scan
+/// at startup, and nothing else -- and WAL allows one at a time. **Without a
+/// busy timeout SQLite does not wait at all**: a contended write returns
+/// SQLITE_BUSY immediately, and the tag scan's per-file error path would drop
+/// that file's row and carry on, leaving a hole nothing would ever revisit.
+/// Five seconds is far longer than any write here takes and far shorter than
+/// anyone would wait for a stuck one.
+const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub(crate) const TAG_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS file_tags (
         file_id INTEGER PRIMARY KEY,
@@ -107,6 +118,7 @@ impl Library {
     pub fn open(path: &std::path::Path) -> Result<Self, DbError> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|e| DbError::Open(e.to_string()))?;
+        conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
         Ok(Self { conn })
     }
 
@@ -117,6 +129,7 @@ impl Library {
     /// player -- the same standing as Sampo -- and it is the only caller here.
     pub fn open_writable(path: &std::path::Path) -> Result<Self, DbError> {
         let conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
         Ok(Self { conn })
     }
 
@@ -326,6 +339,7 @@ pub struct PlayerStore {
 impl PlayerStore {
     pub fn open(path: &std::path::Path) -> Result<Self, DbError> {
         let conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS player_state (
                  id INTEGER PRIMARY KEY CHECK (id = 1),

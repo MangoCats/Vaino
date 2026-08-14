@@ -68,6 +68,11 @@ pub struct PlayerState {
     pub skip_lead_ms: u64,
     pub active_streams: usize,
     pub underrun_samples: u64,
+    /// Times the callback could not take the output lock at all. Distinct from
+    /// an underrun because the remedy differs: contention argues for a
+    /// lock-free ring, starvation for more buffering. Surfaced rather than
+    /// merely counted -- a diagnostic nobody can read is not one.
+    pub lock_failures: u64,
     /// Samples handed to the device but not yet played. Playback is NOT over
     /// while this is non-zero: the output ring holds ~14 s, so a short passage
     /// can be fully submitted before a single sample is audible.
@@ -727,6 +732,7 @@ impl Engine {
             s.skip_lead_ms = self.skip_lead_ms;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
+            s.lock_failures = self.out.as_ref().map_or(0, |o| o.diagnostics().1);
             s.output_buffered = self
                 .out
                 .as_ref()
