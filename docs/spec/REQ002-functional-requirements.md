@@ -137,6 +137,22 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 >
 > `[REQ-AUD-140]` verified end-to-end on desktop hardware (48 kHz device, 44.1 kHz sources, 8,079-passage library): a run interrupted at ~16 s saved 15.01 s, and the next run resumed the same passage at 15.0 s and went on to save 25.01 s — position advancing *from* the resume point, not restarting. The 15.01 s figure is also the check on audible-versus-mixed position: had the mixed figure been saved it would have read ~29 s.
 
+> ### Known, accepted, and deferred
+>
+> Recorded from the review of 2026-08-14 so they are not rediscovered from scratch. Each was judged, not missed.
+>
+> **Position freezes briefly at a handover** *(cosmetic, accepted)*. When the passage being displayed leaves `live` before the next becomes audible, its reported position holds its last value instead of advancing. Bounded by the ring depth and invisible unless watched closely `[REQ-AUD-164]`.
+>
+> **A passage that fails to open is dropped by the engine but still counted as queued by the Director** *(correctness, outstanding)*. `prepare_next` advances past it while `note_queued` has already recorded it, so rotation history counts a passage that never played. Needs the engine to report dropped passages and the Director to forget them.
+>
+> **The display-name rule is stated twice** *(SSOT, outstanding)*. `QueueEntry::title` resolves MusicBrainz → tag → **filename**; the browse SQL resolves MusicBrainz → tag and then filters the rest out. An untitled, unidentified passage therefore plays under its filename but is absent from Browse. Measured at **0 passages** on the present library, so it is latent rather than active `[REQ-VIS-170]`, `[REQ-VIS-180]`.
+>
+> **The three skins each carry the same behaviour** *(DRY, outstanding)*. Volume drag handling, queue rendering and the fader conversion appear in all three; the programme `<select>` rebuild in two. Roughly 200 lines that belong behind optional binders in `core.js`, leaving a fourth skin nothing to reimplement `[REQ-VIS-160]`.
+>
+> **`publish()` makes presentation policy inside the audio engine** *(maintainability, outstanding)*. Which passage the listener is on, and how much queue a display gets, are display decisions living in `engine.rs` at 722 lines.
+>
+> **`web.rs` mixes routing, serialisation, browse, art and queue verbs** *(maintainability, deferred)*. Not urgent; treat as a priority at the next refactor, being the file most likely to keep growing.
+
 ## 2. Program Director — `PD`
 
 **`[REQ-PD-100]`** Select the next passage automatically, continuously, without user intervention. The queue never empties while eligible passages exist.
