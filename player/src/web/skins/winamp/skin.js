@@ -83,6 +83,7 @@
       d.className = 'dur';
       d.textContent = clock(q.duration_ms);
       li.appendChild(d);
+      li.appendChild(Vaino.queueControls(q.passage_id));
       ol.appendChild(li);
     }
   }

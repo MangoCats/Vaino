@@ -69,6 +69,13 @@ body { background-color: black; color: #ccc; }
 }
 .queue p { margin: .35rem 0; }
 .queue .dur { color: #888; }
+/* The original had checkboxes and a "Remove Checked" button; these do the
+   same work in one tap, which is the better bargain on a phone. */
+.qedit { display: inline-flex; gap: .2rem; margin-left: .5rem; }
+.qedit button { font: inherit; font-size: 16px; line-height: 1; min-width: 2rem;
+                min-height: 2rem; padding: 0; cursor: pointer;
+                background-color: #2010a0; color: #ccc;
+                border: 2px solid #402080; border-radius: 8px; }
 
 hr { border: none; border-top: 1px solid #333; margin: 1.2rem 0; }
 

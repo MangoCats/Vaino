@@ -221,6 +221,35 @@ const Vaino = (() => {
         return r.json();
       });
     },
-    queueNext: id => post(`/queue/${id}`),
+    // now | next | last | remove | sooner | later `[REQ-VIS-185]`.
+    queue: (id, action) => post(`/queue/${id}/${action}`),
+
+    // The edit controls for one queued passage, wired and ready to append.
+    //
+    // Here rather than in each skin because all three want the same three
+    // verbs on the same object, and three copies would drift. A skin styles
+    // them through `.qedit` and decides where they go; it does not decide what
+    // they do.
+    queueControls(passageId) {
+        const box = document.createElement('span');
+        box.className = 'qedit';
+        for (const [label, action, title] of [
+            ['\u2191', 'sooner', 'play sooner'],
+            ['\u2193', 'later', 'play later'],
+            ['\u00d7', 'remove', 'remove from the queue'],
+        ]) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = label;
+            b.title = title;
+            b.onclick = e => {
+                // The row itself may do something else entirely.
+                e.stopPropagation();
+                post(`/queue/${passageId}/${action}`);
+            };
+            box.appendChild(b);
+        }
+        return box;
+    },
   };
 })();

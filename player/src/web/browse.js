@@ -157,13 +157,28 @@
       }
 
       if (kind === 'tracks') {
-        body.appendChild(row(
-          r.title,
-          [r.artist, r.album].filter(Boolean).join(' — '),
-          r.plays ? `${r.plays}×` : '',
-          () => Vaino.queueNext(r.passage_id).then(() => {
-            note.textContent = `Queued ${r.title} — it plays next.`;
-          })));
+        // Three verbs rather than one tap: wanting to hear something is not the
+        // same as wanting to hear it INSTEAD of what is playing, and a single
+        // action has to guess which was meant.
+        const li = row(r.title, [r.artist, r.album].filter(Boolean).join(' — '),
+                       r.plays ? `${r.plays}×` : '');
+        const acts = document.createElement('span');
+        acts.className = 'acts';
+        for (const [label, action, said] of [
+          ['Now', 'now', 'plays now'],
+          ['Next', 'next', 'plays next'],
+          ['Last', 'last', 'added to the end'],
+        ]) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = label;
+          b.onclick = () => Vaino.queue(r.passage_id, action).then(() => {
+            note.textContent = `${r.title} — ${said}.`;
+          });
+          acts.appendChild(b);
+        }
+        li.appendChild(acts);
+        body.appendChild(li);
       } else if (kind === 'albums') {
         body.appendChild(row(
           r.name, r.artist ?? '',

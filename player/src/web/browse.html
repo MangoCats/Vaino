@@ -63,6 +63,14 @@
   .rows .letter { padding: .3rem .4rem; font-size: .75rem; letter-spacing: .12em;
                   opacity: .5; border: none; cursor: default; min-height: 0;
                   position: sticky; top: 2.9rem; background: inherit; }
+  /* Three verbs per track. Sized for a thumb, and kept on one line so a row
+     stays one row on a narrow screen. */
+  .acts { display: flex; gap: .25rem; flex: none; }
+  .acts button { font: inherit; font-size: .8125rem; min-height: 2.4rem;
+                 min-width: 3.1rem; padding: 0 .35rem; cursor: pointer;
+                 background: transparent; color: inherit;
+                 border: 1px solid rgba(128,128,128,.45); border-radius: 4px; }
+  .acts button:active { background: rgba(128,128,128,.25); }
   .note { font-size: .8125rem; opacity: .7; margin: .75rem .2rem; }
   .note.bad { opacity: 1; }
 </style>

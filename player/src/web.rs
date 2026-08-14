@@ -172,7 +172,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
-        .route("/queue/:passage_id", post(queue_passage))
+        .route("/queue/:passage_id/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
@@ -240,15 +240,41 @@ async fn browse(
     }
 }
 
-/// Put a browsed passage next in the queue `[REQ-VIS-180]`.
+/// Act on a passage's place in the queue `[REQ-VIS-185]`.
 ///
-/// Next rather than at the back: browsing to something and waiting five
-/// passages for it is indistinguishable from the button not working. It does
-/// not interrupt what is playing -- that is what Skip is for.
+/// Six verbs on one route, because they are one idea -- where does this go --
+/// and splitting them across six routes would spread that idea thin:
+///
+/// * `now` — to the front, then skip into it. The only one that interrupts.
+/// * `next` — after the current passage.
+/// * `last` — to the back, behind everything already waiting.
+/// * `remove` — out of the queue.
+/// * `sooner` / `later` — one place each way, clamped at the ends.
+///
+/// The first three take a passage from the library; the last three act on one
+/// already queued, and need no library read at all.
 async fn queue_passage(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    axum::extract::Path((passage_id, action)): axum::extract::Path<(i64, String)>,
 ) -> StatusCode {
+    // Editing the queue is a rearrangement, not a lookup: the passage is
+    // already there, so this must not touch the database.
+    match action.as_str() {
+        "remove" => {
+            ui.handle.send(Command::RemoveQueued(passage_id));
+            return StatusCode::NO_CONTENT;
+        }
+        "sooner" => {
+            ui.handle.send(Command::ShiftQueued(passage_id, -1));
+            return StatusCode::NO_CONTENT;
+        }
+        "later" => {
+            ui.handle.send(Command::ShiftQueued(passage_id, 1));
+            return StatusCode::NO_CONTENT;
+        }
+        "now" | "next" | "last" => {}
+        _ => return StatusCode::NOT_FOUND,
+    }
     let db = ui.db.clone();
     let entry = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open(&db).ok()?;
@@ -262,7 +288,11 @@ async fn queue_passage(
     .await;
     match entry {
         Ok(Some(e)) => {
-            ui.handle.send(Command::EnqueueNext(e));
+            ui.handle.send(match action.as_str() {
+                "now" => Command::PlayNow(e),
+                "last" => Command::Enqueue(e),
+                _ => Command::EnqueueNext(e),
+            });
             StatusCode::NO_CONTENT
         }
         _ => StatusCode::NOT_FOUND,

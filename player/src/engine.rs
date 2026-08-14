@@ -99,6 +99,12 @@ pub enum Command {
     /// Put a passage next rather than last, for a browsed choice
     /// `[REQ-VIS-180]`.
     EnqueueNext(QueueEntry),
+    /// Play a passage at once: to the front of the queue, then skip into it.
+    PlayNow(QueueEntry),
+    /// Drop a queued passage `[REQ-VIS-185]`.
+    RemoveQueued(i64),
+    /// Move a queued passage earlier (negative) or later (positive).
+    ShiftQueued(i64, isize),
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
     Shutdown,
@@ -277,6 +283,19 @@ impl Engine {
                 }
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
                 Ok(Command::EnqueueNext(e)) => self.queue.push_after_current(e),
+                Ok(Command::PlayNow(e)) => {
+                    // Front, then skip: skip takes the front of the queue, so
+                    // anything less than the front would play the passage that
+                    // was already next instead.
+                    self.queue.push_front(e);
+                    self.skip();
+                }
+                Ok(Command::RemoveQueued(id)) => {
+                    self.queue.remove(id);
+                }
+                Ok(Command::ShiftQueued(id, delta)) => {
+                    self.queue.shift(id, delta);
+                }
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
                     self.shutdown = true;
                     return;

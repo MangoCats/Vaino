@@ -221,6 +221,24 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 >
 > **Browsing runs off the engine entirely.** The page queries the database directly, so listing ten thousand tracks cannot interfere with playing one. Only the queueing action touches the player, and it inserts **next** rather than last: browsing to something and then waiting five passages for it is indistinguishable from the button not working. It does not interrupt what is playing — that is what Skip is for.
 
+**`[REQ-VIS-185]` A found passage can be heard three ways, and the queue can be edited.** Wanting to hear something is not the same as wanting to hear it *instead* of what is playing, and one action has to guess which was meant:
+
+| verb | what it does |
+|---|---|
+| **Now** | to the front of the queue, then skip into it — the only one that interrupts |
+| **Next** | after the current passage |
+| **Last** | behind everything already waiting |
+| **↑ / ↓** | one place sooner or later, clamped at the ends |
+| **×** | out of the queue |
+
+> **Now means the front, not "after the current".** Skip reaches for the front of the queue, so anything less would play whatever was already next instead — the passage the listener did not ask for.
+>
+> **Shifting clamps rather than wraps.** Nudging the first passage "sooner" does nothing, which is what is expected; wrapping it to last would be a surprise indistinguishable from a bug.
+>
+> **The three edits touch no database.** A queued passage is already in hand, so rearranging is a message to the engine and nothing more. Only the three library verbs read a passage in.
+>
+> **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
+
 **`[REQ-VIS-160]` The listening surface is skinnable, and the skin is the only part that may differ.** A skin is three files — `skin.html`, `skin.css`, `skin.js` — and nothing else. It never opens a socket, never builds a URL, and never carries a copy of a control law.
 
 What makes this possible was already true and merely tangled: **the server's contract is the snapshot and the command endpoints**, and the DOM was only ever one rendering of it. `core.js` holds that contract — the socket and its reconnection, the complete-snapshot dispatch, the command helpers, the shared formatting, and the fader curve `[REQ-AUD-156]`, which is specified rather than decorative and would be three chances to disagree with the engine if each skin carried its own.

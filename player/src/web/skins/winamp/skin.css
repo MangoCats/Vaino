@@ -105,6 +105,10 @@ body { background: #101014; color: #d8d8dc;
 .playlist li:first-child { color: #b6ffb6; }
 .playlist .dur { opacity: .6; }
 .playlist .empty { list-style: none; margin-left: -2.4ch; opacity: .5; }
+.qedit { display: inline-flex; gap: 2px; margin-left: 6px; }
+.qedit button { font: inherit; font-size: 10px; line-height: 1; width: 16px;
+                height: 16px; min-width: 0; padding: 0; color: var(--lcd);
+                background: transparent; border: 1px solid #143d19; }
 
 .wa select {
   font: inherit; font-size: 10px; background: var(--chassis); color: #d8d8dc;

@@ -230,6 +230,31 @@ impl Queue {
     }
 
     /// Insert immediately after the playing passage — a user "play next".
+    /// Put a passage at the very front, ahead of everything waiting.
+    ///
+    /// Distinct from `push_after_current`, which leaves the next passage next.
+    /// This is what "play this now" needs: the front of the queue is what Skip
+    /// reaches for.
+    pub fn push_front(&mut self, e: QueueEntry) {
+        self.entries.push_front(e);
+    }
+
+    /// Move a queued passage `delta` places, clamped to the ends. Returns
+    /// whether anything moved -- false when it is already first or last, which
+    /// a UI should treat as "nothing to do" rather than as a failure.
+    pub fn shift(&mut self, passage_id: i64, delta: isize) -> bool {
+        let Some(at) = self.entries.iter().position(|e| e.passage_id == passage_id) else {
+            return false;
+        };
+        let to = (at as isize + delta).clamp(0, self.entries.len() as isize - 1) as usize;
+        if to == at {
+            return false;
+        }
+        let e = self.entries.remove(at).expect("index came from position()");
+        self.entries.insert(to, e);
+        true
+    }
+
     pub fn push_after_current(&mut self, e: QueueEntry) {
         let at = if self.entries.is_empty() { 0 } else { 1 };
         self.entries.insert(at, e);
@@ -270,6 +295,48 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Moving must be clamped, not wrapped: a listener nudging the first
+    /// passage "sooner" expects nothing to happen, not for it to jump to last.
+    #[test]
+    fn shifting_is_clamped_at_both_ends() {
+        let mut q = Queue::new(3);
+        for id in 1..=3 {
+            q.push(entry(id, 1000, 0, 0));
+        }
+        assert!(!q.shift(1, -1), "already first");
+        assert!(!q.shift(3, 1), "already last");
+        assert_eq!(ids(&q), vec![1, 2, 3], "and nothing moved");
+    }
+
+    #[test]
+    fn shifting_moves_one_place_each_way() {
+        let mut q = Queue::new(3);
+        for id in 1..=4 {
+            q.push(entry(id, 1000, 0, 0));
+        }
+        assert!(q.shift(4, -1));
+        assert_eq!(ids(&q), vec![1, 2, 4, 3]);
+        assert!(q.shift(1, 1));
+        assert_eq!(ids(&q), vec![2, 1, 4, 3]);
+        assert!(!q.shift(99, -1), "a passage not queued cannot move");
+    }
+
+    /// "Play this now" needs the very front, where Skip reaches. After the
+    /// current passage is where "next" goes, and the two must not be confused.
+    #[test]
+    fn push_front_goes_ahead_of_push_after_current() {
+        let mut q = Queue::new(3);
+        q.push(entry(1, 1000, 0, 0));
+        q.push(entry(2, 1000, 0, 0));
+        q.push_after_current(entry(50, 1000, 0, 0));
+        q.push_front(entry(99, 1000, 0, 0));
+        assert_eq!(ids(&q), vec![99, 1, 50, 2]);
+    }
+
+    fn ids(q: &Queue) -> Vec<i64> {
+        q.iter().map(|e| e.passage_id).collect()
+    }
 
     fn named(mb: Option<&str>, tag: Option<&str>) -> QueueEntry {
         let mut e = entry(1, 1000, 0, 0);
