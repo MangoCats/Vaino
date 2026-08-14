@@ -63,12 +63,11 @@ pub struct Snapshot {
     pub queue_len: usize,
     /// What is coming, in play order.
     pub queue: Vec<QueueItem>,
-    /// Fader *travel*, 0.0 to 1.0 -- a knob position, not an amplitude. The
-    /// taper between the two is `Volume::amplitude_at` `[REQ-AUD-154]`, and it
-    /// lives there rather than here so the browser holds no audio constants.
-    pub volume: f32,
-    /// Level in dB, or `null` when the fader is closed.
-    pub volume_db: Option<f32>,
+    /// Master level in dB relative to full scale, `-72.0` to `0.0`
+    /// `[REQ-AUD-154]`. The control is graduated in dB and captioned with this
+    /// number directly, so the browser never converts and cannot disagree with
+    /// the engine about what the fader is set to.
+    pub volume_db: f32,
     /// The programme in force, and whether it was chosen by hand.
     pub program: Option<String>,
     pub program_manual: bool,
@@ -98,8 +97,7 @@ impl From<&PlayerState> for Snapshot {
                     duration_ms: e.duration_ms(),
                 })
                 .collect(),
-            volume: Volume::travel_for(s.volume),
-            volume_db: Volume::db_at(Volume::travel_for(s.volume)),
+            volume_db: Volume::db_for(s.volume),
             program: None,
             program_manual: false,
             programs: Vec::new(),
@@ -114,7 +112,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/", get(|| async { Html(INDEX) }))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
-        .route("/volume/:level", post(set_volume))
+        .route("/volume/:db", post(set_volume))
         .route("/program/:id", post(set_program))
         .with_state(ui)
 }
@@ -123,19 +121,21 @@ async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResp
     ws.on_upgrade(move |socket| push_state(socket, ui))
 }
 
-/// Fader position as a percentage of travel, 0-100. A percentage rather than a
-/// float because it crosses a URL, and "50" is unambiguous where "0.5" invites
-/// locale trouble.
+/// Master level in whole dB relative to full scale, `-72` to `0`.
 ///
-/// The position becomes an amplitude here, at the edge, so that everything
-/// inward of this point -- engine, device, saved state -- speaks in amplitude
-/// and only the listener's control speaks in travel `[REQ-AUD-154]`.
+/// Whole decibels because that is the control's own graduation and about the
+/// smallest step a listener can pick out; an integer also crosses a URL without
+/// the locale trouble a decimal point invites.
+///
+/// It becomes an amplitude here, at the edge, so that everything inward of this
+/// point -- engine, device, saved state -- speaks in amplitude, which is what
+/// multiplies samples, and only the listener's control speaks in dB
+/// `[REQ-AUD-154]`.
 async fn set_volume(
     State(ui): State<Ui>,
-    axum::extract::Path(level): axum::extract::Path<u32>,
+    axum::extract::Path(db): axum::extract::Path<i32>,
 ) -> StatusCode {
-    let travel = level.min(100) as f32 / 100.0;
-    ui.handle.send(Command::SetVolume(Volume::amplitude_at(travel)));
+    ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db as f32)));
     StatusCode::NO_CONTENT
 }
 

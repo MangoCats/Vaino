@@ -38,19 +38,23 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 >
 > The value crosses to the callback as an atomic, not behind the ring's mutex. The callback must never block, and must be able to change level even on a tick where it cannot take that lock.
 
-**`[REQ-AUD-154]` The master fader is logarithmic: equal travel, equal decibels.** 64 dB of range, `amplitude = 10^((travel − 1) × 64 / 20)`, with the very bottom of the travel being true silence rather than −64 dB — a fader that cannot be closed is a fault. Loudness is perceived in ratios, so a linear amplitude fader spends its top half on differences barely distinguishable from full and crams everything audible into the bottom sliver.
+**`[REQ-AUD-154]` The master fader is graduated in decibels, and runs the full −72 dB to 0 dB.** `amplitude = 10^(dB/20)`, linear in dB across the whole travel. Loudness is perceived in ratios, so equal movement must be an equal *ratio*: a fader linear in amplitude spends its top half on differences barely distinguishable from full and crams everything audible into the bottom sliver.
 
-| knob | linear (was) | logarithmic (is) |
-|---:|---:|---:|
-| 100 % | 1.000 | 1.000 — 0 dB |
-| 75 % | 0.750 | 0.158 — −16 dB |
-| 50 % | 0.500 | 0.025 — −32 dB |
-| 25 % | 0.250 | 0.004 — −48 dB |
-| 0 % | 0.000 | muted |
+**The control is captioned with its own value** — "−32 dB", not "50 %". A percentage of travel is not a quantity the listener can act on, and deriving a dB caption from a percentage would put a second copy of the curve in the browser, free to disagree with the engine about what the fader is set to. The slider is graduated in whole decibels, about the smallest step that can be picked out, and the caption is simply what it reads.
 
-> The 64 dB figure is MuLibPlay's, carried over from six years of daily use: it ran a `-8192..=0` integer slider scaled by 1/128 into exactly this curve, likewise with a hard mute at the bottom.
+| dB | amplitude | |
+|---:|---:|:--|
+| 0 | 1.000 | full scale |
+| −6 | 0.501 | half amplitude |
+| −20 | 0.100 | |
+| −40 | 0.010 | |
+| −72 | 0.00025 | bottom of travel |
+
+> **There is no mute position.** An earlier revision reserved the very bottom of the travel for silence, following MuLibPlay, which closed hard below −8191 on its `-8192..=0` slider. Specifying the control's full range as −72…0 dB leaves no position for it. Nothing is lost that matters: −72 dB is inaudible through any normal amplifier, and pause stops the output device outright `[REQ-AUD-142]`, which is the honest way to silence a player. If a detent below −72 is ever wanted, that is where it goes.
 >
-> **Amplitude is the internal representation; travel is the listener's.** The engine, the device and the saved resume point all speak amplitude — it is what multiplies samples. Only the control speaks in travel, and the conversion happens once at each edge of the HTTP layer. The browser is told a position and a dB value and holds no copy of the curve, so there is one taper in the system rather than two that can drift.
+> The 72 dB span is the one number here not inherited from MuLibPlay, which used 64 dB.
+>
+> **Amplitude is the internal representation; dB is the listener's.** The engine, the device and the saved resume point all speak amplitude — it is what multiplies samples. Only the control speaks in dB, converted at each edge of the HTTP layer, so there is one curve in the system rather than two that can drift.
 
 > **Verification:** `[REQ-AUD-110]` and `[REQ-AUD-120]` are gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency `[GDE-ARC-050]`.
 >
