@@ -205,6 +205,14 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 >
 > **Measured on this library:** 5,589 of 5,590 files carry tags and 3,604 carry cover art. Browsing yields 463 artists in 75 ms, 660 albums in 36 ms, and tracks in 80 ms — on demand rather than per tick, so a query is the right answer and a cache would be premature. Tracks are capped at 2,000 rows per response.
 >
+> **Built for a phone**, which is how these pages were actually used: an alphabet bar rather than a scrollbar, because 463 artists is a long way to drag with a thumb and one tap to the letter is the whole difference. Nothing depends on hover, no tap target is smaller than a fingertip, and the listing is rows rather than a table — a table on a narrow screen either scrolls sideways or crushes the name, which is the thing being looked for.
+>
+> **Letter headings are the jump targets**, so the bar cannot fall out of step with the list. They are derived exactly as the server sorts: strip a leading "The" for the heading while the `ORDER BY` does not, and "The Beatles" emits a stray B in the middle of the Ts.
+>
+> **A missing `file_tags` table is a failed query, not an empty result.** The first version shipped without creating it, so every browse page came up blank on a library that had never been scanned — and a blank page is indistinguishable from an empty library, which sent the fault-finding in the wrong direction entirely. The player now creates it at startup with its own writable handle, and the page reports a failure as a failure rather than rendering nothing.
+>
+> Without a scan, browsing by **artist** and **track** still works from MusicBrainz alone — 463 artists on this library. Only **album** is empty, and says why.
+>
 > **One page for every skin**, wearing the chosen skin's stylesheet. Three browse implementations would rot at different rates; this way a new skin gets browsing for free and can still restyle every part of it. MuLibPlay's three separate buttons still work, via `?kind=`.
 >
 > **Browsing runs off the engine entirely.** The page queries the database directly, so listing ten thousand tracks cannot interfere with playing one. Only the queueing action touches the player, and it inserts **next** rather than last: browsing to something and then waiting five passages for it is indistinguishable from the button not working. It does not interrupt what is playing — that is what Skip is for.

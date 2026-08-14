@@ -50,6 +50,22 @@ impl std::fmt::Display for DbError {
 /// millisecond each.
 const DESCRIBE: &str = "    SELECT (SELECT r.title FROM recordings r WHERE r.mbid = m.mbid),            (SELECT a.name FROM recording_artists ra               JOIN artists a ON a.mbid = ra.artist_mbid              WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1),            (SELECT rel.title FROM release_recordings rr               JOIN releases rel ON rel.mbid = rr.release_mbid              WHERE rr.mbid = m.mbid ORDER BY rel.release_date, rel.title LIMIT 1),            (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid),            (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid)       FROM (SELECT ?1 AS mbid) m";
 
+/// The tag index, defined once `[REQ-VIS-180]`.
+///
+/// Created by whoever holds a writable handle: `tagscan` when it fills it, and
+/// the player at startup when it does not exist at all. **Browsing joins this
+/// table, so a missing one is not an empty result but a failed query** -- the
+/// first version shipped without this and every browse page came up blank on a
+/// library that had never been scanned.
+pub(crate) const TAG_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS file_tags (
+        file_id INTEGER PRIMARY KEY,
+        title TEXT, artist TEXT, album TEXT,
+        has_art INTEGER NOT NULL DEFAULT 0,
+        scanned_at INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_file_tags_album ON file_tags(album);
+    CREATE INDEX IF NOT EXISTS idx_file_tags_artist ON file_tags(artist);";
+
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                                (SELECT pr.mbid FROM passage_recordings pr \
@@ -179,17 +195,7 @@ impl Library {
     /// kept. The table is the player's own, created here rather than by the
     /// ingest tools, because it is the player that needs it.
     pub fn ensure_tag_table(&self) -> Result<(), DbError> {
-        self.conn
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS file_tags ( \
-                     file_id INTEGER PRIMARY KEY, \
-                     title TEXT, artist TEXT, album TEXT, \
-                     has_art INTEGER NOT NULL DEFAULT 0, \
-                     scanned_at INTEGER NOT NULL); \
-                 CREATE INDEX IF NOT EXISTS idx_file_tags_album ON file_tags(album); \
-                 CREATE INDEX IF NOT EXISTS idx_file_tags_artist ON file_tags(artist);",
-            )
-            .map_err(|e| DbError::Query(e.to_string()))
+        self.conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Query(e.to_string()))
     }
 
     pub fn put_tags(
@@ -262,6 +268,10 @@ impl PlayerStore {
                  updated_at TEXT NOT NULL);",
         )
         .map_err(|e| DbError::Open(e.to_string()))?;
+        // Browsing joins this table, and an absent one fails the query rather
+        // than returning nothing. Created here because this is the player's
+        // only writable handle; filling it is `tagscan`'s job.
+        conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         Ok(Self { conn })
     }
 

@@ -3,50 +3,86 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vaino — Browse</title>
 <style>
-  /* One browse page for every skin, rather than three.
-     It loads the chosen skin's stylesheet, so it inherits that skin's ground,
-     type and buttons; what is here is only the layout the listing needs, and
-     it is all class-based so a skin can override any of it. */
+  /* One browse page for every skin rather than three. It loads the chosen
+     skin's stylesheet, so it inherits that skin's ground, type and buttons;
+     what is here is only the layout a listing needs, and all of it is
+     class-based so a skin can override any part.
+
+     Built for a phone first, which is how MuLibPlay's browse pages were used:
+     one-handed, at arm's length, tapping rather than pointing. Nothing here
+     depends on hover, and no tap target is smaller than a fingertip. */
   html, body { margin: 0; padding: 0; background: #141416; color: #eee;
                font: 16px/1.5 system-ui, sans-serif; }
-  .browse { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem; }
-  .browse header { display: flex; align-items: center; gap: 1rem;
-                   flex-wrap: wrap; margin-bottom: 1rem; }
-  .browse h1 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
-               font-weight: 600; margin: 0; opacity: .7; }
-  .tabs { display: flex; gap: .35rem; }
-  .tabs button[aria-selected="true"] { outline: 2px solid currentColor; }
-  .browse input[type=search] { font: inherit; padding: .3rem .5rem; min-width: 12rem;
-                               background: transparent; color: inherit;
-                               border: 1px solid currentColor; border-radius: 4px; }
-  .crumbs { font-size: .875rem; opacity: .75; margin-bottom: .6rem; min-height: 1.4rem; }
-  .crumbs a { cursor: pointer; text-decoration: underline; }
-  .rows { border-collapse: collapse; width: 100%; font-size: .9375rem; }
-  .rows td { padding: .3rem .5rem; border-bottom: 1px solid rgba(128,128,128,.25); }
-  .rows tr:hover td { background: rgba(128,128,128,.12); }
-  .rows .num { text-align: right; font-variant-numeric: tabular-nums; opacity: .7;
-               white-space: nowrap; }
-  .rows .go { cursor: pointer; }
-  .rows .sub { opacity: .65; }
-  .count { font-size: .8125rem; opacity: .6; margin: .5rem 0 0; }
+  .browse { max-width: 60rem; margin: 0 auto; padding: .75rem; }
+
+  .browse header { display: flex; align-items: center; gap: .5rem;
+                   flex-wrap: wrap; margin-bottom: .5rem; }
+  .browse h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+               font-weight: 600; margin: 0; opacity: .6; flex: 1; }
   .browse a.back { font-size: .8125rem; }
+
+  /* Axis buttons: full-width thirds on a phone, so they cannot be mis-tapped. */
+  .tabs { display: flex; gap: .35rem; width: 100%; }
+  .tabs button { flex: 1; min-height: 2.75rem; font: inherit; cursor: pointer; }
+  .tabs button[aria-selected="true"] { outline: 2px solid currentColor;
+                                       font-weight: 600; }
+
+  .browse input[type=search] { font: inherit; padding: .55rem .6rem; width: 100%;
+                               box-sizing: border-box; background: transparent;
+                               color: inherit; border: 1px solid currentColor;
+                               border-radius: 4px; margin-top: .4rem; }
+
+  /* The alphabet. Sticky, because the whole point is to jump while scrolled. */
+  .az { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap;
+        gap: .15rem; padding: .35rem 0; margin-bottom: .25rem;
+        background: inherit; backdrop-filter: blur(6px); }
+  .az button { font: inherit; font-size: .8125rem; min-width: 1.9rem;
+               min-height: 1.9rem; padding: 0; cursor: pointer;
+               background: transparent; color: inherit;
+               border: 1px solid rgba(128,128,128,.35); border-radius: 4px; }
+  .az button[disabled] { opacity: .25; }
+
+  .crumbs { font-size: .875rem; opacity: .8; margin: .1rem 0 .4rem;
+            min-height: 1.4rem; }
+  .crumbs a { cursor: pointer; text-decoration: underline; }
+
+  /* Rows, not a table: a table cannot reflow on a narrow screen without
+     either scrolling sideways or crushing the names, and the name is the
+     thing being looked for. */
+  .rows { list-style: none; margin: 0; padding: 0; }
+  .rows li { display: flex; align-items: center; gap: .6rem; min-height: 2.9rem;
+             padding: .35rem .4rem; border-bottom: 1px solid rgba(128,128,128,.22);
+             cursor: pointer; }
+  .rows .name { flex: 1; min-width: 0; }
+  .rows .name b { font-weight: 600; display: block; overflow-wrap: anywhere; }
+  .rows .name span { font-size: .8125rem; opacity: .65;
+                     display: block; overflow-wrap: anywhere; }
+  .rows .num { font-size: .8125rem; opacity: .65; text-align: right;
+               white-space: pre-line; font-variant-numeric: tabular-nums;
+               line-height: 1.25; }
+  .rows .letter { padding: .3rem .4rem; font-size: .75rem; letter-spacing: .12em;
+                  opacity: .5; border: none; cursor: default; min-height: 0;
+                  position: sticky; top: 2.9rem; background: inherit; }
+  .note { font-size: .8125rem; opacity: .7; margin: .75rem .2rem; }
+  .note.bad { opacity: 1; }
 </style>
 
 <div class="browse">
   <header>
     <h1>Vaino — Browse</h1>
-    <div class="tabs">
-      <button data-kind="artists">Artist</button>
-      <button data-kind="albums">Album</button>
-      <button data-kind="tracks">Track</button>
-    </div>
-    <input type="search" id="q" placeholder="filter…" autocomplete="off">
-    <a class="back" href="/">← back to the player</a>
+    <a class="back" href="/">← player</a>
   </header>
+  <div class="tabs">
+    <button data-kind="artists">Artist</button>
+    <button data-kind="albums">Album</button>
+    <button data-kind="tracks">Track</button>
+  </div>
+  <input type="search" id="q" placeholder="filter…" autocomplete="off">
 
   <div class="crumbs" id="crumbs"></div>
-  <table class="rows"><tbody id="rows"></tbody></table>
-  <p class="count" id="count"></p>
+  <div class="az" id="az"></div>
+  <ul class="rows" id="rows"></ul>
+  <p class="note" id="note"></p>
 </div>
 
 <script src="/core.js"></script>

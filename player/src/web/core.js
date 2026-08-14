@@ -211,10 +211,15 @@ const Vaino = (() => {
       l.href = `/skin/${chosen()}/skin.css`;
       document.head.appendChild(l);
     },
+    // Throws rather than resolving to nothing when the query fails, so a
+    // broken listing cannot be mistaken for an empty library.
     browse: (kind, filter = {}) => {
       const q = new URLSearchParams();
       for (const [k, v] of Object.entries(filter)) if (v) q.set(k, v);
-      return fetch(`/browse/${kind}?${q}`).then(r => r.json());
+      return fetch(`/browse/${kind}?${q}`).then(r => {
+        if (!r.ok) throw new Error(`the server answered ${r.status}`);
+        return r.json();
+      });
     },
     queueNext: id => post(`/queue/${id}`),
   };
