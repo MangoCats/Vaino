@@ -87,6 +87,137 @@ const Vaino = (() => {
     img.src = `/art/${passageId}`;
   }
 
+  // The edit controls for one queued passage, wired and ready to append.
+  //
+  // Here rather than in each skin because all three want the same three
+  // verbs on the same object, and three copies would drift. A skin styles
+  // them through `.qedit` and decides where they go; it does not decide
+  // what they do.
+  function queueControls(passageId, editable = true) {
+      const box = document.createElement('span');
+      box.className = 'qedit';
+      // Remove first and furthest left, then sooner, then later. Fixed
+      // order and fixed widths so the controls line up as columns down the
+      // queue: a column of identical buttons is one target to learn, where
+      // buttons that shift with the length of a title are three.
+      for (const [label, action, title] of Vaino.VERBS.edit) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = label;
+          b.title = title;
+          if (editable === false) {
+              // Already in the mixer, so its audio is partly in the ring:
+              // the control would report success and change nothing.
+              b.disabled = true;
+              b.title = 'already playing into the buffer';
+          }
+          b.onclick = e => {
+              // The row itself may do something else entirely.
+              e.stopPropagation();
+              post(`/queue/${passageId}/${action}`);
+          };
+          box.appendChild(b);
+      }
+      return box;
+  }
+
+  // ---- binders -----------------------------------------------------------
+  // Behaviour every skin needs and none should own. A skin marks up a slider,
+  // a select and a list; these make them work, and the skin keeps only what it
+  // is for -- where things go and what they look like.
+  //
+  // Each returns a render function for the snapshot, which `subscribe` calls.
+  // They are opt-in: a skin that wants to do something unusual simply does not
+  // call them, and nothing here is load-bearing for the rest.
+
+  // The volume slider. While dragging, the slider is the truth -- adopting the
+  // pushed value mid-drag would fight the user's thumb twice a second -- and
+  // the level is sent on release, not per pixel of travel.
+  function bindVolume(slider, label) {
+    let holding = false;
+    let pending = 0;
+    const show = db => { if (label) label.textContent = fmt.db(db); };
+    slider.oninput = () => {
+      holding = true;
+      pending = fmt.round1(fader.db(Number(slider.value)));
+      show(pending);
+    };
+    slider.onchange = () => { holding = false; post(`/volume/${pending}`); };
+    return s => {
+      if (holding) return;
+      const db = fmt.round1(s.volume_db ?? 0);
+      slider.value = fader.travel(db);
+      show(db);
+    };
+  }
+
+  // The programme picker. The option list is rebuilt only when it actually
+  // changes; replacing it on every push would close the dropdown in the hand
+  // of whoever is reading it.
+  function bindProgram(select, autoLabel = 'Automatic (by time of day)') {
+    let signature = '';
+    select.onchange = e => post(`/program/${e.target.value}`);
+    return s => {
+      const programs = s.programs || [];
+      const sig = programs.map(p => p.id + p.name).join('|');
+      if (sig !== signature) {
+        signature = sig;
+        select.textContent = '';
+        const auto = document.createElement('option');
+        auto.value = 'auto';
+        auto.textContent = autoLabel;
+        select.appendChild(auto);
+        for (const p of programs) {
+          const o = document.createElement('option');
+          o.value = p.id;
+          o.textContent = `${p.name} — from ${p.start}`;
+          select.appendChild(o);
+        }
+      }
+      if (!s.program_manual) {
+        select.value = 'auto';
+      } else {
+        const m = programs.find(p => p.name === s.program);
+        if (m) select.value = String(m.id);
+      }
+    };
+  }
+
+  // One queue row: edit controls first, then the title, then the duration.
+  // The skin supplies the element it wants and how the row should read; the
+  // order and the controls are the same everywhere because they are the same
+  // idea everywhere `[REQ-VIS-185]`.
+  function queueRow(item, label, tag = 'li') {
+    const row = document.createElement(tag);
+    row.appendChild(queueControls(item.passage_id, item.editable));
+    const title = document.createElement('span');
+    title.className = 'qtitle';
+    title.textContent = label(item) + ' ';
+    const dur = document.createElement('span');
+    dur.className = 'dur';
+    dur.textContent = fmt.clock(item.duration_ms);
+    title.appendChild(dur);
+    row.appendChild(title);
+    return row;
+  }
+
+  // The whole list, including the empty case, which every skin got wrong in
+  // its own way before this.
+  function bindQueue(container, label, tag = 'li', empty = 'nothing queued') {
+    return s => {
+      container.textContent = '';
+      const items = s.queue || [];
+      if (!items.length) {
+        const none = document.createElement(tag);
+        none.className = 'empty';
+        none.textContent = empty;
+        container.appendChild(none);
+        return;
+      }
+      for (const q of items) container.appendChild(queueRow(q, label, tag));
+    };
+  }
+
   // ---- skins -------------------------------------------------------------
   // The choice is per browser, not per player: two people on two phones may
   // want different skins of the same radio, and neither should be able to
@@ -188,6 +319,10 @@ const Vaino = (() => {
     setSkin,
     fader,
     fmt,
+    bindVolume,
+    bindProgram,
+    bindQueue,
+    queueRow,
     showArt,
     artUrl: id => `/art/${id}`,
     command: name => post(`/command/${name}`),
@@ -239,38 +374,6 @@ const Vaino = (() => {
     },
     queue: (id, action) => post(`/queue/${id}/${action}`),
 
-    // The edit controls for one queued passage, wired and ready to append.
-    //
-    // Here rather than in each skin because all three want the same three
-    // verbs on the same object, and three copies would drift. A skin styles
-    // them through `.qedit` and decides where they go; it does not decide what
-    // they do.
-    queueControls(passageId, editable = true) {
-        const box = document.createElement('span');
-        box.className = 'qedit';
-        // Remove first and furthest left, then sooner, then later. Fixed
-        // order and fixed widths so the controls line up as columns down the
-        // queue: a column of identical buttons is one target to learn, where
-        // buttons that shift with the length of a title are three.
-        for (const [label, action, title] of Vaino.VERBS.edit) {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.textContent = label;
-            b.title = title;
-            if (editable === false) {
-                // Already in the mixer, so its audio is partly in the ring:
-                // the control would report success and change nothing.
-                b.disabled = true;
-                b.title = 'already playing into the buffer';
-            }
-            b.onclick = e => {
-                // The row itself may do something else entirely.
-                e.stopPropagation();
-                post(`/queue/${passageId}/${action}`);
-            };
-            box.appendChild(b);
-        }
-        return box;
-    },
+    queueControls,
   };
 })();

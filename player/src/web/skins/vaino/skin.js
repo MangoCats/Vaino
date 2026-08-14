@@ -2,24 +2,15 @@
 // first -- so if something is missing from the contract, it shows up here.
 (() => {
   const $ = id => document.getElementById(id);
-  const { clock, round1, db: dbLabel, overlap } = Vaino.fmt;
+  const { clock, overlap } = Vaino.fmt;
 
-  // While dragging, the slider is the truth; adopting the pushed value mid-drag
-  // would fight the user's thumb every 500 ms.
-  let holding = false;
-  let pendingDb = 0;
-  const vol = $('volume');
-  vol.oninput = () => {
-    holding = true;
-    pendingDb = round1(Vaino.fader.db(Number(vol.value)));
-    $('volnum').textContent = dbLabel(pendingDb);
-  };
-  vol.onchange = () => {
-    holding = false;
-    Vaino.volume(pendingDb);
-  };
-
-  $('prog').onchange = e => Vaino.program(e.target.value);
+  // Volume, programme and the queue are the same behaviour in every skin, so
+  // they come from core; this skin says only where they live and how a row
+  // should read `[REQ-VIS-160]`.
+  const showVolume = Vaino.bindVolume($('volume'), $('volnum'));
+  const showProgram = Vaino.bindProgram($('prog'));
+  const showQueue = Vaino.bindQueue(
+    $('queue'), q => (q.artist ? `${q.title} — ${q.artist}` : q.title));
 
   // Seconds here, milliseconds on the wire: seconds are what the listener is
   // choosing, milliseconds are what the mixer counts in.
@@ -40,61 +31,10 @@
     ['Occasion',         w => w.occasion],
   ];
 
-  function renderQueue(items, total) {
-    const ol = $('queue');
-    $('queuelen').textContent = total ?? 0;
-    ol.textContent = '';
-    if (!items || !items.length) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.textContent = 'nothing queued';
-      ol.appendChild(li);
-      return;
-    }
-    for (const q of items) {
-      const li = document.createElement('li');
-      li.appendChild(Vaino.queueControls(q.passage_id, q.editable));
-      const t = document.createElement('span');
-      t.className = 'qtitle';
-      t.textContent = q.artist ? `${q.title} — ${q.artist} ` : q.title + ' ';
-      const d = document.createElement('span');
-      d.className = 'dur';
-      d.textContent = clock(q.duration_ms);
-      t.appendChild(d);
-      li.appendChild(t);
-      ol.appendChild(li);
-    }
-  }
 
   // The <option> list is rebuilt only when it actually changes; replacing it on
   // every push would close the dropdown in the user's hand.
   let progSig = '';
-  function renderProgram(s) {
-    const sel = $('prog');
-    const sig = (s.programs || []).map(p => p.id + p.name).join('|');
-    if (sig !== progSig) {
-      progSig = sig;
-      sel.textContent = '';
-      const auto = document.createElement('option');
-      auto.value = 'auto';
-      auto.textContent = 'Automatic (by time of day)';
-      sel.appendChild(auto);
-      for (const p of s.programs || []) {
-        const o = document.createElement('option');
-        o.value = p.id;
-        o.textContent = `${p.name} — from ${p.start}`;
-        sel.appendChild(o);
-      }
-    }
-    if (!s.program_manual) sel.value = 'auto';
-    else {
-      const m = (s.programs || []).find(p => p.name === s.program);
-      if (m) sel.value = String(m.id);
-    }
-    $('progmode').textContent = s.program
-      ? (s.program_manual ? `${s.program}, chosen` : `${s.program}, by the clock`)
-      : '';
-  }
 
   // Limits come from the engine, which is what actually enforces them.
   // Fields being edited are left alone, as the volume slider is while held.
@@ -202,13 +142,13 @@
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
     $('state').textContent = s.playing ? 'playing' : 'paused';
     $('under').textContent = s.underrun_samples;
-    renderQueue(s.queue, s.queue_len);
-    renderProgram(s);
-    if (!holding) {
-      const db = round1(s.volume_db ?? 0);
-      vol.value = Vaino.fader.travel(db);
-      $('volnum').textContent = dbLabel(db);
-    }
+    $('queuelen').textContent = s.queue_len ?? 0;
+    showQueue(s);
+    showProgram(s);
+    showVolume(s);
+    $('progmode').textContent = s.program
+      ? (s.program_manual ? `${s.program}, chosen` : `${s.program}, by the clock`)
+      : '';
     renderSkip(s.skip);
     renderWhy(s.why);
     $('link').textContent =

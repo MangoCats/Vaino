@@ -13,18 +13,14 @@
 // cover at all.
 (() => {
   const $ = id => document.getElementById(id);
-  const { clock, round1, db: dbLabel } = Vaino.fmt;
+  const { clock } = Vaino.fmt;
 
-  let holding = false, pendingDb = 0;
-  const vol = $('volume');
-  vol.oninput = () => {
-    holding = true;
-    pendingDb = round1(Vaino.fader.db(Number(vol.value)));
-    $('volnum').textContent = dbLabel(pendingDb);
-  };
-  // The original submitted on mouseup and touchend for exactly this reason:
-  // a level per pixel of travel would be a request per pixel of travel.
-  vol.onchange = () => { holding = false; Vaino.volume(pendingDb); };
+  // The original submitted volume on mouseup and touchend for the same reason
+  // core sends on release: a level per pixel of travel would be a request per
+  // pixel of travel.
+  const showVolume = Vaino.bindVolume($('volume'), $('volnum'));
+  const showQueue = Vaino.bindQueue(
+    $('queue'), q => (q.artist ? `${q.title} by ${q.artist}` : q.title), 'p');
 
   // Checked means the clock is choosing, which is Vaino's "no manual override".
   $('autoclock').onchange = e => { if (e.target.checked) Vaino.program('auto'); };
@@ -53,27 +49,6 @@
     $('autoclock').checked = !s.program_manual;
   }
 
-  function renderQueue(items) {
-    const host = $('queue');
-    host.textContent = '';
-    if (!items || !items.length) {
-      host.textContent = 'nothing queued';
-      return;
-    }
-    for (const q of items) {
-      const p = document.createElement('p');
-      p.appendChild(Vaino.queueControls(q.passage_id, q.editable));
-      const t = document.createElement('span');
-      t.className = 'qtitle';
-      t.textContent = q.artist ? `${q.title} by ${q.artist} ` : q.title + ' ';
-      p.appendChild(t);
-      const d = document.createElement('span');
-      d.className = 'dur';
-      d.textContent = clock(q.duration_ms);
-      p.appendChild(d);
-      host.appendChild(p);
-    }
-  }
 
   // Hide the connecting word along with the value it introduces.
   const pair = (wordId, valueId, text) => {
@@ -90,12 +65,8 @@
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
     lit($('b-play'), s.playing);
     lit($('b-pause'), !s.playing);
-    if (!holding) {
-      const db = round1(s.volume_db ?? 0);
-      vol.value = Vaino.fader.travel(db);
-      $('volnum').textContent = dbLabel(db);
-    }
-    renderQueue(s.queue);
+    showVolume(s);
+    showQueue(s);
     renderStations(s);
     $('why').textContent = s.why
       ? `${s.why.program ? s.why.program + ': ' : ''}weight ` +

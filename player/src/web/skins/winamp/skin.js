@@ -4,18 +4,12 @@
 // having rather than merely tidy.
 (() => {
   const $ = id => document.getElementById(id);
-  const { clock, round1, db: dbLabel, overlap } = Vaino.fmt;
+  const { clock, overlap } = Vaino.fmt;
 
-  let holding = false, pendingDb = 0;
-  const vol = $('volume');
-  vol.oninput = () => {
-    holding = true;
-    pendingDb = round1(Vaino.fader.db(Number(vol.value)));
-    $('volnum').textContent = dbLabel(pendingDb);
-  };
-  vol.onchange = () => { holding = false; Vaino.volume(pendingDb); };
-
-  $('prog').onchange = e => Vaino.program(e.target.value);
+  const showVolume = Vaino.bindVolume($('volume'), $('volnum'));
+  const showProgram = Vaino.bindProgram($('prog'), 'auto (by clock)');
+  const showQueue = Vaino.bindQueue(
+    $('queue'), q => (q.artist ? `${q.artist} - ${q.title}` : q.title));
   const skipFade = $('skipfade'), skipLead = $('skiplead');
   skipFade.onchange = () => Vaino.skipFade(skipFade.value * 1000);
   skipLead.onchange = () => Vaino.skipLead(skipLead.value * 1000);
@@ -42,54 +36,7 @@
   }
 
   let progSig = '';
-  function renderProgram(s) {
-    const sel = $('prog');
-    const sig = (s.programs || []).map(p => p.id + p.name).join('|');
-    if (sig !== progSig) {
-      progSig = sig;
-      sel.textContent = '';
-      const auto = document.createElement('option');
-      auto.value = 'auto';
-      auto.textContent = 'auto (by clock)';
-      sel.appendChild(auto);
-      for (const p of s.programs || []) {
-        const o = document.createElement('option');
-        o.value = p.id;
-        o.textContent = `${p.name} ${p.start}`;
-        sel.appendChild(o);
-      }
-    }
-    if (!s.program_manual) sel.value = 'auto';
-    else {
-      const m = (s.programs || []).find(p => p.name === s.program);
-      if (m) sel.value = String(m.id);
-    }
-  }
 
-  function renderQueue(items) {
-    const ol = $('queue');
-    ol.textContent = '';
-    if (!items || !items.length) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.textContent = 'nothing queued';
-      ol.appendChild(li);
-      return;
-    }
-    for (const q of items) {
-      const li = document.createElement('li');
-      li.appendChild(Vaino.queueControls(q.passage_id, q.editable));
-      const t = document.createElement('span');
-      t.className = 'qtitle';
-      t.textContent = q.artist ? `${q.artist} - ${q.title} ` : q.title + ' ';
-      const d = document.createElement('span');
-      d.className = 'dur';
-      d.textContent = clock(q.duration_ms);
-      t.appendChild(d);
-      li.appendChild(t);
-      ol.appendChild(li);
-    }
-  }
 
   Vaino.subscribe(s => {
     // "Artist - Title" is this idiom's own habit, and it happens to put the
@@ -106,13 +53,9 @@
                                    : '… reconnecting';
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
-    if (!holding) {
-      const db = round1(s.volume_db ?? 0);
-      vol.value = Vaino.fader.travel(db);
-      $('volnum').textContent = dbLabel(db);
-    }
-    renderProgram(s);
-    renderQueue(s.queue);
+    showVolume(s);
+    showProgram(s);
+    showQueue(s);
     if (s.skip) {
       if (document.activeElement !== skipFade) {
         skipFade.min = 0;
