@@ -95,8 +95,15 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
 }
 
 impl Library {
-    /// Open read-only. The player never writes the library; only Sampo does,
-    /// and enforcing that here means a bug cannot corrupt it.
+    /// Open read-only.
+    ///
+    /// This is the handle everything on the *reading* path uses -- selection,
+    /// naming, browsing -- and it cannot write, so a bug in any of them cannot
+    /// corrupt the library. It is not a claim that the player never writes:
+    /// `PlayerStore` keeps the resume row and creates `file_tags`, and the tag
+    /// scan takes `open_writable` `[REQ-VIS-180]`. The guard is narrower than
+    /// "only Sampo writes", which is what this comment used to say, and it is
+    /// the narrow version that is true.
     pub fn open(path: &std::path::Path) -> Result<Self, DbError> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|e| DbError::Open(e.to_string()))?;

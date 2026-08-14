@@ -131,7 +131,9 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 >
 > This was the third instance of one fault `[REQ-AUD-142]`, `[REQ-AUD-152]`: **a control the listener expects to act now cannot be implemented upstream of a 14 s buffer.** Pause had to stop the device, volume had to move into the callback, and skip has to reach into the ring. Any future control of this kind should be assumed to need the same treatment until shown otherwise.
 
-> **Verification:** `[REQ-AUD-110]` and `[REQ-AUD-120]` are gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency `[GDE-ARC-050]`.
+> **Verification:** `[REQ-AUD-110]` is gated by [`memcheck`](../../player/src/bin/memcheck.rs), which decodes a passage of any length through the fixed-capacity buffer and **fails** above 150 MB peak RSS `[REQ-HW-100]`. It needs a long file from a real library, so `verify-targets.sh` runs it only when `VAINO_LONG_FILE` names one and reports **SKIPPED**, never passed, when it does not.
+>
+> This previously read "gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency". Two parts of that were untrue: nothing invoked the gate at all, and **no test measures skip latency** — `memcheck` does not, and the word now means the Skip control `[REQ-AUD-158]`, which is 0.6–1.0 s by design. `[REQ-AUD-120]` — playing a passage as a span of a larger file without decoding the rest — is exercised by the decoder's own tests and by every DAO passage the player opens, not by a dedicated gate.
 >
 > `[REQ-AUD-140]` verified end-to-end on desktop hardware (48 kHz device, 44.1 kHz sources, 8,079-passage library): a run interrupted at ~16 s saved 15.01 s, and the next run resumed the same passage at 15.0 s and went on to save 25.01 s — position advancing *from* the resume point, not restarting. The 15.01 s figure is also the check on audible-versus-mixed position: had the mixed figure been saved it would have read ~29 s.
 
@@ -219,7 +221,9 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 >
 > **Browsing never dead-ends on an artist.** An artist with no album names yet shows their tracks instead, with a note saying why. "No albums" is a useless answer to "show me this artist", and while the background scan is still running it is a temporary one as well.
 >
-> **The index is a cost worth naming.** Album has no source but the file's own tag, and reading tags means opening and probing every file — 18 seconds for 5,590 of them, which is fine once and impossible per request. `tagscan` writes them to `file_tags`; it is a tool, not the player, and takes the only writable handle to the library for that reason. Re-running it is safe and costs only the new files.
+> **The index is a cost worth naming.** Album has no source but the file's own tag, and reading it means opening and probing every file — 18 seconds for 5,590 of them, fine once and impossible per request. Re-scanning is safe and costs only the files added since.
+>
+> **Two handles write to the library, and neither is the audio path.** `PlayerStore` creates `file_tags` at startup alongside the resume row, and the background scan opens its own writable connection; `Library::open` stays read-only so the *reading* path cannot corrupt anything. The earlier claim that `tagscan` held "the only writable handle" stopped being true when the player learned to scan for itself.
 >
 > **Measured on this library:** 5,589 of 5,590 files carry tags and 3,604 carry cover art. Browsing yields 463 artists in 75 ms, 660 albums in 36 ms, and tracks in 80 ms — on demand rather than per tick, so a query is the right answer and a cache would be premature. Tracks are capped at 2,000 rows per response.
 >
@@ -293,7 +297,7 @@ What makes this possible was already true and merely tangled: **the server's con
 >
 > **What the MuLibPlay skin cannot show, it does not invent:** album art, artist and album names, play counts, and the browse-by-artist pages are simply not in the snapshot. The omission is the engine's, not the layout's, and a skin fabricating them would be worse than the gap.
 >
-> **Verified** by [`build/verify-skins.js`](../../build/verify-skins.js), which loads each skin through `core.js`'s own loader into a real DOM and pushes snapshots at it — one with everything in it, one with almost nothing, optionally a live capture. It checks that nothing throws, that the transport is wired, and that dragging the fader to mid-travel posts `−18 dB`, which is the quadratic `[REQ-AUD-156]` confirming itself through the skin. Optional, because the player needs neither node nor jsdom to run: a skip is reported as a skip and never folded into the pass.
+> **Verified** by [`build/verify-skins.js`](../../build/verify-skins.js), which also drives the browse page — its alphabet, its narrowing from artist to album to track, album ordering, the verbs refusing while nothing is selected, the selection travelling as one request in listing order, and a failed query reporting rather than rendering as an empty library `[REQ-VIS-180]`, `[REQ-VIS-195]`. For each skin it loads through `core.js`'s own loader into a real DOM and pushes snapshots at it — one with everything in it, one with almost nothing, optionally a live capture. It checks that nothing throws, that the transport is wired, and that dragging the fader to mid-travel posts `−18 dB`, which is the quadratic `[REQ-AUD-156]` confirming itself through the skin. Optional, because the player needs neither node nor jsdom to run: a skip is reported as a skip and never folded into the pass.
 
 **`[REQ-VIS-140]`** Long-running operations report real progress and are interruptible without loss `[REQ-LIB-130]`.
 

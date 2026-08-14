@@ -55,6 +55,25 @@ echo "== C: host (Windows or Linux) =="
 # Cleared here so the result does not depend on the developer's environment.
 ( cd "$ROOT/player" && env -u CC cargo test --release 2>&1     | grep -E "^test result: ok\.|FAILED" | head -1 ) || fail=$((fail+1))
 
+# The bounded-decode gate. It needs a long file from a real library, which no
+# build machine has by default, so it is opt-in via VAINO_LONG_FILE -- and a run
+# without one reports SKIPPED rather than passing quietly. `[REQ-AUD-110]`
+echo
+echo "== Bounded decode (optional: set VAINO_LONG_FILE) =="
+mem_note=""
+if [ -n "${VAINO_LONG_FILE:-}" ]; then
+    if [ -f "$VAINO_LONG_FILE" ]; then
+        ( cd "$ROOT/player" && env -u CC cargo run --release --quiet --bin memcheck -- \
+              "$VAINO_LONG_FILE" 2>&1 | tail -4 ) || fail=$((fail+1))
+    else
+        echo "  VAINO_LONG_FILE is set but does not exist: $VAINO_LONG_FILE"
+        fail=$((fail+1))
+    fi
+else
+    mem_note="bounded decode NOT checked (VAINO_LONG_FILE unset)"
+    echo "  $mem_note"
+fi
+
 # The skins are HTML, CSS and JavaScript, so cargo cannot reach them. Optional
 # because the player needs neither node nor jsdom to run; a skip is reported as
 # a skip, never folded into the pass.
@@ -73,6 +92,9 @@ else
 fi
 
 echo
+if [ -n "$mem_note" ]; then
+    echo "$mem_note"
+fi
 if [ -n "$skins_note" ]; then
     echo "$skins_note"
 fi

@@ -202,8 +202,118 @@ async function run(skin) {
   for (const e of errors) console.log('    ! ' + e);
 }
 
+
+// ---------------------------------------------------------------------------
+// The browse page. Its own check, because it is not a skin: it has no socket,
+// it drives three listings and a selection, and it is where the last several
+// faults landed -- an empty listing that was really a failed query, a dead end
+// on an artist, and an order that came out backwards.
+async function runBrowse() {
+  const html = fs.readFileSync(path.join(ROOT, 'browse.html'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost/browse' });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+
+  const ARTISTS = [{ name: 'ABBA', artist: null, passages: 3, plays: 9 },
+                   { name: 'Steely Dan', artist: null, passages: 8, plays: 40 }];
+  const ALBUMS = [{ name: 'Aja', artist: 'Steely Dan', passages: 7, plays: 30 }];
+  const TRACKS = [
+    { passage_id: 11, title: 'Black Cow', artist: 'Steely Dan', album: 'Aja', plays: 4, track_no: 1, disc_no: 1 },
+    { passage_id: 12, title: 'Aja', artist: 'Steely Dan', album: 'Aja', plays: 2, track_no: 2, disc_no: 1 },
+  ];
+
+  const posted = [];
+  let fail = null;                       // set to make /browse/* answer 500
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') { posted.push(url); return Promise.resolve({ ok: true }); }
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    const m = /^\/browse\/(\w+)/.exec(url);
+    if (m) {
+      if (fail) return Promise.resolve({ ok: false, status: fail });
+      const rows = { artists: ARTISTS, albums: ALBUMS, tracks: TRACKS }[m[1]] || [];
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(rows) });
+    }
+    return Promise.reject(new Error('unexpected fetch ' + url));
+  };
+
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript(fs.readFileSync(path.join(ROOT, 'browse.js'), 'utf8'));
+
+  const settle = () => new Promise(r => setTimeout(r, 30));
+  await settle(); await settle();
+
+  const $ = id => window.document.getElementById(id);
+  const rows = () => [...window.document.querySelectorAll('#rows li')]
+    .filter(li => !li.classList.contains('letter'));
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+
+  // Artists list, with the alphabet built from what is actually there.
+  check(rows().length === 2, `artists: ${rows().length} rows, want 2`);
+  const az = [...window.document.querySelectorAll('#az button')];
+  check(az.length === 27, `alphabet: ${az.length} letters, want 27`);
+  check(az.some(b => b.textContent === 'A' && !b.disabled), 'A should be live');
+  check(az.some(b => b.textContent === 'Q' && b.disabled), 'Q should be disabled');
+  check($('verbs').hidden, 'the verbs belong to the track listing only');
+
+  // An artist narrows to albums; an album narrows to its tracks.
+  rows()[1].onclick();
+  await settle();
+  check($('crumbs').textContent.includes('Steely Dan'), 'crumb trail should name the artist');
+  rows()[0].onclick();
+  await settle();
+  check(!$('verbs').hidden, 'the verbs appear on tracks');
+  check(rows().length === 2, `album tracks: ${rows().length}, want 2`);
+  // Album order, so the number leads and the alphabet is gone.
+  check(rows()[0].textContent.includes('1. Black Cow'), 'track number should lead in album order');
+  check(window.document.querySelectorAll('#az button').length === 0,
+        'no alphabet over a running order');
+
+  // Nothing selected: the verbs must refuse rather than act.
+  check($('v-now').disabled && $('v-next').disabled && $('v-last').disabled,
+        'verbs must start disabled');
+  $('v-next').onclick();
+  check(posted.length === 0, 'a disabled verb must not post');
+
+  // Select both, in listing order, and queue them as one request.
+  for (const box of window.document.querySelectorAll('.pick')) { box.checked = true; }
+  window.document.querySelector('.pick').onchange();
+  check(!$('v-next').disabled, 'a selection must arm the verbs');
+  $('v-next').onclick();
+  await settle();
+  check(posted.length === 1, `one request, got ${posted.length}`);
+  check(posted[0] === '/queue/11,12/next',
+        `must send the list in listing order, got ${posted[0]}`);
+
+  // A failed query must say so, not render as an empty library.
+  fail = 500;
+  $('q').value = 'zzz';
+  $('q').oninput();
+  await new Promise(r => setTimeout(r, 260));
+  check(/could not read/i.test($('note').textContent),
+        `a failed query must be reported, got "${$('note').textContent}"`);
+
+  console.log(`${'browse'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `${rows().length} rows rendered, posted=${JSON.stringify(posted)}`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
+  await runBrowse();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);
 })();
