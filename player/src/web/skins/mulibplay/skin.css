@@ -1,0 +1,75 @@
+/* MuLibPlay, as it actually runs at http://bose:1160/mulib.
+   The colours and metrics are lifted from that page's own stylesheet rather
+   than remembered: black ground, #ccc text, big rounded #2010a0 buttons with a
+   #d0a000 gold for whatever is currently on, and everything centred.
+
+   Six years of daily use earned this layout. What it gets here is the same
+   look driven by a live socket instead of a 156-second meta refresh. */
+
+body { background-color: black; color: #ccc; }
+
+.mulib { max-width: 46rem; margin: 0 auto; padding: 1rem; text-align: center; }
+
+.button, .buttonOn {
+  border: 2px solid #402080;
+  padding: 12px 24px;
+  text-align: center;
+  text-decoration: none;
+  font-size: 24px;
+  border-radius: 20px;
+  margin: 4px 2px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.button   { background-color: #2010a0; color: #cccccc; }
+.buttonOn { background-color: #d0a000; color: #111111; }
+
+/* Doubled, as the original does, so the touch target is a target. */
+.mulib input[type=checkbox] { transform: scale(2); padding: 15px; margin-right: .6rem; }
+
+/* The original's slider, kept: a full-width track with a tall pale thumb. */
+.mulib input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  margin: 18px 0; width: 100%; background: transparent;
+}
+.mulib input[type=range]:focus { outline: none; }
+.mulib input[type=range]::-webkit-slider-runnable-track {
+  width: 100%; height: 8.4px; cursor: pointer;
+  box-shadow: 1px 1px 1px #000000, 0px 0px 1px #0d0d0d;
+  background: #3071a9; border-radius: 1.3px; border: 0.2px solid #010101;
+}
+.mulib input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  box-shadow: 1px 1px 1px #000000, 0px 0px 1px #0d0d0d;
+  border: 1px solid #000000; height: 36px; width: 16px; border-radius: 3px;
+  background: #ffffff; cursor: pointer; margin-top: -14px;
+}
+.mulib input[type=range]::-moz-range-track {
+  width: 100%; height: 8.4px; cursor: pointer;
+  background: #3071a9; border-radius: 1.3px; border: 0.2px solid #010101;
+}
+.mulib input[type=range]::-moz-range-thumb {
+  border: 1px solid #000000; height: 36px; width: 16px; border-radius: 3px;
+  background: #ffffff; cursor: pointer;
+}
+
+.nowplaying { font-weight: bold; font-size: 1.15rem; margin: 1rem 0 .2rem; }
+.nowplaying i { font-weight: normal; color: #888; }
+.elapsed { color: #888; }
+
+.panes { display: flex; width: 100%; gap: 2rem; text-align: left; margin-top: 1rem; }
+.panes > div:first-child { flex: 1; }
+.stations { text-align: right; }
+.stations h3 { margin: 0 0 .3rem; }
+.stations .button, .stations .buttonOn {
+  display: block; width: 100%; box-sizing: border-box; font-size: 18px;
+  padding: 8px 16px;
+}
+.queue p { margin: .35rem 0; }
+.queue .dur { color: #888; }
+
+hr { border: none; border-top: 1px solid #333; margin: 1.2rem 0; }
+
+.why { color: #999; font-size: .9rem; text-align: left; }
+.skinbar { margin-top: 1.5rem; color: #666; font-size: .8rem; }
+.mulib select { font: inherit; background: #111; color: #ccc; border: 1px solid #402080; }

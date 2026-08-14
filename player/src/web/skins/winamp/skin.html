@@ -1,0 +1,43 @@
+<div class="wa">
+  <div class="window">
+    <div class="titlebar">Vaino <span id="state">—</span></div>
+    <div class="body">
+      <div class="lcd">
+        <div class="readout">
+          <span id="time">0:00</span>
+          <span class="stat" id="stat">—</span>
+        </div>
+        <div class="marquee" id="marquee"><span id="title">—</span></div>
+        <div class="bar"><div id="fill"></div></div>
+      </div>
+      <div class="row">
+        <button data-cmd="play" title="Play">&#9654;</button>
+        <button data-cmd="pause" title="Pause">&#10073;&#10073;</button>
+        <button data-cmd="skip" title="Skip">&#9654;&#9654;</button>
+        <input type="range" id="volume" min="0" max="1" step="any" value="1">
+        <span id="volnum">0.0 dB</span>
+      </div>
+      <div class="row">
+        <label for="prog">Prog</label>
+        <select id="prog" style="flex:1"></select>
+      </div>
+      <div class="row">
+        <label for="skipfade">Fade</label>
+        <input type="number" id="skipfade" step="0.1">
+        <label for="skiplead">Next</label>
+        <input type="number" id="skiplead" step="0.1">
+        <span class="stat" id="skipoverlap"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">Playlist</div>
+    <div class="playlist"><ol id="queue"><li class="empty">nothing queued</li></ol></div>
+    <div class="why" id="why"></div>
+  </div>
+
+  <div class="row" style="justify-content:flex-end">
+    <label for="skinpick">Skin</label> <select id="skinpick" data-skins></select>
+  </div>
+</div>

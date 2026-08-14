@@ -1,0 +1,32 @@
+<div class="mulib">
+  <div>
+    <button class="button" data-cmd="pause" id="b-pause">Pause</button>&nbsp;&nbsp;
+    <button class="button" data-cmd="play"  id="b-play">Play</button>&nbsp;&nbsp;
+    <button class="button" data-cmd="skip">Skip</button>
+  </div>
+
+  <input type="range" id="volume" min="0" max="1" step="any" value="1">
+  <div class="elapsed" id="volnum">0.0 dB</div>
+
+  <div class="nowplaying" id="title">—</div>
+  <div class="elapsed" id="time">0:00 / 0:00</div>
+
+  <div class="panes">
+    <div class="queue">
+      <h3>Coming up</h3>
+      <div id="queue"></div>
+    </div>
+    <div class="stations">
+      <h3>Programme</h3>
+      <div id="stations"></div>
+      <p><input type="checkbox" id="autoclock"><label for="autoclock">Autoselect by clock time</label></p>
+    </div>
+  </div>
+
+  <hr/>
+  <div class="why" id="why"></div>
+
+  <div class="skinbar">
+    <label for="skinpick">Skin</label> <select id="skinpick" data-skins></select>
+  </div>
+</div>

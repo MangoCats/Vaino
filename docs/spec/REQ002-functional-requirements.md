@@ -177,6 +177,24 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 >
 > **The Director is not `Sync`,** so the browser cannot reach it. Programme choice is written to a small shared cell that the engine reads on its next refill — an override therefore changes what is selected *next* rather than interrupting what is playing, which is the wanted behaviour. An unknown programme id is a 404 rather than a silent no-op.
 
+**`[REQ-VIS-160]` The listening surface is skinnable, and the skin is the only part that may differ.** A skin is three files — `skin.html`, `skin.css`, `skin.js` — and nothing else. It never opens a socket, never builds a URL, and never carries a copy of a control law.
+
+What makes this possible was already true and merely tangled: **the server's contract is the snapshot and the command endpoints**, and the DOM was only ever one rendering of it. `core.js` holds that contract — the socket and its reconnection, the complete-snapshot dispatch, the command helpers, the shared formatting, and the fader curve `[REQ-AUD-156]`, which is specified rather than decorative and would be three chances to disagree with the engine if each skin carried its own.
+
+| skin | what it is |
+|---|---|
+| `vaino` | The reference: quiet and typographic. Whatever a new skin needs from `core.js`, this one uses first, so a gap in the contract shows up here. |
+| `mulibplay` | MuLibPlay's arrangement, with the colours and metrics taken from the page it actually serves rather than remembered. Stacked station buttons with the live one gold are the programme list; "Autoselect by clock time" is the manual override `[SPEC-DIR-185]`. |
+| `winamp` | The awkward case, on purpose: a fixed-width appliance with bevelled chassis, green LCD, a scrolling title and a separate playlist window. It is the proof that the contract survives a skin that is not a document. |
+
+> **The choice is per browser, not per player.** Two people on two phones may want different skins of the same radio, and neither should be able to restyle the other; it lives in `localStorage`, never in the engine. `?skin=` selects and sticks.
+>
+> **Skins are compiled in** (`include_str!`), so deploying to a Pi stays a copy rather than an install. Adding a skin is a row in `SKINS` and three files; the catalogue is served, so no existing skin needs editing to list a new one. An unknown skin or file is a 404 and nothing can reach outside the binary.
+>
+> **What the MuLibPlay skin cannot show, it does not invent:** album art, artist and album names, play counts, and the browse-by-artist pages are simply not in the snapshot. The omission is the engine's, not the layout's, and a skin fabricating them would be worse than the gap.
+>
+> **Verified** by [`build/verify-skins.js`](../../build/verify-skins.js), which loads each skin through `core.js`'s own loader into a real DOM and pushes snapshots at it — one with everything in it, one with almost nothing, optionally a live capture. It checks that nothing throws, that the transport is wired, and that dragging the fader to mid-travel posts `−18 dB`, which is the quadratic `[REQ-AUD-156]` confirming itself through the skin. Optional, because the player needs neither node nor jsdom to run: a skip is reported as a skip and never folded into the pass.
+
 **`[REQ-VIS-140]`** Long-running operations report real progress and are interruptible without loss `[REQ-LIB-130]`.
 
 ## 4. Library Building — `LIB` *(Sampo)*

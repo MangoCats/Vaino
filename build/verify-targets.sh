@@ -55,7 +55,27 @@ echo "== C: host (Windows or Linux) =="
 # Cleared here so the result does not depend on the developer's environment.
 ( cd "$ROOT/player" && env -u CC cargo test --release 2>&1     | grep -E "^test result: ok\.|FAILED" | head -1 ) || fail=$((fail+1))
 
+# The skins are HTML, CSS and JavaScript, so cargo cannot reach them. Optional
+# because the player needs neither node nor jsdom to run; a skip is reported as
+# a skip, never folded into the pass.
 echo
+echo "== Skins (optional: needs node + jsdom) =="
+skins_note=""
+if command -v node >/dev/null 2>&1; then
+    node "$ROOT/build/verify-skins.js"
+    case $? in
+        0) ;;
+        2) skins_note="skins NOT checked (jsdom missing)" ;;
+        *) fail=$((fail+1)) ;;
+    esac
+else
+    skins_note="skins NOT checked (node missing)"
+fi
+
+echo
+if [ -n "$skins_note" ]; then
+    echo "$skins_note"
+fi
 if [ "$fail" -eq 0 ]; then
     echo "ALL TARGETS PASS"
 else

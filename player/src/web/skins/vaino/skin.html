@@ -1,0 +1,53 @@
+<main>
+  <h1>Vaino</h1>
+  <div id="title">—</div>
+  <div id="bar"><div id="fill"></div></div>
+  <div id="time">0:00 / 0:00</div>
+
+  <div class="controls">
+    <button data-cmd="play">Play</button>
+    <button data-cmd="pause">Pause</button>
+    <button data-cmd="skip">Skip</button>
+    <label id="vol"><input type="range" id="volume" min="0" max="1" step="any" value="1"><span id="volnum">0.0 dB</span></label>
+  </div>
+  <div class="skipcfg">
+    <label>skip fade <input type="number" id="skipfade" step="0.1"> s</label>
+    <label>next starts at <input type="number" id="skiplead" step="0.1"> s</label>
+    <span id="skipoverlap"></span>
+  </div>
+
+  <div class="progline">
+    <label for="prog">Programme</label>
+    <select id="prog"></select>
+    <span id="progmode"></span>
+  </div>
+
+  <section>
+    <h2>Up next</h2>
+    <ol id="queue"><li class="empty">nothing queued</li></ol>
+  </section>
+
+  <dl>
+    <dt>State</dt><dd id="state">—</dd>
+    <dt>Queue</dt><dd id="queuelen">—</dd>
+    <dt>Underruns</dt><dd id="under">—</dd>
+  </dl>
+
+  <section>
+    <h2>Why this track?</h2>
+    <div id="why">Waiting for a selection…</div>
+    <table id="terms" hidden>
+      <tbody></tbody>
+    </table>
+    <div id="losers" hidden>
+      <h3>It beat</h3>
+      <ol></ol>
+    </div>
+    <p id="stages"></p>
+  </section>
+
+  <div id="link">Connecting…</div>
+
+  <div class="skinbar"><label for="skinpick">Skin</label>
+    <select id="skinpick" data-skins></select></div>
+</main>

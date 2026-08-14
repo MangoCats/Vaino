@@ -135,7 +135,10 @@ impl From<&PlayerState> for Snapshot {
 
 pub fn router(ui: Ui) -> Router {
     Router::new()
-        .route("/", get(|| async { Html(INDEX) }))
+        .route("/", get(|| async { Html(SHELL) }))
+        .route("/core.js", get(|| async { js(CORE) }))
+        .route("/skins", get(skin_list))
+        .route("/skin/:name/:file", get(skin_asset))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
@@ -264,4 +267,72 @@ async fn command(
     StatusCode::NO_CONTENT
 }
 
-const INDEX: &str = include_str!("web/index.html");
+/// The page, and the skins it may wear `[REQ-VIS-160]`.
+///
+/// `include_str!` rather than reading from disk: one binary that runs anywhere
+/// without a data directory beside it, which is what makes deploying to a Pi a
+/// copy rather than an install. Adding a skin means adding a row here and three
+/// files; nothing else in the server changes.
+const SHELL: &str = include_str!("web/shell.html");
+const CORE: &str = include_str!("web/core.js");
+
+struct Skin {
+    name: &'static str,
+    label: &'static str,
+    html: &'static str,
+    css: &'static str,
+    js: &'static str,
+}
+
+macro_rules! skin {
+    ($name:literal, $label:literal) => {
+        Skin {
+            name: $name,
+            label: $label,
+            html: include_str!(concat!("web/skins/", $name, "/skin.html")),
+            css: include_str!(concat!("web/skins/", $name, "/skin.css")),
+            js: include_str!(concat!("web/skins/", $name, "/skin.js")),
+        }
+    };
+}
+
+const SKINS: &[Skin] = &[
+    skin!("vaino", "Vaino"),
+    skin!("mulibplay", "MuLibPlay"),
+    skin!("winamp", "WinAmp"),
+];
+
+fn js(body: &'static str) -> impl IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")], body)
+}
+
+/// What the browser may choose between. The catalogue is served rather than
+/// written into each skin, so adding one does not mean editing the others to
+/// list it.
+async fn skin_list() -> impl IntoResponse {
+    let names: Vec<_> = SKINS
+        .iter()
+        .map(|s| serde_json::json!({ "name": s.name, "label": s.label }))
+        .collect();
+    axum::Json(names)
+}
+
+/// A skin is exactly three files. The set is fixed, so an unknown name is a
+/// 404 rather than anything that could reach outside the binary.
+async fn skin_asset(
+    axum::extract::Path((name, file)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    let Some(skin) = SKINS.iter().find(|s| s.name == name) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match file.as_str() {
+        "skin.html" => Html(skin.html).into_response(),
+        "skin.css" => (
+            [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+            skin.css,
+        )
+            .into_response(),
+        "skin.js" => js(skin.js).into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
