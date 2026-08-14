@@ -14,7 +14,11 @@ artist is already fixed by the recording MBID, so that term is spent, and what
 remains is:
 
   * the file's own ALBUM tag against the release title (5,587 files have one),
-    which is direct evidence of the record it was ripped from;
+    which is direct evidence of the record it was ripped from -- and when it
+    matches confidently, that settles it: knowing which record a rip came from
+    beats every other consideration, compilation or not;
+  * failing that, the ORIGINAL release album -- an official album that is not a
+    compilation, live set or soundtrack, earliest first;
   * kind -- an Album that is not a compilation, live album or soundtrack;
   * status -- Official over Promotion over Bootleg;
   * date, last, as the tiebreak McRhythm's cascade also left until last.
@@ -91,6 +95,31 @@ def jaro_winkler(a: str, b: str) -> float:
     return jaro + prefix * 0.1 * (1 - jaro)
 
 
+def name_match(tag: str, title: str) -> float:
+    """How much a release title looks like the file's album tag.
+
+    Jaro-Winkler alone is not enough, and the failure is systematic: a tag of
+    "Tomb Raider" against "Lara Croft: Tomb Raider: Music From the Motion
+    Picture" scores 0.60, because the measure is punished by the length gap --
+    while the tag being *contained whole* in the title is about as strong a
+    signal as exists. Rippers abbreviate; they rarely invent.
+
+    So containment is taken as its own near-certainty and the two are combined
+    by the better of them. McRhythm hit the same family of problem from the
+    other side, with CamelCase splitting and per-token fuzzing `[AM-ARCH-020]`.
+    """
+    a = "".join(ch for ch in (tag or "").lower() if ch.isalnum() or ch == " ").strip()
+    b = "".join(ch for ch in (title or "").lower() if ch.isalnum() or ch == " ").strip()
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0                 # identical beats contained, and should read so
+    # Four characters, so that "four" still counts and "a" never does.
+    if len(a) >= 4 and (a in b or b in a):
+        return 0.9
+    return jaro_winkler(a, b)
+
+
 def kind_score(primary: str | None, secondary: str | None) -> float:
     """How much this looks like the record a song belongs to."""
     score = 1.0 if primary == "Album" else (0.4 if primary == "EP" else 0.0)
@@ -115,7 +144,7 @@ def score_all(rows, album_tag: str | None, oldest: int | None):
     out = []
     for r in rows:
         rid, title, date, status, primary, secondary, track_count = r
-        name = jaro_winkler(album_tag or "", title or "")
+        name = name_match(album_tag or "", title or "")
         kind = kind_score(primary, secondary)
         stat = status_score(status)
         # Earlier is better, but gently: the original pressing usually is the
@@ -144,11 +173,30 @@ def score_all(rows, album_tag: str | None, oldest: int | None):
     # is not the question.
     best_name = max((d["name_similarity"] for d in out), default=0.0)
     if best_name >= 0.85:
+        # Tier 1: the record the rip came from. The file's tag names it, and
+        # nothing else outranks knowing. A compilation is a legitimate answer
+        # here -- if the file is a compilation rip, that IS the record.
         tier = [d for d in out if d["name_similarity"] >= best_name - 0.05]
+        tier.sort(key=lambda d: (-d["score"], d["date"] or "9999", d["title"] or ""))
     else:
-        tier = out
-    tier.sort(key=lambda d: (-d["score"], d["date"] or "9999", d["title"] or ""))
-    rest = sorted((d for d in out if d not in tier),
+        # Tier 2: the original release album. With no tag to trust, the answer
+        # is the record the song was released ON, which means an album that is
+        # not a compilation, live set or soundtrack, officially issued, and the
+        # earliest such -- a reissue thirty years later is the same album, but
+        # it is not the original.
+        originals = [d for d in out
+                     if d["primary_type"] == "Album"
+                     and d["kind"] >= 1.0
+                     and d["status"] == "Official"
+                     and year(d["date"]) is not None]
+        if originals:
+            tier = sorted(originals, key=lambda d: (year(d["date"]), d["title"] or ""))
+        else:
+            # Neither known. Rank by everything at once and record a thin
+            # margin, which is the signal that a human should look.
+            tier = sorted(out, key=lambda d: (-d["score"], d["date"] or "9999"))
+    chosen_ids = {id(d) for d in tier}
+    rest = sorted((d for d in out if id(d) not in chosen_ids),
                   key=lambda d: (-d["score"], d["date"] or "9999"))
     return tier + rest
 
