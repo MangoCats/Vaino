@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::queue::QueueEntry;
+use crate::queue::{Naming, QueueEntry};
 
 pub struct Library {
     conn: Connection,
@@ -39,6 +39,17 @@ impl std::fmt::Display for DbError {
 /// these columns *plus its own* and still map the row with [`row_to_entry`].
 /// A second hand-written copy of this join would be a second place to get the
 /// fade columns wrong.
+/// Fill in what a passage is called, and how often it has been heard
+/// `[REQ-VIS-170]`.
+///
+/// Deliberately NOT part of `COLS`. The Director loads the whole radio pool
+/// through those columns -- 8,078 rows -- and five correlated subqueries there
+/// would be five subqueries eight thousand times, to answer a question about
+/// weighting that names have nothing to do with. Display metadata is fetched
+/// for the dozen passages actually on screen, where it costs under a
+/// millisecond each.
+const DESCRIBE: &str = "    SELECT (SELECT r.title FROM recordings r WHERE r.mbid = m.mbid),            (SELECT a.name FROM recording_artists ra               JOIN artists a ON a.mbid = ra.artist_mbid              WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1),            (SELECT rel.title FROM release_recordings rr               JOIN releases rel ON rel.mbid = rr.release_mbid              WHERE rr.mbid = m.mbid ORDER BY rel.release_date, rel.title LIMIT 1),            (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid),            (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid)       FROM (SELECT ?1 AS mbid) m";
+
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                                (SELECT pr.mbid FROM passage_recordings pr \
@@ -62,6 +73,7 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         // medley of several recordings `[SPEC-SC-*]`, and a join would silently
         // return that passage twice. Highest weight wins, mbid breaks ties.
         mbid: row.get::<_, Option<String>>(7)?,
+        naming: Naming::default(),
     })
 }
 
@@ -94,6 +106,42 @@ impl Library {
     /// Load the Program Director from this same library `[SPEC009]`.
     /// Keeps the connection private -- selection reads the library, it does
     /// not get its own handle on the file.
+    /// Names and play count for one passage, from MusicBrainz.
+    ///
+    /// Silent failure on purpose: a passage whose names cannot be read still
+    /// plays, and still shows its filename. Nothing here is worth interrupting
+    /// the music for.
+    pub fn describe(&self, e: &mut QueueEntry) {
+        let Some(mbid) = e.mbid.clone() else { return };
+        let got = self.conn.query_row(DESCRIBE, [&mbid], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+            ))
+        });
+        if let Ok((title, artist, album, plays, last)) = got {
+            e.naming.mb_title = title;
+            e.naming.mb_artist = artist;
+            e.naming.mb_album = album;
+            e.naming.plays = plays;
+            e.naming.last_played = last;
+        }
+    }
+
+    /// Where a passage's audio lives, for serving its cover art.
+    pub fn passage_path(&self, passage_id: i64) -> Result<std::path::PathBuf, DbError> {
+        let p: String = self.conn.query_row(
+            "SELECT f.path FROM passages p JOIN files f ON f.file_id = p.file_id              WHERE p.passage_id = ?1",
+            [passage_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(std::path::PathBuf::from(p))
+    }
+
     pub fn director(&self) -> Result<crate::director::library::Director, DbError> {
         crate::director::library::Director::load(&self.conn)
     }

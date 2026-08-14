@@ -19,6 +19,7 @@ pub mod mixer;
 pub mod output;
 pub mod queue;
 pub mod session;
+pub mod tags;
 pub mod web;
 pub mod resample;
 

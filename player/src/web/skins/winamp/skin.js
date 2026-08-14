@@ -78,7 +78,7 @@
     }
     for (const q of items) {
       const li = document.createElement('li');
-      li.textContent = q.title + ' ';
+      li.textContent = q.artist ? `${q.artist} - ${q.title} ` : q.title + ' ';
       const d = document.createElement('span');
       d.className = 'dur';
       d.textContent = clock(q.duration_ms);
@@ -88,10 +88,14 @@
   }
 
   Vaino.subscribe(s => {
-    renderTitle(s.title ?? '—');
+    // "Artist - Title" is this idiom's own habit, and it happens to put the
+    // more identifying half first when the line has to scroll.
+    renderTitle(s.artist ? `${s.artist} - ${s.title}` : (s.title ?? '—'));
+    Vaino.showArt($('art'), s.passage_id);
     $('time').textContent = clock(s.position_ms);
     $('stat').textContent =
       `${clock(s.duration_ms)} · ${s.queue_len ?? 0} queued` +
+      (s.plays ? ` · ${s.plays} plays` : '') +
       (s.underrun_samples ? ` · ${s.underrun_samples} under` : '');
     $('state').textContent =
       Vaino.status === 'connected' ? (s.playing ? '▶ playing' : '❚❚ paused')

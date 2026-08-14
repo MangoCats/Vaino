@@ -37,6 +37,10 @@ async fn main() {
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);
 
+    // The web side needs the library too, to read cover art out of the files
+    // [REQ-VIS-170]; the engine thread takes ownership of the path itself.
+    let art_db = db.clone();
+
     // The engine thread builds everything it owns, then reports its handle
     // back. Nothing audio-related crosses a thread boundary afterwards.
     let (tx, rx) = sync_channel(1);
@@ -52,7 +56,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let ui = web::Ui { handle, why, controls };
+    let ui = web::Ui { handle, why, controls, db: art_db };
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port as u16));
     let listener = match tokio::net::TcpListener::bind(addr).await {

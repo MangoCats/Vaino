@@ -656,6 +656,7 @@ mod tests {
             lead_out_ms: 0,
             gain_db: 0.0,
             mbid: None,
+            naming: Default::default(),
         }
     }
 

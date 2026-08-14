@@ -44,6 +44,15 @@ const Vaino = (() => {
     // caption cannot differ from the level in force.
     round1: v => Math.round(v * 10) / 10,
     db: db => `${db <= -0.05 ? '−' + Math.abs(db).toFixed(1) : '0.0'} dB`,
+    // "12 plays", and when. Play counts are per RECORDING, so the phrasing
+    // must not imply this file: the same recording reached through two files
+    // is the same thing heard twice.
+    plays(n, at) {
+      if (!n) return 'never played';
+      const times = n === 1 ? 'once' : `${n} times`;
+      return at ? `played ${times}, last ${new Date(at * 1000).toLocaleDateString()}`
+                : `played ${times}`;
+    },
     // "1.5 s of overlap" / "0.5 s of silence between" / "back to back".
     // A lead longer than the fade is legal and leaves a gap; say so plainly
     // rather than letting silence come as a surprise.
@@ -54,6 +63,29 @@ const Vaino = (() => {
            : 'back to back';
     },
   };
+
+  // ---- cover art ---------------------------------------------------------
+  // A URL and the load/error dance around it. The URL because core owns every
+  // route; the dance because all three skins would otherwise carry the same
+  // eight lines, and art is missing often enough -- roughly a third of this
+  // library -- that getting the failure case wrong would be conspicuous.
+  //
+  // Nothing is asked of the server until a skin asks: a 404 is the normal
+  // answer for a file with no embedded picture, not an error to report.
+  function showArt(img, passageId) {
+    if (!img) return;
+    if (passageId == null) {
+      img.hidden = true;
+      img.removeAttribute('data-for');
+      return;
+    }
+    if (img.dataset.for === String(passageId)) return; // already showing it
+    img.dataset.for = String(passageId);
+    img.hidden = true;                 // stay hidden until it is known to exist
+    img.onload = () => { img.hidden = false; };
+    img.onerror = () => { img.hidden = true; };
+    img.src = `/art/${passageId}`;
+  }
 
   // ---- skins -------------------------------------------------------------
   // The choice is per browser, not per player: two people on two phones may
@@ -156,6 +188,8 @@ const Vaino = (() => {
     setSkin,
     fader,
     fmt,
+    showArt,
+    artUrl: id => `/art/${id}`,
     command: name => post(`/command/${name}`),
     volume: db => post(`/volume/${db}`),
     program: id => post(`/program/${id}`),

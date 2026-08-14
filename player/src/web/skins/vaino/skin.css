@@ -10,8 +10,14 @@
   main { max-width: 34rem; margin: 0 auto; padding: 2rem 1.25rem; }
   h1 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
        color: var(--dim); font-weight: 600; margin: 0 0 1.5rem; }
+  .np { display: flex; gap: 1rem; align-items: flex-start; }
+  .np > div { flex: 1; min-width: 0; }
+  #art { width: 84px; height: 84px; object-fit: cover; border-radius: 4px;
+         border: 1px solid var(--line); flex: none; }
   #title { font-size: 1.4rem; font-weight: 600; min-height: 2.1rem;
            overflow-wrap: anywhere; }
+  #byline { color: var(--dim); font-size: .9375rem; overflow-wrap: anywhere; }
+  #plays { color: var(--dim); font-size: .8125rem; opacity: .8; margin-top: .15rem; }
   #bar { height: 4px; background: var(--line); border-radius: 2px; margin: .9rem 0 .4rem; }
   #fill { height: 100%; width: 0; background: currentColor; border-radius: 2px;
           transition: width .5s linear; }

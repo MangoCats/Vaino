@@ -177,6 +177,26 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 >
 > **The Director is not `Sync`,** so the browser cannot reach it. Programme choice is written to a small shared cell that the engine reads on its next refill — an override therefore changes what is selected *next* rather than interrupting what is playing, which is the wanted behaviour. An unknown programme id is a 404 rather than a silent no-op.
 
+**`[REQ-VIS-170]` A passage is named by MusicBrainz where MusicBrainz has an answer.** Three fields, three fallbacks, and every one of them says which source it came from `[REQ-VIS-120]`:
+
+| shown | first choice | fallback | last resort |
+|---|---|---|---|
+| track | **Recording** title | file tag | filename |
+| artist | **Artist** name, by credit | file tag | — absent |
+| album | **Release** title | file tag | — absent |
+
+**Recording and Release are different levels of the MusicBrainz model, and the distinction is the reason album is the hard one.** A Recording is a particular piece of recorded audio; its title names that performance. A Release is a published product — this pressing, this edition, this cover — and *its* title is what an album name is. One recording appears on many releases and one release holds many recordings, so the link is a join table rather than a column, and naming an album means choosing *which* release to name. That choice is ingest work, not playback work.
+
+Artist and album have **no filename fallback**. Guessing a performer out of a path is how a library comes to believe in a band called "02"; absent is the honest answer.
+
+> **Play counts are per recording, not per passage or per file.** The same recording reached through two files is the same thing heard twice, which is also how rotation already counts it `[SPEC-SC-095]`.
+>
+> **Measured on this library:** recording titles and artist names are present for the whole identified set — 7,912 recordings, 7,924 artist credits. `releases` and `release_recordings` are **empty**, so *every* album name today comes from the file's own tag. A sample of 40 files carried album on 40, artist on 40, title on 38, and embedded cover art on 28. The release tables are queried correctly regardless, so MusicBrainz album names take precedence the moment Sampo populates them, without a code change.
+>
+> **Cover art is read from the audio file, never fetched.** Playback must not depend on a live external service `[REQ-NEG-100]`, and the Cover Art Archive is exactly the dependency that forbids. It is served per passage at `/art/{id}` and cached for a day; a file with no picture is a plain 404, which is what lets a skin ask unconditionally and hide the element on failure. Roughly a third of this library has no embedded cover, so that path is the common case, not the exception.
+>
+> **Naming is not part of selection.** The Director loads the whole radio pool — 8,078 rows — and putting these five correlated subqueries in those columns would run them eight thousand times to answer a question that weighting does not ask. They are fetched for the dozen passages actually on screen instead, once each on the way into the queue, at under a millisecond apiece.
+
 **`[REQ-VIS-160]` The listening surface is skinnable, and the skin is the only part that may differ.** A skin is three files — `skin.html`, `skin.css`, `skin.js` — and nothing else. It never opens a socket, never builds a URL, and never carries a copy of a control law.
 
 What makes this possible was already true and merely tangled: **the server's contract is the snapshot and the command endpoints**, and the DOM was only ever one rendering of it. `core.js` holds that contract — the socket and its reconnection, the complete-snapshot dispatch, the command helpers, the shared formatting, and the fader curve `[REQ-AUD-156]`, which is specified rather than decorative and would be three chances to disagree with the engine if each skin carried its own.

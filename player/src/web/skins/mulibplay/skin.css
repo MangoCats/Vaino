@@ -53,6 +53,8 @@ body { background-color: black; color: #ccc; }
   background: #ffffff; cursor: pointer;
 }
 
+/* The original showed its cover at 200px, centred, above the title line. */
+#art { height: 200px; max-width: 100%; object-fit: contain; margin-top: 1rem; }
 .nowplaying { font-weight: bold; font-size: 1.15rem; margin: 1rem 0 .2rem; }
 .nowplaying i { font-weight: normal; color: #888; }
 .elapsed { color: #888; }

@@ -4,10 +4,13 @@
 // the stacked station buttons with the live one in gold are the programme list,
 // and "Autoselect by clock time" is the manual-programme override [SPEC-DIR-185].
 //
-// What the original had and this cannot: album art, artist and album names, play
-// counts, and the browse-by-artist pages. None of that is in the snapshot -- the
-// engine simply does not send it -- and a skin inventing it would be a lie. The
-// omissions are the skin's, not the layout's.
+// The original "Title by Artist from Album", its 200px cover and its play count
+// are all back, now that the engine sends them [REQ-VIS-170]. Its
+// browse-by-artist pages are still missing, needing endpoints that do not exist.
+//
+// The connecting words hide with what they introduce: a bare "by" with nothing
+// after it reads as a fault, and about a third of this library has no embedded
+// cover at all.
 (() => {
   const $ = id => document.getElementById(id);
   const { clock, round1, db: dbLabel } = Vaino.fmt;
@@ -59,7 +62,7 @@
     }
     for (const q of items) {
       const p = document.createElement('p');
-      p.textContent = q.title + ' ';
+      p.textContent = q.artist ? `${q.title} by ${q.artist} ` : q.title + ' ';
       const d = document.createElement('span');
       d.className = 'dur';
       d.textContent = clock(q.duration_ms);
@@ -68,8 +71,18 @@
     }
   }
 
+  // Hide the connecting word along with the value it introduces.
+  const pair = (wordId, valueId, text) => {
+    $(valueId).textContent = text ?? '';
+    $(wordId).hidden = !text;
+  };
+
   Vaino.subscribe(s => {
     $('title').textContent = s.title ?? '—';
+    pair('byword', 'artist', s.artist);
+    pair('fromword', 'album', s.album);
+    $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
+    Vaino.showArt($('art'), s.passage_id);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
     lit($('b-play'), s.playing);
     lit($('b-pause'), !s.playing);

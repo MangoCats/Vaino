@@ -30,6 +30,10 @@ use crate::session::{Explanations, SharedControls};
 #[derive(Clone)]
 pub struct Ui {
     pub handle: Arc<EngineHandle>,
+    /// The library file, for serving cover art. A path rather than a
+    /// connection: `rusqlite`'s is not `Sync`, art is asked for once per track
+    /// change, and opening one for that is cheaper than sharing one forever.
+    pub db: std::path::PathBuf,
     pub why: Explanations,
     pub controls: SharedControls,
 }
@@ -57,6 +61,7 @@ pub struct SkipShape {
 pub struct QueueItem {
     pub passage_id: i64,
     pub title: String,
+    pub artist: Option<String>,
     pub duration_ms: u64,
 }
 
@@ -70,7 +75,22 @@ pub struct ProgramItem {
 #[derive(Serialize)]
 pub struct Snapshot {
     pub playing: bool,
+    /// The passage on air, for fetching its cover at `/art/{id}`.
+    pub passage_id: Option<i64>,
+    /// MusicBrainz Recording title where there is one, then the file's tag,
+    /// then the filename `[REQ-VIS-170]`.
     pub title: Option<String>,
+    pub artist: Option<String>,
+    /// The **Release** title. `None` until the release tables are populated
+    /// and the file carries no album tag either.
+    pub album: Option<String>,
+    /// Which source each displayed name came from `[REQ-VIS-120]`.
+    pub title_source: &'static str,
+    pub artist_source: &'static str,
+    pub album_source: &'static str,
+    /// Plays of this **recording**, all-time, and when it was last heard.
+    pub plays: i64,
+    pub last_played: Option<i64>,
     pub position_ms: u64,
     pub duration_ms: u64,
     pub queue_len: usize,
@@ -102,7 +122,15 @@ impl From<&PlayerState> for Snapshot {
     fn from(s: &PlayerState) -> Self {
         Snapshot {
             playing: s.playing,
+            passage_id: s.current.as_ref().map(|e| e.passage_id),
             title: s.current.as_ref().map(|e| e.title()),
+            artist: s.current.as_ref().and_then(|e| e.artist()),
+            album: s.current.as_ref().and_then(|e| e.album()),
+            title_source: s.current.as_ref().map_or("unknown", |e| e.title_source().as_str()),
+            artist_source: s.current.as_ref().map_or("unknown", |e| e.artist_source().as_str()),
+            album_source: s.current.as_ref().map_or("unknown", |e| e.album_source().as_str()),
+            plays: s.current.as_ref().map_or(0, |e| e.naming.plays),
+            last_played: s.current.as_ref().and_then(|e| e.naming.last_played),
             position_ms: s.position_ms,
             duration_ms: s.current.as_ref().map(|e| e.duration_ms()).unwrap_or(0),
             queue_len: s.queue_len,
@@ -112,6 +140,7 @@ impl From<&PlayerState> for Snapshot {
                 .map(|e| QueueItem {
                     passage_id: e.passage_id,
                     title: e.title(),
+                    artist: e.artist(),
                     duration_ms: e.duration_ms(),
                 })
                 .collect(),
@@ -139,6 +168,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/core.js", get(|| async { js(CORE) }))
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
+        .route("/art/:passage_id", get(cover_art))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
@@ -172,6 +202,43 @@ async fn set_volume(
 ) -> StatusCode {
     ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
     StatusCode::NO_CONTENT
+}
+
+/// The passage's cover art `[REQ-VIS-170]`.
+///
+/// Read from the audio file, never fetched: playback must not depend on a live
+/// external service `[REQ-NEG-100]`, and the Cover Art Archive is precisely the
+/// dependency that forbids. Files without a picture are a plain 404, which is
+/// what lets a skin ask unconditionally and hide the element on failure.
+///
+/// Served by passage rather than by album because that is the id a skin has in
+/// hand, and it makes the URL stable enough to cache for a day.
+async fn cover_art(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    // Both the query and the file read block, so they belong off the runtime.
+    let db = ui.db.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        let path = lib.passage_path(passage_id).ok()?;
+        crate::tags::artwork(&path)
+    })
+    .await;
+
+    match found {
+        Ok(Some(art)) => (
+            [
+                (axum::http::header::CONTENT_TYPE, art.media_type),
+                // The art of a given passage does not change; let the browser
+                // keep it rather than re-reading the file on every track change.
+                (axum::http::header::CACHE_CONTROL, "public, max-age=86400".into()),
+            ],
+            art.data,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// How long a skip fades the outgoing passage out, in ms. Clamped by the

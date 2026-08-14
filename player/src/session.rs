@@ -129,6 +129,27 @@ impl Session {
         })
     }
 
+    /// Name a passage before it is shown `[REQ-VIS-170]`.
+    ///
+    /// MusicBrainz first, then the file's own tags for whatever it did not
+    /// answer -- which today is every album name, the release tables being
+    /// empty until Sampo fills them. Done once per passage, on the way into the
+    /// queue, rather than per render: it touches the disk, and a snapshot goes
+    /// out twice a second.
+    /// Takes the library rather than `&self` so it can be called while the
+    /// Director holds a mutable borrow of its own field -- disjoint fields,
+    /// which the compiler will allow only if the borrow is spelled out.
+    fn describe(lib: &Library, e: &mut crate::queue::QueueEntry) {
+        lib.describe(e);
+        if e.naming.mb_title.is_none()
+            || e.naming.mb_artist.is_none()
+            || e.naming.mb_album.is_none()
+        {
+            let tags = crate::tags::read(&e.path);
+            e.naming.apply_tags(tags);
+        }
+    }
+
     /// Hand the engine its store, its resume offset, and a full queue.
     pub fn prime(&mut self, engine: &mut Engine) {
         if let Some(s) = self.store.take() {
@@ -136,7 +157,8 @@ impl Session {
         }
         if let Some(id) = self.resume_id.take() {
             match self.lib.passage(id) {
-                Ok(e) => {
+                Ok(mut e) => {
+                    Self::describe(&self.lib, &mut e);
                     println!("resuming passage {id} at {:.1}s", self.resume_ms as f64 / 1000.0);
                     engine.resume_at(self.resume_ms);
                     engine.enqueue(e);
@@ -213,6 +235,8 @@ impl Session {
                 if let Ok(mut log) = self.explanations.lock() {
                     log.insert(decision.why);
                 }
+                let mut entry = entry;
+                Self::describe(&self.lib, &mut entry);
                 engine.enqueue(entry);
             }
         }
@@ -220,7 +244,10 @@ impl Session {
         let still_short = engine.shortfall();
         if still_short > 0 {
             match self.lib.random_radio(still_short) {
-                Ok(entries) => entries.into_iter().for_each(|e| engine.enqueue(e)),
+                Ok(entries) => entries.into_iter().for_each(|mut e| {
+                    Self::describe(&self.lib, &mut e);
+                    engine.enqueue(e);
+                }),
                 Err(e) => eprintln!("refill: {e}"),
             }
         }

@@ -46,6 +46,67 @@ pub struct QueueEntry {
     /// `None` when unidentified — such a passage still plays, it simply
     /// cannot contribute to rotation.
     pub mbid: Option<String>,
+    /// What to call this passage, and how often it has been heard
+    /// `[REQ-VIS-170]`. Empty until `Library::describe` fills it; a passage
+    /// plays perfectly well unnamed, so nothing here is required.
+    pub naming: Naming,
+}
+
+/// Names from both sources, kept apart rather than merged on arrival.
+///
+/// MusicBrainz is preferred where it has an answer, but which source spoke is
+/// itself worth showing `[REQ-VIS-120]` -- "Recording title" and "whatever the
+/// file's ID3 says" are not the same claim, and collapsing them at load time
+/// would throw away the difference before anyone could see it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Naming {
+    /// MusicBrainz Recording title -- the name of this performance.
+    pub mb_title: Option<String>,
+    /// MusicBrainz Artist name, by artist credit.
+    pub mb_artist: Option<String>,
+    /// MusicBrainz **Release** title, which is what an album name is. Distinct
+    /// from the Recording: one recording appears on many releases, so this is
+    /// a join away rather than a column, and it stays `None` until those
+    /// tables are populated.
+    pub mb_album: Option<String>,
+    /// The file's own tags, used only where MusicBrainz is silent.
+    pub tag_title: Option<String>,
+    pub tag_artist: Option<String>,
+    pub tag_album: Option<String>,
+    /// How many times this recording has been played, over all of history.
+    /// Counted by recording, not by passage: the same recording reached
+    /// through two files is the same thing heard twice.
+    pub plays: i64,
+    /// When it was last heard, as a Unix timestamp.
+    pub last_played: Option<i64>,
+}
+
+/// Where a displayed name came from, so a UI can say so `[REQ-VIS-120]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    MusicBrainz,
+    FileTags,
+    Filename,
+    Unknown,
+}
+
+impl Source {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::MusicBrainz => "musicbrainz",
+            Source::FileTags => "tags",
+            Source::Filename => "filename",
+            Source::Unknown => "unknown",
+        }
+    }
+}
+
+impl Naming {
+    pub fn apply_tags(&mut self, t: crate::tags::Tags) {
+        self.tag_title = t.title;
+        self.tag_artist = t.artist;
+        self.tag_album = t.album;
+    }
 }
 
 impl QueueEntry {
@@ -59,8 +120,57 @@ impl QueueEntry {
     /// Here rather than in each display path so the browser, the decision
     /// record and the terminal all name a passage the same way — and so the
     /// filesystem path stays inside the process.
+    /// What to call this passage: the MusicBrainz Recording title if there is
+    /// one, then the file's own tag, and only then the filename
+    /// `[REQ-VIS-170]`.
+    ///
+    /// The filename is the floor rather than the answer -- it produces
+    /// "(Heart)Little_Queen-02-Love_Alive", which is a path, not a title.
     pub fn title(&self) -> String {
-        self.path.file_stem().unwrap_or_default().to_string_lossy().to_string()
+        self.naming
+            .mb_title
+            .clone()
+            .or_else(|| self.naming.tag_title.clone())
+            .unwrap_or_else(|| {
+                self.path.file_stem().unwrap_or_default().to_string_lossy().to_string()
+            })
+    }
+
+    pub fn title_source(&self) -> Source {
+        if self.naming.mb_title.is_some() {
+            Source::MusicBrainz
+        } else if self.naming.tag_title.is_some() {
+            Source::FileTags
+        } else {
+            Source::Filename
+        }
+    }
+
+    /// The performer. No filename fallback: guessing an artist out of a path is
+    /// how a library ends up believing in a band called "02".
+    pub fn artist(&self) -> Option<String> {
+        self.naming.mb_artist.clone().or_else(|| self.naming.tag_artist.clone())
+    }
+
+    pub fn artist_source(&self) -> Source {
+        match (&self.naming.mb_artist, &self.naming.tag_artist) {
+            (Some(_), _) => Source::MusicBrainz,
+            (None, Some(_)) => Source::FileTags,
+            _ => Source::Unknown,
+        }
+    }
+
+    /// The release this passage is from.
+    pub fn album(&self) -> Option<String> {
+        self.naming.mb_album.clone().or_else(|| self.naming.tag_album.clone())
+    }
+
+    pub fn album_source(&self) -> Source {
+        match (&self.naming.mb_album, &self.naming.tag_album) {
+            (Some(_), _) => Source::MusicBrainz,
+            (None, Some(_)) => Source::FileTags,
+            _ => Source::Unknown,
+        }
     }
 }
 
@@ -161,6 +271,66 @@ impl Queue {
 mod tests {
     use super::*;
 
+    fn named(mb: Option<&str>, tag: Option<&str>) -> QueueEntry {
+        let mut e = entry(1, 1000, 0, 0);
+        e.path = PathBuf::from("/music/(Heart)Little_Queen-02-Love_Alive.mp3");
+        e.naming.mb_title = mb.map(String::from);
+        e.naming.tag_title = tag.map(String::from);
+        e
+    }
+
+    /// MusicBrainz first. That is the whole point of identifying a passage:
+    /// the Recording title is the name of the performance, where a tag is
+    /// whatever whoever ripped the disc happened to type.
+    #[test]
+    fn the_recording_title_is_preferred_over_the_file_tag() {
+        assert_eq!(named(Some("Love Alive"), Some("love alive")).title(), "Love Alive");
+        assert_eq!(named(Some("Love Alive"), None).title_source(), Source::MusicBrainz);
+    }
+
+    #[test]
+    fn the_file_tag_is_used_when_musicbrainz_is_silent() {
+        let e = named(None, Some("Love Alive"));
+        assert_eq!(e.title(), "Love Alive");
+        assert_eq!(e.title_source(), Source::FileTags);
+    }
+
+    /// The filename is the floor, not the answer -- it yields a path, not a
+    /// title -- but an unidentified, untagged passage must still show
+    /// something and still play.
+    #[test]
+    fn the_filename_is_the_last_resort() {
+        let e = named(None, None);
+        assert_eq!(e.title(), "(Heart)Little_Queen-02-Love_Alive");
+        assert_eq!(e.title_source(), Source::Filename);
+    }
+
+    /// Artist and album have no filename fallback: guessing a performer out of
+    /// a path is how a library comes to believe in a band called "02".
+    #[test]
+    fn artist_and_album_are_absent_rather_than_guessed() {
+        let e = named(None, None);
+        assert_eq!(e.artist(), None);
+        assert_eq!(e.album(), None);
+        assert_eq!(e.artist_source(), Source::Unknown);
+        assert_eq!(e.album_source(), Source::Unknown);
+    }
+
+    /// Album is the Release title, and the release tables are empty until
+    /// Sampo fills them -- so today this path is always the tag one, and it
+    /// must say so rather than claim MusicBrainz.
+    #[test]
+    fn each_field_reports_its_own_source() {
+        let mut e = entry(1, 1000, 0, 0);
+        e.naming.mb_title = Some("Recording Title".into());
+        e.naming.mb_artist = Some("The Artist".into());
+        e.naming.tag_album = Some("Some Compilation".into());
+        assert_eq!(e.title_source(), Source::MusicBrainz);
+        assert_eq!(e.artist_source(), Source::MusicBrainz);
+        assert_eq!(e.album_source(), Source::FileTags);
+        assert_eq!(e.album().as_deref(), Some("Some Compilation"));
+    }
+
     fn entry(id: i64, dur_ms: u64, lead_in: u64, lead_out: u64) -> QueueEntry {
         QueueEntry {
             passage_id: id,
@@ -171,6 +341,7 @@ mod tests {
             lead_out_ms: lead_out,
             gain_db: 0.0,
             mbid: None,
+            naming: Default::default(),
         }
     }
 

@@ -45,6 +45,12 @@ body { background: #101014; color: #d8d8dc;
   border-bottom: 2px solid var(--bevel-hi);
   padding: 4px 6px;
 }
+.lcdrow { display: flex; gap: 6px; align-items: stretch; }
+.lcdmain { flex: 1; min-width: 0; }
+/* Small, square and pixelated: art scaled down in this idiom should look like a
+   thumbnail from the period rather than a smooth photograph. */
+#art { width: 58px; height: 58px; object-fit: cover; flex: none;
+       image-rendering: pixelated; border: 1px solid #143d19; }
 .readout { display: flex; align-items: baseline; gap: 8px; }
 #time { font-size: 19px; letter-spacing: .06em; }
 .stat { font-size: 9px; opacity: .75; letter-spacing: .1em; text-transform: uppercase; }

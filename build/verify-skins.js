@@ -40,6 +40,10 @@ const LIVE = process.argv[2]
 // nothing playing, nothing queued, no programme, no explanation, fade of zero.
 const SPARSE = {
   playing: false, title: null, position_ms: 0, duration_ms: 0,
+  // Nothing named, nothing counted: the branch where every connecting word and
+  // the cover must disappear rather than dangle [REQ-VIS-170].
+  passage_id: null, artist: null, album: null, plays: 0, last_played: null,
+  title_source: 'unknown', artist_source: 'unknown', album_source: 'unknown',
   queue_len: 0, queue: [], volume_db: -72.0, fader_min_db: -72.0,
   program: null, program_manual: false, programs: [],
   skip: { fade_ms: 0, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000 },
@@ -51,9 +55,14 @@ const SPARSE = {
 const RICH = {
   ...SPARSE,
   playing: true, title: 'A Passage With Reasons', position_ms: 61000, duration_ms: 244000,
+  // MusicBrainz for the recording and the artist, the file's tag for the album
+  // -- which is exactly the mixed provenance the live library produces today.
+  passage_id: 4242, artist: 'Some Performer', album: 'Some Release',
+  plays: 12, last_played: 1735689600,
+  title_source: 'musicbrainz', artist_source: 'musicbrainz', album_source: 'tags',
   queue_len: 3,
-  queue: [{ passage_id: 1, title: 'Next One', duration_ms: 180000 },
-          { passage_id: 2, title: 'The One After', duration_ms: 205000 }],
+  queue: [{ passage_id: 1, title: 'Next One', artist: 'Another', duration_ms: 180000 },
+          { passage_id: 2, title: 'The One After', artist: null, duration_ms: 205000 }],
   volume_db: -12.5,
   program: 'Mellow', program_manual: true,
   programs: [{ id: 1, name: 'Mellow', start: '20:00' }, { id: 2, name: 'Prog', start: '09:00' }],
@@ -98,6 +107,7 @@ async function run(skin) {
     }
     const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
     if (m) return Promise.resolve({ text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    if (/^\/art\//.test(url)) return Promise.reject(new Error('no art in a test DOM'));
     return Promise.reject(new Error('unexpected fetch ' + url));
   };
 

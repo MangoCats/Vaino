@@ -45,6 +45,7 @@ fn main() {
                 lead_out_ms: lout,
                 gain_db: 0.0,
                 mbid: None,
+                naming: Default::default(),
             });
         };
         if a.len() >= 6 {

@@ -53,7 +53,7 @@
     }
     for (const q of items) {
       const li = document.createElement('li');
-      li.textContent = q.title + ' ';
+      li.textContent = q.artist ? `${q.title} — ${q.artist} ` : q.title + ' ';
       const d = document.createElement('span');
       d.className = 'dur';
       d.textContent = clock(q.duration_ms);
@@ -179,8 +179,20 @@
 
   // Each message is a complete snapshot, so rendering is a pure function of
   // the last one received. No accumulated client state means no drift.
+  // Names carry where they came from, because "the MusicBrainz Recording title"
+  // and "whatever this file's ID3 tag says" are different claims [REQ-VIS-120].
+  // On hover rather than inline: it matters when you ask, not at every glance.
+  const SOURCE = { musicbrainz: 'MusicBrainz', tags: 'the file tags',
+                   filename: 'the filename', unknown: 'nowhere' };
+
   Vaino.subscribe(s => {
     $('title').textContent = s.title ?? '—';
+    $('title').title = `title from ${SOURCE[s.title_source] ?? s.title_source}`;
+    $('byline').textContent = [s.artist, s.album].filter(Boolean).join(' — ');
+    $('byline').title =
+      `artist from ${SOURCE[s.artist_source]}, album from ${SOURCE[s.album_source]}`;
+    $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
+    Vaino.showArt($('art'), s.passage_id);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
