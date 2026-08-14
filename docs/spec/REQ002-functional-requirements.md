@@ -201,7 +201,11 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 
 **Browsing groups by the *displayed* name**, resolved exactly as `[REQ-VIS-170]` resolves it: MusicBrainz where it has an answer, the file's tag where it does not. What you can browse by is therefore precisely what you can see, rather than a second naming scheme that disagrees with the player.
 
-> **This needed a tag index, and that is the honest cost.** Album has no source but the file's own tag, and reading tags means opening and probing every file — 18 seconds for 5,590 of them, which is fine once and impossible per request. `tagscan` writes them to `file_tags`; it is a tool, not the player, and takes the only writable handle to the library for that reason. Re-running it is safe and costs only the new files.
+> **The player builds its own tag index, in the background, on first run.** Album names come from the files' own tags and reading them takes ~18 s for 5,590 files — fine once, impossible per request. Doing it at startup on a spare thread is the difference between a feature that works and one that waits for someone to remember a command: the browse pages first shipped needing a manual scan, and came up empty for exactly that reason. It is incremental, so every later start is a no-op, and it is off the audio path entirely. `tagscan` remains for libraries prepared before they are ever played, and for `--all` after files are re-tagged.
+>
+> **Browsing never dead-ends on an artist.** An artist with no album names yet shows their tracks instead, with a note saying why. "No albums" is a useless answer to "show me this artist", and while the background scan is still running it is a temporary one as well.
+>
+> **The index is a cost worth naming.** Album has no source but the file's own tag, and reading tags means opening and probing every file — 18 seconds for 5,590 of them, which is fine once and impossible per request. `tagscan` writes them to `file_tags`; it is a tool, not the player, and takes the only writable handle to the library for that reason. Re-running it is safe and costs only the new files.
 >
 > **Measured on this library:** 5,589 of 5,590 files carry tags and 3,604 carry cover art. Browsing yields 463 artists in 75 ms, 660 albums in 36 ms, and tracks in 80 ms — on demand rather than per tick, so a query is the right answer and a cache would be premature. Tracks are capped at 2,000 rows per response.
 >

@@ -1,72 +1,43 @@
-//! Read every file's own tags into the library, once.
+//! Read every file's own tags into the library.
 //!
-//! Browsing by album has no other source: MusicBrainz Release data is the right
-//! answer and Vaino has none of it, so the file's own ALBUM tag is what there
-//! is `[REQ-VIS-180]`. Reading them means opening and probing every file, which
-//! is far too slow to do on demand for a whole library -- so it happens here,
-//! deliberately, and the answers are kept.
+//! The player does this by itself in the background at startup, incrementally
+//! `[REQ-VIS-180]`. This tool exists for the cases that are not a startup: a
+//! library being prepared before it is ever played, or one whose files have
+//! been re-tagged and need reading again.
 //!
-//! Safe to re-run: rows are upserted, so a rescan after adding music costs only
-//! the files themselves.
-//!
-//!   tagscan <library.db>
-
-use vaino_player::db::Library;
+//!   tagscan <library.db>          scan whatever has never been scanned
+//!   tagscan <library.db> --all    scan everything again
 
 fn main() {
-    let Some(db) = std::env::args().nth(1) else {
-        eprintln!("usage: tagscan <library.db>");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(db) = args.first() else {
+        eprintln!("usage: tagscan <library.db> [--all]");
         std::process::exit(2);
     };
-    let lib = match Library::open_writable(std::path::Path::new(&db)) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("open {db}: {e}");
-            std::process::exit(1);
-        }
-    };
-    if let Err(e) = lib.ensure_tag_table() {
-        eprintln!("create file_tags: {e}");
-        std::process::exit(1);
-    }
-    let files = match lib.all_files() {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("list files: {e}");
-            std::process::exit(1);
-        }
-    };
+    let db = std::path::Path::new(db);
 
-    let started = std::time::Instant::now();
-    let (mut tagged, mut art, mut failed) = (0u32, 0u32, 0u32);
-    for (i, (file_id, path)) in files.iter().enumerate() {
-        let t = vaino_player::tags::read(path);
-        let has_art = vaino_player::tags::artwork(path).is_some();
-        if t.is_empty() && !has_art {
-            failed += 1;
-        } else {
-            tagged += 1;
-        }
-        if has_art {
-            art += 1;
-        }
-        if let Err(e) = lib.put_tags(*file_id, &t, has_art) {
-            eprintln!("store {file_id}: {e}");
-        }
-        // Progress, because this walks the whole library and a silent minute
-        // looks like a hang [REQ-VIS-140].
-        if i % 250 == 249 || i + 1 == files.len() {
-            println!(
-                "  {}/{} files, {tagged} tagged, {art} with art, {failed} with neither ({:.0}s)",
-                i + 1,
-                files.len(),
-                started.elapsed().as_secs_f32()
-            );
+    if args.iter().any(|a| a == "--all") {
+        // Forget what is known, so every file is read afresh.
+        match vaino_player::db::Library::open_writable(db) {
+            Ok(lib) => {
+                if let Err(e) = lib.forget_tags() {
+                    eprintln!("clear tags: {e}");
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("open {}: {e}", db.display());
+                std::process::exit(1);
+            }
         }
     }
-    println!(
-        "scanned {} files in {:.1}s: {tagged} tagged, {art} with cover art, {failed} with neither",
-        files.len(),
-        started.elapsed().as_secs_f32()
-    );
+
+    match vaino_player::tags::backfill(db, true) {
+        Ok((0, _)) => println!("nothing to scan: every file already has tags"),
+        Ok((n, art)) => println!("{n} file(s) scanned, {art} with cover art"),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
 }

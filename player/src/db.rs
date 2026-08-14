@@ -220,6 +220,36 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// Throw away the tag index, so a rescan reads every file again.
+    pub fn forget_tags(&self) -> Result<(), DbError> {
+        self.ensure_tag_table()?;
+        self.conn
+            .execute("DELETE FROM file_tags", [])
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Files with no tag row yet. What a resumed or incremental scan works on:
+    /// re-reading five thousand files to learn nothing new is the difference
+    /// between a scan that can run at startup and one that cannot.
+    pub fn files_without_tags(&self) -> Result<Vec<(i64, std::path::PathBuf)>, DbError> {
+        let mut st = self
+            .conn
+            .prepare(
+                "SELECT f.file_id, f.path FROM files f \
+                   LEFT JOIN file_tags t ON t.file_id = f.file_id \
+                  WHERE t.file_id IS NULL ORDER BY f.file_id",
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map([], |r| {
+                Ok((r.get::<_, i64>(0)?, std::path::PathBuf::from(r.get::<_, String>(1)?)))
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// Every file, for the scanner. Path included so it can be read.
     pub fn all_files(&self) -> Result<Vec<(i64, std::path::PathBuf)>, DbError> {
         let mut st = self

@@ -112,6 +112,56 @@ pub fn artwork(path: &Path) -> Option<Artwork> {
     probed.metadata.get().as_ref().and_then(|m| m.current()).and_then(pick)
 }
 
+/// Read tags for every file that has none yet, and store them
+/// `[REQ-VIS-180]`.
+///
+/// Shared by `tagscan` and by the player's own startup scan, so there is one
+/// definition of what scanning means. Incremental by construction: it asks for
+/// the files without a tag row, so a second run costs only what was added.
+///
+/// Never fatal. A library that cannot be written -- read-only media, a locked
+/// file -- still plays; it simply cannot browse by album.
+pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), String> {
+    let lib = crate::db::Library::open_writable(db).map_err(|e| e.to_string())?;
+    lib.ensure_tag_table().map_err(|e| e.to_string())?;
+    let files = lib.files_without_tags().map_err(|e| e.to_string())?;
+    if files.is_empty() {
+        return Ok((0, 0));
+    }
+    if announce {
+        println!("scanning tags for {} file(s) in the background", files.len());
+    }
+    let started = std::time::Instant::now();
+    let mut art = 0usize;
+    for (i, (file_id, path)) in files.iter().enumerate() {
+        let t = read(path);
+        let has_art = artwork(path).is_some();
+        if has_art {
+            art += 1;
+        }
+        if let Err(e) = lib.put_tags(*file_id, &t, has_art) {
+            eprintln!("store tags for {file_id}: {e}");
+        }
+        // A silent minute looks like a hang `[REQ-VIS-140]`.
+        if announce && (i % 500 == 499 || i + 1 == files.len()) {
+            println!(
+                "  tags: {}/{} files ({:.0}s)",
+                i + 1,
+                files.len(),
+                started.elapsed().as_secs_f32()
+            );
+        }
+    }
+    if announce {
+        println!(
+            "tag scan complete: {} files, {art} with cover art, {:.1}s",
+            files.len(),
+            started.elapsed().as_secs_f32()
+        );
+    }
+    Ok((files.len(), art))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

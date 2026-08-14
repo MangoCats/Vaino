@@ -124,8 +124,17 @@
     body.textContent = '';
     note.className = 'note';
     if (!rows.length) {
+      // Never dead-end on an artist. Album names come from the files' own
+      // tags, which the player reads in the background on first run, so an
+      // artist can legitimately have none yet -- and "no albums" is a useless
+      // answer to "show me this artist". Their tracks are what was wanted.
+      if (kind === 'albums' && filter.artist) {
+        note.textContent = 'No album names for this artist yet — showing tracks.';
+        return show('tracks');
+      }
       note.textContent = kind === 'albums'
-        ? 'No albums. Album names come from the files’ own tags — run tagscan over the library.'
+        ? 'No album names yet. They are read from the files themselves, in the '
+          + 'background, the first time the player runs — try again shortly.'
         : 'Nothing matches.';
       $('az').textContent = '';
       return;

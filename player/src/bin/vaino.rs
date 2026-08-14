@@ -37,6 +37,24 @@ async fn main() {
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);
 
+    // Album names and the browse index come from the files' own tags, and
+    // reading them takes ~18 s for five thousand files. Doing it here, in the
+    // background, is the difference between a feature that works and one that
+    // waits for someone to remember a command -- which is exactly how the
+    // browse pages came up empty in the first place. Incremental, so it is a
+    // no-op on every start after the first, and off the audio path entirely.
+    {
+        let scan_db = db.clone();
+        std::thread::Builder::new()
+            .name("vaino-tagscan".into())
+            .spawn(move || {
+                if let Err(e) = vaino_player::tags::backfill(&scan_db, true) {
+                    eprintln!("tag scan unavailable ({e}); album names will be missing");
+                }
+            })
+            .ok();
+    }
+
     // The web side needs the library too, to read cover art out of the files
     // [REQ-VIS-170]; the engine thread takes ownership of the path itself.
     let art_db = db.clone();
