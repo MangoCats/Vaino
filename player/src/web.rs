@@ -40,6 +40,19 @@ const PUSH_EVERY: Duration = Duration::from_millis(500);
 
 /// What the browser is told. One flat object, so the client needs no merge
 /// logic and cannot drift out of step with the engine.
+/// The skip transition, with the limits it may be set between `[REQ-AUD-162]`.
+///
+/// The bounds travel with the values so the browser can offer exactly the range
+/// the engine will accept, rather than keeping its own copy to fall out of step.
+#[derive(Serialize)]
+pub struct SkipShape {
+    pub fade_ms: u64,
+    pub lead_ms: u64,
+    pub fade_max_ms: u64,
+    pub lead_min_ms: u64,
+    pub lead_max_ms: u64,
+}
+
 #[derive(Serialize)]
 pub struct QueueItem {
     pub passage_id: i64,
@@ -72,6 +85,7 @@ pub struct Snapshot {
     /// around the engine's floor instead of keeping its own copy of the number
     /// `[REQ-AUD-156]`.
     pub fader_min_db: f32,
+    pub skip: SkipShape,
     /// The programme in force, and whether it was chosen by hand.
     pub program: Option<String>,
     pub program_manual: bool,
@@ -103,6 +117,13 @@ impl From<&PlayerState> for Snapshot {
                 .collect(),
             volume_db: Volume::db_for(s.volume),
             fader_min_db: crate::output::FADER_MIN_DB,
+            skip: SkipShape {
+                fade_ms: s.skip_fade_ms,
+                lead_ms: s.skip_lead_ms,
+                fade_max_ms: crate::SKIP_FADE_MAX_MS,
+                lead_min_ms: crate::SKIP_LEAD_MIN_MS,
+                lead_max_ms: crate::SKIP_LEAD_MAX_MS,
+            },
             program: None,
             program_manual: false,
             programs: Vec::new(),
@@ -118,6 +139,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
+        .route("/skip/fade/:ms", post(set_skip_fade))
+        .route("/skip/lead/:ms", post(set_skip_lead))
         .route("/program/:id", post(set_program))
         .with_state(ui)
 }
@@ -145,6 +168,25 @@ async fn set_volume(
     axum::extract::Path(db): axum::extract::Path<f32>,
 ) -> StatusCode {
     ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
+    StatusCode::NO_CONTENT
+}
+
+/// How long a skip fades the outgoing passage out, in ms. Clamped by the
+/// engine, which owns the limits `[REQ-AUD-162]`.
+async fn set_skip_fade(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetSkipFade(ms));
+    StatusCode::NO_CONTENT
+}
+
+/// How long after a skip the next passage starts, in ms `[REQ-AUD-162]`.
+async fn set_skip_lead(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetSkipLead(ms));
     StatusCode::NO_CONTENT
 }
 

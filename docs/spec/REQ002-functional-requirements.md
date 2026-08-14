@@ -79,33 +79,43 @@ Zero slope at the top is what the curve is for: it spends most of the control's 
 >
 > **This is the control's geometry, not audio, so it lives in the control.** The engine owns dB-to-amplitude and never sees a position; the browser owns position-to-dB and never sees an amplitude. The floor is sent to the browser rather than written there twice, so −72 exists in one place.
 
-**`[REQ-AUD-158]` Skip fades the outgoing passage out over 0.5 s at the device, and starts the next one immediately.** Dropping the passage upstream is not enough, and the code claimed otherwise: it discards the *decoder's* buffer, but the output ring still holds every sample already mixed. Measured, that was **14.0 s from button to new music** — the ring's full depth. The reported title changed in 0.5 s, so the display said one thing while the speakers said another for fourteen seconds.
+**`[REQ-AUD-158]` Skip cuts the output ring short and fades what remains.** Dropping the passage upstream is not enough, and the code claimed otherwise: it discards the *decoder's* buffer, but the output ring still holds every sample already mixed. Measured, that was **14.0 s from button to new music** — the ring's full depth. The reported title changed in 0.5 s, so the display said one thing while the speakers said another for fourteen seconds.
 
-So the ring is **cut to the length of the fade**, and the fade applied to what remains, in the callback. The listener hears the audio they were already hearing, fading out, and then the next passage.
+**`[REQ-AUD-160]` The next passage is opened and decoded before anyone asks for it.** It is held in a prepared slot outside the mixer's `live` set — fed by the same decoder top-up, but not summed, so it is ready without sounding. Promotion is a move. Skip used to pay for a file open, a seek and a resampler build at the moment the button was pressed. The same slot serves ordinary crossfade admission, so the prepared path is the normal path and cannot rot from disuse.
 
-**`[REQ-AUD-160]` The next passage is opened and decoded before anyone asks for it.** It is held in a prepared slot outside the mixer's `live` set — fed by the same decoder top-up, but not summed, so it is ready without sounding. Promotion is a move.
+**`[REQ-AUD-162]` A skip is a crossfade, not a stop followed by a start.** The outgoing passage falls away over `skip_fade_ms`; the incoming one begins its normal fade-in at `skip_lead_ms`; for the difference between them the two are **summed**. Both are adjustable while playing:
 
-This is what sets the floor on the fade. Skip used to pay for a file open, a seek and a resampler build at the moment the button was pressed, and the fade had to be long enough to hide all of it; **2 s was covering the decoder, not serving the listener.** With the work done in advance the fade can be as short as it *sounds* right. The same slot serves ordinary crossfade admission, so the prepared path is the normal path and cannot rot from disuse.
+| | default | range | |
+|---|---:|---|---|
+| `skip_fade_ms` | 2.0 s | 0 – 10.0 s | outgoing fade-out |
+| `skip_lead_ms` | 0.5 s | 0.1 – 2.0 s | when the incoming starts |
+| *overlap* | *1.5 s* | | *the difference* |
 
+A lead longer than the fade is legal and leaves silence between the two; the UI reports which of the three it is rather than letting a gap come as a surprise. The engine clamps, and the browser is sent the limits rather than keeping its own copy.
+
+> **The fade is applied on the mixer thread, not in the callback** — the opposite of volume `[REQ-AUD-152]`, and for a reason worth stating: the incoming passage is summed into those same samples, so a fade-out evaluated in the callback would drag the newcomer down with the passage it is replacing. Cut, fade and overlay happen under one lock, so no callback can observe a ring that is cut but not yet faded.
+>
+> **The overlap is affordable only because the passage is already decoded** `[REQ-AUD-160]`. The 1.5 s laid over the outgoing tail is lifted straight from its prepared buffer, with its fade-in already applied on the way in `[XFD-ORTH-020]`, and through `mix` rather than by reading the ring directly so the accounting is identical to an ordinary tick.
+>
 > **Measured, on desktop hardware:**
 >
 > | | button to new music | underruns |
 > |---|---:|---:|
 > | drop the passage upstream only | 14.0 s | 0 |
 > | cut the ring, 2 s fade, cold open | 2.5 s | 0 |
-> | cut the ring, 0.5 s fade, prepared | **1.0 s** | 0 |
+> | cut and overlay, 2 s fade / 0.5 s lead | **0.6 – 1.0 s** | 0 |
 >
-> Each figure includes up to 500 ms of snapshot-push granularity in the measurement itself, so the audible latency is the fade. Ten skips produced no underruns, and HTTP stayed responsive throughout — median 12 ms, maximum 28 ms across ~2,700 requests spanning six skips — which matters because cutting to 0.5 s leaves the mixer only that long to refill ~14.5 s of ring.
+> Each figure includes up to 500 ms of snapshot-push granularity in the measurement itself. Clamping verified at both ends: 20 s → 10 s, 50 ms → 100 ms. HTTP stayed responsive throughout — median 12 ms, maximum 28 ms across ~2,700 requests spanning six skips.
 >
-> **Unverified on a Pi Zero 2W**, where that margin is far thinner. If it underruns there, `SKIP_FADE_MS` is the dial; the prepared passage makes a longer fade a comfort measure rather than a decoder requirement.
+> **Unverified on a Pi Zero 2W**, where the margin is far thinner: cutting to the fade length leaves the mixer only that long to refill ~13 s of ring.
 >
-> **Cost:** one more decoded passage in memory, a per-passage buffer of ~5 MB against the 150 MB ceiling of `[REQ-AUD-110]`.
+> **Not persisted.** Both settings return to their defaults on restart. The resume row `[SPEC-SC-098]` carries volume but not these.
 >
-> **The curve is `Exponential`, i.e. linear in dB** `[XFD-EXP-020]`: a fast initial drop and a short quiet tail. `Linear` and `Cosine` are equally available in [`fade.rs`](../../player/src/fade.rs) and the choice is one word; it has not yet been listened to.
+> **A passage part-way through an ordinary crossfade is discarded, not carried over.** It is already mixed into the ring alongside the outgoing one and is faded out with it; its decode ran a ring's depth ahead of the ear, so what the listener actually heard of it is nothing. The prepared passage takes its place.
 >
-> **A passage part-way through a crossfade is re-opened where it was actually heard.** Its decode had run far ahead of the ear and that work is discarded with the rest of the ring; resuming it from the decode position would jump forward by the ring's depth.
+> **The curve is `Exponential`, i.e. linear in dB** `[XFD-EXP-020]`. `Linear` and `Cosine` are equally available in [`fade.rs`](../../player/src/fade.rs) and the choice is one word; it has not yet been listened to.
 >
-> This is the third instance of one fault `[REQ-AUD-142]`, `[REQ-AUD-152]`: **a control the listener expects to act now cannot be implemented upstream of a 14 s buffer.** Pause had to stop the device, volume had to move into the callback, and skip has to cut the ring. Any future control of this kind should be assumed to need the same treatment until shown otherwise.
+> This was the third instance of one fault `[REQ-AUD-142]`, `[REQ-AUD-152]`: **a control the listener expects to act now cannot be implemented upstream of a 14 s buffer.** Pause had to stop the device, volume had to move into the callback, and skip has to reach into the ring. Any future control of this kind should be assumed to need the same treatment until shown otherwise.
 
 > **Verification:** `[REQ-AUD-110]` and `[REQ-AUD-120]` are gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency `[GDE-ARC-050]`.
 >

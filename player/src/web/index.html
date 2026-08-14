@@ -42,6 +42,9 @@
   #stages { font-size: .75rem; color: var(--dim); opacity: .7; margin: 1rem 0 0; }
   #link { opacity: .55; font-size: .8125rem; margin-top: 2rem; }
   #vol { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+  .skipcfg { display: flex; align-items: center; gap: 1rem; font-size: .8125rem;
+             color: var(--dim); margin: .35rem 0 0; }
+  .skipcfg input { width: 4rem; }
   #volume { width: 7rem; accent-color: currentColor; }
   /* Wide enough for "-72.0 dB" so the readout cannot shuffle the header. */
   #volnum { font-variant-numeric: tabular-nums; color: var(--dim);
@@ -69,6 +72,11 @@
     <button data-cmd="pause">Pause</button>
     <button data-cmd="skip">Skip</button>
     <label id="vol"><input type="range" id="volume" min="0" max="1" step="any" value="1"><span id="volnum">0.0 dB</span></label>
+  </div>
+  <div class="skipcfg">
+    <label>skip fade <input type="number" id="skipfade" step="0.1"> s</label>
+    <label>next starts at <input type="number" id="skiplead" step="0.1"> s</label>
+    <span id="skipoverlap"></span>
   </div>
 
   <div class="progline">
@@ -148,6 +156,14 @@
   };
   $('prog').onchange = e => fetch(`/program/${e.target.value}`, { method: 'POST' });
 
+  // Seconds here, milliseconds on the wire: seconds are what the listener is
+  // choosing, milliseconds are what the mixer counts in.
+  const skipFade = $('skipfade'), skipLead = $('skiplead');
+  skipFade.onchange = () =>
+    fetch(`/skip/fade/${Math.round(skipFade.value * 1000)}`, { method: 'POST' });
+  skipLead.onchange = () =>
+    fetch(`/skip/lead/${Math.round(skipLead.value * 1000)}`, { method: 'POST' });
+
   // Each message is a complete snapshot, so rendering is a pure function of
   // the last one received. No accumulated client state means no drift.
   function render(s) {
@@ -165,7 +181,31 @@
       vol.value = faderX(db);
       $('volnum').textContent = dbLabel(db);
     }
+    renderSkip(s.skip);
     renderWhy(s.why);
+  }
+
+  // Limits come from the engine, which is what actually enforces them.
+  // Fields being edited are left alone, as the volume slider is while held.
+  function renderSkip(k) {
+    if (!k) return;
+    if (document.activeElement !== skipFade) {
+      skipFade.min = 0;
+      skipFade.max = k.fade_max_ms / 1000;
+      skipFade.value = (k.fade_ms / 1000).toFixed(1);
+    }
+    if (document.activeElement !== skipLead) {
+      skipLead.min = k.lead_min_ms / 1000;
+      skipLead.max = k.lead_max_ms / 1000;
+      skipLead.value = (k.lead_ms / 1000).toFixed(1);
+    }
+    // A lead longer than the fade is legal and leaves a gap. Say so plainly
+    // rather than reporting "no overlap" and letting silence be a surprise.
+    const overlap = (k.fade_ms - k.lead_ms) / 1000;
+    $('skipoverlap').textContent =
+        overlap > 0 ? `${overlap.toFixed(1)} s of overlap`
+      : overlap < 0 ? `${(-overlap).toFixed(1)} s of silence between`
+      : 'back to back';
   }
 
   // Each term is shown separately, never just the product: a single number

@@ -52,7 +52,6 @@ impl RingBuffer {
         n
     }
 
-    /// Remove up to `dst.len()` samples into `dst`, returning how many.
     /// Keep at most `n` samples and discard everything queued behind them.
     ///
     /// The ring is a head and a length, so dropping the tail is one assignment
@@ -63,6 +62,7 @@ impl RingBuffer {
         self.len
     }
 
+    /// Remove up to `dst.len()` samples into `dst`, returning how many.
     pub fn read(&mut self, dst: &mut [f32]) -> usize {
         let n = dst.len().min(self.len);
         let cap = self.buf.len();
@@ -74,6 +74,54 @@ impl RingBuffer {
         self.head = (self.head + n) % cap;
         self.len -= n;
         n
+    }
+
+    /// The buffered samples, as the two contiguous runs a ring stores them in.
+    ///
+    /// For editing audio that has already been submitted -- which is the only
+    /// way to reach it, since the callback owns everything downstream. The
+    /// second run is the wrapped part and is empty unless the data straddles
+    /// the end of the backing store.
+    pub fn as_mut_slices(&mut self) -> (&mut [f32], &mut [f32]) {
+        let cap = self.buf.len();
+        let first = self.len.min(cap - self.head);
+        let (start, from_head) = self.buf.split_at_mut(self.head);
+        (&mut from_head[..first], &mut start[..self.len - first])
+    }
+
+    /// Add `src` into the buffer starting `offset` samples from the read point,
+    /// summing where audio is already queued and appending past the end.
+    ///
+    /// This is how a passage is laid OVER audio that has already been
+    /// submitted `[REQ-AUD-162]`. `write` cannot do it: that appends, and the
+    /// whole point is to overlap. Any gap between the current end and `offset`
+    /// is filled with silence, so the offset means what it says even when the
+    /// buffer holds less than that.
+    ///
+    /// Returns the samples placed, which is short of `src.len()` only when the
+    /// buffer runs out of capacity.
+    pub fn mix_at(&mut self, offset: usize, src: &[f32]) -> usize {
+        let cap = self.buf.len();
+        while self.len < offset && self.len < cap {
+            self.buf[(self.head + self.len) % cap] = 0.0;
+            self.len += 1;
+        }
+        let mut placed = 0;
+        for (i, s) in src.iter().enumerate() {
+            let pos = offset + i;
+            if pos < self.len {
+                let p = (self.head + pos) % cap;
+                self.buf[p] += *s;
+            } else if self.len < cap {
+                let p = (self.head + self.len) % cap;
+                self.buf[p] = *s;
+                self.len += 1;
+            } else {
+                break;
+            }
+            placed += 1;
+        }
+        placed
     }
 
     /// Add up to `dst.len()` samples into `dst` rather than overwriting.
@@ -163,6 +211,87 @@ pub fn retain_active(streams: &mut Vec<Stream>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The overlay sums where audio is already queued and appends past the end
+    /// -- one call spanning both, because the incoming passage straddles the
+    /// end of what the outgoing one left behind.
+    #[test]
+    fn mix_at_sums_over_existing_audio_and_appends_past_it() {
+        let mut r = RingBuffer::new(64);
+        r.write(&[1.0; 20]);
+        let placed = r.mix_at(15, &[0.5; 10]);
+        assert_eq!(placed, 10);
+        assert_eq!(r.len(), 25, "five summed, five appended");
+        let mut out = [0.0f32; 25];
+        r.read(&mut out);
+        assert_eq!(out[14], 1.0, "before the overlay, untouched");
+        assert_eq!(out[15], 1.5, "summed, not overwritten");
+        assert_eq!(out[19], 1.5);
+        assert_eq!(out[20], 0.5, "past the end, appended");
+    }
+
+    /// The offset must mean the same thing after the buffer has wrapped, which
+    /// it will have done: the output ring runs for the life of the process.
+    #[test]
+    fn mix_at_is_correct_across_the_wrap() {
+        let mut r = RingBuffer::new(16);
+        r.write(&[9.0; 12]);
+        let mut sink = [0.0f32; 10];
+        r.read(&mut sink); // head now at 10, two samples left
+        r.write(&[1.0; 8]); // straddles the end of the backing store
+        assert_eq!(r.len(), 10);
+        let placed = r.mix_at(4, &[0.5; 4]);
+        assert_eq!(placed, 4);
+        let mut out = [0.0f32; 10];
+        r.read(&mut out);
+        assert_eq!(out[3], 1.0, "before the overlay");
+        assert_eq!(out[4], 1.5, "summed across the wrap");
+        assert_eq!(out[7], 1.5);
+        assert_eq!(out[8], 1.0, "after it");
+    }
+
+    /// A gap between the end of the audio and the offset is silence, so the
+    /// offset means what it says even when the ring is nearly empty.
+    #[test]
+    fn mix_at_pads_when_the_offset_is_beyond_the_end() {
+        let mut r = RingBuffer::new(32);
+        r.write(&[1.0; 2]);
+        r.mix_at(5, &[0.5; 3]);
+        assert_eq!(r.len(), 8);
+        let mut out = [0.0f32; 8];
+        r.read(&mut out);
+        assert_eq!(&out[2..5], &[0.0, 0.0, 0.0], "silence, not stale audio");
+        assert_eq!(out[5], 0.5);
+    }
+
+    /// The shape of a skip: the outgoing passage falls away, the incoming one
+    /// arrives part-way down, and for the difference they are summed. This is
+    /// the property that distinguishes it from a stop followed by a start.
+    #[test]
+    fn a_skip_transition_overlaps_the_two_passages() {
+        let mut r = RingBuffer::new(64);
+        r.write(&[1.0; 40]);
+        assert_eq!(r.truncate(20), 20, "the backlog is cut to the fade");
+        let fade = Fade { curve: Curve::Linear, frames: 20, fade_in: false };
+        {
+            let (front, back) = r.as_mut_slices();
+            fade.apply(front, 1, 0);
+            let wrapped_at = front.len() as u64;
+            fade.apply(back, 1, wrapped_at);
+        }
+        r.mix_at(5, &[0.5; 25]);
+
+        let mut out = [0.0f32; 30];
+        assert_eq!(r.read(&mut out), 30);
+        assert!((out[0] - 1.0).abs() < 1e-6, "outgoing starts where it was");
+        assert!((out[4] - 0.8).abs() < 1e-6, "and is alone until the lead");
+        assert!((out[5] - (0.75 + 0.5)).abs() < 1e-6, "then the two are summed");
+        assert!((out[19] - (0.05 + 0.5)).abs() < 1e-6, "still summed at the end");
+        assert!((out[20] - 0.5).abs() < 1e-6, "outgoing gone, incoming alone");
+        // The outgoing part must fall monotonically the whole way.
+        let outgoing: Vec<f32> = (0..5).map(|i| out[i]).collect();
+        assert!(outgoing.windows(2).all(|w| w[1] < w[0]), "{outgoing:?}");
+    }
     use crate::fade::{Curve, Fade};
 
     #[test]

@@ -28,16 +28,25 @@ pub mod resample;
 /// * 15 s = 5.29 MB, against a =<150 MB total-process target `[REQ-HW-100]`.
 pub const BUFFER_FRAMES: usize = 44_100 * 15;
 
-/// How long Skip takes to fade the outgoing passage to silence `[REQ-AUD-158]`.
+/// How long Skip takes to fade the outgoing passage out `[REQ-AUD-158]`.
 ///
 /// The listener is hearing audio mixed up to a ring's depth ago, so a skip can
-/// only be prompt if what was already submitted is cut short. Half a second is
-/// enough to read as a deliberate fade rather than a click, and it is affordable
-/// only because the next passage is already decoded and waiting
-/// `[REQ-AUD-160]` -- the fade no longer has to cover a file open, a seek and a
-/// resampler build. Deliberately a constant and not a setting until it has been
-/// listened to.
-pub const SKIP_FADE_MS: u64 = 500;
+/// only be prompt if what was already submitted is cut short. This is how much
+/// of it survives, and over how long it falls away.
+pub const SKIP_FADE_MS: u64 = 2_000;
+pub const SKIP_FADE_MAX_MS: u64 = 10_000;
+
+/// How long after a skip the next passage begins its normal fade-in
+/// `[REQ-AUD-162]`.
+///
+/// Shorter than the fade-out, so the two overlap and are summed for the
+/// difference -- 1.5 s with both at their defaults. The overlap is what makes a
+/// skip sound like a transition rather than a stop followed by a start, and it
+/// costs nothing extra because the incoming passage is already decoded
+/// `[REQ-AUD-160]`.
+pub const SKIP_LEAD_MS: u64 = 500;
+pub const SKIP_LEAD_MIN_MS: u64 = 100;
+pub const SKIP_LEAD_MAX_MS: u64 = 2_000;
 
 /// Peak resident memory of this process, in bytes.
 ///

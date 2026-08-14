@@ -60,6 +60,9 @@ pub struct PlayerState {
     pub queue: Vec<QueueEntry>,
     /// Master volume, 0.0 to 1.0.
     pub volume: f32,
+    /// Skip transition shape `[REQ-AUD-162]`, so a UI can show what it will do.
+    pub skip_fade_ms: u64,
+    pub skip_lead_ms: u64,
     pub active_streams: usize,
     pub underrun_samples: u64,
     /// Samples handed to the device but not yet played. Playback is NOT over
@@ -88,6 +91,10 @@ pub enum Command {
     Skip,
     /// Master volume, clamped to 0.0..=1.0.
     SetVolume(f32),
+    /// How long a skip fades the outgoing passage out, in ms `[REQ-AUD-158]`.
+    SetSkipFade(u64),
+    /// How long after a skip the next passage starts, in ms `[REQ-AUD-162]`.
+    SetSkipLead(u64),
     Enqueue(QueueEntry),
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
@@ -133,6 +140,9 @@ pub struct Engine {
     playing: bool,
     shutdown: bool,
     volume: f32,
+    /// Skip transition shape, adjustable while playing `[REQ-AUD-162]`.
+    skip_fade_ms: u64,
+    skip_lead_ms: u64,
     store: Option<PlayerStore>,
     /// One-shot: the offset the NEXT admitted passage opens at. Consumed on
     /// use, so only the resumed passage is seeked and everything after it
@@ -173,6 +183,8 @@ impl Engine {
             playing: false,
             shutdown: false,
             volume: 1.0,
+            skip_fade_ms: crate::SKIP_FADE_MS,
+            skip_lead_ms: crate::SKIP_LEAD_MS,
             store: None,
             pending_resume: None,
             last_save: Instant::now(),
@@ -245,6 +257,13 @@ impl Engine {
                 Ok(Command::Play) => self.set_playing(true),
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::Skip) => self.skip(),
+                Ok(Command::SetSkipFade(ms)) => {
+                    self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
+                }
+                Ok(Command::SetSkipLead(ms)) => {
+                    self.skip_lead_ms =
+                        ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
+                }
                 Ok(Command::SetVolume(v)) => {
                     self.volume = v.clamp(0.0, 1.0);
                     // Straight to the device: the callback applies it, so the
@@ -273,44 +292,60 @@ impl Engine {
         }
     }
 
-    /// Fade the sounding passage out and move on `[REQ-AUD-158]`.
+    /// Fade the sounding passage out and cross into the next `[REQ-AUD-162]`.
     ///
     /// Dropping the passage here is not enough on its own, and the comment that
     /// used to sit on this function claiming otherwise was wrong: it discards
     /// the *decoder's* buffer, but the output ring still holds every sample
-    /// already mixed. Measured, that was **14.0 s** from button to new music --
-    /// the ring's full depth. So the ring is cut to the length of the fade and
-    /// faded out at the device, and the next passage is opened at once, ready
-    /// to sound the instant the fade ends.
+    /// already mixed. Measured, that was **14.0 s** from button to new music.
+    ///
+    /// So the ring is cut to the length of the fade, and the next passage --
+    /// already decoded `[REQ-AUD-160]` -- is summed over its tail. The listener
+    /// hears the outgoing passage fall away over `skip_fade_ms` while the
+    /// incoming one rises from `skip_lead_ms`, the two overlapping for the
+    /// difference.
     fn skip(&mut self) {
         if self.live.is_empty() {
             return;
         }
-        // Read positions BEFORE cutting the ring: `audible_ms` measures back
-        // from what is still buffered, and that is about to change.
-        let stragglers: Vec<(QueueEntry, u64)> = self.live[1..]
-            .iter()
-            .map(|l| (l.entry.clone(), self.audible_ms(l)))
-            .collect();
+        let ch = self.out_channels.max(1);
+        let rate = self.out_rate as u64;
+        let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
+        let lead_samples = (self.skip_lead_ms * rate / 1000) as usize * ch;
+
+        // Everything sounding is already mixed into the ring and will be faded
+        // there, together. Nothing upstream is worth keeping -- including a
+        // passage part-way through an ordinary crossfade, which the listener
+        // has barely heard, its decode having run a ring's depth ahead.
+        self.live.clear();
+        // Promote the prepared passage. Without one this degrades to a plain
+        // fade to silence, which is the right answer when the queue is empty.
+        self.admit_due();
+
+        // How much of the outgoing survives the cut sets how much of the
+        // incoming overlaps it. Asked before the cut, since afterwards the
+        // answer is by definition the fade length.
+        let have = self.out.as_ref().map_or(0, |o| o.buffered()).min(fade_samples);
+        let mut overlay = vec![0.0f32; have.saturating_sub(lead_samples)];
+        if let Some(l) = self.live.first_mut() {
+            // Through `mix`, not by reading the ring directly: the fade-in has
+            // been applied on the way in `[XFD-ORTH-020]`, and this keeps the
+            // accounting identical to an ordinary tick.
+            let before = l.stream.ring.len();
+            let filled = mix(std::iter::once(&mut l.stream), &mut overlay);
+            let consumed = before.saturating_sub(l.stream.ring.len());
+            l.frames_mixed += (consumed / l.stream.channels.max(1)) as u64;
+            overlay.truncate(filled);
+        }
 
         if let Some(o) = &self.out {
-            o.begin_skip_fade(crate::SKIP_FADE_MS, Curve::Exponential);
+            o.begin_skip_transition(
+                self.skip_fade_ms,
+                self.skip_lead_ms,
+                Curve::Exponential,
+                &overlay,
+            );
         }
-        self.live.clear();
-
-        // A passage part-way through a crossfade had been mixed far ahead of
-        // the ear, and that work has just been discarded with the rest of the
-        // ring. Re-open each where it was actually *heard* -- normally its very
-        // start, since the ring runs deeper than a crossfade is long.
-        for (entry, at) in stragglers {
-            match self.open(&entry, at) {
-                Ok(l) => self.live.push(l),
-                Err(e) => eprintln!("re-opening {} after skip: {e}", entry.path.display()),
-            }
-        }
-        // Open the next passage now rather than on the next tick, so decoding
-        // happens DURING the fade and the passage is ready the moment it ends.
-        self.admit_due();
     }
 
     /// Start the next passage when the current one reaches its lead-out point.
@@ -582,6 +617,8 @@ impl Engine {
             s.queue_len = self.queue.len();
             s.queue = self.queue.iter().take(12).cloned().collect();
             s.volume = self.volume;
+            s.skip_fade_ms = self.skip_fade_ms;
+            s.skip_lead_ms = self.skip_lead_ms;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.output_buffered = self
