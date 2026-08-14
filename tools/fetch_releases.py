@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Sampo S3, release half: fill `releases` and `release_recordings` [SPEC-SA-030].
+
+Vaino knows 7,912 recordings and not one release, which is why every album name
+it shows comes from a file's own ID3 tag rather than from MusicBrainz. A
+Recording is a piece of recorded audio; a Release is the published product, and
+*its* title is what an album is called. The link between them is many-to-many,
+so it is a join table and not a column, and filling it is ingest work -- Sampo's
+job, never the player's [REQ-VIS-170].
+
+Being a good citizen of a free service is most of the design here:
+
+  * one request per second, which is MusicBrainz's published limit;
+  * a real User-Agent with a contact address, which they ask for and enforce;
+  * resumable, so an interrupted run costs only what it had not yet fetched;
+  * every response cached, so a re-run after a schema change asks nothing twice.
+
+At one request per second the full library is a little over two hours. It is
+meant to be left running, and it can be stopped at any point with Ctrl-C.
+
+    python tools/fetch_releases.py data/vaino_new.db [--limit N] [--refresh]
+"""
+
+import argparse
+import json
+import sqlite3
+import sys
+import time
+import urllib.error
+import urllib.request
+
+# They ask for a contact address and will rate-limit or block a generic agent.
+UA = "Vaino-Sampo/0.1 ( https://github.com/MangoCats/Vaino )"
+BASE = "https://musicbrainz.org/ws/2/recording/"
+
+# MusicBrainz asks for at most one request per second averaged over time. This
+# is the whole reason the run takes hours; going faster gets an IP blocked, and
+# a blocked IP is a worse outcome than a slow scan.
+RATE_S = 1.0
+
+# A response that has been fetched once should never be fetched again: the
+# answer changes rarely, the run is long, and a re-run after a schema change
+# would otherwise repeat two hours of requests for data already on disk.
+CACHE_DDL = """
+CREATE TABLE IF NOT EXISTS musicbrainz_cache (
+    mbid TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    response TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL
+);
+"""
+
+
+def fetch(mbid: str, tries: int = 4) -> dict | None:
+    """One recording, with its releases and their track positions.
+
+    `media` is what carries the position, and the position is what lets an
+    album be listed in its own running order rather than alphabetically
+    `[REQ-VIS-190]`.
+    """
+    url = f"{BASE}{mbid}?inc=releases+media&fmt=json"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None        # the MBID is gone or was merged away
+            # 503 is their documented "slow down", and over a two-hour run it
+            # is routine rather than exceptional -- one in five on the first
+            # trial. Backing off and retrying is the difference between a
+            # complete scan and a scan with holes that look like missing data.
+            if e.code in (429, 503) and attempt < tries - 1:
+                time.sleep(2 ** attempt * 2)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt < tries - 1:
+                time.sleep(2 ** attempt * 2)
+                continue
+            raise
+    return None
+
+
+def store(conn, mbid: str, doc: dict) -> int:
+    """Write the releases a recording appears on. Returns how many."""
+    n = 0
+    for rel in doc.get("releases", []):
+        rid = rel.get("id")
+        if not rid:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO releases (mbid, title, release_date, source) "
+            "VALUES (?1, ?2, ?3, 'musicbrainz')",
+            (rid, rel.get("title"), rel.get("date")),
+        )
+        # Position lives under media/tracks; a recording can legitimately appear
+        # twice on one release (a reprise), so the first is taken rather than
+        # the last, and its absence is not an error.
+        position = None
+        for medium in rel.get("media", []) or []:
+            for track in medium.get("tracks", []) or []:
+                if track.get("position") is not None:
+                    position = track["position"]
+                    break
+            if position is not None:
+                break
+        conn.execute(
+            "INSERT OR REPLACE INTO release_recordings "
+            "(release_mbid, mbid, position, source) VALUES (?1, ?2, ?3, 'musicbrainz')",
+            (rid, mbid, position),
+        )
+        n += 1
+    return n
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("db")
+    ap.add_argument("--limit", type=int, default=0, help="stop after N lookups")
+    ap.add_argument("--refresh", action="store_true",
+                    help="ignore the cache and ask MusicBrainz again")
+    args = ap.parse_args()
+
+    conn = sqlite3.connect(args.db)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.executescript(CACHE_DDL)
+
+    # Only recordings the library actually uses, and only those without links
+    # already -- that is what makes the run resumable.
+    todo = [r[0] for r in conn.execute(
+        "SELECT DISTINCT r.mbid FROM recordings r "
+        "  JOIN passage_recordings pr ON pr.mbid = r.mbid "
+        " WHERE NOT EXISTS (SELECT 1 FROM release_recordings rr WHERE rr.mbid = r.mbid) "
+        " ORDER BY r.mbid")]
+    if args.limit:
+        todo = todo[: args.limit]
+
+    if not todo:
+        print("nothing to fetch: every used recording already has releases")
+        return 0
+
+    print(f"{len(todo)} recording(s) to look up, ~{len(todo) * RATE_S / 60:.0f} minutes "
+          f"at MusicBrainz's one-per-second limit")
+    started = time.time()
+    linked = found = missing = failed = cached = 0
+
+    for i, mbid in enumerate(todo, 1):
+        doc = None
+        if not args.refresh:
+            row = conn.execute(
+                "SELECT response FROM musicbrainz_cache WHERE mbid = ?", (mbid,)).fetchone()
+            if row:
+                doc = json.loads(row[0])
+                cached += 1
+        if doc is None:
+            try:
+                doc = fetch(mbid)
+            except Exception as e:                      # noqa: BLE001 - report and go on
+                failed += 1
+                print(f"  {mbid}: {e}", file=sys.stderr)
+                time.sleep(RATE_S)
+                continue
+            # Cache even an empty answer: "this recording has no releases" is
+            # worth remembering, and it is what stops a re-run asking again.
+            conn.execute(
+                "INSERT OR REPLACE INTO musicbrainz_cache (mbid, kind, response, fetched_at) "
+                "VALUES (?1, 'recording+releases', ?2, ?3)",
+                (mbid, json.dumps(doc or {}), int(time.time())))
+            time.sleep(RATE_S)
+
+        if not doc:
+            missing += 1
+        else:
+            added = store(conn, mbid, doc)
+            linked += added
+            found += 1 if added else 0
+
+        # Commit as it goes: a run this long must not lose an hour to a
+        # power cut, and SQLite handles the frequency without complaint.
+        if i % 25 == 0 or i == len(todo):
+            conn.commit()
+            done = time.time() - started
+            rate = i / max(done, 1e-9)
+            print(f"  {i}/{len(todo)}  {linked} links, {missing} without releases, "
+                  f"{failed} failed, {cached} from cache  "
+                  f"({done / 60:.1f} min, ~{(len(todo) - i) / max(rate, 1e-9) / 60:.0f} left)",
+                  flush=True)
+
+    conn.commit()
+    albums = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
+    print(f"\ndone: {linked} recording-release links over {albums} releases, "
+          f"{missing} recordings with none, {failed} failed")
+    if failed:
+        print("re-run to retry the failures; everything fetched is cached and will not "
+              "be asked for again")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        # Resumable by design, so an interrupt is a pause and not a loss.
+        print("\ninterrupted; re-run to carry on from here")
+        sys.exit(130)
