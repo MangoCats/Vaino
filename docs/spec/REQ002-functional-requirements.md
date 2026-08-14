@@ -152,6 +152,24 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 > **`publish()` makes presentation policy inside the audio engine** *(maintainability, outstanding)*. Which passage the listener is on, and how much queue a display gets, are display decisions living in `engine.rs` at 722 lines.
 >
 > **`web.rs` mixes routing, serialisation, browse, art and queue verbs** *(maintainability, deferred)*. Not urgent; treat as a priority at the next refactor, being the file most likely to keep growing.
+>
+> ### Recorded 2026-08-14, from the "what next" review
+>
+> **Listener state has no backup, and it is not reproducible** *(durability, highest consequence)*. The library file holds 37,206 plays, 3,261 preferences, 8 programmes, 49 seeds and 24 occasion points, and the player writes to it continuously. Sampo can rebuild the library from the audio files; it cannot rebuild the listening history, and the Director is worthless without it. One interrupted write on a Pi takes all of it. The fix is small — a periodic snapshot through the SQLite backup API to a rotating file, the same mechanism the test copies already use.
+>
+> **Taste is unbuilt** `[REQ-PD-150]` *(feature)*. `listener_likes` holds nothing. It is the one substantial Director capability specified and not implemented, and `[SPEC-DIR-210/215/220]` are open design rather than settled, so it starts as a design conversation. Browse is its natural home: that is where a listener is looking at a track when they form an opinion about it.
+>
+> **Nothing starts the player on boot** *(deployment)*. The Dockerfiles are build targets, not deployment.
+>
+> **Errors are invisible on an appliance** *(operability)*. Sixteen `eprintln!` sites across engine, session, output and tags — decode failures, dropped passages, unstorable tag rows — all to stderr, on a headless machine with no terminal. Underruns and lock failures now reach the UI; the same treatment for recent faults would make them findable without a shell.
+>
+> **The HTTP surface has no authentication of any kind** *(security, decision needed)*. Anyone on the network can play, skip, reorder and browse the library. That may be right for a home LAN, but it should be a recorded decision rather than an accident.
+>
+> **`skip_fade_ms` and `skip_lead_ms` do not survive a restart** *(small)*. Volume does; the resume row is the obvious home for both.
+>
+> **Several audible choices have never been listened to** *(needs ears, not development)*: the skip fade curve `Exponential` against `Cosine` and `Linear`; whether 72 dB of fader travel gives enough resolution where the listening actually happens; whether 1.5 s of crossfade overlap on a skip reads as a transition or a muddle; and whether losing the mute detent at the bottom of the fader matters. Each is a one-word or one-constant change.
+>
+> **`session.rs` and `tags::backfill` have no tests, and nothing boots the server** *(test coverage)*. The absent integration test is the one that would have caught the queue-insertion and browse faults found by hand.
 
 ## 2. Program Director — `PD`
 
