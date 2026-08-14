@@ -79,6 +79,16 @@ Zero slope at the top is what the curve is for: it spends most of the control's 
 >
 > **This is the control's geometry, not audio, so it lives in the control.** The engine owns dB-to-amplitude and never sees a position; the browser owns position-to-dB and never sees an amplitude. The floor is sent to the browser rather than written there twice, so −72 exists in one place.
 
+**`[REQ-AUD-164]` What is reported as playing is what is being *heard*.** A passage becomes current when its first sample leaves the ring for the device, not when the mixer starts on it — those are a ring's depth apart, so the display announced each track some fourteen seconds before it could be heard, cover art and all.
+
+The test is `frames_mixed` against the ring depth, deliberately in **frames rather than position**: a resumed passage starts at a non-zero position and would otherwise announce itself the instant it was admitted. Skip is the exception and hands the display over at once, because it cuts the ring to the fade and the incoming passage really is audible within a second.
+
+> **Measured:** resumed 40 s from the end of a passage, the title changed at **40.0 s** — exactly when the outgoing passage stopped reaching the device.
+>
+> The reported passage outlives `live`, because a passage stays audible for a ring's depth after the mixer has finished with it. Blanking the display at that point would be the same fault mirrored.
+>
+> **This is the fourth instance of one fault** `[REQ-AUD-142]`, `[REQ-AUD-152]`, `[REQ-AUD-158]`. Pause had to stop the device, volume had to move into the callback, skip had to cut the ring, and now the display has to lag the mixer. The rule has earned its generality: **anything the listener perceives is downstream of a 14 s buffer, and anything measured upstream of it is measuring the wrong moment.**
+
 **`[REQ-AUD-158]` Skip cuts the output ring short and fades what remains.** Dropping the passage upstream is not enough, and the code claimed otherwise: it discards the *decoder's* buffer, but the output ring still holds every sample already mixed. Measured, that was **14.0 s from button to new music** — the ring's full depth. The reported title changed in 0.5 s, so the display said one thing while the speakers said another for fourteen seconds.
 
 **`[REQ-AUD-160]` The next passage is opened and decoded before anyone asks for it.** It is held in a prepared slot outside the mixer's `live` set — fed by the same decoder top-up, but not summed, so it is ready without sounding. Promotion is a move. Skip used to pay for a file open, a seek and a resampler build at the moment the button was pressed. The same slot serves ordinary crossfade admission, so the prepared path is the normal path and cannot rot from disuse.
@@ -236,6 +246,8 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 > **Shifting clamps rather than wraps.** Nudging the first passage "sooner" does nothing, which is what is expected; wrapping it to last would be a surprise indistinguishable from a bug.
 >
 > **The three edits touch no database.** A queued passage is already in hand, so rearranging is a message to the engine and nothing more. Only the three library verbs read a passage in.
+>
+> **The controls sit to the left of the title, in fixed-width columns**, ordered × then ↑ then ↓. A column of identical buttons is one target to learn; buttons that shift with the length of a title are three. The list markers went with them — a number in front of the controls would put two unrelated things in the same column.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 

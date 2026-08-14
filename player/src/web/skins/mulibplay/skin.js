@@ -62,8 +62,11 @@
     }
     for (const q of items) {
       const p = document.createElement('p');
-      p.textContent = q.artist ? `${q.title} by ${q.artist} ` : q.title + ' ';
       p.appendChild(Vaino.queueControls(q.passage_id));
+      const t = document.createElement('span');
+      t.className = 'qtitle';
+      t.textContent = q.artist ? `${q.title} by ${q.artist} ` : q.title + ' ';
+      p.appendChild(t);
       const d = document.createElement('span');
       d.className = 'dur';
       d.textContent = clock(q.duration_ms);

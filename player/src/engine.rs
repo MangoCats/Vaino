@@ -162,6 +162,10 @@ pub struct Engine {
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
     recorded: Option<i64>,
+    /// The passage the LISTENER is on, which is not the one being mixed
+    /// `[REQ-AUD-164]`. Held here because it outlives `live`: a passage stays
+    /// audible for a ring's depth after the mixer has finished with it.
+    shown: Option<(QueueEntry, u64)>,
     /// Underruns that happened while PLAYING. Under the two-state model the
     /// device callback drains continuously, so a paused player underruns
     /// forever -- counting those would bury the fault this number exists to
@@ -199,6 +203,7 @@ impl Engine {
             last_save: Instant::now(),
             saved: None,
             recorded: None,
+            shown: None,
             underruns_playing: 0,
             last_raw_underruns: 0,
         };
@@ -344,6 +349,10 @@ impl Engine {
         // Promote the prepared passage. Without one this degrades to a plain
         // fade to silence, which is the right answer when the queue is empty.
         self.admit_due();
+        // Skip cuts the ring to the fade, so the incoming passage is audible
+        // within a second rather than a ring's depth. Handing the display over
+        // now keeps the button honest [REQ-AUD-164].
+        self.shown = self.live.first().map(|l| (l.entry.clone(), 0));
 
         // How much of the outgoing survives the cut sets how much of the
         // incoming overlaps it. Asked before the cut, since afterwards the
@@ -633,10 +642,31 @@ impl Engine {
         if self.playing {
             self.underruns_playing += delta;
         }
+        // A passage becomes "playing" when its first sample leaves the ring for
+        // the device, not when the mixer starts on it -- those are ~14 s apart
+        // [REQ-AUD-164]. `frames_mixed` against the ring depth is the test, and
+        // it is deliberately in FRAMES rather than milliseconds of position: a
+        // resumed passage starts at a non-zero position and would otherwise
+        // announce itself the instant it was admitted.
+        let ring = self.out_buffered_frames() as u64;
+        if let Some(l) = self.live.iter().rev().find(|l| l.frames_mixed > ring) {
+            self.shown = Some((l.entry.clone(), self.audible_ms(l)));
+        } else if let Some((entry, _)) = self.shown.clone() {
+            // Still audible though no longer mixed: keep it, and keep its
+            // position moving, rather than blanking the display mid-passage.
+            let pos = self
+                .live
+                .iter()
+                .find(|l| l.entry.passage_id == entry.passage_id)
+                .map(|l| self.audible_ms(l));
+            if let Some(p) = pos {
+                self.shown = Some((entry, p));
+            }
+        }
         if let Ok(mut s) = self.state.lock() {
             s.playing = self.playing;
-            s.current = self.live.first().map(|l| l.entry.clone());
-            s.position_ms = self.live.first().map(|l| self.audible_ms(l)).unwrap_or(0);
+            s.current = self.shown.as_ref().map(|(e, _)| e.clone());
+            s.position_ms = self.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);
             s.queue_len = self.queue.len();
             s.queue = self.queue.iter().take(12).cloned().collect();
             s.volume = self.volume;

@@ -53,12 +53,15 @@
     }
     for (const q of items) {
       const li = document.createElement('li');
-      li.textContent = q.artist ? `${q.title} — ${q.artist} ` : q.title + ' ';
+      li.appendChild(Vaino.queueControls(q.passage_id));
+      const t = document.createElement('span');
+      t.className = 'qtitle';
+      t.textContent = q.artist ? `${q.title} — ${q.artist} ` : q.title + ' ';
       const d = document.createElement('span');
       d.className = 'dur';
       d.textContent = clock(q.duration_ms);
-      li.appendChild(d);
-      li.appendChild(Vaino.queueControls(q.passage_id));
+      t.appendChild(d);
+      li.appendChild(t);
       ol.appendChild(li);
     }
   }

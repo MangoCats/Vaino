@@ -233,10 +233,14 @@ const Vaino = (() => {
     queueControls(passageId) {
         const box = document.createElement('span');
         box.className = 'qedit';
+        // Remove first and furthest left, then sooner, then later. Fixed
+        // order and fixed widths so the controls line up as columns down the
+        // queue: a column of identical buttons is one target to learn, where
+        // buttons that shift with the length of a title are three.
         for (const [label, action, title] of [
+            ['\u00d7', 'remove', 'remove from the queue'],
             ['\u2191', 'sooner', 'play sooner'],
             ['\u2193', 'later', 'play later'],
-            ['\u00d7', 'remove', 'remove from the queue'],
         ]) {
             const b = document.createElement('button');
             b.type = 'button';

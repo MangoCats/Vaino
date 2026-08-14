@@ -99,13 +99,14 @@ body { background: #101014; color: #d8d8dc;
 /* The playlist window: its own black panel, green mono, numbered rows. */
 .playlist { background: var(--lcd-bg); color: var(--lcd); padding: 4px 6px;
             min-height: 60px; }
-.playlist ol { margin: 0; padding-left: 2.4ch; }
-.playlist li { padding: 1px 0; white-space: nowrap; overflow: hidden;
-               text-overflow: ellipsis; }
+.playlist ol { margin: 0; padding-left: 0; list-style: none; }
+.playlist li { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
+.playlist .qtitle { flex: 1; min-width: 0; white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
 .playlist li:first-child { color: #b6ffb6; }
 .playlist .dur { opacity: .6; }
 .playlist .empty { list-style: none; margin-left: -2.4ch; opacity: .5; }
-.qedit { display: inline-flex; gap: 2px; margin-left: 6px; }
+.qedit { display: flex; gap: 2px; flex: none; }
 .qedit button { font: inherit; font-size: 10px; line-height: 1; width: 16px;
                 height: 16px; min-width: 0; padding: 0; color: var(--lcd);
                 background: transparent; border: 1px solid #143d19; }
