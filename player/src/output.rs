@@ -45,7 +45,50 @@ impl OutputState {
 #[derive(Clone)]
 pub struct Volume(Arc<std::sync::atomic::AtomicU32>);
 
+/// How much range the fader spans, in dB `[REQ-AUD-154]`.
+///
+/// MuLibPlay's figure, from six years of daily use: it ran a `-8192..=0`
+/// integer slider scaled by 1/128 into exactly this curve. Wider than 64 dB
+/// and the bottom of the travel is inaudible anyway; much narrower and the
+/// quietest usable setting is not quiet enough for a room at night.
+pub const FADER_DB: f32 = 64.0;
+
 impl Volume {
+    /// Fader travel (0.0 at the bottom, 1.0 at the top) to amplitude.
+    ///
+    /// Equal travel gives an equal change in *decibels*, because that is what
+    /// the ear hears as an even change in loudness. A linear fader spends its
+    /// top half on differences barely distinguishable from full and its bottom
+    /// half plunging to silence -- the taper we started with, and audibly
+    /// wrong at both ends.
+    ///
+    /// The very bottom is silence, not -64 dB: a fader that cannot be closed
+    /// is a fault, and -64 dB is quiet but not nothing.
+    pub fn amplitude_at(travel: f32) -> f32 {
+        let t = travel.clamp(0.0, 1.0);
+        if t <= 0.0 {
+            return 0.0;
+        }
+        10f32.powf((t - 1.0) * FADER_DB / 20.0)
+    }
+
+    /// The inverse, for putting the knob back where the listener left it.
+    /// The stored value is amplitude, so the UI has to be told a position.
+    pub fn travel_for(amplitude: f32) -> f32 {
+        let a = amplitude.clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return 0.0;
+        }
+        (1.0 + a.log10() * 20.0 / FADER_DB).clamp(0.0, 1.0)
+    }
+
+    /// Level in dB relative to full scale, or `None` when closed -- which is
+    /// negative infinity, and not a number a display should try to render.
+    pub fn db_at(travel: f32) -> Option<f32> {
+        let t = travel.clamp(0.0, 1.0);
+        (t > 0.0).then(|| (t - 1.0) * FADER_DB)
+    }
+
     pub fn new(v: f32) -> Self {
         Self(Arc::new(std::sync::atomic::AtomicU32::new(v.to_bits())))
     }
@@ -317,6 +360,57 @@ mod tests {
         let mut b = [0.0f32; 4];
         fill(&st, &vol, &mut b);
         assert!((b[0] - 0.5).abs() < 1e-6, "the change must reach buffered audio");
+    }
+
+    /// The ends must be exact: full scale must not be 0.999, and the bottom
+    /// must be true silence rather than something merely quiet.
+    #[test]
+    fn fader_ends_are_exact() {
+        assert_eq!(Volume::amplitude_at(1.0), 1.0);
+        assert_eq!(Volume::amplitude_at(0.0), 0.0);
+        assert_eq!(Volume::db_at(1.0), Some(0.0));
+        assert_eq!(Volume::db_at(0.0), None, "a closed fader has no dB value");
+    }
+
+    /// Equal travel, equal dB -- the property that makes the taper worth
+    /// having. Half travel is half the dB range down, NOT half the amplitude.
+    #[test]
+    fn fader_is_even_in_decibels() {
+        for (travel, want_db) in [(0.75, -16.0), (0.5, -32.0), (0.25, -48.0)] {
+            let got = 20.0 * Volume::amplitude_at(travel).log10();
+            assert!((got - want_db).abs() < 1e-3, "at {travel}: {got} dB, want {want_db}");
+        }
+        // The step from 0.75 to 0.5 must equal the step from 0.5 to 0.25.
+        let db = |t: f32| 20.0 * Volume::amplitude_at(t).log10();
+        assert!(((db(0.75) - db(0.5)) - (db(0.5) - db(0.25))).abs() < 1e-3);
+    }
+
+    /// A linear fader would put half travel at -6 dB, which is the fault being
+    /// corrected: barely quieter, with the whole audible range crammed into
+    /// the last sliver of movement.
+    #[test]
+    fn half_travel_is_not_half_amplitude() {
+        assert!(Volume::amplitude_at(0.5) < 0.05, "{}", Volume::amplitude_at(0.5));
+    }
+
+    /// The knob has to go back where the listener left it after a restart.
+    #[test]
+    fn travel_round_trips_through_amplitude() {
+        for step in 0..=100 {
+            let t = step as f32 / 100.0;
+            let back = Volume::travel_for(Volume::amplitude_at(t));
+            assert!((back - t).abs() < 1e-4, "travel {t} came back as {back}");
+        }
+    }
+
+    #[test]
+    fn fader_is_monotonic() {
+        let mut prev = -1.0;
+        for step in 0..=100 {
+            let a = Volume::amplitude_at(step as f32 / 100.0);
+            assert!(a > prev, "not increasing at step {step}");
+            prev = a;
+        }
     }
 
     #[test]

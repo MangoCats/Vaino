@@ -22,6 +22,7 @@ use axum::Router;
 use serde::Serialize;
 
 use crate::engine::{Command, EngineHandle, PlayerState};
+use crate::output::Volume;
 use crate::session::{Explanations, SharedControls};
 
 /// What the server needs to answer a request: the control surface, and why the
@@ -62,7 +63,12 @@ pub struct Snapshot {
     pub queue_len: usize,
     /// What is coming, in play order.
     pub queue: Vec<QueueItem>,
+    /// Fader *travel*, 0.0 to 1.0 -- a knob position, not an amplitude. The
+    /// taper between the two is `Volume::amplitude_at` `[REQ-AUD-154]`, and it
+    /// lives there rather than here so the browser holds no audio constants.
     pub volume: f32,
+    /// Level in dB, or `null` when the fader is closed.
+    pub volume_db: Option<f32>,
     /// The programme in force, and whether it was chosen by hand.
     pub program: Option<String>,
     pub program_manual: bool,
@@ -92,7 +98,8 @@ impl From<&PlayerState> for Snapshot {
                     duration_ms: e.duration_ms(),
                 })
                 .collect(),
-            volume: s.volume,
+            volume: Volume::travel_for(s.volume),
+            volume_db: Volume::db_at(Volume::travel_for(s.volume)),
             program: None,
             program_manual: false,
             programs: Vec::new(),
@@ -116,13 +123,19 @@ async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResp
     ws.on_upgrade(move |socket| push_state(socket, ui))
 }
 
-/// Volume as a percentage, 0-100. A percentage rather than a float because it
-/// crosses a URL, and "50" is unambiguous where "0.5" invites locale trouble.
+/// Fader position as a percentage of travel, 0-100. A percentage rather than a
+/// float because it crosses a URL, and "50" is unambiguous where "0.5" invites
+/// locale trouble.
+///
+/// The position becomes an amplitude here, at the edge, so that everything
+/// inward of this point -- engine, device, saved state -- speaks in amplitude
+/// and only the listener's control speaks in travel `[REQ-AUD-154]`.
 async fn set_volume(
     State(ui): State<Ui>,
     axum::extract::Path(level): axum::extract::Path<u32>,
 ) -> StatusCode {
-    ui.handle.send(Command::SetVolume(level.min(100) as f32 / 100.0));
+    let travel = level.min(100) as f32 / 100.0;
+    ui.handle.send(Command::SetVolume(Volume::amplitude_at(travel)));
     StatusCode::NO_CONTENT
 }
 

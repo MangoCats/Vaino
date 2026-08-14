@@ -140,9 +140,13 @@
     renderQueue(s.queue, s.queue_len);
     renderProgram(s);
     if (!holdingVolume) {
+      // s.volume is fader TRAVEL, already tapered server-side. The browser
+      // must not know the curve; if it did, there would be two of them.
       const pct = Math.round((s.volume ?? 1) * 100);
       vol.value = pct;
       $('volnum').textContent = pct + '%';
+      vol.title = s.volume_db == null ? 'muted'
+                : `${s.volume_db.toFixed(1)} dB`;
     }
     renderWhy(s.why);
   }

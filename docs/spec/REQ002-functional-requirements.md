@@ -38,6 +38,20 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 >
 > The value crosses to the callback as an atomic, not behind the ring's mutex. The callback must never block, and must be able to change level even on a tick where it cannot take that lock.
 
+**`[REQ-AUD-154]` The master fader is logarithmic: equal travel, equal decibels.** 64 dB of range, `amplitude = 10^((travel − 1) × 64 / 20)`, with the very bottom of the travel being true silence rather than −64 dB — a fader that cannot be closed is a fault. Loudness is perceived in ratios, so a linear amplitude fader spends its top half on differences barely distinguishable from full and crams everything audible into the bottom sliver.
+
+| knob | linear (was) | logarithmic (is) |
+|---:|---:|---:|
+| 100 % | 1.000 | 1.000 — 0 dB |
+| 75 % | 0.750 | 0.158 — −16 dB |
+| 50 % | 0.500 | 0.025 — −32 dB |
+| 25 % | 0.250 | 0.004 — −48 dB |
+| 0 % | 0.000 | muted |
+
+> The 64 dB figure is MuLibPlay's, carried over from six years of daily use: it ran a `-8192..=0` integer slider scaled by 1/128 into exactly this curve, likewise with a hard mute at the bottom.
+>
+> **Amplitude is the internal representation; travel is the listener's.** The engine, the device and the saved resume point all speak amplitude — it is what multiplies samples. Only the control speaks in travel, and the conversion happens once at each edge of the HTTP layer. The browser is told a position and a dB value and holds no copy of the curve, so there is one taper in the system rather than two that can drift.
+
 > **Verification:** `[REQ-AUD-110]` and `[REQ-AUD-120]` are gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency `[GDE-ARC-050]`.
 >
 > `[REQ-AUD-140]` verified end-to-end on desktop hardware (48 kHz device, 44.1 kHz sources, 8,079-passage library): a run interrupted at ~16 s saved 15.01 s, and the next run resumed the same passage at 15.0 s and went on to save 25.01 s — position advancing *from* the resume point, not restarting. The 15.01 s figure is also the check on audible-versus-mixed position: had the mixed figure been saved it would have read ~29 s.
