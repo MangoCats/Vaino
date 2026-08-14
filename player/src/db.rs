@@ -86,6 +86,16 @@ impl Library {
         Ok(Self { conn })
     }
 
+    /// Open for writing, for the **scanner only**.
+    ///
+    /// The read-only default above is a real guard and stays: the player must
+    /// not be able to corrupt the library. `tagscan` is a tool rather than the
+    /// player -- the same standing as Sampo -- and it is the only caller here.
+    pub fn open_writable(path: &std::path::Path) -> Result<Self, DbError> {
+        let conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
+        Ok(Self { conn })
+    }
+
     pub fn passage(&self, passage_id: i64) -> Result<QueueEntry, DbError> {
         self.conn
             .query_row(&format!("SELECT {COLS} {FROM} WHERE p.passage_id = ?1"), [passage_id], row_to_entry)
@@ -111,6 +121,25 @@ impl Library {
     /// Silent failure on purpose: a passage whose names cannot be read still
     /// plays, and still shows its filename. Nothing here is worth interrupting
     /// the music for.
+    /// The file's own tags, if they have been scanned.
+    pub fn stored_tags(&self, passage_id: i64) -> Option<crate::tags::Tags> {
+        self.conn
+            .query_row(
+                "SELECT t.title, t.artist, t.album FROM passages p \
+                   JOIN file_tags t ON t.file_id = p.file_id \
+                  WHERE p.passage_id = ?1",
+                [passage_id],
+                |r| {
+                    Ok(crate::tags::Tags {
+                        title: r.get(0)?,
+                        artist: r.get(1)?,
+                        album: r.get(2)?,
+                    })
+                },
+            )
+            .ok()
+    }
+
     pub fn describe(&self, e: &mut QueueEntry) {
         let Some(mbid) = e.mbid.clone() else { return };
         let got = self.conn.query_row(DESCRIBE, [&mbid], |r| {
@@ -140,6 +169,64 @@ impl Library {
         )
         .map_err(|e| DbError::Query(e.to_string()))?;
         Ok(std::path::PathBuf::from(p))
+    }
+
+    /// Remember what a file's own tags say `[REQ-VIS-180]`.
+    ///
+    /// Reading tags means opening and probing the file, which is far too slow
+    /// to do for a whole library on demand -- and browsing by album has no
+    /// other source at all, the release tables being empty. So the answers are
+    /// kept. The table is the player's own, created here rather than by the
+    /// ingest tools, because it is the player that needs it.
+    pub fn ensure_tag_table(&self) -> Result<(), DbError> {
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS file_tags ( \
+                     file_id INTEGER PRIMARY KEY, \
+                     title TEXT, artist TEXT, album TEXT, \
+                     has_art INTEGER NOT NULL DEFAULT 0, \
+                     scanned_at INTEGER NOT NULL); \
+                 CREATE INDEX IF NOT EXISTS idx_file_tags_album ON file_tags(album); \
+                 CREATE INDEX IF NOT EXISTS idx_file_tags_artist ON file_tags(artist);",
+            )
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    pub fn put_tags(
+        &self,
+        file_id: i64,
+        t: &crate::tags::Tags,
+        has_art: bool,
+    ) -> Result<(), DbError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.conn
+            .execute(
+                "INSERT INTO file_tags (file_id, title, artist, album, has_art, scanned_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(file_id) DO UPDATE SET \
+                   title = ?2, artist = ?3, album = ?4, has_art = ?5, scanned_at = ?6",
+                rusqlite::params![file_id, t.title, t.artist, t.album, has_art as i64, now],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Every file, for the scanner. Path included so it can be read.
+    pub fn all_files(&self) -> Result<Vec<(i64, std::path::PathBuf)>, DbError> {
+        let mut st = self
+            .conn
+            .prepare("SELECT file_id, path FROM files ORDER BY file_id")
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map([], |r| {
+                Ok((r.get::<_, i64>(0)?, std::path::PathBuf::from(r.get::<_, String>(1)?)))
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
     }
 
     pub fn director(&self) -> Result<crate::director::library::Director, DbError> {
@@ -250,6 +337,159 @@ impl PlayerStore {
             })
     }
 
+}
+
+/// Browsing the library, by artist, by album, by track `[REQ-VIS-180]`.
+///
+/// MuLibPlay's three "Browse by" pages, which are the one part of its interface
+/// Vaino had no answer for. They group by the *displayed* name -- MusicBrainz
+/// where it has one, the file's tag where it does not -- so what you can browse
+/// by is exactly what you can see, rather than a second naming scheme that
+/// disagrees with the player.
+///
+/// One shape underneath all three: every radio passage, the mbid that names it,
+/// and the file whose tags stand in. Measured on this library, 463 artists in
+/// 53 ms, 660 albums in 29 ms, 8,078 tracks in 80 ms -- on demand, not per tick,
+/// so that is comfortably fast enough to leave as a query rather than a cache.
+const NAMED: &str = "\
+    SELECT p.passage_id, p.file_id, \
+           (SELECT pr.mbid FROM passage_recordings pr \
+             WHERE pr.passage_id = p.passage_id \
+             ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS mbid \
+      FROM passages p WHERE p.kind = 'radio'";
+
+/// The displayed artist, as a SQL expression over `NAMED` joined to `file_tags`.
+const ARTIST_EXPR: &str = "COALESCE( \
+    (SELECT a.name FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid \
+      WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), ft.artist)";
+
+/// The displayed album: MusicBrainz **Release** title, then the file's tag.
+const ALBUM_EXPR: &str = "COALESCE( \
+    (SELECT rel.title FROM release_recordings rr JOIN releases rel ON rel.mbid = rr.release_mbid \
+      WHERE rr.mbid = m.mbid ORDER BY rel.release_date, rel.title LIMIT 1), ft.album)";
+
+const TITLE_EXPR: &str =
+    "COALESCE((SELECT r.title FROM recordings r WHERE r.mbid = m.mbid), ft.title)";
+
+const PLAYS_EXPR: &str =
+    "(SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid)";
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BrowseGroup {
+    pub name: String,
+    /// The artist a release belongs to; `None` when browsing artists.
+    pub artist: Option<String>,
+    pub passages: i64,
+    pub plays: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BrowseTrack {
+    pub passage_id: i64,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub plays: i64,
+}
+
+/// What to narrow a browse to. Every field is a whole-value match except `q`,
+/// which is a substring -- the difference between "this artist" and "anything
+/// that looks like this".
+#[derive(Debug, Default, Clone)]
+pub struct BrowseFilter {
+    pub q: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+}
+
+impl BrowseFilter {
+    fn like(&self) -> String {
+        self.q.as_deref().map(|s| format!("%{s}%")).unwrap_or_default()
+    }
+}
+
+impl Library {
+    pub fn browse_artists(&self, f: &BrowseFilter) -> Result<Vec<BrowseGroup>, DbError> {
+        let sql = format!(
+            "SELECT artist, COUNT(*), SUM(plays) FROM ( \
+               SELECT {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays \
+                 FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
+             WHERE artist IS NOT NULL AND artist <> '' \
+               AND (?1 = '' OR artist LIKE ?1) \
+             GROUP BY artist ORDER BY artist COLLATE NOCASE"
+        );
+        self.groups(&sql, rusqlite::params![f.like()], false)
+    }
+
+    pub fn browse_albums(&self, f: &BrowseFilter) -> Result<Vec<BrowseGroup>, DbError> {
+        let sql = format!(
+            "SELECT album, COUNT(*), SUM(plays), artist FROM ( \
+               SELECT {ALBUM_EXPR} AS album, {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays \
+                 FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
+             WHERE album IS NOT NULL AND album <> '' \
+               AND (?1 = '' OR album LIKE ?1) \
+               AND (?2 = '' OR artist = ?2) \
+             GROUP BY album ORDER BY album COLLATE NOCASE"
+        );
+        let artist = f.artist.clone().unwrap_or_default();
+        self.groups(&sql, rusqlite::params![f.like(), artist], true)
+    }
+
+    fn groups(
+        &self,
+        sql: &str,
+        params: impl rusqlite::Params,
+        with_artist: bool,
+    ) -> Result<Vec<BrowseGroup>, DbError> {
+        let mut st = self.conn.prepare(sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map(params, |r| {
+                Ok(BrowseGroup {
+                    name: r.get(0)?,
+                    passages: r.get(1)?,
+                    plays: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    artist: if with_artist { r.get(3)? } else { None },
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
+        let sql = format!(
+            "SELECT passage_id, title, artist, album, plays FROM ( \
+               SELECT m.passage_id, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, \
+                      {ALBUM_EXPR} AS album, {PLAYS_EXPR} AS plays \
+                 FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
+             WHERE title IS NOT NULL AND title <> '' \
+               AND (?1 = '' OR title LIKE ?1) \
+               AND (?2 = '' OR artist = ?2) \
+               AND (?3 = '' OR album = ?3) \
+             ORDER BY title COLLATE NOCASE LIMIT 2000"
+        );
+        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map(
+                rusqlite::params![
+                    f.like(),
+                    f.artist.clone().unwrap_or_default(),
+                    f.album.clone().unwrap_or_default()
+                ],
+                |r| {
+                    Ok(BrowseTrack {
+                        passage_id: r.get(0)?,
+                        title: r.get(1)?,
+                        artist: r.get(2)?,
+                        album: r.get(3)?,
+                        plays: r.get(4)?,
+                    })
+                },
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
 }
 
 #[cfg(test)]

@@ -169,6 +169,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
         .route("/art/:passage_id", get(cover_art))
+        .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
+        .route("/browse.js", get(|| async { js(BROWSE_JS) }))
+        .route("/browse/:kind", get(browse))
+        .route("/queue/:passage_id", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
@@ -202,6 +206,67 @@ async fn set_volume(
 ) -> StatusCode {
     ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
     StatusCode::NO_CONTENT
+}
+
+/// Browse the library by artist, album or track `[REQ-VIS-180]`.
+///
+/// Read-only and off the engine entirely: the browse page asks the database
+/// directly rather than going through the player, so listing ten thousand
+/// tracks cannot get in the way of playing one.
+async fn browse(
+    State(ui): State<Ui>,
+    axum::extract::Path(kind): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let filter = crate::db::BrowseFilter {
+        q: q.get("q").filter(|s| !s.is_empty()).cloned(),
+        artist: q.get("artist").filter(|s| !s.is_empty()).cloned(),
+        album: q.get("album").filter(|s| !s.is_empty()).cloned(),
+    };
+    let out = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        match kind.as_str() {
+            "artists" => serde_json::to_value(lib.browse_artists(&filter).ok()?).ok(),
+            "albums" => serde_json::to_value(lib.browse_albums(&filter).ok()?).ok(),
+            "tracks" => serde_json::to_value(lib.browse_tracks(&filter).ok()?).ok(),
+            _ => None,
+        }
+    })
+    .await;
+    match out {
+        Ok(Some(v)) => axum::Json(v).into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Put a browsed passage next in the queue `[REQ-VIS-180]`.
+///
+/// Next rather than at the back: browsing to something and waiting five
+/// passages for it is indistinguishable from the button not working. It does
+/// not interrupt what is playing -- that is what Skip is for.
+async fn queue_passage(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> StatusCode {
+    let db = ui.db.clone();
+    let entry = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        let mut e = lib.passage(passage_id).ok()?;
+        lib.describe(&mut e);
+        if let Some(t) = lib.stored_tags(passage_id) {
+            e.naming.apply_tags(t);
+        }
+        Some(e)
+    })
+    .await;
+    match entry {
+        Ok(Some(e)) => {
+            ui.handle.send(Command::EnqueueNext(e));
+            StatusCode::NO_CONTENT
+        }
+        _ => StatusCode::NOT_FOUND,
+    }
 }
 
 /// The passage's cover art `[REQ-VIS-170]`.
@@ -341,6 +406,8 @@ async fn command(
 /// copy rather than an install. Adding a skin means adding a row here and three
 /// files; nothing else in the server changes.
 const SHELL: &str = include_str!("web/shell.html");
+const BROWSE_HTML: &str = include_str!("web/browse.html");
+const BROWSE_JS: &str = include_str!("web/browse.js");
 const CORE: &str = include_str!("web/core.js");
 
 struct Skin {
@@ -369,8 +436,21 @@ const SKINS: &[Skin] = &[
     skin!("winamp", "WinAmp"),
 ];
 
+/// Skins are compiled into the binary, so a cached copy in the browser can be
+/// older than the running player -- which looks exactly like a feature that
+/// does not work. `no-cache` means revalidate, not "do not store": the browser
+/// still keeps it and still gets a 304 when nothing changed.
+const REVALIDATE: (axum::http::HeaderName, &str) =
+    (axum::http::header::CACHE_CONTROL, "no-cache");
+
 fn js(body: &'static str) -> impl IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8")], body)
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            REVALIDATE,
+        ],
+        body,
+    )
 }
 
 /// What the browser may choose between. The catalogue is served rather than
@@ -393,9 +473,12 @@ async fn skin_asset(
         return StatusCode::NOT_FOUND.into_response();
     };
     match file.as_str() {
-        "skin.html" => Html(skin.html).into_response(),
+        "skin.html" => ([REVALIDATE], Html(skin.html)).into_response(),
         "skin.css" => (
-            [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+            [
+                (axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8"),
+                REVALIDATE,
+            ],
             skin.css,
         )
             .into_response(),

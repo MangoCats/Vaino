@@ -84,7 +84,12 @@ let failures = 0;
 
 async function run(skin) {
   const dir = path.join(ROOT, 'skins', skin);
-  const dom = new JSDOM(fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8'),
+  // The shell starts core with an inline script. Here core is injected by hand
+  // (jsdom fetches no subresources), so that call would fire before core exists
+  // and print a ReferenceError that means nothing. Drop it; we call start below.
+  const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
+    .replace('<script>Vaino.start();</script>', '');
+  const dom = new JSDOM(shell,
                         { runScripts: 'dangerously', url: 'http://localhost/?skin=' + skin });
   const { window } = dom;
   const errors = [];
@@ -122,6 +127,8 @@ async function run(skin) {
     window.document.body.appendChild(el);
   };
   runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  // core.js is a library now; the page starts it, exactly as shell.html does.
+  runScript('Vaino.start();');
 
   // Wait for core to have loaded the skin and opened its socket.
   for (let i = 0; i < 200 && !sock; i++) await new Promise(r => setTimeout(r, 5));
@@ -146,6 +153,31 @@ async function run(skin) {
       errors.push(`${label} snapshot threw: ${e.message}`);
     }
   }
+
+  // Cover art: jsdom never loads images, so the browser's load event has to be
+  // faked. Without this the check would pass on a skin that can never show a
+  // cover -- which is exactly the failure being guarded against.
+  const art = window.document.getElementById('art');
+  let artOk = 'no #art element';
+  if (art) {
+    if (!art.getAttribute('src')) {
+      artOk = 'src never set';
+    } else if (!art.hidden) {
+      artOk = 'visible before it loaded';
+    } else {
+      art.dispatchEvent(new window.Event('load'));
+      artOk = art.hidden ? 'still hidden after load' : null;
+      if (!artOk) {
+        // ...and moving to a passage whose file has no picture must hide it
+        // again. Driven by pushing a snapshot, not by calling core directly,
+        // so what is under test is the path the skin actually takes.
+        sock.onmessage({ data: JSON.stringify({ ...RICH, passage_id: 999 }) });
+        art.dispatchEvent(new window.Event('error'));
+        artOk = art.hidden ? null : 'still visible after a 404';
+      }
+    }
+  }
+  if (artOk) errors.push('cover art: ' + artOk);
 
   // The transport must be wired, and the picker populated from the catalogue.
   window.document.querySelector('[data-cmd="skip"]').onclick();

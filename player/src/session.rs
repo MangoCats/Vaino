@@ -145,7 +145,13 @@ impl Session {
             || e.naming.mb_artist.is_none()
             || e.naming.mb_album.is_none()
         {
-            let tags = crate::tags::read(&e.path);
+            // The scanned copy first: reading tags means probing the file, and
+            // this runs on the way into the queue while music is playing
+            // `[REQ-VIS-180]`. Falling back to the file keeps an unscanned
+            // library working, just more slowly.
+            let tags = lib
+                .stored_tags(e.passage_id)
+                .unwrap_or_else(|| crate::tags::read(&e.path));
             e.naming.apply_tags(tags);
         }
     }

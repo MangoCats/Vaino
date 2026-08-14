@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaino — Browse</title>
+<style>
+  /* One browse page for every skin, rather than three.
+     It loads the chosen skin's stylesheet, so it inherits that skin's ground,
+     type and buttons; what is here is only the layout the listing needs, and
+     it is all class-based so a skin can override any of it. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .browse { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem; }
+  .browse header { display: flex; align-items: center; gap: 1rem;
+                   flex-wrap: wrap; margin-bottom: 1rem; }
+  .browse h1 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
+               font-weight: 600; margin: 0; opacity: .7; }
+  .tabs { display: flex; gap: .35rem; }
+  .tabs button[aria-selected="true"] { outline: 2px solid currentColor; }
+  .browse input[type=search] { font: inherit; padding: .3rem .5rem; min-width: 12rem;
+                               background: transparent; color: inherit;
+                               border: 1px solid currentColor; border-radius: 4px; }
+  .crumbs { font-size: .875rem; opacity: .75; margin-bottom: .6rem; min-height: 1.4rem; }
+  .crumbs a { cursor: pointer; text-decoration: underline; }
+  .rows { border-collapse: collapse; width: 100%; font-size: .9375rem; }
+  .rows td { padding: .3rem .5rem; border-bottom: 1px solid rgba(128,128,128,.25); }
+  .rows tr:hover td { background: rgba(128,128,128,.12); }
+  .rows .num { text-align: right; font-variant-numeric: tabular-nums; opacity: .7;
+               white-space: nowrap; }
+  .rows .go { cursor: pointer; }
+  .rows .sub { opacity: .65; }
+  .count { font-size: .8125rem; opacity: .6; margin: .5rem 0 0; }
+  .browse a.back { font-size: .8125rem; }
+</style>
+
+<div class="browse">
+  <header>
+    <h1>Vaino — Browse</h1>
+    <div class="tabs">
+      <button data-kind="artists">Artist</button>
+      <button data-kind="albums">Album</button>
+      <button data-kind="tracks">Track</button>
+    </div>
+    <input type="search" id="q" placeholder="filter…" autocomplete="off">
+    <a class="back" href="/">← back to the player</a>
+  </header>
+
+  <div class="crumbs" id="crumbs"></div>
+  <table class="rows"><tbody id="rows"></tbody></table>
+  <p class="count" id="count"></p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/browse.js"></script>

@@ -197,6 +197,18 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 >
 > **Naming is not part of selection.** The Director loads the whole radio pool — 8,078 rows — and putting these five correlated subqueries in those columns would run them eight thousand times to answer a question that weighting does not ask. They are fetched for the dozen passages actually on screen instead, once each on the way into the queue, at under a millisecond apiece.
 
+**`[REQ-VIS-180]` The library can be browsed by artist, by album and by track.** MuLibPlay's three "Browse by" pages, which were the one part of its interface Vaino had no answer for. Artist and album are ways *in* to tracks rather than destinations — an artist narrows to their albums, an album to its tracks, a track queues itself **next** — with a crumb trail so the narrowing is reversible.
+
+**Browsing groups by the *displayed* name**, resolved exactly as `[REQ-VIS-170]` resolves it: MusicBrainz where it has an answer, the file's tag where it does not. What you can browse by is therefore precisely what you can see, rather than a second naming scheme that disagrees with the player.
+
+> **This needed a tag index, and that is the honest cost.** Album has no source but the file's own tag, and reading tags means opening and probing every file — 18 seconds for 5,590 of them, which is fine once and impossible per request. `tagscan` writes them to `file_tags`; it is a tool, not the player, and takes the only writable handle to the library for that reason. Re-running it is safe and costs only the new files.
+>
+> **Measured on this library:** 5,589 of 5,590 files carry tags and 3,604 carry cover art. Browsing yields 463 artists in 75 ms, 660 albums in 36 ms, and tracks in 80 ms — on demand rather than per tick, so a query is the right answer and a cache would be premature. Tracks are capped at 2,000 rows per response.
+>
+> **One page for every skin**, wearing the chosen skin's stylesheet. Three browse implementations would rot at different rates; this way a new skin gets browsing for free and can still restyle every part of it. MuLibPlay's three separate buttons still work, via `?kind=`.
+>
+> **Browsing runs off the engine entirely.** The page queries the database directly, so listing ten thousand tracks cannot interfere with playing one. Only the queueing action touches the player, and it inserts **next** rather than last: browsing to something and then waiting five passages for it is indistinguishable from the button not working. It does not interrupt what is playing — that is what Skip is for.
+
 **`[REQ-VIS-160]` The listening surface is skinnable, and the skin is the only part that may differ.** A skin is three files — `skin.html`, `skin.css`, `skin.js` — and nothing else. It never opens a socket, never builds a URL, and never carries a copy of a control law.
 
 What makes this possible was already true and merely tangled: **the server's contract is the snapshot and the command endpoints**, and the DOM was only ever one rendering of it. `core.js` holds that contract — the socket and its reconnection, the complete-snapshot dispatch, the command helpers, the shared formatting, and the fader curve `[REQ-AUD-156]`, which is specified rather than decorative and would be three chances to disagree with the engine if each skin carried its own.

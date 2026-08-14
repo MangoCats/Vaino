@@ -96,6 +96,9 @@ pub enum Command {
     /// How long after a skip the next passage starts, in ms `[REQ-AUD-162]`.
     SetSkipLead(u64),
     Enqueue(QueueEntry),
+    /// Put a passage next rather than last, for a browsed choice
+    /// `[REQ-VIS-180]`.
+    EnqueueNext(QueueEntry),
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
     Shutdown,
@@ -273,6 +276,7 @@ impl Engine {
                     }
                 }
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
+                Ok(Command::EnqueueNext(e)) => self.queue.push_after_current(e),
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
                     self.shutdown = true;
                     return;
@@ -721,6 +725,22 @@ mod tests {
         e.enqueue(entry(1, "does-not-exist.mp3"));
         e.tick();
         assert_eq!(h.snapshot().active_streams, 0, "prepared is not live");
+    }
+
+    #[test]
+    /// A browsed passage goes NEXT, not last: browsing to something and
+    /// waiting five passages for it is indistinguishable from the button not
+    /// working `[REQ-VIS-180]`.
+    #[test]
+    fn enqueue_next_puts_a_passage_after_the_current_one() {
+        let (mut e, h) = Engine::new(None, 3);
+        e.enqueue(entry(1, "a.mp3"));
+        e.enqueue(entry(2, "b.mp3"));
+        e.enqueue(entry(3, "c.mp3"));
+        h.send(Command::EnqueueNext(entry(99, "browsed.mp3")));
+        e.drain_commands();
+        let ids: Vec<i64> = e.queued().map(|q| q.passage_id).collect();
+        assert_eq!(ids, vec![1, 99, 2, 3], "browsed passage lands second");
     }
 
     #[test]

@@ -195,12 +195,27 @@ const Vaino = (() => {
     program: id => post(`/program/${id}`),
     skipFade: ms => post(`/skip/fade/${Math.round(ms)}`),
     skipLead: ms => post(`/skip/lead/${Math.round(ms)}`),
+    // The player page: load the chosen skin, then follow the socket.
     async start() {
       catalogue = await fetch('/skins').then(r => r.json()).catch(() => []);
       await loadSkin(chosen());
       connect();
     },
+    // The browse page: it wants the skin's LOOK and the command helpers, but
+    // not the player's markup and not a socket -- a library listing does not
+    // change twice a second.
+    async startBare() {
+      catalogue = await fetch('/skins').then(r => r.json()).catch(() => []);
+      const l = document.createElement('link');
+      l.rel = 'stylesheet';
+      l.href = `/skin/${chosen()}/skin.css`;
+      document.head.appendChild(l);
+    },
+    browse: (kind, filter = {}) => {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(filter)) if (v) q.set(k, v);
+      return fetch(`/browse/${kind}?${q}`).then(r => r.json());
+    },
+    queueNext: id => post(`/queue/${id}`),
   };
 })();
-
-Vaino.start();
