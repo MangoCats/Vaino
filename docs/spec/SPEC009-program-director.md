@@ -168,6 +168,19 @@ Note that `[K]` was never seasonal at all — a flat ×0.000001 on 140 children'
 
 Measured effect in August: eligible passages fall **8,038 → 7,851**, with 187 more dropping under `min_weight` — the christmas and children's tracks, suppressed out of season. The mechanism had been complete and inert since it was written; the library already carried the characteristic values from six years of MuLibPlay tagging, so loading the curves is what made that tagging act again.
 
+> **`[SPEC-DIR-137]` The children's weight interacts with `min_weight`, and 0.000001 means *never*, not *rarely*.** A children's passage weighs `average × multiplier`; at the library's average of 1.214 that is 0.0000012, which falls **below `min_weight` (0.001)** and is therefore *excluded entirely* rather than made unlikely. There is a cliff at multiplier ≈ 0.00083.
+>
+> | kids multiplier | track weight | eligible? | plays/year @ 60 tracks/day |
+> | ---: | ---: | :--- | ---: |
+> | 0.000001 *(MuLibPlay's)* | 0.0000012 | **no** | **never** |
+> | 0.001 | 0.0012 | yes | 0.42 |
+> | **0.0024** | 0.0029 | yes | **1.00** |
+> | 0.005 | 0.0061 | yes | 2.08 |
+>
+> **MuLibPlay used the same `kidSongWeight` and the same `minWeightLimit`, so children's songs never played there either.** The stated intent — "extremely rarely, one per year or less" — is satisfied by the *or less*, and the six years of observed behaviour were the *never* end of it. Retained deliberately at 0.000001; `--kids 0.0024` is the value that would make it genuinely once-a-year instead.
+>
+> The general lesson: an occasion multiplier small enough to look like suppression can cross `min_weight` and become exclusion, and the two are not the same thing — an excluded passage cannot be surfaced by any amount of listening.
+
 > **The children's weight deserves a decision rather than a default.** MuLibPlay's shipped `kidSongWeight` is 0.000001, which is not a de-emphasis but an effective ban, and here it removes **149 radio passages — 1.8% of the library — permanently, in every season**. It is transcribed faithfully because that is what ran for six years, but it is a parameter: `--kids 0.5` merely damps them, and the value is a row rather than a constant.
 
 ---
