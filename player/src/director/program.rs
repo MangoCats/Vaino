@@ -1,4 +1,5 @@
-//! Programmes and their seeds `[SPEC-DIR-140]`, `[SPEC-DIR-180]`.
+//! Programmes and their seeds `[SPEC-DIR-140]`, `[SPEC-DIR-180]`,
+//! `[REQ-PD-140]`.
 //!
 //! A programme is a list of exemplar passages, not a set of tuned parameters.
 //! Naming songs beats moving sliders, and it is the mechanism MuLibPlay's user

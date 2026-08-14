@@ -25,6 +25,10 @@ pub const MAX_DEPTH_S: f64 = 10800.0;
 pub const LENGTH_MIDPOINT_S: f64 = 180.0;
 pub const LENGTH_CAP: f64 = 4.0;
 
+/// Related recordings share a rotation `[REQ-PD-115]`, and two master time
+/// scales -- one for artists, one for tracks -- multiply every block and ramp
+/// duration `[REQ-PD-118]`.
+///
 /// Log-scale time encoding `[SPEC-DIR-110]`: one float spans four orders of
 /// magnitude, which is why a single slider can mean "six minutes" or "41 days".
 pub fn seconds(v: f64) -> f64 {

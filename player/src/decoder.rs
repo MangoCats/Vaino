@@ -1,9 +1,18 @@
-//! Bounded streaming decoder for a single passage.
+//! Bounded streaming decoder for a single passage `[REQ-AUD-110]`.
 //!
 //! Opens a file, seeks to the passage start, and yields decoded frames a packet
 //! at a time. It **never** holds more than one decoded packet plus the caller's
 //! buffer, so memory is independent of passage length -- decoding minute 240 of
-//! a 245-minute file costs exactly what decoding minute 1 costs.
+//! a 245-minute file costs exactly what decoding minute 1 costs. Measured by
+//! [`memcheck`](bin/memcheck.rs), which fails above the RSS budget rather than
+//! asserting the claim.
+//!
+//! Decoding a span of a larger file costs only that span `[REQ-AUD-120]`: the
+//! seek is what makes a 40-track DAO rip tractable.
+//!
+//! **Nothing here alters the audio** `[REQ-AUD-100]`. Sample rate conversion
+//! happens downstream in [`resample`](../resample.rs) and gain in the mixer;
+//! what this yields is what the file holds.
 
 use std::fs::File;
 use std::path::Path;
@@ -82,6 +91,7 @@ impl PassageDecoder {
 
         // Seeking is what makes a 40-track DAO file tractable: minute 240 costs
         // the same as minute 1 [REQ-AUD-120].
+        // Sample-accurate, not packet-accurate `[REQ-AUD-122]`.
         // Seek lands on a PACKET, and returns where it actually landed. Ignoring
         // that return value leaves every passage start off by up to a packet --
         // silent, but it shifts trim points and, because frame_limit is measured

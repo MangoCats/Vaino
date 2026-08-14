@@ -1,5 +1,9 @@
 //! Flavor distance `[SPEC005]` — how alike two passages sound.
 //!
+//! Partial data degrades rather than disqualifies `[REQ-PD-160]`: a passage
+//! with 11 known characteristics stays selectable beside one with 71, because
+//! aggregation divides by what is actually known.
+//!
 //! Per characteristic the distance is **total variation**, `½·Σ|a−b|`, which
 //! unifies binary and complex characteristics without a fudge factor: for K=2
 //! it reduces exactly to `|Δp|`, for K≥3 it is the probability mass that must

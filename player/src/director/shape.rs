@@ -1,5 +1,9 @@
 //! Stage B: pool shaping — *does this fit right now?* `[SPEC-DIR-145]`
 //!
+//! Candidates are shaped by flavor distance in two stages `[REQ-PD-130]`:
+//! pruned against the programme's seeds, then ordered by similarity to the
+//! passage already queued.
+//!
 //! Frequency has already said how often each passage may play. This stage says
 //! nothing about frequency and never touches a weight `[SPEC-DIR-100]`: it
 //! decides **which** passages are in the running, and hands the survivors on

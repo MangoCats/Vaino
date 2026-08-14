@@ -381,6 +381,10 @@ impl PlayerStore {
     /// `mbid` is stored alongside `passage_id` because six years of history
     /// must survive a rescan that renumbers passages `[SPEC-SC-095]`; the
     /// passage id is the convenience, the MBID is the durable key.
+    /// Record a play, keyed by recording MBID `[REQ-PD-112]`.
+    ///
+    /// Rotation is meaningless without it: an unrecorded play leaves a track as
+    /// eligible as it was before it was heard.
     pub fn record_play(&self, passage_id: i64, mbid: Option<&str>) -> Result<(), DbError> {
         self.conn
             .execute(

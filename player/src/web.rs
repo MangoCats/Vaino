@@ -76,6 +76,10 @@ pub struct ProgramItem {
     pub start: String,
 }
 
+/// What the listening surface shows `[REQ-VIS-150]`: the queue in play order,
+/// the programme in force with its manual override, and master volume -- all of
+/// it as one complete snapshot, so a render is a pure function of the last
+/// message and cannot drift.
 #[derive(Serialize)]
 pub struct Snapshot {
     pub playing: bool,
@@ -536,5 +540,160 @@ async fn skin_asset(
             .into_response(),
         "skin.js" => js(skin.js).into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::QueueEntry;
+    use std::path::PathBuf;
+
+    fn entry(id: i64, title: &str) -> QueueEntry {
+        let mut e = QueueEntry {
+            passage_id: id,
+            path: PathBuf::from(format!("/music/{title}.mp3")),
+            start_ms: 0,
+            end_ms: 200_000,
+            lead_in_ms: 0,
+            lead_out_ms: 0,
+            gain_db: 0.0,
+            mbid: None,
+            naming: Default::default(),
+        };
+        e.naming.mb_title = Some(title.into());
+        e
+    }
+
+    fn state() -> PlayerState {
+        let mut s = PlayerState::default();
+        let mut cur = entry(1, "Now Playing");
+        cur.naming.mb_artist = Some("The Artist".into());
+        cur.naming.tag_album = Some("Some Record".into());
+        cur.naming.plays = 12;
+        cur.naming.last_played = Some(1_700_000_000);
+        s.current = Some(cur);
+        s.queue = vec![entry(2, "Mixing"), entry(3, "Waiting")];
+        s.mixing_ahead = 1;
+        s.queue_len = 2;
+        s.volume = 0.5;
+        s.skip_fade_ms = 2_000;
+        s.skip_lead_ms = 500;
+        s
+    }
+
+    /// Every skin is three non-empty files under a unique name. A skin that
+    /// compiles in empty would serve a blank page and fail nowhere else.
+    #[test]
+    fn every_registered_skin_is_complete() {
+        assert!(!SKINS.is_empty());
+        let mut seen = std::collections::HashSet::new();
+        for s in SKINS {
+            assert!(seen.insert(s.name), "duplicate skin name {}", s.name);
+            assert!(!s.label.is_empty(), "{} has no label", s.name);
+            for (what, body) in [("html", s.html), ("css", s.css), ("js", s.js)] {
+                assert!(body.len() > 50, "{} {what} is empty", s.name);
+            }
+            // The contract: a skin gets its transport wired by core, so it must
+            // mark the buttons up `[REQ-VIS-160]`.
+            for cmd in ["play", "pause", "skip"] {
+                assert!(
+                    s.html.contains(&format!("data-cmd=\"{cmd}\"")),
+                    "{} is missing the {cmd} control",
+                    s.name
+                );
+            }
+            assert!(s.html.contains("data-skins"), "{} has no skin picker", s.name);
+        }
+    }
+
+    /// The shell and browse page must load core, or nothing on them works.
+    #[test]
+    fn the_pages_load_the_runtime() {
+        assert!(SHELL.contains("/core.js"));
+        assert!(SHELL.contains("Vaino.start()"), "the shell starts core");
+        assert!(BROWSE_HTML.contains("/core.js") && BROWSE_HTML.contains("/browse.js"));
+        assert!(BROWSE_JS.contains("startBare"), "browse takes the skin, not the player");
+    }
+
+    /// Names reach the browser resolved, and carry where they came from
+    /// `[REQ-VIS-170]`.
+    #[test]
+    fn a_snapshot_reports_names_and_their_provenance() {
+        let snap = Snapshot::from(&state());
+        assert_eq!(snap.title.as_deref(), Some("Now Playing"));
+        assert_eq!(snap.artist.as_deref(), Some("The Artist"));
+        assert_eq!(snap.album.as_deref(), Some("Some Record"));
+        assert_eq!(snap.title_source, "musicbrainz");
+        assert_eq!(snap.artist_source, "musicbrainz");
+        // The release tables are empty, so album comes from the file and must
+        // say so rather than claiming MusicBrainz.
+        assert_eq!(snap.album_source, "tags");
+        assert_eq!(snap.plays, 12);
+        assert_eq!(snap.passage_id, Some(1));
+    }
+
+    /// What the mixer already holds cannot be edited, and the flag says which
+    /// `[REQ-VIS-185]`.
+    #[test]
+    fn queue_items_report_whether_they_can_still_be_edited() {
+        let snap = Snapshot::from(&state());
+        assert_eq!(snap.queue.len(), 2);
+        assert!(!snap.queue[0].editable, "the mixer has this one");
+        assert!(snap.queue[1].editable, "this one is still only queued");
+        assert_eq!(snap.queue[0].title, "Mixing");
+    }
+
+    /// Amplitude is internal; the browser is told dB and the floor
+    /// `[REQ-AUD-154]`.
+    #[test]
+    fn volume_crosses_as_decibels_not_amplitude() {
+        let snap = Snapshot::from(&state());
+        assert!((snap.volume_db - (-6.0206)).abs() < 1e-3, "{}", snap.volume_db);
+        assert_eq!(snap.fader_min_db, crate::output::FADER_MIN_DB);
+    }
+
+    /// The limits travel with the values, so the browser cannot offer a range
+    /// the engine will refuse `[REQ-AUD-162]`.
+    #[test]
+    fn the_skip_shape_carries_its_own_limits() {
+        let snap = Snapshot::from(&state());
+        assert_eq!(snap.skip.fade_ms, 2_000);
+        assert_eq!(snap.skip.lead_ms, 500);
+        assert_eq!(snap.skip.fade_max_ms, crate::SKIP_FADE_MAX_MS);
+        assert_eq!(snap.skip.lead_min_ms, crate::SKIP_LEAD_MIN_MS);
+        assert_eq!(snap.skip.lead_max_ms, crate::SKIP_LEAD_MAX_MS);
+    }
+
+    /// An idle player must serialise rather than panic on its empty fields.
+    #[test]
+    fn an_empty_snapshot_is_still_a_snapshot() {
+        let snap = Snapshot::from(&PlayerState::default());
+        assert_eq!(snap.title, None);
+        assert_eq!(snap.title_source, "unknown");
+        assert_eq!(snap.plays, 0);
+        assert!(snap.queue.is_empty());
+        let json = serde_json::to_string(&snap).expect("an idle snapshot must serialise");
+        assert!(json.contains("\"volume_db\""));
+    }
+
+    /// The wire shape the skins are written against. Renaming a field here
+    /// silently blanks part of every skin, which no Rust test would otherwise
+    /// catch `[REQ-VIS-160]`.
+    #[test]
+    fn the_snapshot_keeps_the_field_names_the_skins_read() {
+        let json = serde_json::to_string(&Snapshot::from(&state())).unwrap();
+        for field in [
+            "playing", "passage_id", "title", "artist", "album", "plays",
+            "last_played", "position_ms", "duration_ms", "queue_len", "queue",
+            "volume_db", "fader_min_db", "skip", "program", "program_manual",
+            "programs", "underrun_samples",
+        ] {
+            assert!(json.contains(&format!("\"{field}\"")), "snapshot lost {field}");
+        }
+        for field in ["passage_id", "title", "artist", "duration_ms", "editable"] {
+            assert!(json.contains(&format!("\"{field}\"")), "queue item lost {field}");
+        }
     }
 }

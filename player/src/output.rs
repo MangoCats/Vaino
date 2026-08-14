@@ -1,5 +1,8 @@
 //! Audio output: a cpal stream whose callback drains a ring buffer.
 //!
+//! The device is local to the process `[REQ-AUD-150]`: remote browsers control
+//! the player, they never receive audio.
+//!
 //! The callback runs on a real-time thread. It must not allocate, must not
 //! block, and must always return promptly -- so it does exactly one thing:
 //! copy from a ring buffer, and count the shortfall when there isn't enough.

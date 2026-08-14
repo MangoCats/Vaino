@@ -1,4 +1,6 @@
-//! The acceptance gate for [GDE-ARC-050], run as a program rather than asserted.
+//! The acceptance gate for `[REQ-AUD-110]` / [GDE-ARC-050], run as a program
+//! rather than asserted. `verify-targets.sh` invokes it when `VAINO_LONG_FILE`
+//! names a long file, and reports SKIPPED when it does not.
 //!
 //! Vaino v1's play/skip latency and memory use came from one decision: decode
 //! the whole file [GDE-V1-030]. This decodes a passage of arbitrary length
