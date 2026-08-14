@@ -63,6 +63,10 @@ pub struct QueueItem {
     pub title: String,
     pub artist: Option<String>,
     pub duration_ms: u64,
+    /// Whether it can still be moved or dropped `[REQ-VIS-185]`. False once
+    /// the mixer has it: its audio is already partly in the ring, so removing
+    /// it from the queue would change nothing anyone could hear.
+    pub editable: bool,
 }
 
 #[derive(Serialize)]
@@ -137,11 +141,13 @@ impl From<&PlayerState> for Snapshot {
             queue: s
                 .queue
                 .iter()
-                .map(|e| QueueItem {
+                .enumerate()
+                .map(|(i, e)| QueueItem {
                     passage_id: e.passage_id,
                     title: e.title(),
                     artist: e.artist(),
                     duration_ms: e.duration_ms(),
+                    editable: i >= s.mixing_ahead,
                 })
                 .collect(),
             volume_db: Volume::db_for(s.volume),

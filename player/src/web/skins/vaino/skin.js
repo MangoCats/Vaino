@@ -53,7 +53,7 @@
     }
     for (const q of items) {
       const li = document.createElement('li');
-      li.appendChild(Vaino.queueControls(q.passage_id));
+      li.appendChild(Vaino.queueControls(q.passage_id, q.editable));
       const t = document.createElement('span');
       t.className = 'qtitle';
       t.textContent = q.artist ? `${q.title} — ${q.artist} ` : q.title + ' ';

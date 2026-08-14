@@ -230,7 +230,7 @@ const Vaino = (() => {
     // verbs on the same object, and three copies would drift. A skin styles
     // them through `.qedit` and decides where they go; it does not decide what
     // they do.
-    queueControls(passageId) {
+    queueControls(passageId, editable = true) {
         const box = document.createElement('span');
         box.className = 'qedit';
         // Remove first and furthest left, then sooner, then later. Fixed
@@ -246,6 +246,12 @@ const Vaino = (() => {
             b.type = 'button';
             b.textContent = label;
             b.title = title;
+            if (editable === false) {
+                // Already in the mixer, so its audio is partly in the ring:
+                // the control would report success and change nothing.
+                b.disabled = true;
+                b.title = 'already playing into the buffer';
+            }
             b.onclick = e => {
                 // The row itself may do something else entirely.
                 e.stopPropagation();

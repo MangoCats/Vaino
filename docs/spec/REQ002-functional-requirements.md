@@ -85,6 +85,10 @@ The test is `frames_mixed` against the ring depth, deliberately in **frames rath
 
 > **Measured:** resumed 40 s from the end of a passage, the title changed at **40.0 s** — exactly when the outgoing passage stopped reaching the device.
 >
+> **"Coming up" follows the same clock.** A passage leaves the queue when the mixer admits it, which is up to a ring's depth before anyone hears it — so the next track used to vanish from the list while the current one was still playing. Anything admitted but not yet audible now sits at the top of the list rather than being gone from it. Measured across a real handover: the next track stayed listed throughout, became uneditable 15 s before the change — the ring depth — and left the list at the moment it was heard.
+>
+> **What the mixer holds cannot be edited**, and says so `[REQ-VIS-185]`: its audio is already partly in the ring, so removing it from the queue would change nothing anyone could hear. The controls are disabled rather than absent, because a control that vanishes teaches less than one that explains itself.
+>
 > The reported passage outlives `live`, because a passage stays audible for a ring's depth after the mixer has finished with it. Blanking the display at that point would be the same fault mirrored.
 >
 > **This is the fourth instance of one fault** `[REQ-AUD-142]`, `[REQ-AUD-152]`, `[REQ-AUD-158]`. Pause had to stop the device, volume had to move into the callback, skip had to cut the ring, and now the display has to lag the mixer. The rule has earned its generality: **anything the listener perceives is downstream of a 14 s buffer, and anything measured upstream of it is measuring the wrong moment.**

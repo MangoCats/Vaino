@@ -58,6 +58,9 @@ pub struct PlayerState {
     pub queue_len: usize,
     /// What is coming, in play order.
     pub queue: Vec<QueueEntry>,
+    /// How many of those the mixer already holds, and so cannot be edited
+    /// `[REQ-VIS-185]`. They sit at the front of `queue`.
+    pub mixing_ahead: usize,
     /// Master volume, 0.0 to 1.0.
     pub volume: f32,
     /// Skip transition shape `[REQ-AUD-162]`, so a UI can show what it will do.
@@ -702,8 +705,23 @@ impl Engine {
             s.playing = self.playing;
             s.current = self.shown.as_ref().map(|(e, _)| e.clone());
             s.position_ms = self.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);
-            s.queue_len = self.queue.len();
-            s.queue = self.queue.iter().take(12).cloned().collect();
+            // What is still to come FOR THE LISTENER `[REQ-AUD-164]`. A
+            // passage leaves the queue when the mixer admits it, which is up to
+            // a ring's depth before anyone hears it -- so the next track used
+            // to vanish from "Coming up" while the current one was still
+            // playing. Anything admitted but not yet audible belongs at the
+            // top of the list, not gone from it.
+            let shown_id = self.shown.as_ref().map(|(e, _)| e.passage_id);
+            let after = match self.live.iter().position(|l| Some(l.entry.passage_id) == shown_id) {
+                Some(i) => i + 1,
+                // The heard passage has finished mixing, so everything still
+                // in `live` is ahead of the listener.
+                None => 0,
+            };
+            let pending = self.live.iter().skip(after).map(|l| l.entry.clone());
+            s.queue_len = self.live.len().saturating_sub(after) + self.queue.len();
+            s.queue = pending.chain(self.queue.iter().cloned()).take(12).collect();
+            s.mixing_ahead = self.live.len().saturating_sub(after);
             s.volume = self.volume;
             s.skip_fade_ms = self.skip_fade_ms;
             s.skip_lead_ms = self.skip_lead_ms;
