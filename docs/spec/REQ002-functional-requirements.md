@@ -38,9 +38,9 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 >
 > The value crosses to the callback as an atomic, not behind the ring's mutex. The callback must never block, and must be able to change level even on a tick where it cannot take that lock.
 
-**`[REQ-AUD-154]` The master fader is graduated in decibels, and runs the full −72 dB to 0 dB.** `amplitude = 10^(dB/20)`, linear in dB across the whole travel. Loudness is perceived in ratios, so equal movement must be an equal *ratio*: a fader linear in amplitude spends its top half on differences barely distinguishable from full and crams everything audible into the bottom sliver.
+**`[REQ-AUD-154]` The master level is expressed in decibels, −72 dB to 0 dB**, `amplitude = 10^(dB/20)`. Loudness is perceived in ratios, so dB is the unit in which a listener's judgements are actually even; amplitude is not.
 
-**The control is captioned with its own value** — "−32 dB", not "50 %". A percentage of travel is not a quantity the listener can act on, and deriving a dB caption from a percentage would put a second copy of the curve in the browser, free to disagree with the engine about what the fader is set to. The slider is graduated in whole decibels, about the smallest step that can be picked out, and the caption is simply what it reads.
+**The control is captioned with its own computed value** — "−32.0 dB", not "50 %". A percentage of travel is not a quantity the listener can act on. The figure displayed is the figure sent, so the caption cannot differ from the level in force.
 
 | dB | amplitude | |
 |---:|---:|:--|
@@ -50,11 +50,34 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 | −40 | 0.010 | |
 | −72 | 0.00025 | bottom of travel |
 
-> **There is no mute position.** An earlier revision reserved the very bottom of the travel for silence, following MuLibPlay, which closed hard below −8191 on its `-8192..=0` slider. Specifying the control's full range as −72…0 dB leaves no position for it. Nothing is lost that matters: −72 dB is inaudible through any normal amplifier, and pause stops the output device outright `[REQ-AUD-142]`, which is the honest way to silence a player. If a detent below −72 is ever wanted, that is where it goes.
+> **There is no mute position.** An earlier revision reserved the very bottom of the travel for silence, following MuLibPlay, which closed hard below −8191 on its `-8192..=0` slider. Specifying the control's full range as −72…0 dB leaves no position for it. Nothing audible is lost: −72 dB is inaudible through any normal amplifier, and pause stops the output device outright `[REQ-AUD-142]`, which is the honest way to silence a player. If a detent below −72 is ever wanted, that is where it goes.
 >
-> The 72 dB span is the one number here not inherited from MuLibPlay, which used 64 dB.
+> The 72 dB span is the one figure here not inherited from MuLibPlay, which used 64 dB.
 >
-> **Amplitude is the internal representation; dB is the listener's.** The engine, the device and the saved resume point all speak amplitude — it is what multiplies samples. Only the control speaks in dB, converted at each edge of the HTTP layer, so there is one curve in the system rather than two that can drift.
+> **Amplitude is the internal representation; dB is the listener's.** The engine, the device and the saved resume point all speak amplitude — it is what multiplies samples. Only the control speaks in dB, converted at the edge of the HTTP layer.
+
+**`[REQ-AUD-156]` The control's travel is quadratic in dB, flat where it meets full scale.** With `x` as travel from left (0) to right (1):
+
+```
+dB(x) = −72 × (1 − x)²
+```
+
+Zero slope at the top is what the curve is for: it spends most of the control's pixels on the top of the range, where listening actually happens, and compresses the bottom, which is inaudible anyway. On a 112-pixel control that is **0.007 dB per pixel** near full scale against **1.25 dB per pixel** at the far left. The control moves with single-pixel precision (`step="any"`) rather than in fixed increments.
+
+| travel | dB | amplitude |
+|---:|---:|---:|
+| 0 | −72.0 | 0.00025 |
+| 1/4 | −40.5 | 0.0094 |
+| 1/2 | −18.0 | 0.126 |
+| 2/3 | −8.0 | 0.398 |
+| 3/4 | −4.5 | 0.596 |
+| 1 | 0.0 | 1.000 |
+
+> **The specification was over-determined, and the 2/3 point is what gave.** It asked for −72 dB at the left, −6 dB at 2/3, 0 dB at the right, and zero slope at the top — four conditions on a curve with three coefficients. Zero slope with `dB(1) = 0` forces the form `a(1−x)²`, and `dB(0) = −72` then fixes `a = −72`, putting 2/3 at `−72/9 = −8 dB`. Honouring −6 dB at 2/3 instead would raise the left end to −54 dB; fitting all three points exactly without the slope condition gives a curve that rises to +0.28 dB at x = 0.94 before falling back, which is non-monotonic and overshoots full scale. Both endpoints and the flat top are kept exact; the 2/3 point sits 2 dB low.
+>
+> **Displayed to a tenth of a dB, and sent as the displayed figure.** A tenth is far below what anyone can hear, so quantising to it loses nothing audible and guarantees the caption is the level in force. Near full scale the curve is flat enough that several adjacent pixels read the same figure — that is the zero slope behaving as specified, not a loss of precision.
+>
+> **This is the control's geometry, not audio, so it lives in the control.** The engine owns dB-to-amplitude and never sees a position; the browser owns position-to-dB and never sees an amplitude. The floor is sent to the browser rather than written there twice, so −72 exists in one place.
 
 > **Verification:** `[REQ-AUD-110]` and `[REQ-AUD-120]` are gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency `[GDE-ARC-050]`.
 >

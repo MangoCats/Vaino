@@ -68,6 +68,10 @@ pub struct Snapshot {
     /// number directly, so the browser never converts and cannot disagree with
     /// the engine about what the fader is set to.
     pub volume_db: f32,
+    /// The bottom of the fader, in dB. Sent so the control can shape itself
+    /// around the engine's floor instead of keeping its own copy of the number
+    /// `[REQ-AUD-156]`.
+    pub fader_min_db: f32,
     /// The programme in force, and whether it was chosen by hand.
     pub program: Option<String>,
     pub program_manual: bool,
@@ -98,6 +102,7 @@ impl From<&PlayerState> for Snapshot {
                 })
                 .collect(),
             volume_db: Volume::db_for(s.volume),
+            fader_min_db: crate::output::FADER_MIN_DB,
             program: None,
             program_manual: false,
             programs: Vec::new(),
@@ -121,11 +126,15 @@ async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResp
     ws.on_upgrade(move |socket| push_state(socket, ui))
 }
 
-/// Master level in whole dB relative to full scale, `-72` to `0`.
+/// Master level in dB relative to full scale, `-72.0` to `0.0`.
 ///
-/// Whole decibels because that is the control's own graduation and about the
-/// smallest step a listener can pick out; an integer also crosses a URL without
-/// the locale trouble a decimal point invites.
+/// Fractional now that the control moves a pixel at a time `[REQ-AUD-156]`: at
+/// the top of its travel a pixel is worth less than a hundredth of a dB, so
+/// whole decibels would quantise away most of the resolution the curve exists
+/// to provide. Rust parses a decimal point locale-independently, so the earlier
+/// worry about one crossing a URL does not apply to the parser -- only to
+/// anything that might have formatted it, and the browser formats with
+/// `toFixed`.
 ///
 /// It becomes an amplitude here, at the edge, so that everything inward of this
 /// point -- engine, device, saved state -- speaks in amplitude, which is what
@@ -133,9 +142,9 @@ async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResp
 /// `[REQ-AUD-154]`.
 async fn set_volume(
     State(ui): State<Ui>,
-    axum::extract::Path(db): axum::extract::Path<i32>,
+    axum::extract::Path(db): axum::extract::Path<f32>,
 ) -> StatusCode {
-    ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db as f32)));
+    ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
     StatusCode::NO_CONTENT
 }
 
