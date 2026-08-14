@@ -231,6 +231,16 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 >
 > **Browsing runs off the engine entirely.** The page queries the database directly, so listing ten thousand tracks cannot interfere with playing one. Only the queueing action touches the player, and it inserts **next** rather than last: browsing to something and then waiting five passages for it is indistinguishable from the button not working. It does not interrupt what is playing — that is what Skip is for.
 
+**`[REQ-VIS-195]` Tracks are selected, then acted on together.** A checkbox on each row and **one** set of Now / Next / Last for the list, disabled until something is ticked — a button that does nothing when pressed teaches nothing. Tapping anywhere on a row ticks it, because a 16-pixel checkbox is not a phone target and the whole row is.
+
+Several tracks go in **exactly as one would**, and in the order they appear in the listing — so an album queues in its running order `[REQ-VIS-190]` in a single action.
+
+> **They must arrive together.** Sent as separate requests, three passages inserted one at a time at the same place come out **backwards**; a whole album queued in reverse looks like a UI fault and is not. So the list travels as one request and is inserted by one command, and `Queue::insert_at` is the single place that knows how to keep an order. Both are tested, including insertion past the end.
+>
+> **A passage that cannot be read is dropped rather than failing the batch:** nineteen tracks queued beats none.
+>
+> Measured: all seven tracks of *Aja*, queued Next in one action, landed after the current passage as Black Cow → Aja → Deacon Blues → Peg → Home at Last → I Got the News → Josie.
+
 **`[REQ-VIS-190]` An album opens in its own running order.** An album is a sequence, not an index: opened as one, its tracks belong in the order they were put on the record. Alphabetical remains right everywhere else, where a long list has to be findable rather than faithful.
 
 Ordering is by disc, then track number, then title. **Unnumbered tracks sort after the numbered ones**, not ahead of them, which is where a bare `NULL` would put them.

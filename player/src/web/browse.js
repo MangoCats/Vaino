@@ -98,12 +98,43 @@
 
   const plural = (n, one) => `${n.toLocaleString()} ${one}${n === 1 ? '' : 's'}`;
 
+  const picked = () =>
+    [...document.querySelectorAll('.pick:checked')].map(b => b.value);
+
+  // The verbs are useless without a selection, and a button that does nothing
+  // when pressed teaches nothing. Disabled until there is something to act on.
+  function armed() {
+    const n = picked().length;
+    for (const b of document.querySelectorAll('#verbs button')) b.disabled = !n;
+    $('picked').textContent = n ? `${plural(n, 'track')} selected` : '';
+  }
+
+  for (const [id, action, said] of [
+    ['v-now', 'now', 'playing now'],
+    ['v-next', 'next', 'playing next'],
+    ['v-last', 'last', 'added to the end'],
+  ]) {
+    $(id).onclick = () => {
+      const ids = picked();
+      if (!ids.length) return;
+      // One request carrying the list, in the order it is displayed. Sent as
+      // separate requests they would arrive interleaved, and inserting each at
+      // the same place would reverse them.
+      Vaino.queue(ids.join(','), action).then(() => {
+        $('note').textContent = `${plural(ids.length, 'track')} — ${said}.`;
+        for (const b of document.querySelectorAll('.pick:checked')) b.checked = false;
+        armed();
+      });
+    };
+  }
+
   async function show(next) {
     if (next) kind = next;
     for (const b of document.querySelectorAll('[data-kind]')) {
       b.setAttribute('aria-selected', String(b.dataset.kind === kind));
     }
     crumbs();
+    $('verbs').hidden = kind !== 'tracks';
     const body = $('rows');
     const note = $('note');
 
@@ -161,9 +192,9 @@
       }
 
       if (kind === 'tracks') {
-        // Three verbs rather than one tap: wanting to hear something is not the
-        // same as wanting to hear it INSTEAD of what is playing, and a single
-        // action has to guess which was meant.
+        // A checkbox rather than three buttons per row: one set of verbs serves
+        // the whole list [REQ-VIS-195], which keeps a row narrow enough to read
+        // on a phone and makes queueing an album a single action.
         // In album order the number leads, because that is how the record is
         // read. Elsewhere it would be noise attached to an arbitrary position.
         const numbered = filter.album && r.track_no
@@ -173,22 +204,16 @@
                        filter.album ? (r.artist ?? '')
                                     : [r.artist, r.album].filter(Boolean).join(' — '),
                        r.plays ? `${r.plays}×` : '');
-        const acts = document.createElement('span');
-        acts.className = 'acts';
-        for (const [label, action, said] of [
-          ['Now', 'now', 'plays now'],
-          ['Next', 'next', 'plays next'],
-          ['Last', 'last', 'added to the end'],
-        ]) {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.textContent = label;
-          b.onclick = () => Vaino.queue(r.passage_id, action).then(() => {
-            note.textContent = `${r.title} — ${said}.`;
-          });
-          acts.appendChild(b);
-        }
-        li.appendChild(acts);
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.className = 'pick';
+        box.value = r.passage_id;
+        box.onclick = e => e.stopPropagation();
+        box.onchange = armed;
+        li.prepend(box);
+        // Tapping anywhere on the row ticks it: a 16-pixel checkbox is not a
+        // phone target, and the whole row is.
+        li.onclick = () => { box.checked = !box.checked; armed(); };
         body.appendChild(li);
       } else if (kind === 'albums') {
         body.appendChild(row(
@@ -204,6 +229,7 @@
       }
     }
     if (byLetter) alphabet(anchors);
+    armed();
     note.textContent = `${rows.length.toLocaleString()} ${kind}`
       + (rows.length >= 2000 ? ' (showing the first 2,000)' : '');
   }

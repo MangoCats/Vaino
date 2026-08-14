@@ -83,6 +83,17 @@ impl PlayerState {
 /// "stopped": pausing halts only the *consumer*, while decoders keep filling
 /// their buffers, so resuming is instant and the pipeline stays primed after
 /// the initial power-on fill.
+/// Where a batch of passages goes `[REQ-VIS-195]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// Front of the queue, then skip into it. The only one that interrupts.
+    Now,
+    /// After the current passage.
+    Next,
+    /// Behind everything already waiting.
+    Last,
+}
+
 #[derive(Debug)]
 pub enum Command {
     Play,
@@ -101,6 +112,8 @@ pub enum Command {
     EnqueueNext(QueueEntry),
     /// Play a passage at once: to the front of the queue, then skip into it.
     PlayNow(QueueEntry),
+    /// Several passages at once, in the order given `[REQ-VIS-195]`.
+    EnqueueMany(Vec<QueueEntry>, Placement),
     /// Drop a queued passage `[REQ-VIS-185]`.
     RemoveQueued(i64),
     /// Move a queued passage earlier (negative) or later (positive).
@@ -288,6 +301,27 @@ impl Engine {
                 }
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
                 Ok(Command::EnqueueNext(e)) => self.queue.push_after_current(e),
+                Ok(Command::EnqueueMany(entries, place)) => {
+                    if !entries.is_empty() {
+                        match place {
+                            Placement::Now => {
+                                self.queue.insert_at(0, entries);
+                                self.skip();
+                            }
+                            // After the current passage, not at the front:
+                            // "next" must leave what is playing alone.
+                            Placement::Next => {
+                                let at = usize::from(!self.queue.is_empty());
+                                self.queue.insert_at(at, entries);
+                            }
+                            Placement::Last => {
+                                for e in entries {
+                                    self.queue.push(e);
+                                }
+                            }
+                        }
+                    }
+                }
                 Ok(Command::PlayNow(e)) => {
                     // Front, then skip: skip takes the front of the queue, so
                     // anything less than the front would play the passage that

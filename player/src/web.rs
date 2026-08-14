@@ -21,7 +21,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::Serialize;
 
-use crate::engine::{Command, EngineHandle, PlayerState};
+use crate::engine::{Command, EngineHandle, Placement, PlayerState};
 use crate::output::Volume;
 use crate::session::{Explanations, SharedControls};
 
@@ -172,7 +172,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
-        .route("/queue/:passage_id/:action", post(queue_passage))
+        .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
@@ -255,13 +255,23 @@ async fn browse(
 /// already queued, and need no library read at all.
 async fn queue_passage(
     State(ui): State<Ui>,
-    axum::extract::Path((passage_id, action)): axum::extract::Path<(i64, String)>,
+    axum::extract::Path((passages, action)): axum::extract::Path<(String, String)>,
 ) -> StatusCode {
+    // A comma-separated list, so one selected track and thirty travel the same
+    // path `[REQ-VIS-195]`. They must arrive together: three passages sent as
+    // three requests and inserted one at a time at the same place come out
+    // backwards, which looks like a UI fault and is not.
+    let ids: Vec<i64> = passages.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let Some(&passage_id) = ids.first() else {
+        return StatusCode::NOT_FOUND;
+    };
     // Editing the queue is a rearrangement, not a lookup: the passage is
     // already there, so this must not touch the database.
-    match action.as_str() {
+    let place = match action.as_str() {
         "remove" => {
-            ui.handle.send(Command::RemoveQueued(passage_id));
+            for id in &ids {
+                ui.handle.send(Command::RemoveQueued(*id));
+            }
             return StatusCode::NO_CONTENT;
         }
         "sooner" => {
@@ -272,27 +282,33 @@ async fn queue_passage(
             ui.handle.send(Command::ShiftQueued(passage_id, 1));
             return StatusCode::NO_CONTENT;
         }
-        "now" | "next" | "last" => {}
+        "now" => Placement::Now,
+        "next" => Placement::Next,
+        "last" => Placement::Last,
         _ => return StatusCode::NOT_FOUND,
-    }
+    };
     let db = ui.db.clone();
-    let entry = tokio::task::spawn_blocking(move || {
+    let entries = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open(&db).ok()?;
-        let mut e = lib.passage(passage_id).ok()?;
-        lib.describe(&mut e);
-        if let Some(t) = lib.stored_tags(passage_id) {
-            e.naming.apply_tags(t);
+        // Order is the caller's, and it is the order they were looking at.
+        // A passage that cannot be read is dropped rather than failing the
+        // batch: nineteen tracks queued beats none.
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Ok(mut e) = lib.passage(id) {
+                lib.describe(&mut e);
+                if let Some(t) = lib.stored_tags(id) {
+                    e.naming.apply_tags(t);
+                }
+                out.push(e);
+            }
         }
-        Some(e)
+        Some(out)
     })
     .await;
-    match entry {
-        Ok(Some(e)) => {
-            ui.handle.send(match action.as_str() {
-                "now" => Command::PlayNow(e),
-                "last" => Command::Enqueue(e),
-                _ => Command::EnqueueNext(e),
-            });
+    match entries {
+        Ok(Some(v)) if !v.is_empty() => {
+            ui.handle.send(Command::EnqueueMany(v, place));
             StatusCode::NO_CONTENT
         }
         _ => StatusCode::NOT_FOUND,

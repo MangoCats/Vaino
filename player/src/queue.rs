@@ -239,6 +239,20 @@ impl Queue {
         self.entries.push_front(e);
     }
 
+    /// Insert several passages at `at`, keeping the order they arrive in
+    /// `[REQ-VIS-195]`.
+    ///
+    /// One call rather than repeated single inserts, because inserting three
+    /// passages one at a time at the same index yields them backwards -- the
+    /// kind of bug that looks like a UI fault and is not.
+    pub fn insert_at(&mut self, at: usize, entries: Vec<QueueEntry>) {
+        let mut at = at.min(self.entries.len());
+        for e in entries {
+            self.entries.insert(at, e);
+            at += 1;
+        }
+    }
+
     /// Move a queued passage `delta` places, clamped to the ends. Returns
     /// whether anything moved -- false when it is already first or last, which
     /// a UI should treat as "nothing to do" rather than as a failure.
@@ -332,6 +346,26 @@ mod tests {
         q.push_after_current(entry(50, 1000, 0, 0));
         q.push_front(entry(99, 1000, 0, 0));
         assert_eq!(ids(&q), vec![99, 1, 50, 2]);
+    }
+
+    /// The trap this method exists for: inserting three passages one at a time
+    /// at the same index yields them backwards. A whole album queued in reverse
+    /// looks like a UI fault and is not `[REQ-VIS-195]`.
+    #[test]
+    fn a_batch_keeps_the_order_it_was_given() {
+        let mut q = Queue::new(3);
+        q.push(entry(1, 1000, 0, 0));
+        q.push(entry(2, 1000, 0, 0));
+        q.insert_at(1, (10..13).map(|id| entry(id, 1000, 0, 0)).collect());
+        assert_eq!(ids(&q), vec![1, 10, 11, 12, 2]);
+    }
+
+    #[test]
+    fn a_batch_past_the_end_appends_rather_than_panicking() {
+        let mut q = Queue::new(3);
+        q.push(entry(1, 1000, 0, 0));
+        q.insert_at(99, (10..12).map(|id| entry(id, 1000, 0, 0)).collect());
+        assert_eq!(ids(&q), vec![1, 10, 11]);
     }
 
     fn ids(q: &Queue) -> Vec<i64> {
