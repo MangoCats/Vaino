@@ -31,11 +31,13 @@ pub const BUFFER_FRAMES: usize = 44_100 * 15;
 /// How long Skip takes to fade the outgoing passage to silence `[REQ-AUD-158]`.
 ///
 /// The listener is hearing audio mixed up to a ring's depth ago, so a skip can
-/// only be prompt if what was already submitted is cut short. Two seconds is
-/// long enough to read as a deliberate fade rather than a fault, and short
-/// enough to feel like the button worked. Deliberately a constant and not a
-/// setting until it has been listened to.
-pub const SKIP_FADE_MS: u64 = 2_000;
+/// only be prompt if what was already submitted is cut short. Half a second is
+/// enough to read as a deliberate fade rather than a click, and it is affordable
+/// only because the next passage is already decoded and waiting
+/// `[REQ-AUD-160]` -- the fade no longer has to cover a file open, a seek and a
+/// resampler build. Deliberately a constant and not a setting until it has been
+/// listened to.
+pub const SKIP_FADE_MS: u64 = 500;
 
 /// Peak resident memory of this process, in bytes.
 ///

@@ -118,6 +118,12 @@ impl EngineHandle {
 pub struct Engine {
     queue: Queue,
     live: Vec<Live>,
+    /// The next passage, opened and decoded ahead of need `[REQ-AUD-160]`.
+    ///
+    /// Held OUTSIDE `live` because `live` is what the mixer sums: a passage in
+    /// there is sounding. This one is merely ready, and `top_up_decoders` keeps
+    /// it fed so promoting it costs nothing but the move.
+    ready: Option<Live>,
     out: Option<Output>,
     out_rate: u32,
     out_channels: usize,
@@ -157,6 +163,7 @@ impl Engine {
         let engine = Self {
             queue: Queue::new(min_depth),
             live: Vec::new(),
+            ready: None,
             out,
             out_rate,
             out_channels,
@@ -216,6 +223,9 @@ impl Engine {
             return 0;
         }
         self.admit_due();
+        // Prepare AFTER admitting, so this readies the passage that is next
+        // once the admission has moved the queue on.
+        self.prepare_next();
         // Producers run in BOTH states. Pausing stops the consumer only, so
         // buffers stay full and resuming does not re-incur a fill.
         self.top_up_decoders();
@@ -321,10 +331,50 @@ impl Engine {
         // `live`, where `live[0]` is what is sounding. Keeping a passage in
         // both places would mean two answers to "what is playing".
         let Some(entry) = self.queue.advance() else { return };
-        let origin = self.pending_resume.take().unwrap_or(0);
-        match self.open(&entry, origin) {
+        let origin = self.pending_resume.take();
+
+        // The prepared passage is the queue head already opened at its start,
+        // so it serves unless a resume offset overrides where to begin.
+        if origin.is_none() {
+            if let Some(l) = self.ready.take().filter(|l| l.entry.passage_id == entry.passage_id) {
+                self.live.push(l);
+                return;
+            }
+        }
+        match self.open(&entry, origin.unwrap_or(0)) {
             Ok(l) => self.live.push(l),
             Err(e) => eprintln!("skipping {}: {e}", entry.path.display()),
+        }
+    }
+
+    /// Open the passage after this one before anyone asks for it
+    /// `[REQ-AUD-160]`.
+    ///
+    /// Skip used to pay for a file open, a seek and a resampler build at the
+    /// moment the button was pressed, and the fade had to be long enough to
+    /// hide all of it. Doing that work early is what lets the fade be as short
+    /// as it sounds right rather than as long as the decoder needs.
+    fn prepare_next(&mut self) {
+        // A pending resume owns the next admission and opens at its own offset,
+        // so preparing one at the start would be wasted and then discarded.
+        if self.pending_resume.is_some() {
+            return;
+        }
+        let Some(next) = self.queue.peek() else { return };
+        if self.ready.as_ref().map(|l| l.entry.passage_id) == Some(next.passage_id) {
+            return; // already standing by
+        }
+        let entry = next.clone();
+        match self.open(&entry, 0) {
+            Ok(l) => self.ready = Some(l),
+            Err(e) => {
+                // Dropped rather than left in place: retrying an unopenable
+                // passage every tick would spin forever and never reach the
+                // playable one behind it.
+                eprintln!("skipping {}: {e}", entry.path.display());
+                self.queue.advance();
+                self.ready = None;
+            }
         }
     }
 
@@ -357,10 +407,18 @@ impl Engine {
         })
     }
 
+    /// Feeds what is sounding AND what is merely ready, so the prepared passage
+    /// arrives at the mixer already full `[REQ-AUD-160]`.
     fn top_up_decoders(&mut self) {
-        for l in self.live.iter_mut() {
+        for l in self.live.iter_mut().chain(self.ready.iter_mut()) {
+            Self::top_up(l);
+        }
+    }
+
+    fn top_up(l: &mut Live) {
+        {
             if l.stream.finished || l.stream.ring.free() < 4096 * l.stream.channels {
-                continue;
+                return;
             }
             match l.dec.next() {
                 Ok(Some(chunk)) => {
@@ -600,6 +658,31 @@ mod tests {
         drop(h);
         e.tick();
         assert!(e.is_shutdown(), "a vanished controller must not leave it running");
+    }
+
+    #[test]
+    fn the_next_passage_is_opened_before_it_is_needed() {
+        let (mut e, h) = Engine::new(None, 3);
+        h.send(Command::Play);
+        e.enqueue(entry(1, "does-not-exist.mp3"));
+        e.tick();
+        // Nothing openable here, but the point stands: preparing must not leave
+        // an unopenable passage in place to be retried on every tick forever.
+        assert_eq!(h.snapshot().queue_len, 0);
+        assert!(e.ready.is_none());
+        assert!(!e.is_shutdown());
+    }
+
+    /// Preparation must not make the passage sound. `live` is what the mixer
+    /// sums; a prepared passage that leaked into it would play over the top of
+    /// whatever is already going.
+    #[test]
+    fn a_prepared_passage_is_not_yet_sounding() {
+        let (mut e, h) = Engine::new(None, 3);
+        h.send(Command::Play);
+        e.enqueue(entry(1, "does-not-exist.mp3"));
+        e.tick();
+        assert_eq!(h.snapshot().active_streams, 0, "prepared is not live");
     }
 
     #[test]
