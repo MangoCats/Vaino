@@ -48,7 +48,7 @@ impl std::fmt::Display for DbError {
 /// weighting that names have nothing to do with. Display metadata is fetched
 /// for the dozen passages actually on screen, where it costs under a
 /// millisecond each.
-const DESCRIBE: &str = "    SELECT (SELECT r.title FROM recordings r WHERE r.mbid = m.mbid),            (SELECT a.name FROM recording_artists ra               JOIN artists a ON a.mbid = ra.artist_mbid              WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1),            (SELECT rel.title FROM release_recordings rr               JOIN releases rel ON rel.mbid = rr.release_mbid              WHERE rr.mbid = m.mbid ORDER BY rel.release_date, rel.title LIMIT 1),            (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid),            (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid)       FROM (SELECT ?1 AS mbid) m";
+const DESCRIBE: &str = "    SELECT (SELECT r.title FROM recordings r WHERE r.mbid = m.mbid),            (SELECT a.name FROM recording_artists ra               JOIN artists a ON a.mbid = ra.artist_mbid              WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1),            (SELECT rel.title FROM release_recordings rr               JOIN releases rel ON rel.mbid = rr.release_mbid              WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1),            (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid),            (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid)       FROM (SELECT ?1 AS mbid) m";
 
 /// The tag index, defined once `[REQ-VIS-180]`.
 ///
@@ -224,6 +224,13 @@ impl Library {
         // stored tags are dropped so the background scan reads the numbers in
         // `[REQ-VIS-190]`. Cheaper than a version table for one migration, and
         // it cannot half-apply.
+        // Sampo marks the release it chose for a recording `[SPEC-SA-030]`.
+        // Created here so a library Sampo has never touched still browses:
+        // the album expression orders by this column, and a missing one is a
+        // failed query rather than an empty result.
+        let _ = self
+            .conn
+            .execute("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0", []);
         for column in ["track_no", "disc_no"] {
             let added = self
                 .conn
@@ -460,7 +467,7 @@ const ARTIST_EXPR: &str = "COALESCE( \
 /// The displayed album: MusicBrainz **Release** title, then the file's tag.
 const ALBUM_EXPR: &str = "COALESCE( \
     (SELECT rel.title FROM release_recordings rr JOIN releases rel ON rel.mbid = rr.release_mbid \
-      WHERE rr.mbid = m.mbid ORDER BY rel.release_date, rel.title LIMIT 1), ft.album)";
+      WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1), ft.album)";
 
 const TITLE_EXPR: &str =
     "COALESCE((SELECT r.title FROM recordings r WHERE r.mbid = m.mbid), ft.title)";
