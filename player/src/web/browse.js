@@ -140,14 +140,18 @@
       return;
     }
 
-    // Letter headings double as the jump targets, so the bar needs no separate
-    // index and cannot fall out of step with what is on screen.
+    // An album arrives in ITS OWN order, not alphabetical order [REQ-VIS-190],
+    // so the letter headings would neither be monotonic nor mean anything --
+    // and an A-Z bar over twelve tracks is furniture. Suppressed together.
+    const byLetter = !(kind === 'tracks' && filter.album);
+    $('az').textContent = '';
+
     const anchors = new Map();
     let last = null;
     for (const r of rows) {
       const label = kind === 'tracks' ? r.title : r.name;
       const L = initial(label);
-      if (L !== last) {
+      if (byLetter && L !== last) {
         last = L;
         const head = document.createElement('li');
         head.className = 'letter';
@@ -160,7 +164,14 @@
         // Three verbs rather than one tap: wanting to hear something is not the
         // same as wanting to hear it INSTEAD of what is playing, and a single
         // action has to guess which was meant.
-        const li = row(r.title, [r.artist, r.album].filter(Boolean).join(' — '),
+        // In album order the number leads, because that is how the record is
+        // read. Elsewhere it would be noise attached to an arbitrary position.
+        const numbered = filter.album && r.track_no
+          ? `${r.disc_no && r.disc_no > 1 ? r.disc_no + '-' : ''}${r.track_no}. ${r.title}`
+          : r.title;
+        const li = row(numbered,
+                       filter.album ? (r.artist ?? '')
+                                    : [r.artist, r.album].filter(Boolean).join(' — '),
                        r.plays ? `${r.plays}×` : '');
         const acts = document.createElement('span');
         acts.className = 'acts';
@@ -192,7 +203,7 @@
           () => { filter = { artist: r.name }; show('albums'); }));
       }
     }
-    alphabet(anchors);
+    if (byLetter) alphabet(anchors);
     note.textContent = `${rows.length.toLocaleString()} ${kind}`
       + (rows.length >= 2000 ? ' (showing the first 2,000)' : '');
   }

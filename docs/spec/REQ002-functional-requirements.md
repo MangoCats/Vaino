@@ -231,6 +231,16 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 >
 > **Browsing runs off the engine entirely.** The page queries the database directly, so listing ten thousand tracks cannot interfere with playing one. Only the queueing action touches the player, and it inserts **next** rather than last: browsing to something and then waiting five passages for it is indistinguishable from the button not working. It does not interrupt what is playing — that is what Skip is for.
 
+**`[REQ-VIS-190]` An album opens in its own running order.** An album is a sequence, not an index: opened as one, its tracks belong in the order they were put on the record. Alphabetical remains right everywhere else, where a long list has to be findable rather than faithful.
+
+Ordering is by disc, then track number, then title. **Unnumbered tracks sort after the numbered ones**, not ahead of them, which is where a bare `NULL` would put them.
+
+> **The numbers come from the files.** MusicBrainz keeps position on the Release, in `release_recordings.position`, and those tables are empty `[REQ-VIS-170]` — so the file's own `TRACKNUMBER` is the only thing that knows an album's order. It is parsed for the forms tags actually use: `7`, `07`, and the `7/12` that ID3 writes and a naive parse drops, silently sorting a whole album alphabetically instead. Zero means absent, not first.
+>
+> **The tag index migrates itself.** An index built before track numbers existed has the rows but not the columns; adding a column succeeds exactly once, and on that run the stored tags are dropped so the background scan reads the numbers. Cheaper than a version table for one migration, and it cannot half-apply. Measured: an already-scanned library rebuilt itself in 18.7 s on the next start, with no manual step.
+>
+> **In album order the number leads the title and the alphabet bar disappears.** Letter headings over a running order would be neither monotonic nor meaningful, and an A–Z index over twelve tracks is furniture.
+
 **`[REQ-VIS-185]` A found passage can be heard three ways, and the queue can be edited.** Wanting to hear something is not the same as wanting to hear it *instead* of what is playing, and one action has to guess which was meant:
 
 | verb | what it does |

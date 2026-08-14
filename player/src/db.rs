@@ -61,6 +61,7 @@ pub(crate) const TAG_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS file_tags (
         file_id INTEGER PRIMARY KEY,
         title TEXT, artist TEXT, album TEXT,
+        track_no INTEGER, disc_no INTEGER,
         has_art INTEGER NOT NULL DEFAULT 0,
         scanned_at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_file_tags_album ON file_tags(album);
@@ -150,6 +151,8 @@ impl Library {
                         title: r.get(0)?,
                         artist: r.get(1)?,
                         album: r.get(2)?,
+                        track_no: None,
+                        disc_no: None,
                     })
                 },
             )
@@ -195,7 +198,22 @@ impl Library {
     /// kept. The table is the player's own, created here rather than by the
     /// ingest tools, because it is the player that needs it.
     pub fn ensure_tag_table(&self) -> Result<(), DbError> {
-        self.conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Query(e.to_string()))
+        self.conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Query(e.to_string()))?;
+        // An index built before track numbers existed has the rows but not the
+        // columns. Adding a column succeeds exactly once; on that run the
+        // stored tags are dropped so the background scan reads the numbers in
+        // `[REQ-VIS-190]`. Cheaper than a version table for one migration, and
+        // it cannot half-apply.
+        for column in ["track_no", "disc_no"] {
+            let added = self
+                .conn
+                .execute(&format!("ALTER TABLE file_tags ADD COLUMN {column} INTEGER"), [])
+                .is_ok();
+            if added {
+                let _ = self.conn.execute("DELETE FROM file_tags", []);
+            }
+        }
+        Ok(())
     }
 
     pub fn put_tags(
@@ -210,11 +228,22 @@ impl Library {
             .unwrap_or(0);
         self.conn
             .execute(
-                "INSERT INTO file_tags (file_id, title, artist, album, has_art, scanned_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                "INSERT INTO file_tags \
+                     (file_id, title, artist, album, track_no, disc_no, has_art, scanned_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
                  ON CONFLICT(file_id) DO UPDATE SET \
-                   title = ?2, artist = ?3, album = ?4, has_art = ?5, scanned_at = ?6",
-                rusqlite::params![file_id, t.title, t.artist, t.album, has_art as i64, now],
+                   title = ?2, artist = ?3, album = ?4, track_no = ?5, disc_no = ?6, \
+                   has_art = ?7, scanned_at = ?8",
+                rusqlite::params![
+                    file_id,
+                    t.title,
+                    t.artist,
+                    t.album,
+                    t.track_no,
+                    t.disc_no,
+                    has_art as i64,
+                    now
+                ],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
@@ -430,6 +459,9 @@ pub struct BrowseTrack {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub plays: i64,
+    /// Position on the record, when the file knows it `[REQ-VIS-190]`.
+    pub track_no: Option<i64>,
+    pub disc_no: Option<i64>,
 }
 
 /// What to narrow a browse to. Every field is a whole-value match except `q`,
@@ -497,16 +529,29 @@ impl Library {
     }
 
     pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
+        // An album is a running order, not an index: opened as one, its tracks
+        // belong in the order they were put on the record `[REQ-VIS-190]`.
+        // Anywhere else alphabetical is what makes a long list findable.
+        // Unnumbered tracks sort after the numbered ones rather than ahead of
+        // them, which is where a bare NULL would put them.
+        let order = if f.album.is_some() {
+            "ORDER BY COALESCE(disc_no, 1), \
+                      CASE WHEN track_no IS NULL THEN 1 ELSE 0 END, track_no, \
+                      title COLLATE NOCASE"
+        } else {
+            "ORDER BY title COLLATE NOCASE"
+        };
         let sql = format!(
-            "SELECT passage_id, title, artist, album, plays FROM ( \
+            "SELECT passage_id, title, artist, album, plays, track_no, disc_no FROM ( \
                SELECT m.passage_id, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, \
-                      {ALBUM_EXPR} AS album, {PLAYS_EXPR} AS plays \
+                      {ALBUM_EXPR} AS album, {PLAYS_EXPR} AS plays, \
+                      ft.track_no AS track_no, ft.disc_no AS disc_no \
                  FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
              WHERE title IS NOT NULL AND title <> '' \
                AND (?1 = '' OR title LIKE ?1) \
                AND (?2 = '' OR artist = ?2) \
                AND (?3 = '' OR album = ?3) \
-             ORDER BY title COLLATE NOCASE LIMIT 2000"
+             {order} LIMIT 2000"
         );
         let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
         let rows = st
@@ -523,6 +568,8 @@ impl Library {
                         artist: r.get(2)?,
                         album: r.get(3)?,
                         plays: r.get(4)?,
+                        track_no: r.get(5)?,
+                        disc_no: r.get(6)?,
                     })
                 },
             )

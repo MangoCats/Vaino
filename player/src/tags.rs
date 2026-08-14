@@ -23,6 +23,27 @@ pub struct Tags {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// Position on the record `[REQ-VIS-190]`. MusicBrainz keeps this on the
+    /// Release, in `release_recordings.position`; with those tables empty, the
+    /// file's own TRACKNUMBER is the only thing that knows an album's order.
+    pub track_no: Option<u32>,
+    /// Which disc, for sets. Sorted before the track number, so disc two's
+    /// opener does not land second.
+    pub disc_no: Option<u32>,
+}
+
+/// "7", "07", "7/12" and " 7 " all mean seven.
+///
+/// The `n/total` form is what ID3 writes and what a naive parse chokes on,
+/// which would silently sort a whole album alphabetically instead.
+fn number(v: &str) -> Option<u32> {
+    v.trim()
+        .split(['/', '-'])
+        .next()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|n| *n > 0)
 }
 
 impl Tags {
@@ -60,6 +81,21 @@ pub fn read(path: &Path) -> Tags {
     // to the format itself. Taking only one silently loses half the library.
     let mut take = |rev: &symphonia::core::meta::MetadataRevision| {
         for tag in rev.tags() {
+            match tag.std_key {
+                Some(StandardTagKey::TrackNumber) => {
+                    if tags.track_no.is_none() {
+                        tags.track_no = number(&tag.value.to_string());
+                    }
+                    continue;
+                }
+                Some(StandardTagKey::DiscNumber) => {
+                    if tags.disc_no.is_none() {
+                        tags.disc_no = number(&tag.value.to_string());
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             let slot = match tag.std_key {
                 Some(StandardTagKey::TrackTitle) => &mut tags.title,
                 Some(StandardTagKey::Artist) => &mut tags.artist,
@@ -165,6 +201,19 @@ pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn track_numbers_survive_the_forms_tags_actually_use() {
+        assert_eq!(number("7"), Some(7));
+        assert_eq!(number("07"), Some(7));
+        assert_eq!(number(" 7 "), Some(7));
+        // The form ID3 writes, and the one a naive parse drops -- which would
+        // sort a whole album alphabetically instead.
+        assert_eq!(number("7/12"), Some(7));
+        assert_eq!(number(""), None);
+        assert_eq!(number("A"), None);
+        assert_eq!(number("0"), None, "zero is absence, not a position");
+    }
 
     /// Missing metadata must never be an error: a passage with no tags plays
     /// exactly as well as one with them.
