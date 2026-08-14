@@ -527,7 +527,9 @@ impl Engine {
 
     fn top_up(l: &mut Live) {
         {
-            if l.stream.finished || l.stream.ring.free() < 4096 * l.stream.channels {
+            if l.stream.finished
+                || l.stream.ring.free() < crate::DECODE_TOPUP_FRAMES * l.stream.channels
+            {
                 return;
             }
             match l.dec.next() {
@@ -725,7 +727,10 @@ impl Engine {
             };
             let pending = self.live.iter().skip(after).map(|l| l.entry.clone());
             s.queue_len = self.live.len().saturating_sub(after) + self.queue.len();
-            s.queue = pending.chain(self.queue.iter().cloned()).take(12).collect();
+            s.queue = pending
+                .chain(self.queue.iter().cloned())
+                .take(crate::QUEUE_SHOWN)
+                .collect();
             s.mixing_ahead = self.live.len().saturating_sub(after);
             s.volume = self.volume;
             s.skip_fade_ms = self.skip_fade_ms;

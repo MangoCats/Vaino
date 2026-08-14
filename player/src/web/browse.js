@@ -16,6 +16,9 @@
   const $ = id => document.getElementById(id);
 
   let kind = 'artists';
+  // Told to us rather than assumed; `startBare` has no socket to learn it from,
+  // so it is read from the first listing request's sibling endpoint.
+  let browseLimit = 0;
   let filter = {};          // { artist, album } -- the narrowing, not the search
   let timer = null;
 
@@ -109,12 +112,8 @@
     $('picked').textContent = n ? `${plural(n, 'track')} selected` : '';
   }
 
-  for (const [id, action, said] of [
-    ['v-now', 'now', 'playing now'],
-    ['v-next', 'next', 'playing next'],
-    ['v-last', 'last', 'added to the end'],
-  ]) {
-    $(id).onclick = () => {
+  for (const [label, action, said] of Vaino.VERBS.place) {
+    $('v-' + action).onclick = () => {
       const ids = picked();
       if (!ids.length) return;
       // One request carrying the list, in the order it is displayed. Sent as
@@ -230,8 +229,10 @@
     }
     if (byLetter) alphabet(anchors);
     armed();
+    // The cap comes from the engine, which is what actually applies it.
+    const cap = browseLimit;
     note.textContent = `${rows.length.toLocaleString()} ${kind}`
-      + (rows.length >= 2000 ? ' (showing the first 2,000)' : '');
+      + (cap && rows.length >= cap ? ` (showing the first ${cap.toLocaleString()})` : '');
   }
 
   for (const b of document.querySelectorAll('[data-kind]')) {
@@ -249,5 +250,7 @@
   // still ask for one axis by name.
   const asked = new URLSearchParams(location.search).get('kind');
   const start = ['artists', 'albums', 'tracks'].includes(asked) ? asked : 'artists';
-  Vaino.startBare().then(() => show(start));
+  Vaino.startBare()
+    .then(() => Vaino.browse('limit').then(n => { browseLimit = n; }).catch(() => {}))
+    .then(() => show(start));
 })();

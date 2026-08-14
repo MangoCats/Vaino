@@ -29,6 +29,26 @@ pub mod resample;
 /// * 15 s = 5.29 MB, against a =<150 MB total-process target `[REQ-HW-100]`.
 pub const BUFFER_FRAMES: usize = 44_100 * 15;
 
+/// How much of the queue a display is sent.
+///
+/// Not how much is queued -- the Director keeps whatever depth it was given.
+/// This is how far ahead anyone can usefully read, and it bounds the size of a
+/// snapshot that goes out twice a second to every connected browser.
+pub const QUEUE_SHOWN: usize = 12;
+
+/// Free space below which a passage's decoder is topped up again, in frames.
+///
+/// Small enough that the check is cheap and the buffer never sits nearly empty,
+/// large enough that a decode yields more than it costs to ask for.
+pub const DECODE_TOPUP_FRAMES: usize = 4096;
+
+/// Most tracks one browse request will answer with `[REQ-VIS-180]`.
+///
+/// A library of 8,000 passages returns in 80 ms, but the number is sent to the
+/// browser rather than assumed there, so the page can say "showing the first
+/// 2,000" without a second copy of this constant to fall out of step.
+pub const BROWSE_LIMIT: usize = 2_000;
+
 /// How long Skip takes to fade the outgoing passage out `[REQ-AUD-158]`.
 ///
 /// The listener is hearing audio mixed up to a ring's depth ago, so a skip can

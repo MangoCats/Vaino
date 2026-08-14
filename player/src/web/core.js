@@ -221,7 +221,22 @@ const Vaino = (() => {
         return r.json();
       });
     },
-    // now | next | last | remove | sooner | later `[REQ-VIS-185]`.
+    // The verbs, in one place `[REQ-VIS-185]`. The engine validates them and
+    // is the authority; this is the list the pages build their controls from,
+    // so adding one means touching the match in `web.rs` and this array,
+    // rather than three separate button-building loops.
+    VERBS: {
+        place: [
+            ['Now', 'now', 'playing now'],
+            ['Next', 'next', 'playing next'],
+            ['Last', 'last', 'added to the end'],
+        ],
+        edit: [
+            ['\u00d7', 'remove', 'remove from the queue'],
+            ['\u2191', 'sooner', 'play sooner'],
+            ['\u2193', 'later', 'play later'],
+        ],
+    },
     queue: (id, action) => post(`/queue/${id}/${action}`),
 
     // The edit controls for one queued passage, wired and ready to append.
@@ -237,11 +252,7 @@ const Vaino = (() => {
         // order and fixed widths so the controls line up as columns down the
         // queue: a column of identical buttons is one target to learn, where
         // buttons that shift with the length of a title are three.
-        for (const [label, action, title] of [
-            ['\u00d7', 'remove', 'remove from the queue'],
-            ['\u2191', 'sooner', 'play sooner'],
-            ['\u2193', 'later', 'play later'],
-        ]) {
+        for (const [label, action, title] of Vaino.VERBS.edit) {
             const b = document.createElement('button');
             b.type = 'button';
             b.textContent = label;

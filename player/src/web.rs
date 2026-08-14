@@ -113,6 +113,9 @@ pub struct Snapshot {
     /// around the engine's floor instead of keeping its own copy of the number
     /// `[REQ-AUD-156]`.
     pub fader_min_db: f32,
+    /// Most tracks a browse request will return, so the page can say so
+    /// without a second copy of the number `[REQ-VIS-180]`.
+    pub browse_limit: usize,
     pub skip: SkipShape,
     /// The programme in force, and whether it was chosen by hand.
     pub program: Option<String>,
@@ -159,6 +162,7 @@ impl From<&PlayerState> for Snapshot {
                 .collect(),
             volume_db: Volume::db_for(s.volume),
             fader_min_db: crate::output::FADER_MIN_DB,
+            browse_limit: crate::BROWSE_LIMIT,
             skip: SkipShape {
                 fade_ms: s.skip_fade_ms,
                 lead_ms: s.skip_lead_ms,
@@ -244,6 +248,8 @@ async fn browse(
             "artists" => serde_json::to_value(lib.browse_artists(&filter).ok()?).ok(),
             "albums" => serde_json::to_value(lib.browse_albums(&filter).ok()?).ok(),
             "tracks" => serde_json::to_value(lib.browse_tracks(&filter).ok()?).ok(),
+            // The row cap, so the page can report it without a second copy.
+            "limit" => serde_json::to_value(crate::BROWSE_LIMIT).ok(),
             _ => None,
         }
     })

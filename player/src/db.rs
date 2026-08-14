@@ -576,7 +576,8 @@ impl Library {
                AND (?1 = '' OR title LIKE ?1) \
                AND (?2 = '' OR artist = ?2) \
                AND (?3 = '' OR album = ?3) \
-             {order} LIMIT 2000"
+             {order} LIMIT {limit}",
+            limit = crate::BROWSE_LIMIT
         );
         let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
         let rows = st
