@@ -28,6 +28,15 @@ pub mod resample;
 /// * 15 s = 5.29 MB, against a =<150 MB total-process target `[REQ-HW-100]`.
 pub const BUFFER_FRAMES: usize = 44_100 * 15;
 
+/// How long Skip takes to fade the outgoing passage to silence `[REQ-AUD-158]`.
+///
+/// The listener is hearing audio mixed up to a ring's depth ago, so a skip can
+/// only be prompt if what was already submitted is cut short. Two seconds is
+/// long enough to read as a deliberate fade rather than a fault, and short
+/// enough to feel like the button worked. Deliberately a constant and not a
+/// setting until it has been listened to.
+pub const SKIP_FADE_MS: u64 = 2_000;
+
 /// Peak resident memory of this process, in bytes.
 ///
 /// Deliberately dependency-free: the memory bound is the property under test,

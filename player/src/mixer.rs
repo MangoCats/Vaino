@@ -53,6 +53,16 @@ impl RingBuffer {
     }
 
     /// Remove up to `dst.len()` samples into `dst`, returning how many.
+    /// Keep at most `n` samples and discard everything queued behind them.
+    ///
+    /// The ring is a head and a length, so dropping the tail is one assignment
+    /// -- no copying, no reallocation, safe to call from under the output lock.
+    /// Returns what is left.
+    pub fn truncate(&mut self, n: usize) -> usize {
+        self.len = self.len.min(n);
+        self.len
+    }
+
     pub fn read(&mut self, dst: &mut [f32]) -> usize {
         let n = dst.len().min(self.len);
         let cap = self.buf.len();

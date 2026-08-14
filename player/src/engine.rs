@@ -263,13 +263,44 @@ impl Engine {
         }
     }
 
-    /// Drop the sounding passage. Its buffered audio goes with it, which is
-    /// what makes skip immediate rather than "after the buffer drains"
-    /// `[REQ-AUD-110]`.
+    /// Fade the sounding passage out and move on `[REQ-AUD-158]`.
+    ///
+    /// Dropping the passage here is not enough on its own, and the comment that
+    /// used to sit on this function claiming otherwise was wrong: it discards
+    /// the *decoder's* buffer, but the output ring still holds every sample
+    /// already mixed. Measured, that was **14.0 s** from button to new music --
+    /// the ring's full depth. So the ring is cut to the length of the fade and
+    /// faded out at the device, and the next passage is opened at once, ready
+    /// to sound the instant the fade ends.
     fn skip(&mut self) {
-        if !self.live.is_empty() {
-            self.live.remove(0);
+        if self.live.is_empty() {
+            return;
         }
+        // Read positions BEFORE cutting the ring: `audible_ms` measures back
+        // from what is still buffered, and that is about to change.
+        let stragglers: Vec<(QueueEntry, u64)> = self.live[1..]
+            .iter()
+            .map(|l| (l.entry.clone(), self.audible_ms(l)))
+            .collect();
+
+        if let Some(o) = &self.out {
+            o.begin_skip_fade(crate::SKIP_FADE_MS, Curve::Exponential);
+        }
+        self.live.clear();
+
+        // A passage part-way through a crossfade had been mixed far ahead of
+        // the ear, and that work has just been discarded with the rest of the
+        // ring. Re-open each where it was actually *heard* -- normally its very
+        // start, since the ring runs deeper than a crossfade is long.
+        for (entry, at) in stragglers {
+            match self.open(&entry, at) {
+                Ok(l) => self.live.push(l),
+                Err(e) => eprintln!("re-opening {} after skip: {e}", entry.path.display()),
+            }
+        }
+        // Open the next passage now rather than on the next tick, so decoding
+        // happens DURING the fade and the passage is ready the moment it ends.
+        self.admit_due();
     }
 
     /// Start the next passage when the current one reaches its lead-out point.

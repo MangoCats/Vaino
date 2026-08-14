@@ -15,11 +15,24 @@ use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 
+use crate::fade::{Curve, Fade};
 use crate::mixer::RingBuffer;
+
+/// A fade applied to audio that is ALREADY in the ring `[REQ-AUD-158]`.
+///
+/// Carries its own frame counter because the callback cannot ask anyone where
+/// it has got to; it advances one frame per frame emitted and retires itself.
+pub struct SkipFade {
+    fade: Fade,
+    frame: u64,
+    channels: usize,
+}
 
 /// Shared between the mixer thread and the audio callback.
 pub struct OutputState {
     pub ring: RingBuffer,
+    /// Set by `Output::begin_skip_fade`, cleared by the callback when spent.
+    pub skip_fade: Option<SkipFade>,
     /// Samples the callback wanted but could not get. Non-zero means the
     /// producer is not keeping up -- the diagnostic that matters most here,
     /// and the one a silent fallback would otherwise hide `[REQ-VIS-140]`.
@@ -32,7 +45,12 @@ pub struct OutputState {
 
 impl OutputState {
     fn new(capacity: usize) -> Self {
-        Self { ring: RingBuffer::new(capacity), underrun_samples: 0, lock_failures: 0 }
+        Self {
+            ring: RingBuffer::new(capacity),
+            skip_fade: None,
+            underrun_samples: 0,
+            lock_failures: 0,
+        }
     }
 }
 
@@ -251,6 +269,35 @@ impl Output {
     }
 
     /// Samples submitted but not yet consumed by the device.
+    /// Fade what has already been submitted, and discard the rest of it.
+    ///
+    /// Skip could not be immediate for exactly the reason pause could not be
+    /// `[REQ-AUD-142]`: the ring holds ~14 s of mixed audio and the callback
+    /// drains it whatever the mixer does. Dropping the passage upstream stops
+    /// only the *adding* to a backlog the listener must still sit through --
+    /// measured at 14.0 s from button to new music.
+    ///
+    /// So the ring is cut to the length of the fade, and the fade applied to
+    /// what remains. The listener hears the audio they were already hearing,
+    /// fading out over `ms`, and then the next passage `[REQ-AUD-158]`.
+    ///
+    /// Returns the frames actually faded -- fewer than asked for when the ring
+    /// held less than that, as at startup.
+    pub fn begin_skip_fade(&self, ms: u64, curve: Curve) -> usize {
+        let ch = self.channels.max(1);
+        let want = (ms * self.sample_rate as u64 / 1000) as usize * ch;
+        // A blocking lock is safe here: this runs on the mixer thread, and the
+        // callback only ever tries.
+        let Ok(mut s) = self.state.lock() else { return 0 };
+        let frames = (s.ring.truncate(want) / ch) as u64;
+        s.skip_fade = Some(SkipFade {
+            fade: Fade { curve, frames, fade_in: false },
+            frame: 0,
+            channels: ch,
+        });
+        frames as usize
+    }
+
     pub fn buffered(&self) -> usize {
         self.state.lock().map(|s| s.ring.len()).unwrap_or(0)
     }
@@ -280,6 +327,26 @@ fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32]) {
     match state.try_lock() {
         Ok(mut s) => {
             let got = s.ring.read(out);
+            // A skip fade covers audio that was submitted before the listener
+            // asked to skip, so like volume it can only be applied here
+            // [REQ-AUD-158].
+            let spent = match s.skip_fade.as_mut() {
+                Some(sf) => {
+                    let ch = sf.channels.max(1);
+                    for frame in out[..got].chunks_mut(ch) {
+                        let g = sf.fade.gain_at(sf.frame);
+                        frame.iter_mut().for_each(|x| *x *= g);
+                        sf.frame += 1;
+                    }
+                    sf.frame >= sf.fade.frames
+                }
+                None => false,
+            };
+            if spent {
+                // Retired promptly: whatever follows in the ring is the NEXT
+                // passage, which must not inherit the outgoing one's fade.
+                s.skip_fade = None;
+            }
             // Volume is applied HERE, at the device, not before submission.
             // The ring holds ~14 s, so scaling on the way in means a change is
             // inaudible until that much already-scaled audio has drained --
@@ -350,6 +417,35 @@ mod tests {
     }
 
     /// The ends must be exact: full scale must not be 0.999.
+    /// The fade covers exactly what was left in the ring, and gets out of the
+    /// way afterwards -- the next passage must not inherit it.
+    #[test]
+    fn skip_fade_silences_the_backlog_then_retires() {
+        let st = Arc::new(Mutex::new(OutputState::new(64)));
+        {
+            let mut s = st.lock().unwrap();
+            s.ring.write(&[1.0; 32]);
+            assert_eq!(s.ring.truncate(8), 8, "the rest of the backlog is dropped");
+            s.skip_fade = Some(SkipFade {
+                fade: Fade { curve: Curve::Linear, frames: 8, fade_in: false },
+                frame: 0,
+                channels: 1,
+            });
+            s.ring.write(&[1.0; 8]); // the next passage, queued behind the fade
+        }
+
+        let mut out = [0.0f32; 8];
+        fill(&st, &Volume::new(1.0), &mut out);
+        assert_eq!(out[0], 1.0, "the fade begins at the level being heard");
+        assert!(out[7] < 0.2, "and arrives at silence: {}", out[7]);
+        assert!(out.windows(2).all(|w| w[1] <= w[0]), "monotonic: {out:?}");
+
+        let mut after = [0.0f32; 8];
+        fill(&st, &Volume::new(1.0), &mut after);
+        assert!(after.iter().all(|s| *s == 1.0), "next passage at unity: {after:?}");
+        assert!(st.lock().unwrap().skip_fade.is_none());
+    }
+
     #[test]
     fn fader_ends_are_exact() {
         assert_eq!(Volume::amplitude_at_db(0.0), 1.0);
