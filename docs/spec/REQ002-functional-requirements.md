@@ -32,6 +32,12 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-AUD-150]`** Audio output is **co-located with the server**. Remote devices control; they do not receive streams.
 
+**`[REQ-AUD-152]` Master volume is applied at the output device, in the callback** — not to samples on their way into the ring. Anything applied before submission is heard only after everything already submitted has drained, so with a ~14 s ring the control appeared to lag by ten seconds or more: the knob was governing audio computed far ahead of the ear. Applying it in the callback means a change reaches samples that are already buffered but not yet heard, which is precisely the audio a listener expects a volume knob to affect.
+
+> This is the same buffer-depth trap as pausing by declining to submit `[REQ-AUD-142]`, and it recurs for any control the listener expects to act *now*. The rule generalises: per-passage properties (gain `[SPEC-SC-040]`, crossfade) belong before the mixer, because each side of a crossfade carries its own level; listening controls belong at the device.
+>
+> The value crosses to the callback as an atomic, not behind the ring's mutex. The callback must never block, and must be able to change level even on a tick where it cannot take that lock.
+
 > **Verification:** `[REQ-AUD-110]` and `[REQ-AUD-120]` are gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency `[GDE-ARC-050]`.
 >
 > `[REQ-AUD-140]` verified end-to-end on desktop hardware (48 kHz device, 44.1 kHz sources, 8,079-passage library): a run interrupted at ~16 s saved 15.01 s, and the next run resumed the same passage at 15.0 s and went on to save 25.01 s — position advancing *from* the resume point, not restarting. The 15.01 s figure is also the check on audible-versus-mixed position: had the mixed figure been saved it would have read ~29 s.

@@ -36,11 +36,35 @@ impl OutputState {
     }
 }
 
+/// Master volume, as `f32` bits in an atomic.
+///
+/// Deliberately OUTSIDE the mutex that guards the ring. The audio callback must
+/// never block, and it must be able to change level even on the tick where it
+/// cannot take that lock. An `AtomicU32` load is lock-free; a `Mutex<f32>`
+/// would put a second lock on the real-time path for one number.
+#[derive(Clone)]
+pub struct Volume(Arc<std::sync::atomic::AtomicU32>);
+
+impl Volume {
+    pub fn new(v: f32) -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU32::new(v.to_bits())))
+    }
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+    pub fn set(&self, v: f32) {
+        self.0.store(v.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub struct Output {
     // Also the pause control: the callback drains whether or not we are
     // submitting, so stopping the CONSUMER means stopping this stream.
     stream: cpal::Stream,
     pub state: Arc<Mutex<OutputState>>,
+    /// Applied in the callback `[REQ-AUD-152]`, so a change is heard at the
+    /// device rather than after the ring drains.
+    pub volume: Volume,
     pub sample_rate: u32,
     pub channels: usize,
     pub device_name: String,
@@ -111,20 +135,24 @@ impl Output {
         // One closure per sample format. `fill` holds all the logic so the
         // format arms stay trivial and cannot diverge.
         let err_fn = |e| eprintln!("output stream error: {e}");
+        let volume = Volume::new(1.0);
         let stream = match sample_format {
-            SampleFormat::F32 => device.build_output_stream(
+            SampleFormat::F32 => {
+                let cb_vol = volume.clone();
+                device.build_output_stream(
                 &config,
-                move |out: &mut [f32], _| fill(&cb_state, out),
+                move |out: &mut [f32], _| fill(&cb_state, &cb_vol, out),
                 err_fn,
                 None,
-            ),
+            )}
             SampleFormat::I16 => {
                 let mut scratch: Vec<f32> = Vec::new();
+                let cb_vol = volume.clone();
                 device.build_output_stream(
                     &config,
                     move |out: &mut [i16], _| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &mut scratch);
+                        fill(&cb_state, &cb_vol, &mut scratch);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             *o = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -135,11 +163,12 @@ impl Output {
             }
             SampleFormat::U16 => {
                 let mut scratch: Vec<f32> = Vec::new();
+                let cb_vol = volume.clone();
                 device.build_output_stream(
                     &config,
                     move |out: &mut [u16], _| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &mut scratch);
+                        fill(&cb_state, &cb_vol, &mut scratch);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             let v = (s.clamp(-1.0, 1.0) + 1.0) * 0.5;
                             *o = (v * u16::MAX as f32) as u16;
@@ -154,7 +183,7 @@ impl Output {
         .map_err(|e| OutputError::Build(e.to_string()))?;
 
         stream.play().map_err(|e| OutputError::Build(e.to_string()))?;
-        Ok(Self { stream, state, sample_rate, channels, device_name })
+        Ok(Self { stream, state, volume, sample_rate, channels, device_name })
     }
 
     /// Start or stop the device callback.
@@ -217,10 +246,20 @@ impl Output {
 /// `try_lock` rather than `lock`: blocking here would stall the audio device.
 /// On contention we emit silence and count it, because a glitch that is
 /// recorded can be fixed and a glitch that is hidden cannot.
-fn fill(state: &Arc<Mutex<OutputState>>, out: &mut [f32]) {
+fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32]) {
     match state.try_lock() {
         Ok(mut s) => {
             let got = s.ring.read(out);
+            // Volume is applied HERE, at the device, not before submission.
+            // The ring holds ~14 s, so scaling on the way in means a change is
+            // inaudible until that much already-scaled audio has drained --
+            // measured as a volume knob that appeared to lag by ten seconds or
+            // more [REQ-AUD-152]. The same buffer-depth trap as pausing by
+            // declining to submit [REQ-AUD-142].
+            let v = volume.get();
+            if v != 1.0 {
+                out[..got].iter_mut().for_each(|x| *x *= v);
+            }
             if got < out.len() {
                 out[got..].iter_mut().for_each(|v| *v = 0.0);
                 s.underrun_samples += (out.len() - got) as u64;
@@ -246,10 +285,47 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[0.5; 4]);
         let mut out = [9.9f32; 8];
-        fill(&st, &mut out);
+        fill(&st, &Volume::new(1.0), &mut out);
         assert_eq!(&out[..4], &[0.5; 4]);
         assert!(out[4..].iter().all(|v| *v == 0.0), "shortfall must be silence");
         assert_eq!(st.lock().unwrap().underrun_samples, 4);
+    }
+
+    /// Volume is applied at the DEVICE, not before submission. The ring holds
+    /// ~14 s, so scaling on the way in makes a change inaudible until that much
+    /// already-scaled audio has drained [REQ-AUD-152].
+    #[test]
+    fn fill_applies_volume_at_the_callback() {
+        let st = Arc::new(Mutex::new(OutputState::new(16)));
+        st.lock().unwrap().ring.write(&[1.0; 4]);
+        let mut out = [0.0f32; 4];
+        fill(&st, &Volume::new(0.25), &mut out);
+        assert!(out.iter().all(|v| (*v - 0.25).abs() < 1e-6), "got {out:?}");
+    }
+
+    /// A volume change reaches audio already sitting in the ring -- which is
+    /// the whole point: those samples have been submitted but not yet heard.
+    #[test]
+    fn volume_affects_audio_already_buffered() {
+        let st = Arc::new(Mutex::new(OutputState::new(16)));
+        st.lock().unwrap().ring.write(&[1.0; 8]);
+        let vol = Volume::new(1.0);
+        let mut a = [0.0f32; 4];
+        fill(&st, &vol, &mut a);
+        assert!((a[0] - 1.0).abs() < 1e-6);
+        vol.set(0.5); // turned down while the rest is still queued
+        let mut b = [0.0f32; 4];
+        fill(&st, &vol, &mut b);
+        assert!((b[0] - 0.5).abs() < 1e-6, "the change must reach buffered audio");
+    }
+
+    #[test]
+    fn volume_is_clamped() {
+        let v = Volume::new(1.0);
+        v.set(4.0);
+        assert_eq!(v.get(), 1.0);
+        v.set(-2.0);
+        assert_eq!(v.get(), 0.0);
     }
 
     #[test]
@@ -257,7 +333,7 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[0.25; 8]);
         let mut out = [0.0f32; 8];
-        fill(&st, &mut out);
+        fill(&st, &Volume::new(1.0), &mut out);
         assert_eq!(st.lock().unwrap().underrun_samples, 0);
     }
 
@@ -266,7 +342,7 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         let _held = st.lock().unwrap();
         let mut out = [9.9f32; 4];
-        fill(&st, &mut out); // must return, not deadlock
+        fill(&st, &Volume::new(1.0), &mut out); // must return, not deadlock
         assert!(out.iter().all(|v| *v == 0.0));
     }
 }

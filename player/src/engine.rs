@@ -235,7 +235,14 @@ impl Engine {
                 Ok(Command::Play) => self.set_playing(true),
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::Skip) => self.skip(),
-                Ok(Command::SetVolume(v)) => self.volume = v.clamp(0.0, 1.0),
+                Ok(Command::SetVolume(v)) => {
+                    self.volume = v.clamp(0.0, 1.0);
+                    // Straight to the device: the callback applies it, so the
+                    // change is heard now rather than a ring-depth later.
+                    if let Some(o) = &self.out {
+                        o.volume.set(self.volume);
+                    }
+                }
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
                     self.shutdown = true;
@@ -385,13 +392,6 @@ impl Engine {
         }
         if filled == 0 {
             return 0;
-        }
-        // Master volume last, over the mixed signal: it is a listening level,
-        // not a property of any passage.
-        if self.volume != 1.0 {
-            for s in self.scratch[..filled].iter_mut() {
-                *s *= self.volume;
-            }
         }
         match &self.out {
             Some(o) => {
