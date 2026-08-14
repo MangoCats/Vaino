@@ -359,6 +359,16 @@ impl PlayerStore {
         // than returning nothing. Created here because this is the player's
         // only writable handle; filling it is `tagscan`'s job.
         conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
+        // Created HERE, on every start, rather than in `ensure_tag_table`:
+        // that only runs behind the background scan, so a library whose scan
+        // was already complete never reached it and browsing died on a missing
+        // column. A query naming a column that does not exist fails outright;
+        // it does not return nothing.
+        for column in ["chosen INTEGER DEFAULT 0", "position INTEGER", "disc INTEGER"] {
+            let _ = conn.execute(
+                &format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
+        }
         Ok(Self { conn })
     }
 
@@ -567,17 +577,27 @@ impl Library {
         // Unnumbered tracks sort after the numbered ones rather than ahead of
         // them, which is where a bare NULL would put them.
         let order = if f.album.is_some() {
-            "ORDER BY COALESCE(disc_no, 1), \
-                      CASE WHEN track_no IS NULL THEN 1 ELSE 0 END, track_no, \
+            // MusicBrainz first, the file's tag second `[REQ-VIS-190]`. Both are
+            // track numbers; one is the release's own and the other is whatever
+            // the person who ripped the disc typed, so when Sampo has chosen a
+            // release its numbering wins. Unnumbered tracks still sort last.
+            "ORDER BY COALESCE(mb_disc, disc_no, 1), \
+                      CASE WHEN COALESCE(mb_track, track_no) IS NULL THEN 1 ELSE 0 END, \
+                      COALESCE(mb_track, track_no), \
                       title COLLATE NOCASE"
         } else {
             "ORDER BY title COLLATE NOCASE"
         };
         let sql = format!(
-            "SELECT passage_id, title, artist, album, plays, track_no, disc_no FROM ( \
+            "SELECT passage_id, title, artist, album, plays, \
+                    COALESCE(mb_track, track_no), COALESCE(mb_disc, disc_no) FROM ( \
                SELECT m.passage_id, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, \
                       {ALBUM_EXPR} AS album, {PLAYS_EXPR} AS plays, \
-                      ft.track_no AS track_no, ft.disc_no AS disc_no \
+                      ft.track_no AS track_no, ft.disc_no AS disc_no, \
+                      (SELECT rr.position FROM release_recordings rr \
+                        WHERE rr.mbid = m.mbid AND rr.chosen = 1) AS mb_track, \
+                      (SELECT rr.disc FROM release_recordings rr \
+                        WHERE rr.mbid = m.mbid AND rr.chosen = 1) AS mb_disc \
                  FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
              WHERE title IS NOT NULL AND title <> '' \
                AND (?1 = '' OR title LIKE ?1) \
