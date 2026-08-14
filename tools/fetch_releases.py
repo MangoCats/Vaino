@@ -31,12 +31,27 @@ import urllib.request
 
 # They ask for a contact address and will rate-limit or block a generic agent.
 UA = "Vaino-Sampo/0.1 ( https://github.com/MangoCats/Vaino )"
-BASE = "https://musicbrainz.org/ws/2/recording/"
+BASE = "https://musicbrainz.org/ws/2/release"
 
 # MusicBrainz asks for at most one request per second averaged over time. This
 # is the whole reason the run takes hours; going faster gets an IP blocked, and
 # a blocked IP is a worse outcome than a slow scan.
 RATE_S = 1.0
+
+# Browse pages at 100; a recording on more than that is rare but real.
+PAGE = 100
+
+# Columns the selection needs and the first pass did not collect. Added here
+# rather than in Vaino's schema because these are Sampo's to fill: the player
+# only ever reads `releases.title` [SPEC-SA-015].
+EXTRA_DDL = [
+    "ALTER TABLE releases ADD COLUMN status TEXT",
+    "ALTER TABLE releases ADD COLUMN primary_type TEXT",
+    "ALTER TABLE releases ADD COLUMN secondary_types TEXT",
+    "ALTER TABLE releases ADD COLUMN country TEXT",
+    "ALTER TABLE releases ADD COLUMN track_count INTEGER",
+    "ALTER TABLE release_recordings ADD COLUMN track_length_ms INTEGER",
+]
 
 # A response that has been fetched once should never be fetched again: the
 # answer changes rarely, the run is long, and a re-run after a schema change
@@ -51,14 +66,7 @@ CREATE TABLE IF NOT EXISTS musicbrainz_cache (
 """
 
 
-def fetch(mbid: str, tries: int = 4) -> dict | None:
-    """One recording, with its releases and their track positions.
-
-    `media` is what carries the position, and the position is what lets an
-    album be listed in its own running order rather than alphabetically
-    `[REQ-VIS-190]`.
-    """
-    url = f"{BASE}{mbid}?inc=releases+media&fmt=json"
+def get(url: str, tries: int = 4) -> dict | None:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     for attempt in range(tries):
         try:
@@ -67,10 +75,10 @@ def fetch(mbid: str, tries: int = 4) -> dict | None:
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None        # the MBID is gone or was merged away
-            # 503 is their documented "slow down", and over a two-hour run it
+            # 503 is their documented "slow down", and over a run this long it
             # is routine rather than exceptional -- one in five on the first
-            # trial. Backing off and retrying is the difference between a
-            # complete scan and a scan with holes that look like missing data.
+            # trial. Backing off is the difference between a complete scan and
+            # one with holes that look exactly like missing data.
             if e.code in (429, 503) and attempt < tries - 1:
                 time.sleep(2 ** attempt * 2)
                 continue
@@ -83,6 +91,37 @@ def fetch(mbid: str, tries: int = 4) -> dict | None:
     return None
 
 
+def fetch(mbid: str) -> dict | None:
+    """Every release carrying this recording, complete.
+
+    **Browse, not lookup.** A recording lookup with `inc=releases` silently caps
+    its list at 25 and ignores `limit`; measured against the browse endpoint,
+    one recording that reported 25 actually has 29. Choosing "the best release"
+    from an arbitrary first 25 is not a choice, and the truncation is invisible
+    -- 25 looks like an answer.
+
+    `release-groups` is what carries primary and secondary type, which is the
+    only way to tell an album from a compilation. Without it nothing stops a
+    greatest-hits collection winning over the record a song was written for.
+    """
+    out: list[dict] = []
+    offset = 0
+    while True:
+        url = (f"{BASE}?recording={mbid}&inc=release-groups+media"
+               f"&fmt=json&limit={PAGE}&offset={offset}")
+        doc = get(url)
+        if doc is None:
+            return None if offset == 0 else {"releases": out}
+        page = doc.get("releases", []) or []
+        out.extend(page)
+        total = doc.get("release-count", len(out))
+        offset += len(page)
+        if not page or offset >= total:
+            break
+        time.sleep(RATE_S)         # each page is its own request
+    return {"releases": out}
+
+
 def store(conn, mbid: str, doc: dict) -> int:
     """Write the releases a recording appears on. Returns how many."""
     n = 0
@@ -90,26 +129,42 @@ def store(conn, mbid: str, doc: dict) -> int:
         rid = rel.get("id")
         if not rid:
             continue
+        group = rel.get("release-group") or {}
+        media = rel.get("media") or []
         conn.execute(
-            "INSERT OR REPLACE INTO releases (mbid, title, release_date, source) "
-            "VALUES (?1, ?2, ?3, 'musicbrainz')",
-            (rid, rel.get("title"), rel.get("date")),
+            "INSERT OR REPLACE INTO releases "
+            "  (mbid, title, release_date, source, status, primary_type, "
+            "   secondary_types, country, track_count) "
+            "VALUES (?1, ?2, ?3, 'musicbrainz', ?4, ?5, ?6, ?7, ?8)",
+            (rid, rel.get("title"), rel.get("date"), rel.get("status"),
+             group.get("primary-type"),
+             # A comma-separated list because it is read for scoring, never
+             # joined against: "Compilation" and "Live" are what disqualify a
+             # release from being the record a song belongs to.
+             ",".join(group.get("secondary-types") or []) or None,
+             rel.get("country"),
+             sum(m.get("track-count") or 0 for m in media) or None),
         )
         # Position lives under media/tracks; a recording can legitimately appear
         # twice on one release (a reprise), so the first is taken rather than
         # the last, and its absence is not an error.
-        position = None
-        for medium in rel.get("media", []) or []:
+        position = length = None
+        for medium in media:
             for track in medium.get("tracks", []) or []:
                 if track.get("position") is not None:
                     position = track["position"]
+                    # The track's own length, which is the evidence that this
+                    # release is the one the file came from -- a remaster runs
+                    # to a different second than the original.
+                    length = track.get("length")
                     break
             if position is not None:
                 break
         conn.execute(
             "INSERT OR REPLACE INTO release_recordings "
-            "(release_mbid, mbid, position, source) VALUES (?1, ?2, ?3, 'musicbrainz')",
-            (rid, mbid, position),
+            "(release_mbid, mbid, position, source, track_length_ms) "
+            "VALUES (?1, ?2, ?3, 'musicbrainz', ?4)",
+            (rid, mbid, position, length),
         )
         n += 1
     return n
@@ -126,6 +181,11 @@ def main() -> int:
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(CACHE_DDL)
+    for ddl in EXTRA_DDL:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass               # already added by an earlier run
 
     # Only recordings the library actually uses, and only those without links
     # already -- that is what makes the run resumable.
@@ -142,7 +202,8 @@ def main() -> int:
         return 0
 
     print(f"{len(todo)} recording(s) to look up, ~{len(todo) * RATE_S / 60:.0f} minutes "
-          f"at MusicBrainz's one-per-second limit")
+          f"at MusicBrainz's one-per-second limit (longer where a recording "
+          f"needs more than one page)")
     started = time.time()
     linked = found = missing = failed = cached = 0
 
