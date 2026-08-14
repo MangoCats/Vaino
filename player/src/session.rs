@@ -28,6 +28,25 @@ fn unix_now() -> i64 {
 /// second source of truth for the same fact.
 pub type Explanations = Arc<Mutex<ExplanationLog>>;
 
+/// Programme selection, shared between the web thread and the engine thread.
+///
+/// The Director lives on the engine thread and is not `Sync`, so the browser
+/// cannot reach it directly. It writes an intent here instead, and the engine
+/// applies it on its next refill. One shared cell rather than another command
+/// channel: the state is small, idempotent, and the browser needs to *read* it
+/// back to show what is active.
+#[derive(Default)]
+pub struct Controls {
+    /// Chosen by hand, overriding time of day until cleared `[SPEC-DIR-185]`.
+    pub manual_program: Option<i64>,
+    /// `(id, name, start_time)`, for the browser to offer.
+    pub programs: Vec<(i64, String, String)>,
+    /// The programme actually in force, as the engine last resolved it.
+    pub active: Option<String>,
+}
+
+pub type SharedControls = Arc<Mutex<Controls>>;
+
 /// Bounded on purpose. Only the queue and what is playing can be asked about,
 /// so a handful is plenty and an unbounded map would grow for the life of the
 /// process.
@@ -70,6 +89,7 @@ pub struct Session {
     /// sharing one across a thread boundary for a write this rare.
     decisions: Option<PlayerStore>,
     explanations: Explanations,
+    controls: SharedControls,
 }
 
 impl Session {
@@ -105,6 +125,7 @@ impl Session {
             rng: Rng::from_clock(),
             decisions: PlayerStore::open(db).ok(),
             explanations: Explanations::default(),
+            controls: SharedControls::default(),
         })
     }
 
@@ -135,11 +156,29 @@ impl Session {
     /// for five at once would weigh all five against the same stale history and
     /// could queue five tracks by one artist `[SPEC-DIR-115]`.
     pub fn refill(&mut self, engine: &mut Engine) {
+        // Apply the browser's programme choice before selecting, and report
+        // back what is actually in force -- "auto" resolves to a name only the
+        // Director can supply.
+        let now = unix_now();
+        if let (Some(d), Ok(mut c)) = (&mut self.director, self.controls.lock()) {
+            if c.programs.is_empty() {
+                c.programs = d
+                    .programs()
+                    .all()
+                    .iter()
+                    .map(|p| (p.id, p.name.clone(), format!("{:02}:{:02}", p.start_minute / 60, p.start_minute % 60)))
+                    .collect();
+            }
+            if d.programs().manual() != c.manual_program {
+                d.programs_mut().set_manual(c.manual_program);
+            }
+            c.active = d.programs().active(now).map(|p| p.name.clone());
+        }
+
         let short = engine.shortfall();
         if short == 0 {
             return;
         }
-        let now = unix_now();
         let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
         let mut chosen: Vec<i64> = queued;
 
@@ -196,6 +235,11 @@ impl Session {
     /// Share the reasoning with a UI. Cloning the handle, not the data.
     pub fn explanations(&self) -> Explanations {
         Arc::clone(&self.explanations)
+    }
+
+    /// Share programme control with a UI.
+    pub fn controls(&self) -> SharedControls {
+        Arc::clone(&self.controls)
     }
 
     /// The programme in force `[SPEC-DIR-180]`.

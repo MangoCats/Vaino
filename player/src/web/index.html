@@ -41,6 +41,20 @@
   #losers .w { font-variant-numeric: tabular-nums; opacity: .75; }
   #stages { font-size: .75rem; color: var(--dim); opacity: .7; margin: 1rem 0 0; }
   #link { opacity: .55; font-size: .8125rem; margin-top: 2rem; }
+  #vol { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+  #volume { width: 7rem; accent-color: currentColor; }
+  #volnum { font-variant-numeric: tabular-nums; color: var(--dim);
+            font-size: .8125rem; min-width: 2.6rem; text-align: right; }
+  .progline { display: flex; align-items: center; gap: .6rem; font-size: .875rem;
+              color: var(--dim); margin: -.6rem 0 .4rem; }
+  select { font: inherit; font-size: .875rem; padding: .25rem .4rem; color: inherit;
+           background: transparent; border: 1px solid var(--line); border-radius: 6px; }
+  #progmode { font-size: .75rem; opacity: .7; }
+  #queue { margin: 0; padding-left: 1.4rem; font-size: .875rem; color: var(--dim); }
+  #queue li { padding: .16rem 0; overflow-wrap: anywhere; }
+  #queue li:first-child { color: var(--fg); }
+  #queue .dur { font-variant-numeric: tabular-nums; opacity: .6; }
+  #queue .empty { list-style: none; margin-left: -1.4rem; opacity: .6; }
 </style>
 
 <main>
@@ -53,11 +67,23 @@
     <button data-cmd="play">Play</button>
     <button data-cmd="pause">Pause</button>
     <button data-cmd="skip">Skip</button>
+    <label id="vol"><input type="range" id="volume" min="0" max="100" step="1"><span id="volnum">100%</span></label>
   </div>
+
+  <div class="progline">
+    <label for="prog">Programme</label>
+    <select id="prog"></select>
+    <span id="progmode"></span>
+  </div>
+
+  <section>
+    <h2>Up next</h2>
+    <ol id="queue"><li class="empty">nothing queued</li></ol>
+  </section>
 
   <dl>
     <dt>State</dt><dd id="state">—</dd>
-    <dt>Queue</dt><dd id="queue">—</dd>
+    <dt>Queue</dt><dd id="queuelen">—</dd>
     <dt>Underruns</dt><dd id="under">—</dd>
   </dl>
 
@@ -88,6 +114,20 @@
     b.onclick = () => fetch(`/command/${b.dataset.cmd}`, { method: 'POST' });
   }
 
+  // While dragging, the slider is the truth; adopting the pushed value mid-drag
+  // would fight the user's thumb every 500 ms.
+  let holdingVolume = false;
+  const vol = $('volume');
+  vol.oninput = () => {
+    holdingVolume = true;
+    $('volnum').textContent = vol.value + '%';
+  };
+  vol.onchange = () => {
+    holdingVolume = false;
+    fetch(`/volume/${vol.value}`, { method: 'POST' });
+  };
+  $('prog').onchange = e => fetch(`/program/${e.target.value}`, { method: 'POST' });
+
   // Each message is a complete snapshot, so rendering is a pure function of
   // the last one received. No accumulated client state means no drift.
   function render(s) {
@@ -96,8 +136,14 @@
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
     $('state').textContent = s.playing ? 'playing' : 'paused';
-    $('queue').textContent = s.queue_len;
     $('under').textContent = s.underrun_samples;
+    renderQueue(s.queue, s.queue_len);
+    renderProgram(s);
+    if (!holdingVolume) {
+      const pct = Math.round((s.volume ?? 1) * 100);
+      vol.value = pct;
+      $('volnum').textContent = pct + '%';
+    }
     renderWhy(s.why);
   }
 
@@ -113,6 +159,58 @@
     ['Length bonus',     w => w.length_bonus],
     ['Occasion',         w => w.occasion],
   ];
+
+  function renderQueue(items, total) {
+    const ol = $('queue');
+    $('queuelen').textContent = total ?? 0;
+    ol.textContent = '';
+    if (!items || !items.length) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'nothing queued';
+      ol.appendChild(li);
+      return;
+    }
+    for (const q of items) {
+      const li = document.createElement('li');
+      li.textContent = q.title + ' ';
+      const d = document.createElement('span');
+      d.className = 'dur';
+      d.textContent = clock(q.duration_ms);
+      li.appendChild(d);
+      ol.appendChild(li);
+    }
+  }
+
+  // The <option> list is rebuilt only when it actually changes; replacing it on
+  // every push would close the dropdown in the user's hand.
+  let progSig = '';
+  function renderProgram(s) {
+    const sel = $('prog');
+    const sig = (s.programs || []).map(p => p.id + p.name).join('|');
+    if (sig !== progSig) {
+      progSig = sig;
+      sel.textContent = '';
+      const auto = document.createElement('option');
+      auto.value = 'auto';
+      auto.textContent = 'Automatic (by time of day)';
+      sel.appendChild(auto);
+      for (const p of s.programs || []) {
+        const o = document.createElement('option');
+        o.value = p.id;
+        o.textContent = `${p.name} — from ${p.start}`;
+        sel.appendChild(o);
+      }
+    }
+    if (!s.program_manual) sel.value = 'auto';
+    else {
+      const m = (s.programs || []).find(p => p.name === s.program);
+      if (m) sel.value = String(m.id);
+    }
+    $('progmode').textContent = s.program
+      ? (s.program_manual ? `${s.program}, chosen` : `${s.program}, by the clock`)
+      : '';
+  }
 
   function renderWhy(w) {
     const terms = $('terms'), losers = $('losers');

@@ -84,6 +84,14 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 
 **`[REQ-VIS-130]`** Automatically computed boundaries, lead-in/lead-out points and gain are **reviewable and overridable** through a waveform view `[SPEC-SA-080]`. Manual edits outrank computed values permanently and are never silently recomputed.
 
+**`[REQ-VIS-150]` The listening surface shows what is coming and what is in force.** The queue in play order, the active programme with a manual override `[SPEC-DIR-185]`, and master volume.
+
+> Delivered 2026-08-13. Two implementation notes worth keeping:
+>
+> **Per-passage `gain_db` was read from the library and never applied to the audio** — it reached `QueueEntry`, was printed by `station`, and was silently dropped before the mixer. The library carries real values (median −3.0 dB), so tracks were playing at whatever level they were mastered at. It is now applied **per passage, before mixing**, so each side of a crossfade carries its own level; applying it after the mix would level the blend rather than the tracks, and the point is that they meet at a matched loudness. Master volume is applied last, over the mixed signal, because it is a listening level and not a property of any passage.
+>
+> **The Director is not `Sync`,** so the browser cannot reach it. Programme choice is written to a small shared cell that the engine reads on its next refill — an override therefore changes what is selected *next* rather than interrupting what is playing, which is the wanted behaviour. An unknown programme id is a 404 rather than a silent no-op.
+
 **`[REQ-VIS-140]`** Long-running operations report real progress and are interruptible without loss `[REQ-LIB-130]`.
 
 ## 4. Library Building — `LIB` *(Sampo)*

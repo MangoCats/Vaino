@@ -39,6 +39,11 @@ struct Live {
     /// reported position stays position-WITHIN-THE-PASSAGE rather than
     /// restarting at zero and making the next save move backwards.
     origin_ms: u64,
+    /// `gain_db` as a linear factor, applied per passage `[REQ-AUD-130]`.
+    /// Per passage rather than at the mix, so each side of a crossfade carries
+    /// its own level -- applying it after mixing would level the blend, not the
+    /// tracks, and the whole point is that they meet at a matched loudness.
+    gain: f32,
 }
 
 /// What the UI and the persistence layer read. Cheap to clone.
@@ -51,6 +56,10 @@ pub struct PlayerState {
     /// mixed figure would resume ~14 s late every time.
     pub position_ms: u64,
     pub queue_len: usize,
+    /// What is coming, in play order.
+    pub queue: Vec<QueueEntry>,
+    /// Master volume, 0.0 to 1.0.
+    pub volume: f32,
     pub active_streams: usize,
     pub underrun_samples: u64,
     /// Samples handed to the device but not yet played. Playback is NOT over
@@ -77,6 +86,8 @@ pub enum Command {
     Pause,
     /// Drop the playing passage and start the next immediately.
     Skip,
+    /// Master volume, clamped to 0.0..=1.0.
+    SetVolume(f32),
     Enqueue(QueueEntry),
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
@@ -115,6 +126,7 @@ pub struct Engine {
     rx: Receiver<Command>,
     playing: bool,
     shutdown: bool,
+    volume: f32,
     store: Option<PlayerStore>,
     /// One-shot: the offset the NEXT admitted passage opens at. Consumed on
     /// use, so only the resumed passage is seeked and everything after it
@@ -153,6 +165,7 @@ impl Engine {
             rx,
             playing: false,
             shutdown: false,
+            volume: 1.0,
             store: None,
             pending_resume: None,
             last_save: Instant::now(),
@@ -222,6 +235,7 @@ impl Engine {
                 Ok(Command::Play) => self.set_playing(true),
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::Skip) => self.skip(),
+                Ok(Command::SetVolume(v)) => self.volume = v.clamp(0.0, 1.0),
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
                     self.shutdown = true;
@@ -298,6 +312,7 @@ impl Engine {
             dec,
             resampler,
             converted: Vec::new(),
+            gain: 10f32.powf(e.gain_db / 20.0),
             entry: e.clone(),
             frames_mixed: 0,
             origin_ms,
@@ -315,6 +330,11 @@ impl Engine {
                     let mut buf = std::mem::take(&mut l.converted);
                     match l.resampler.process(chunk, &mut buf) {
                         Ok(()) => {
+                            if l.gain != 1.0 {
+                                for s in buf.iter_mut() {
+                                    *s *= l.gain;
+                                }
+                            }
                             l.stream.push(&mut buf);
                         }
                         Err(e) => {
@@ -365,6 +385,13 @@ impl Engine {
         }
         if filled == 0 {
             return 0;
+        }
+        // Master volume last, over the mixed signal: it is a listening level,
+        // not a property of any passage.
+        if self.volume != 1.0 {
+            for s in self.scratch[..filled].iter_mut() {
+                *s *= self.volume;
+            }
         }
         match &self.out {
             Some(o) => {
@@ -464,6 +491,8 @@ impl Engine {
             s.current = self.live.first().map(|l| l.entry.clone());
             s.position_ms = self.live.first().map(|l| self.audible_ms(l)).unwrap_or(0);
             s.queue_len = self.queue.len();
+            s.queue = self.queue.iter().take(12).cloned().collect();
+            s.volume = self.volume;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.output_buffered = self
