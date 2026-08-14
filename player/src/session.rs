@@ -90,6 +90,13 @@ pub struct Session {
     decisions: Option<PlayerStore>,
     explanations: Explanations,
     controls: SharedControls,
+    /// What the Director was told about each queued passage, kept until the
+    /// engine confirms it could be opened `[REQ-PD-112]`.
+    ///
+    /// Bounded by the queue: an entry goes when its passage is dropped, and
+    /// the rest are pruned to what is still queued -- a passage that has been
+    /// admitted can no longer fail to open, so its note is dead weight.
+    notes: HashMap<i64, crate::director::library::QueuedNote>,
 }
 
 impl Session {
@@ -126,6 +133,7 @@ impl Session {
             decisions: PlayerStore::open(db).ok(),
             explanations: Explanations::default(),
             controls: SharedControls::default(),
+            notes: HashMap::new(),
         })
     }
 
@@ -203,6 +211,25 @@ impl Session {
             c.active = d.programs().active(now).map(|p| p.name.clone());
         }
 
+        // A passage the engine could not open never played, so the Director
+        // must stop counting it as though it had -- otherwise one unreadable
+        // file suppresses its recording and its artist for a full rotation
+        // `[REQ-PD-112]`.
+        for id in engine.take_dropped() {
+            if let (Some(note), Some(d)) = (self.notes.remove(&id), self.director.as_mut()) {
+                d.forget_queued(note);
+            }
+        }
+        // A note is only useful while its passage can still fail to open, and
+        // once admitted it cannot. Pruning to what is still queued bounds the
+        // map by the queue depth rather than letting it grow one entry per
+        // passage for the life of the process.
+        if !self.notes.is_empty() {
+            let queued: std::collections::HashSet<i64> =
+                engine.queued().map(|e| e.passage_id).collect();
+            self.notes.retain(|id, _| queued.contains(id));
+        }
+
         let short = engine.shortfall();
         if short == 0 {
             return;
@@ -223,7 +250,9 @@ impl Session {
                     break;
                 };
                 let entry = decision.entry;
-                d.note_queued(entry.passage_id, now);
+                if let Some(note) = d.note_queued(entry.passage_id, now) {
+                    self.notes.insert(entry.passage_id, note);
+                }
                 chosen.push(entry.passage_id);
 
                 // Recording the reasoning must never be able to stop the

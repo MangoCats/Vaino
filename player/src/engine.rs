@@ -183,6 +183,11 @@ pub struct Engine {
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
     recorded: Option<i64>,
+    /// Passages chosen but never opened, waiting to be reported `[REQ-PD-112]`.
+    ///
+    /// The engine drops them; only the Director can undo having counted them,
+    /// and it lives on the other side of `Session`. Kept here until asked for.
+    dropped: Vec<i64>,
     /// The passage the LISTENER is on, which is not the one being mixed
     /// `[REQ-AUD-164]`. Held here because it outlives `live`: a passage stays
     /// audible for a ring's depth after the mixer has finished with it.
@@ -225,6 +230,7 @@ impl Engine {
             saved: None,
             recorded: None,
             shown: None,
+            dropped: Vec::new(),
             underruns_playing: 0,
             last_raw_underruns: 0,
         };
@@ -453,8 +459,19 @@ impl Engine {
         }
         match self.open(&entry, origin.unwrap_or(0)) {
             Ok(l) => self.live.push(l),
-            Err(e) => eprintln!("skipping {}: {e}", entry.path.display()),
+            Err(e) => {
+                eprintln!("skipping {}: {e}", entry.path.display());
+                self.dropped.push(entry.passage_id);
+            }
         }
+    }
+
+    /// Passages that were chosen but could not be opened, taken once.
+    ///
+    /// Draining rather than reading: each is reported to the Director exactly
+    /// once, and a second report would restore a rotation entry twice.
+    pub fn take_dropped(&mut self) -> Vec<i64> {
+        std::mem::take(&mut self.dropped)
     }
 
     /// Open the passage after this one before anyone asks for it
@@ -483,6 +500,7 @@ impl Engine {
                 // playable one behind it.
                 eprintln!("skipping {}: {e}", entry.path.display());
                 self.queue.advance();
+                self.dropped.push(entry.passage_id);
                 self.ready = None;
             }
         }

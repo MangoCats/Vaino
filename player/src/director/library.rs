@@ -134,6 +134,19 @@ pub struct Decision {
     pub why: Explanation,
 }
 
+/// Enough to undo a `note_queued` exactly `[REQ-PD-112]`.
+///
+/// Held between choosing a passage and learning whether it could be opened. It
+/// carries the values that were there before, because `max` cannot be inverted
+/// from its result alone.
+#[derive(Debug, Clone)]
+pub struct QueuedNote {
+    mbid: String,
+    prev_recording: Option<i64>,
+    artist: Option<String>,
+    prev_artist: Option<i64>,
+}
+
 pub struct Director {
     rows: Vec<Row>,
     policy: Policy,
@@ -142,6 +155,7 @@ pub struct Director {
     /// recording → its artist. One artist per recording, as migrated.
     artist_of: HashMap<String, String>,
     last_played: HashMap<String, i64>,
+    // (see `QueuedNote` for why the previous values are handed back)
     artist_last_played: HashMap<String, i64>,
     relations: HashMap<String, Vec<(String, f64)>>,
     occasions: Occasions,
@@ -393,22 +407,64 @@ impl Director {
     /// is put in the play queue)". Without it, topping up five slots at once
     /// would happily queue five tracks by one artist, because every pick would
     /// weigh against the same stale history.
-    pub fn note_queued(&mut self, passage_id: i64, at: i64) {
-        let Some(mbid) = self
+    pub fn note_queued(&mut self, passage_id: i64, at: i64) -> Option<QueuedNote> {
+        let mbid = self
             .rows
             .iter()
             .find(|r| r.entry.passage_id == passage_id)
-            .and_then(|r| r.mbid.clone())
-        else {
-            return;
+            .and_then(|r| r.mbid.clone())?;
+        let artist = self.artist_of.get(&mbid).cloned();
+        // Both previous values are kept so the note can be taken back exactly.
+        // `max` is not invertible: without the old value, undoing a note would
+        // have to guess, and guessing at rotation history is how a track that
+        // never played ends up suppressed.
+        let note = QueuedNote {
+            mbid: mbid.clone(),
+            prev_recording: self.last_played.get(&mbid).copied(),
+            artist: artist.clone(),
+            prev_artist: artist
+                .as_ref()
+                .and_then(|a| self.artist_last_played.get(a).copied()),
         };
-        if let Some(a) = self.artist_of.get(&mbid) {
-            let a = a.clone();
+        if let Some(a) = artist {
             let e = self.artist_last_played.entry(a).or_insert(at);
             *e = (*e).max(at);
         }
         let e = self.last_played.entry(mbid).or_insert(at);
         *e = (*e).max(at);
+        Some(note)
+    }
+
+    /// Undo a note for a passage that never played `[REQ-PD-112]`.
+    ///
+    /// A passage can be chosen, noted, and then fail to open -- an unreadable
+    /// file, a path that moved. The engine drops it, and without this the
+    /// Director would go on believing it was heard, suppressing that recording
+    /// and its artist for a full rotation on the strength of a play that never
+    /// happened.
+    pub fn forget_queued(&mut self, note: QueuedNote) {
+        match note.prev_recording {
+            Some(prev) => {
+                self.last_played.insert(note.mbid, prev);
+            }
+            None => {
+                self.last_played.remove(&note.mbid);
+            }
+        }
+        if let Some(a) = note.artist {
+            match note.prev_artist {
+                Some(prev) => {
+                    self.artist_last_played.insert(a, prev);
+                }
+                // Another passage by the same artist may have been noted since,
+                // in which case removing the entry would forget that one too.
+                // Restoring what was there is the only safe undo, and "nothing
+                // was there" is a value like any other.
+                None => {
+                    self.artist_last_played.remove(&a);
+                }
+            }
+        }
     }
 
     /// Weighted-random pick over the eligible pool.
@@ -799,6 +855,36 @@ mod tests {
         )
         .unwrap();
         c
+    }
+
+    /// A passage that never opened must leave rotation history exactly as it
+    /// found it `[REQ-PD-112]`. `max` cannot be inverted from its result, so
+    /// the note carries what was there before.
+    #[test]
+    fn forgetting_a_queued_passage_restores_what_was_there() {
+        let mut d = Director::load(&fixture()).unwrap();
+        let before = d.last_played.clone();
+        let before_artists = d.artist_last_played.clone();
+        let note = d.note_queued(1, 5_000).expect("passage 1 is in the pool");
+        assert_ne!(d.last_played, before, "noting must change something");
+        d.forget_queued(note);
+        assert_eq!(d.last_played, before, "recording history restored");
+        assert_eq!(d.artist_last_played, before_artists, "artist history restored");
+    }
+
+    /// The common case: nothing was recorded before, so forgetting must remove
+    /// the entry rather than leave a zero behind, which would read as "played
+    /// at the epoch" and suppress nothing.
+    #[test]
+    fn forgetting_removes_an_entry_that_was_not_there() {
+        let mut d = Director::load(&fixture()).unwrap();
+        d.last_played.clear();
+        d.artist_last_played.clear();
+        let note = d.note_queued(1, 5_000).expect("passage 1 is in the pool");
+        assert!(!d.last_played.is_empty());
+        d.forget_queued(note);
+        assert!(d.last_played.is_empty(), "no entry should remain");
+        assert!(d.artist_last_played.is_empty());
     }
 
     #[test]
