@@ -401,6 +401,24 @@ impl PlayerStore {
             let _ = conn.execute(
                 &format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
         }
+        // Album names are looked up BY RECORDING, and `release_recordings` is
+        // keyed `(release_mbid, mbid)` -- so the lookup uses the second column
+        // of the primary key and no index applies. SQLite falls back to a full
+        // scan of the table, once per passage.
+        //
+        // That was free when the table was empty and became quadratic the
+        // moment Sampo filled it: at 304,334 rows against 8,078 passages,
+        // browsing albums went past 400 seconds and the review queue took 229.
+        // With this index the review query is 0.50 s. Nothing about the code
+        // changed in between, only the amount of data, which is the kind of
+        // regression that arrives without a commit to blame.
+        //
+        // Created here because this is the player's only writable handle, and
+        // on every start rather than behind a scan, for the same reason the
+        // columns above are `[REQ-VIS-180]`.
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_release_recordings_mbid \
+               ON release_recordings(mbid)", []);
         Ok(Self { conn })
     }
 
@@ -996,16 +1014,27 @@ mod tests {
     fn reviewable() -> Connection {
         let c = fixture();
         c.execute_batch(
-            "CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
-             CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT);
-             CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);
+            // NOT NULL exactly as SPEC008 declares them. The looser fixture
+            // this replaces is what let a writer that omitted `source` pass
+            // every test and then fail against the real library: `INSERT OR
+            // IGNORE` turned the violation into nothing happening, and the
+            // foreign key failed on the statement after.
+            "CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
+                 length_ms INTEGER, source TEXT NOT NULL);
+             CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT NOT NULL,
+                 sort_name TEXT, source TEXT NOT NULL);
+             CREATE TABLE recording_artists (
+                 mbid TEXT NOT NULL REFERENCES recordings(mbid),
+                 artist_mbid TEXT NOT NULL REFERENCES artists(mbid),
+                 weight REAL NOT NULL DEFAULT 1.0, source TEXT NOT NULL,
+                 PRIMARY KEY (mbid, artist_mbid));
              CREATE TABLE release_recordings (release_mbid TEXT, mbid TEXT, position INTEGER,
                  source TEXT, track_length_ms INTEGER, chosen INTEGER DEFAULT 0, disc INTEGER);
              CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT, release_date TEXT,
                  source TEXT, release_group TEXT, status TEXT, primary_type TEXT,
                  secondary_types TEXT, country TEXT, track_count INTEGER);
              CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, mbid TEXT);
-             INSERT INTO recordings VALUES ('rec-main','Wrong Song');
+             INSERT INTO recordings VALUES ('rec-main','Wrong Song',NULL,'s');
              CREATE TABLE id_checks (passage_id INTEGER PRIMARY KEY, stored_mbid TEXT NOT NULL,
                  verdict TEXT NOT NULL, score REAL, suggested TEXT, checked_at TEXT NOT NULL);
              INSERT INTO id_checks VALUES
@@ -1060,7 +1089,7 @@ mod tests {
         c.execute_batch(
             "INSERT INTO passages VALUES (4,1,'radio',0,1000,NULL,NULL,NULL,'src');
              INSERT INTO passage_recordings VALUES (4,'rec-p',1.0,'s');
-             INSERT INTO recordings VALUES ('rec-p','Wrong Song');
+             INSERT INTO recordings VALUES ('rec-p','Wrong Song',NULL,'s');
              INSERT INTO id_checks VALUES (4,'rec-p','contradicted',0.91,
                  '[{\"mbid\":\"rec-q\",\"title\":\"Wrong Song (remaster)\",\"score\":0.91}]','t');",
         )

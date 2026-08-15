@@ -103,6 +103,7 @@ def main() -> int:
         return 0
 
     applied = new_recordings = new_artists = unnamed = 0
+    skipped: list[tuple[int, str]] = []
     if args.commit:
         conn.execute("BEGIN IMMEDIATE")
 
@@ -110,26 +111,40 @@ def main() -> int:
         names = cached_names(conn, passage_id)
         info = names.get(new_mbid)
         title = (info or {}).get("title")
+
+        # `recordings.title` and `recordings.source` are both NOT NULL, and
+        # `passage_recordings.mbid` has a foreign key to it. So a reassignment
+        # to a recording we can put no name to cannot be made at all -- and it
+        # must be REFUSED rather than papered over with a placeholder title,
+        # which would put a nameless row in the library and display as blank.
+        #
+        # The first version of this used INSERT OR IGNORE and omitted `source`,
+        # so every insert was silently skipped and the foreign key then failed
+        # on the row after. `OR IGNORE` turns a constraint violation into
+        # nothing happening, which is exactly what you do not want when the
+        # next statement depends on it having happened.
         if title is None:
-            # The link can still be made -- the id is what matters -- but a
-            # recording row with no title would display as blank, so say so.
             unnamed += 1
+            skipped.append((passage_id, new_mbid))
+            continue
 
         if args.commit:
-            # The FK on passage_recordings requires the recording to exist.
-            # `rowcount` on the INSERT, not `total_changes`: the latter is
-            # cumulative for the connection and would count every row after
-            # the first one as new.
-            new_recordings += conn.execute(
-                "INSERT OR IGNORE INTO recordings (mbid, title) VALUES (?1, ?2)",
-                (new_mbid, title)).rowcount
-            for artist_mbid, artist_name in (info or {}).get("artists", []):
+            existed = conn.execute(
+                "SELECT 1 FROM recordings WHERE mbid = ?1", (new_mbid,)).fetchone()
+            if not existed:
                 conn.execute(
-                    "INSERT OR IGNORE INTO artists (mbid, name) VALUES (?1, ?2)",
-                    (artist_mbid, artist_name))
+                    "INSERT INTO recordings (mbid, title, source) VALUES (?1, ?2, ?3)",
+                    (new_mbid, title, SOURCE))
+                new_recordings += 1
+            for artist_mbid, artist_name in (info or {}).get("artists", []):
+                if not artist_name:
+                    continue        # `artists.name` is NOT NULL too
+                conn.execute(
+                    "INSERT OR IGNORE INTO artists (mbid, name, source) VALUES (?1, ?2, ?3)",
+                    (artist_mbid, artist_name, SOURCE))
                 new_artists += conn.execute(
-                    "INSERT OR IGNORE INTO recording_artists (mbid, artist_mbid, weight) "
-                    "VALUES (?1, ?2, 1.0)", (new_mbid, artist_mbid)).rowcount
+                    "INSERT OR IGNORE INTO recording_artists (mbid, artist_mbid, weight, source) "
+                    "VALUES (?1, ?2, 1.0, ?3)", (new_mbid, artist_mbid, SOURCE)).rowcount
             # Replace the link rather than adding one: a passage with two
             # recordings is a medley, and this is not that -- it is one song
             # whose identity was wrong.
@@ -140,8 +155,15 @@ def main() -> int:
                 "VALUES (?1, ?2, 1.0, ?3)", (passage_id, new_mbid, SOURCE))
         applied += 1
         if applied <= 10:
-            say(f"  passage {passage_id}: {old_mbid} -> {new_mbid}"
-                + (f"  ({title})" if title else "  (no title cached)"))
+            say(f"  passage {passage_id}: {old_mbid} -> {new_mbid}  ({title})")
+
+    if skipped:
+        say(f"\n{len(skipped)} refused: no cached name for the chosen recording, "
+            f"and a nameless one cannot be written")
+        for passage_id, mbid in skipped[:10]:
+            say(f"  passage {passage_id} -> {mbid}")
+        say("  Re-run tools/fingerprint_ids.py for these passages, or pick a "
+            "different candidate on the review page.")
 
     if args.commit:
         conn.commit()
@@ -151,7 +173,7 @@ def main() -> int:
             "those plays did happen, and to what the passage was then.")
     else:
         say(f"\nwould apply {applied}"
-            + (f"; {unnamed} have no cached title" if unnamed else ""))
+            + (f", refusing {unnamed}" if unnamed else ""))
         say("nothing was written. Re-run with --commit to do it.")
     return 0
 
