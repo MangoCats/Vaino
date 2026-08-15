@@ -173,6 +173,16 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 >
 > **Never fatal.** A player that stops playing because it could not write a backup has turned a precaution into the fault. Failures are reported and playback continues.
 >
+> **A backup nobody has restored is a file of unknown value.** `restore_listener` puts one back, and **rehearsal is the default**: it reports exactly what a real restore would do and writes nothing until `--commit`. The numbers are the same either way, being measured from the same query before anything is written.
+>
+> **Passage ids are not stable; recording MBIDs are.** A Sampo rebuild renumbers passages, so restoring a history by its stored `passage_id` would silently reattribute years of listening to whatever songs hold those numbers now. Every play is re-pointed through its recording instead. Plays whose recording has left the library are **kept as they are** — a play that happened still happened, and discarding it to satisfy a foreign key would lose the only record of it.
+>
+> The whole restore is one transaction: half-applied would leave the listening in a state that never existed, which is worse than either version.
+>
+> **A safety copy is taken before committing, and is exempt from rotation.** The first version was not, and it very nearly destroyed what it was protecting: the safety copy and the snapshot being restored fell on the same day, the ladder keeps only the newest of a day, and the source was pruned out from under the restore. Safety copies now carry their own prefix and `prune` never looks at them.
+>
+> Verified end to end against a copy of the real library: 37,206 plays, damaged to 34,429, restored to 37,206, with 2 orphaned plays kept.
+>
 > Taken once at startup and hourly thereafter, on its own thread, off the audio path. `cargo run --example backup_now` takes one by hand — before a migration, or to check the thing works before trusting it to. Verified against the live 553 MB library **while Sampo was writing to it**: 37,206 plays copied, and the derived library correctly absent.
 
 > ~~**Listener state has no backup, and it is not reproducible**~~ *(resolved by `[REQ-LIB-160]`)*. The library file holds 37,206 plays, 3,261 preferences, 8 programmes, 49 seeds and 24 occasion points, and the player writes to it continuously. Sampo can rebuild the library from the audio files; it cannot rebuild the listening history, and the Director is worthless without it. One interrupted write on a Pi takes all of it. The fix is small — a periodic snapshot through the SQLite backup API to a rotating file, the same mechanism the test copies already use.

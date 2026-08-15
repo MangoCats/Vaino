@@ -90,6 +90,22 @@ pub fn dir_for(db: &Path) -> PathBuf {
 /// Read-only on the source, so it can run while the player is playing: SQLite
 /// in WAL mode lets a reader work through a writer without either waiting.
 pub fn snapshot(db: &Path) -> Result<PathBuf, DbError> {
+    snapshot_named(db, "listener-", true)
+}
+
+/// A snapshot taken before something risky, kept out of the rotation.
+///
+/// Taking an ordinary snapshot before a restore very nearly destroyed the
+/// thing being restored: both fell on the same day, the ladder keeps only the
+/// newest of a day, and the older one -- the snapshot about to be read -- was
+/// pruned out from under the restore. A safety copy that can be rotated away
+/// by the next safety copy is not a safety copy, so these carry their own
+/// prefix and `prune` never looks at them.
+pub fn snapshot_before_restore(db: &Path) -> Result<PathBuf, DbError> {
+    snapshot_named(db, "prerestore-", false)
+}
+
+fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbError> {
     let dir = dir_for(db);
     std::fs::create_dir_all(&dir)
         .map_err(|e| DbError::Open(format!("create {}: {e}", dir.display())))?;
@@ -98,11 +114,11 @@ pub fn snapshot(db: &Path) -> Result<PathBuf, DbError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let out = dir.join(format!("listener-{stamp}.db"));
+    let out = dir.join(format!("{prefix}{stamp}.db"));
     // A half-written snapshot must never look like a good one, so it is built
     // under a temporary name and renamed only once it is complete. Rename is
     // atomic; a copy interrupted half way leaves a `.part` nobody will trust.
-    let part = dir.join(format!("listener-{stamp}.part"));
+    let part = dir.join(format!("{prefix}{stamp}.part"));
     let _ = std::fs::remove_file(&part);
 
     // The connection owns the SNAPSHOT and attaches the library, not the other
@@ -151,8 +167,175 @@ pub fn snapshot(db: &Path) -> Result<PathBuf, DbError> {
     }
     std::fs::rename(&part, &out)
         .map_err(|e| DbError::Open(format!("finish {}: {e}", out.display())))?;
-    prune(&dir);
+    if rotate {
+        prune(&dir);
+    }
     Ok(out)
+}
+
+
+/// What a snapshot holds, without committing to anything.
+///
+/// The first question anyone asks of a backup is "is this the right one",
+/// and it must be answerable without restoring it to find out.
+#[derive(Debug, Default, PartialEq)]
+pub struct Summary {
+    pub plays: i64,
+    pub first_play: Option<i64>,
+    pub last_play: Option<i64>,
+    pub preferences: i64,
+    pub likes: i64,
+    pub programs: i64,
+}
+
+pub fn inspect(snapshot: &Path) -> Result<Summary, DbError> {
+    let c = Connection::open_with_flags(snapshot, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| DbError::Open(e.to_string()))?;
+    let count = |t: &str| -> i64 {
+        c.query_row(&format!("SELECT COUNT(*) FROM \"{t}\""), [], |r| r.get(0)).unwrap_or(0)
+    };
+    Ok(Summary {
+        plays: count("listener_play_history"),
+        first_play: c
+            .query_row("SELECT MIN(played_at) FROM listener_play_history", [], |r| r.get(0))
+            .unwrap_or(None),
+        last_play: c
+            .query_row("SELECT MAX(played_at) FROM listener_play_history", [], |r| r.get(0))
+            .unwrap_or(None),
+        preferences: count("listener_preferences"),
+        likes: count("listener_likes"),
+        programs: count("listener_programs"),
+    })
+}
+
+/// What a restore did, or would do.
+#[derive(Debug, Default, PartialEq)]
+pub struct Report {
+    pub tables: usize,
+    pub plays: i64,
+    /// Plays whose passage now has a different id, matched back by recording.
+    pub remapped: i64,
+    /// Plays whose recording is no longer in the library at all. Kept, with
+    /// their old passage id: a play that happened still happened, and throwing
+    /// it away to tidy a foreign key would lose the only record of it.
+    pub orphaned: i64,
+    pub committed: bool,
+}
+
+/// Put a snapshot back.
+///
+/// **Passage ids are not stable and recording MBIDs are.** A Sampo rebuild
+/// renumbers passages, so restoring a play history by its stored `passage_id`
+/// would silently attribute years of listening to whatever songs happen to
+/// hold those numbers now. Every play carries the recording it was, and that
+/// is what the history is re-pointed through.
+///
+/// Nothing is written unless `commit`. The default is a rehearsal that reports
+/// exactly what would happen, because the first restore anyone performs is
+/// usually the one they are least sure about.
+pub fn restore(snapshot: &Path, db: &Path, commit: bool) -> Result<Report, DbError> {
+    let conn = Connection::open(db).map_err(|e| DbError::Open(e.to_string()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))
+        .map_err(|e| DbError::Open(e.to_string()))?;
+    let src = format!("file:{}?mode=ro", snapshot.to_string_lossy());
+    conn.execute("ATTACH DATABASE ?1 AS snap", [src.as_str()])
+        .map_err(|e| DbError::Query(format!("attach {}: {e}", snapshot.display())))?;
+
+    let mut report = Report { committed: commit, ..Default::default() };
+
+    // How much of the history still points at something that exists, and how
+    // much has moved. Measured before anything is written, so a rehearsal and
+    // a real restore report the same numbers.
+    let has_hist: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM snap.sqlite_master WHERE name='listener_play_history'",
+            [], |r| r.get(0))
+        .unwrap_or(0);
+    if has_hist > 0 {
+        report.plays = conn
+            .query_row("SELECT COUNT(*) FROM snap.listener_play_history", [], |r| r.get(0))
+            .unwrap_or(0);
+        report.remapped = conn
+            .query_row(
+                "SELECT COUNT(*) FROM snap.listener_play_history h \
+                   JOIN main.passage_recordings pr ON pr.mbid = h.mbid \
+                  WHERE h.mbid IS NOT NULL AND pr.passage_id <> h.passage_id",
+                [], |r| r.get(0))
+            .unwrap_or(0);
+        report.orphaned = conn
+            .query_row(
+                "SELECT COUNT(*) FROM snap.listener_play_history h \
+                  WHERE h.mbid IS NULL \
+                     OR NOT EXISTS (SELECT 1 FROM main.passage_recordings pr \
+                                     WHERE pr.mbid = h.mbid)",
+                [], |r| r.get(0))
+            .unwrap_or(0);
+    }
+
+    if !commit {
+        for table in LISTENER_TABLES {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM snap.sqlite_master WHERE type='table' AND name=?1",
+                    [table], |r| r.get(0))
+                .unwrap_or(0);
+            report.tables += exists as usize;
+        }
+        let _ = conn.execute_batch("DETACH DATABASE snap");
+        return Ok(report);
+    }
+
+    // One transaction: a restore that half-applied would leave the listening
+    // in a state that never existed, which is worse than either version.
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| DbError::Query(e.to_string()))?;
+    let done = || -> Result<usize, DbError> {
+        let mut n = 0;
+        for table in LISTENER_TABLES {
+            let in_snap: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM snap.sqlite_master WHERE type='table' AND name=?1",
+                    [table], |r| r.get(0))
+                .unwrap_or(0);
+            let in_main: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM main.sqlite_master WHERE type='table' AND name=?1",
+                    [table], |r| r.get(0))
+                .unwrap_or(0);
+            if in_snap == 0 || in_main == 0 {
+                continue;
+            }
+            conn.execute_batch(&format!(
+                "DELETE FROM main.\"{table}\"; \
+                 INSERT INTO main.\"{table}\" SELECT * FROM snap.\"{table}\";"
+            ))
+            .map_err(|e| DbError::Query(format!("restore {table}: {e}")))?;
+            n += 1;
+        }
+        // Re-point the history through recordings, which outlive renumbering.
+        conn.execute_batch(
+            "UPDATE main.listener_play_history AS h \
+                SET passage_id = (SELECT pr.passage_id FROM main.passage_recordings pr \
+                                   WHERE pr.mbid = h.mbid LIMIT 1) \
+              WHERE h.mbid IS NOT NULL \
+                AND EXISTS (SELECT 1 FROM main.passage_recordings pr WHERE pr.mbid = h.mbid);",
+        )
+        .map_err(|e| DbError::Query(format!("remap history: {e}")))?;
+        Ok(n)
+    };
+    match done() {
+        Ok(n) => {
+            report.tables = n;
+            conn.execute_batch("COMMIT").map_err(|e| DbError::Query(e.to_string()))?;
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            let _ = conn.execute_batch("DETACH DATABASE snap");
+            return Err(e);
+        }
+    }
+    let _ = conn.execute_batch("DETACH DATABASE snap");
+    Ok(report)
 }
 
 /// Thin the snapshots to the retention ladder.
@@ -268,6 +451,79 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+
+    /// The point of the whole exercise: a Sampo rebuild renumbers passages, and
+    /// the history has to follow the RECORDING rather than the number, or years
+    /// of listening are silently reattributed to whatever songs hold those ids
+    /// now `[REQ-LIB-160]`.
+    #[test]
+    fn a_restore_follows_recordings_through_renumbering() {
+        let tmp = std::env::temp_dir().join(format!("vaino-rs-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = tmp.join("lib.db");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(
+            "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                 played_at INTEGER, passage_id INTEGER, mbid TEXT);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
+             INSERT INTO passage_recordings VALUES (10, 'rec-a', 1.0);
+             INSERT INTO passage_recordings VALUES (11, 'rec-b', 1.0);
+             INSERT INTO listener_play_history VALUES (1, 100, 10, 'rec-a');
+             INSERT INTO listener_play_history VALUES (2, 200, 11, 'rec-b');
+             INSERT INTO listener_play_history VALUES (3, 300, 12, 'rec-gone');",
+        )
+        .unwrap();
+        let snap = snapshot(&db).expect("snapshot");
+
+        // Sampo rebuilds: same recordings, entirely different passage numbers.
+        c.execute_batch(
+            "DELETE FROM passage_recordings;
+             INSERT INTO passage_recordings VALUES (77, 'rec-a', 1.0);
+             INSERT INTO passage_recordings VALUES (88, 'rec-b', 1.0);
+             DELETE FROM listener_play_history;",
+        )
+        .unwrap();
+
+        let dry = restore(&snap, &db, false).expect("rehearsal");
+        assert_eq!(dry.plays, 3);
+        assert_eq!(dry.remapped, 2, "two plays moved to new passage ids");
+        assert_eq!(dry.orphaned, 1, "one recording is no longer in the library");
+        assert!(!dry.committed);
+        let still: i64 = c
+            .query_row("SELECT COUNT(*) FROM listener_play_history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(still, 0, "a rehearsal must not write");
+
+        let done = restore(&snap, &db, true).expect("restore");
+        assert!(done.committed);
+        let at: i64 = c
+            .query_row("SELECT passage_id FROM listener_play_history WHERE mbid='rec-a'",
+                       [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(at, 77, "the play followed its recording, not its old number");
+        // A play whose recording has left the library still happened, and is
+        // kept rather than tidied away for the sake of a foreign key.
+        let orphan: i64 = c
+            .query_row("SELECT COUNT(*) FROM listener_play_history WHERE mbid='rec-gone'",
+                       [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(orphan, 1);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A snapshot has to be readable before it is trusted.
+    #[test]
+    fn a_snapshot_can_be_inspected_without_restoring_it() {
+        let tmp = std::env::temp_dir().join(format!("vaino-in-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = library(&tmp);
+        let snap = snapshot(&db).unwrap();
+        let s = inspect(&snap).expect("inspect");
+        assert_eq!(s.plays, 2);
+        assert_eq!(s.first_play, Some(100));
+        assert_eq!(s.last_play, Some(200));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
     /// The date arithmetic has to be exact, because a snapshot filed under the
     /// wrong year is one that survives when it should go, or goes when it is
     /// the only copy of that year.

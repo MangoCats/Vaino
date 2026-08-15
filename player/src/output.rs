@@ -128,7 +128,7 @@ impl std::fmt::Display for OutputError {
 /// a step. The point is to keep `powf` off the output lock entirely.
 const FADE_TABLE: usize = 1024;
 
-fn fade_table(curve: Curve, frames: u64) -> Vec<f32> {
+fn fade_table(curve: Curve) -> Vec<f32> {
     let fade = Fade { curve, frames: FADE_TABLE as u64, fade_in: false };
     (0..FADE_TABLE).map(|i| fade.gain_at(i as u64)).collect()
 }
@@ -320,7 +320,7 @@ impl Output {
         // milliseconds under the lock, and every callback that fails to take it
         // emits silence -- a click at the exact moment of a skip. A table of
         // `FADE_TABLE` entries is built once, off the lock, and indexed here.
-        let table = fade_table(curve, frames);
+        let table = fade_table(curve);
         {
             let (front, back) = s.ring.as_mut_slices();
             let mut frame = 0u64;
