@@ -335,9 +335,108 @@ async function runBrowse() {
   if (errors.length) failures++;
 }
 
+// ---------------------------------------------------------------------------
+// The review page. It records judgements that later change what a passage IS,
+// so the things worth pinning are the refusals: only contradictions listed, no
+// reassignment without a chosen candidate, and a failed write that does not
+// leave a card looking decided.
+async function runReview() {
+  const html = fs.readFileSync(path.join(ROOT, 'review.html'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost/review' });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+
+  const QUEUE = {
+    progress: { ran: true, checked: 8078, confirmed: 6500, contradicted: 2, decided: 0 },
+    items: [
+      { passage_id: 21, stored_mbid: 'rec-wrong', title: 'Wrong Song',
+        artist: 'Some Band', album: 'Some Record', score: 0.97,
+        suggested: [{ mbid: 'rec-real', title: 'Right Song', artist: 'A Band', score: 0.97 }] },
+      { passage_id: 22, stored_mbid: 'rec-other', title: 'Another', artist: null,
+        album: null, score: 0.93, suggested: [] },
+    ],
+  };
+  const posted = [];
+  let writeFails = false;
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      posted.push(url);
+      return Promise.resolve({ ok: !writeFails, status: writeFails ? 500 : 204 });
+    }
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    if (url === '/review/queue')
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(QUEUE) });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  // jsdom does not fetch `<script src>`; the page's scripts are injected the
+  // same way the other checks do it, as classic scripts so `Vaino` is visible.
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript(fs.readFileSync(path.join(ROOT, 'review.js'), 'utf8'));
+
+  const $ = id => window.document.getElementById(id);
+  const settle = () => new Promise(r => setTimeout(r, 30));
+  await settle(); await settle();
+
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const cards = () => [...window.document.querySelectorAll('.card')];
+  check(cards().length === 2, `${cards().length} cards, want 2`);
+  check(/8,?078/.test($('tally').textContent), 'the tally should report what was checked');
+
+  const first = cards()[0];
+  const btn = label => [...first.querySelectorAll('button')]
+                         .find(b => b.textContent === label);
+
+  // A reassignment with nothing chosen must be impossible to send.
+  check(btn('Use the match').disabled, '"Use the match" must start disabled');
+  btn('Use the match').onclick();
+  check(posted.length === 0, 'an unarmed reassignment must not post');
+
+  // Auditioning goes through the ordinary queue verb rather than a new route.
+  btn('Play now').onclick();
+  check(posted[0] === '/queue/21/now', `audition should queue the passage, got ${posted[0]}`);
+
+  const radio = first.querySelector('input[type=radio]');
+  radio.checked = true;
+  radio.dispatchEvent(new window.Event('change', { bubbles: true }));
+  check(!btn('Use the match').disabled, 'choosing a candidate must arm the button');
+  btn('Use the match').onclick();
+  await settle();
+  check(posted[1] === '/review/21/reassigned?mbid=rec-real',
+        `reassignment must name the recording, got ${posted[1]}`);
+  check(first.classList.contains('done'), 'a settled card should read as settled');
+
+  // A card with no candidates can still be kept -- that is a real answer.
+  const second = cards()[1];
+  const keep = [...second.querySelectorAll('button')].find(b => b.textContent === 'Keep ours');
+  writeFails = true;
+  keep.onclick();
+  await settle();
+  check(!second.classList.contains('done'),
+        'a FAILED write must not leave the card looking decided');
+  check(!keep.disabled, 'a failed write must re-arm the controls');
+
+  console.log(`${'review'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `${cards().length} cards, posted=${JSON.stringify(posted)}`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
   await runBrowse();
+  await runReview();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);
 })();

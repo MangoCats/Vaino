@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaino — Review ids</title>
+<style>
+  /* Reviewing questionable recording ids [REQ-LIB-165].
+
+     A judgement page, not a listing: each row is a question with a small
+     number of answers, and the answer needs the evidence beside it. So the
+     layout is one card per passage -- what the library believes on the left,
+     what the audio says on the right -- rather than a dense table. A table
+     would fit more on screen and make each decision worse.
+
+     Deciding is quick and hearing it is slow, so the audition control is
+     right there: "Play now" sends the passage to the actual player, which is
+     the only way to settle a case the metadata cannot. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .review { max-width: 60rem; margin: 0 auto; padding: .75rem; }
+  .review header { display: flex; align-items: center; gap: .5rem;
+                   flex-wrap: wrap; margin-bottom: .5rem; }
+  .review h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+               font-weight: 600; margin: 0; flex: 1; opacity: .6; }
+  .review a.back { font-size: .8125rem; }
+
+  .tally { font-size: .8125rem; opacity: .75; margin: .1rem 0 .75rem;
+           font-variant-numeric: tabular-nums; }
+  .tally b { font-weight: 600; opacity: 1; }
+
+  .card { border: 1px solid rgba(128,128,128,.28); border-radius: 6px;
+          padding: .6rem .7rem; margin-bottom: .7rem; }
+  .card .head { display: flex; align-items: baseline; gap: .5rem;
+                flex-wrap: wrap; margin-bottom: .5rem; }
+  .card .score { font-size: .75rem; opacity: .7; font-variant-numeric: tabular-nums; }
+
+  /* The two claims, side by side on a desktop and stacked on a phone. */
+  .claims { display: flex; gap: .7rem; flex-wrap: wrap; }
+  .claim { flex: 1 1 16rem; min-width: 0; }
+  .claim h2 { font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+              margin: 0 0 .25rem; opacity: .55; font-weight: 600; }
+  .claim .name { font-weight: 600; overflow-wrap: anywhere; }
+  .claim .sub { font-size: .8125rem; opacity: .7; overflow-wrap: anywhere; }
+  .claim .mbid { font-size: .6875rem; opacity: .45; overflow-wrap: anywhere;
+                 font-family: ui-monospace, monospace; }
+
+  /* Candidates are radio buttons: choosing one IS the reassignment, so the
+     control that picks and the control that commits must not be the same. */
+  .opts { list-style: none; margin: .1rem 0 0; padding: 0; }
+  .opts li { display: flex; gap: .45rem; align-items: flex-start;
+             padding: .3rem .1rem; }
+  .opts input { margin: .3rem 0 0; width: 1.1rem; height: 1.1rem; flex: none; }
+  .opts .pct { font-size: .75rem; opacity: .6; font-variant-numeric: tabular-nums; }
+
+  .acts { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .6rem;
+          padding-top: .5rem; border-top: 1px solid rgba(128,128,128,.18); }
+  .acts button { font: inherit; min-height: 2.6rem; padding: 0 .8rem;
+                 cursor: pointer; background: transparent; color: inherit;
+                 border: 1px solid currentColor; border-radius: 4px; }
+  .acts button[disabled] { opacity: .35; cursor: default; }
+  .acts .spacer { flex: 1; }
+  .card.done { opacity: .45; }
+  .card .said { font-size: .8125rem; opacity: .8; }
+
+  .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
+  .note.bad { opacity: 1; }
+</style>
+
+<div class="review">
+  <header>
+    <h1>Vaino — Questionable ids</h1>
+    <a class="back" href="/">← player</a>
+  </header>
+  <p class="tally" id="tally"></p>
+  <div id="cards"></div>
+  <p class="note" id="note"></p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/review.js"></script>

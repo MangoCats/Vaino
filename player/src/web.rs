@@ -190,6 +190,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
+        .route("/review", get(|| async { ([REVALIDATE], Html(REVIEW_HTML)) }))
+        .route("/review.js", get(|| async { js(REVIEW_JS) }))
+        .route("/review/queue", get(review_queue))
+        .route("/review/:passage_id/:decision", post(record_review))
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/command/:name", post(command))
@@ -335,6 +339,58 @@ async fn queue_passage(
     }
 }
 
+/// The questionable ids, with the evidence against them `[REQ-LIB-165]`.
+///
+/// Progress travels with the list so the page can distinguish three states that
+/// would otherwise all render as an empty table: the pass has never been run,
+/// it ran and found nothing, or everything it found has been dealt with.
+async fn review_queue(State(ui): State<Ui>) -> axum::response::Response {
+    let db = ui.db.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        let items = lib.review_queue(crate::BROWSE_LIMIT).ok()?;
+        serde_json::to_value(serde_json::json!({
+            "progress": lib.review_progress(),
+            "items": items,
+        }))
+        .ok()
+    })
+    .await;
+    match out {
+        Ok(Some(v)) => axum::Json(v).into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Record a judgement `[REQ-LIB-165]`.
+///
+/// `kept`, `reassigned` or `deferred`; a reassignment carries `?mbid=`. The
+/// vocabulary is checked in `PlayerStore`, which is the only writer, so an
+/// unknown verb is rejected there rather than trusted from the URL.
+///
+/// Nothing here rewrites `passage_recordings`. A decision is recorded, and
+/// `tools/apply_reviews.py` folds accepted ones into the library as a separate,
+/// deliberate step -- reassigning an id changes what a passage *is*, and play
+/// history is keyed by recording.
+async fn record_review(
+    State(ui): State<Ui>,
+    axum::extract::Path((passage_id, decision)): axum::extract::Path<(i64, String)>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> StatusCode {
+    let db = ui.db.clone();
+    let mbid = q.get("mbid").cloned();
+    let done = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open(&db).ok()?;
+        store.record_review(passage_id, &decision, mbid.as_deref()).ok()
+    })
+    .await;
+    match done {
+        Ok(Some(())) => StatusCode::NO_CONTENT,
+        Ok(None) => StatusCode::BAD_REQUEST,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// The passage's cover art `[REQ-VIS-170]`.
 ///
 /// Read from the audio file, never fetched: playback must not depend on a live
@@ -474,6 +530,8 @@ async fn command(
 const SHELL: &str = include_str!("web/shell.html");
 const BROWSE_HTML: &str = include_str!("web/browse.html");
 const BROWSE_JS: &str = include_str!("web/browse.js");
+const REVIEW_HTML: &str = include_str!("web/review.html");
+const REVIEW_JS: &str = include_str!("web/review.js");
 const CORE: &str = include_str!("web/core.js");
 
 struct Skin {

@@ -78,6 +78,33 @@ pub(crate) const TAG_TABLE: &str = "
     CREATE INDEX IF NOT EXISTS idx_file_tags_album ON file_tags(album);
     CREATE INDEX IF NOT EXISTS idx_file_tags_artist ON file_tags(artist);";
 
+/// Judgements a person has made about a questionable recording id
+/// `[REQ-LIB-165]`.
+///
+/// Separate from `passage_recordings`, and the player never touches that table.
+/// Three reasons, and the last is the one that matters:
+///
+/// * the read-only guard on the library survives -- a bug here still cannot
+///   corrupt what Sampo built;
+/// * the decision is reversible, because the evidence it overrode is still
+///   there to compare against;
+/// * a reassignment changes what a passage *is*, and play history is keyed by
+///   recording. Rewriting the id in place would silently re-attribute every
+///   past play of it. That is a migration, and migrations belong to Sampo.
+///
+/// So this is a decision log the player owns and honours, and
+/// `tools/apply_reviews.py` is what folds accepted decisions into the library
+/// proper -- deliberately a separate, deliberate step.
+pub(crate) const REVIEW_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS id_reviews (
+        passage_id  INTEGER PRIMARY KEY,
+        -- 'kept': the stored id is right despite the fingerprint.
+        -- 'reassigned': chosen_mbid is right.
+        -- 'deferred': looked at, not decided; stays out of the queue.
+        decision    TEXT NOT NULL,
+        chosen_mbid TEXT,
+        decided_at  TEXT NOT NULL);";
+
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                                (SELECT pr.mbid FROM passage_recordings pr \
@@ -359,6 +386,7 @@ impl PlayerStore {
         // than returning nothing. Created here because this is the player's
         // only writable handle; filling it is `tagscan`'s job.
         conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
         // that only runs behind the background scan, so a library whose scan
@@ -374,6 +402,43 @@ impl PlayerStore {
                 &format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
         }
         Ok(Self { conn })
+    }
+
+    /// Record a judgement about a questionable id `[REQ-LIB-165]`.
+    ///
+    /// The decision is validated here rather than trusted from the request:
+    /// this is the only writer, so it is the only place the vocabulary can be
+    /// enforced. A reassignment must name a recording; a keep must not.
+    pub fn record_review(
+        &self,
+        passage_id: i64,
+        decision: &str,
+        chosen_mbid: Option<&str>,
+    ) -> Result<(), DbError> {
+        let mbid = match decision {
+            "reassigned" => match chosen_mbid.filter(|m| !m.is_empty()) {
+                Some(m) => Some(m),
+                None => {
+                    return Err(DbError::Query(
+                        "a reassignment has to say which recording".into(),
+                    ))
+                }
+            },
+            "kept" | "deferred" => None,
+            other => return Err(DbError::Query(format!("unknown decision {other:?}"))),
+        };
+        self.conn
+            .execute(
+                "INSERT INTO id_reviews (passage_id, decision, chosen_mbid, decided_at)
+                 VALUES (?1, ?2, ?3, datetime('now'))
+                 ON CONFLICT(passage_id) DO UPDATE SET
+                     decision = excluded.decision,
+                     chosen_mbid = excluded.chosen_mbid,
+                     decided_at = excluded.decided_at",
+                rusqlite::params![passage_id, decision, mbid],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
     }
 
     /// Save the resume point `[REQ-AUD-140]`.
@@ -558,6 +623,42 @@ pub struct BrowseTrack {
     pub disc_no: Option<i64>,
 }
 
+/// One candidate identity for a passage, as AcoustID reports it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct Suggestion {
+    pub mbid: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub score: f64,
+}
+
+/// A passage whose audio does not match the id it carries `[REQ-LIB-165]`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReviewItem {
+    pub passage_id: i64,
+    pub stored_mbid: String,
+    /// What the library currently believes, by the ordinary naming rules --
+    /// which is what the listener sees, and so what is actually in question.
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// AcoustID's best score for this audio, 0 to 1.
+    pub score: Option<f64>,
+    /// What it says the audio is instead, best first.
+    pub suggested: Vec<Suggestion>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ReviewProgress {
+    /// False when the fingerprint pass has never been run and merged. "No
+    /// findings" and "never looked" must not render the same.
+    pub ran: bool,
+    pub checked: i64,
+    pub confirmed: i64,
+    pub contradicted: i64,
+    pub decided: i64,
+}
+
 /// What to narrow a browse to. Every field is a whole-value match except `q`,
 /// which is a substring -- the difference between "this artist" and "anything
 /// that looks like this".
@@ -620,6 +721,87 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Passages the audio disagrees with, oldest check first `[REQ-LIB-165]`.
+    ///
+    /// Only `contradicted`: a fingerprint that matched something else with high
+    /// confidence. `unmatched` is not evidence of anything -- AcoustID simply
+    /// has no entry -- and putting those in front of a person would bury the
+    /// real findings under thousands of non-findings.
+    ///
+    /// Already-decided passages are excluded, so the queue empties as it is
+    /// worked through rather than re-presenting settled questions.
+    pub fn review_queue(&self, limit: usize) -> Result<Vec<ReviewItem>, DbError> {
+        // `id_checks` is written by the fingerprint pass, not by the player, so
+        // on a library where that has never been run the table is simply absent
+        // -- and a query naming a missing table FAILS rather than returning
+        // nothing. That exact mistake blanked the browse page twice. Nothing to
+        // review is a legitimate state and must not look like a broken page.
+        // `id_reviews` is checked too: it is created by `PlayerStore::open`,
+        // which any running server has done, but this handle does not itself
+        // guarantee it.
+        if !self.has_table("id_checks") || !self.has_table("id_reviews") {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT c.passage_id, c.stored_mbid, c.score, c.suggested, \
+                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR} \
+               FROM id_checks c \
+               JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
+               LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
+              WHERE c.verdict = 'contradicted' \
+                AND c.passage_id NOT IN (SELECT passage_id FROM id_reviews) \
+              ORDER BY c.score DESC, c.passage_id LIMIT ?1"
+        );
+        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map([limit as i64], |r| {
+                let raw: Option<String> = r.get(3)?;
+                Ok(ReviewItem {
+                    passage_id: r.get(0)?,
+                    stored_mbid: r.get(1)?,
+                    score: r.get(2)?,
+                    // A malformed payload becomes an empty list rather than an
+                    // error: the row is still worth showing, minus its options.
+                    suggested: raw
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
+                    title: r.get(4)?,
+                    artist: r.get(5)?,
+                    album: r.get(6)?,
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// How much reviewing there is to do, and how much has been done.
+    ///
+    /// Returned even when `id_checks` has never been created -- the pass may
+    /// simply not have been run -- because "no findings" and "never looked"
+    /// are different states and the page says which one it is in.
+    pub fn review_progress(&self) -> ReviewProgress {
+        let n = |sql: &str| -> i64 { self.conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+        ReviewProgress {
+            ran: self.has_table("id_checks"),
+            checked: n("SELECT COUNT(*) FROM id_checks"),
+            contradicted: n("SELECT COUNT(*) FROM id_checks WHERE verdict = 'contradicted'"),
+            confirmed: n("SELECT COUNT(*) FROM id_checks WHERE verdict = 'confirmed'"),
+            decided: n("SELECT COUNT(*) FROM id_reviews"),
+        }
+    }
+
+    fn has_table(&self, name: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [name],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0
     }
 
     pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
@@ -710,6 +892,116 @@ mod tests {
         )
         .unwrap();
         c
+    }
+
+    /// The review fixture: the naming tables the queue joins, plus findings.
+    fn reviewable() -> Connection {
+        let c = fixture();
+        c.execute_batch(
+            "CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);
+             CREATE TABLE release_recordings (release_mbid TEXT, mbid TEXT, position INTEGER,
+                 source TEXT, track_length_ms INTEGER, chosen INTEGER DEFAULT 0, disc INTEGER);
+             CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT, release_date TEXT,
+                 source TEXT, release_group TEXT, status TEXT, primary_type TEXT,
+                 secondary_types TEXT, country TEXT, track_count INTEGER);
+             CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, mbid TEXT);
+             INSERT INTO recordings VALUES ('rec-main','Wrong Song');
+             CREATE TABLE id_checks (passage_id INTEGER PRIMARY KEY, stored_mbid TEXT NOT NULL,
+                 verdict TEXT NOT NULL, score REAL, suggested TEXT, checked_at TEXT NOT NULL);
+             INSERT INTO id_checks VALUES
+                 (2,'rec-main','contradicted',0.97,
+                  '[{\"mbid\":\"rec-real\",\"title\":\"Right Song\",\"artist\":\"A Band\",\"score\":0.97}]','t');",
+        )
+        .unwrap();
+        c.execute_batch(TAG_TABLE).unwrap();
+        c.execute_batch(REVIEW_TABLE).unwrap();
+        c
+    }
+
+    /// Only contradictions reach a person. `unmatched` means AcoustID has no
+    /// entry for the audio, which is not evidence about the stored id -- and
+    /// there are thousands of them, enough to bury every real finding.
+    #[test]
+    fn only_contradicted_ids_are_put_up_for_review() {
+        let c = reviewable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES (3,1,'radio',0,1000,NULL,NULL,NULL,'src');
+             INSERT INTO passage_recordings VALUES (3,'rec-x',1.0,'s');
+             INSERT INTO id_checks VALUES (3,'rec-x','unmatched',NULL,NULL,'t');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.review_queue(50).unwrap();
+        assert_eq!(q.len(), 1, "the unmatched passage must not be queued");
+        assert_eq!(q[0].passage_id, 2);
+        assert_eq!(q[0].suggested.len(), 1);
+        assert_eq!(q[0].suggested[0].mbid, "rec-real");
+        assert_eq!(q[0].suggested[0].title.as_deref(), Some("Right Song"));
+    }
+
+    /// A decided passage leaves the queue, or the same question is asked for
+    /// ever and the list never shortens.
+    #[test]
+    fn a_decision_takes_the_passage_out_of_the_queue() {
+        let tmp = std::env::temp_dir().join(format!("vaino-rev-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = reviewable();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        let lib = Library::open(&tmp).unwrap();
+        assert_eq!(lib.review_queue(50).unwrap().len(), 1);
+
+        store.record_review(2, "kept", None).unwrap();
+        assert!(lib.review_queue(50).unwrap().is_empty());
+        assert_eq!(lib.review_progress().decided, 1);
+
+        // Changing one's mind overwrites rather than duplicating.
+        store.record_review(2, "reassigned", Some("rec-real")).unwrap();
+        assert_eq!(lib.review_progress().decided, 1);
+        let (d, m): (String, Option<String>) = store
+            .conn
+            .query_row("SELECT decision, chosen_mbid FROM id_reviews WHERE passage_id = 2",
+                       [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(d, "reassigned");
+        assert_eq!(m.as_deref(), Some("rec-real"));
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The vocabulary is enforced where it is written, because that is the only
+    /// place it can be. A reassignment with nothing to reassign to is the case
+    /// a careless request would produce.
+    #[test]
+    fn a_reassignment_must_name_a_recording() {
+        let tmp = std::env::temp_dir().join(format!("vaino-rev2-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = reviewable();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        assert!(store.record_review(2, "reassigned", None).is_err());
+        assert!(store.record_review(2, "reassigned", Some("")).is_err());
+        assert!(store.record_review(2, "nonsense", None).is_err());
+        assert!(store.record_review(2, "deferred", None).is_ok());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A library the pass has never touched has no `id_checks` table at all,
+    /// and a query naming a missing table FAILS rather than returning nothing.
+    /// That mistake blanked the browse page twice; nothing to review has to be
+    /// distinguishable from a broken page.
+    #[test]
+    fn a_library_without_findings_reviews_empty_rather_than_failing() {
+        let lib = Library { conn: fixture() };
+        assert!(lib.review_queue(50).unwrap().is_empty());
+        let p = lib.review_progress();
+        assert!(!p.ran, "the page must be able to say the pass never ran");
+        assert_eq!(p.contradicted, 0);
     }
 
     #[test]
