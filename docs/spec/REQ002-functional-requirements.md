@@ -233,6 +233,12 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 >
 > **The review page shows the two claims side by side and can play the passage.** Hearing it is the only thing that settles a case the names cannot, and it goes through the ordinary queue verb rather than a new audio route `[REQ-VIS-185]`.
 >
+> **A judgement can be withdrawn, and an applied one cannot be withdrawn quietly.** Decided cards return from the queue carrying their decision, behind a *decided* chip that is off by default so the working list still shortens. Undo puts a card back. But once `apply_reviews` has rewritten `passage_recordings`, deleting the review row would leave the library changed with nothing left saying what it replaced or why — an undo that leaves in place the thing it was undoing. So a decision is stamped `applied_at` when it reaches the library, the page refuses those with the reason, and `apply_reviews --revert <passage>` restores the old id and clears the record in one transaction. `previous_mbid` is captured when the decision is *made*, because applying it overwrites the only other copy.
+>
+> **The album can be named, not just guessed.** A recording sits on many releases — the album, the remaster, three compilations — and `ALBUM_EXPR` broke ties by release date. Choosing a candidate offers the releases Sampo knows for it, and the answer is applied as `release_recordings.chosen`, which is the flag that already outranks the date. A recording with no known releases says so: the album keeps coming from the file's own tag.
+>
+> **A passage with no MBID is a different problem from a wrong one.** The migration left 44 carrying `local:track:N`, two of which share a number, so they do not even identify a track uniquely — and everything downstream keys on this string. That is an *absent* identification, not a questionable one, and it is certain rather than likely, so `no-mbid` leads the queue and is graded before the audio is consulted at all. Shape-checked rather than prefix-checked, so any other non-conforming id is caught too. With them the default view is 114 cards.
+>
 > **A decision is recorded; it is not applied.** Judgements go to `id_reviews`, which the player owns, and `tools/apply_reviews.py` folds accepted ones into `passage_recordings` as a separate, rehearse-by-default step. Reassigning an id changes what a passage *is*, and play history is keyed by recording — doing it silently from a web click would re-attribute every past play of it. It also leaves the read-only guard on the library intact.
 >
 > **Nothing to review must not look like a broken page.** `id_checks` is written by the pass, not by the player, so on a library where it has never run the table is absent — and a query naming a missing table fails outright rather than returning nothing. That exact mistake blanked the browse page twice. The page distinguishes "never looked", "found nothing" and "all dealt with".
@@ -255,7 +261,8 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 >
 > | grade | count | shown by default |
 > |---|---:|:--:|
-> | `wrong-song` — neither title nor performer matches | 17 | ✓ |
+> | `no-mbid` — no MusicBrainz id at all, a migration placeholder | 44 | ✓ |
+| `wrong-song` — neither title nor performer matches | 17 | ✓ |
 > | `wrong-artist` — same title, different performer | 46 | ✓ |
 > | `wrong-title` — same performer, different title | 24 | ✓ |
 > | `different-id` — the same recording under another MBID | 480 | |
