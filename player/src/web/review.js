@@ -31,6 +31,15 @@
     box.dataset.passage = item.passage_id;
 
     const head = el('div', 'head');
+    // Two very different findings arrive in this queue and they do not deserve
+    // the same attention. Usually the audio matches a DIFFERENT RECORDING OF
+    // THE SAME SONG -- another pressing, a remaster, a 5.1 mix, a
+    // compilation's own entry -- which is a tidiness problem. Occasionally the
+    // names disagree too, and that is a passage playing under the wrong name.
+    // Saying which is which is most of the value of the page.
+    const kind = el('span', item.same_song ? 'kind same' : 'kind differs',
+      item.same_song ? 'same song, different recording id' : 'names disagree');
+    head.appendChild(kind);
     head.appendChild(el('span', 'score',
       `passage ${item.passage_id} · fingerprint match ${pct(item.score)}`));
     box.appendChild(head);

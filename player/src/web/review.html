@@ -32,6 +32,13 @@
   .card .head { display: flex; align-items: baseline; gap: .5rem;
                 flex-wrap: wrap; margin-bottom: .5rem; }
   .card .score { font-size: .75rem; opacity: .7; font-variant-numeric: tabular-nums; }
+  /* The two findings are not the same size of problem, and the queue leads
+     with the larger one, so the label has to be readable at a glance. */
+  .card .kind { font-size: .6875rem; letter-spacing: .06em; text-transform: uppercase;
+                font-weight: 600; padding: .1rem .4rem; border-radius: 3px;
+                border: 1px solid currentColor; white-space: nowrap; }
+  .card .kind.differs { color: #ffb4a2; }
+  .card .kind.same { color: #9aa; opacity: .8; }
 
   /* The two claims, side by side on a desktop and stacked on a phone. */
   .claims { display: flex; gap: .7rem; flex-wrap: wrap; }

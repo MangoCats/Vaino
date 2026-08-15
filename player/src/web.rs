@@ -192,7 +192,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse/:kind", get(browse))
         .route("/review", get(|| async { ([REVALIDATE], Html(REVIEW_HTML)) }))
         .route("/review.js", get(|| async { js(REVIEW_JS) }))
-        .route("/review/queue", get(review_queue))
+        .route(REVIEW_QUEUE_ROUTE, get(review_queue))
         .route("/review/:passage_id/:decision", post(record_review))
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
@@ -532,6 +532,13 @@ const BROWSE_HTML: &str = include_str!("web/browse.html");
 const BROWSE_JS: &str = include_str!("web/browse.js");
 const REVIEW_HTML: &str = include_str!("web/review.html");
 const REVIEW_JS: &str = include_str!("web/review.js");
+
+/// The route the review page fetches its work from, named once so the router
+/// and the test that checks the page agrees with it cannot drift apart.
+const REVIEW_QUEUE_ROUTE: &str = "/review/queue";
+/// The prefix every decision is posted to. The page builds the rest of the
+/// path from the passage id, so only the stem can be shared.
+const REVIEW_DECIDE_PREFIX: &str = "/review/";
 const CORE: &str = include_str!("web/core.js");
 
 struct Skin {
@@ -683,6 +690,32 @@ mod tests {
         assert!(SHELL.contains("Vaino.start()"), "the shell starts core");
         assert!(BROWSE_HTML.contains("/core.js") && BROWSE_HTML.contains("/browse.js"));
         assert!(BROWSE_JS.contains("startBare"), "browse takes the skin, not the player");
+        assert!(REVIEW_HTML.contains("/core.js") && REVIEW_HTML.contains("/review.js"));
+        assert!(REVIEW_JS.contains("startBare"), "review takes the skin, not the player");
+        // Reviewing ids is reachable, or it may as well not exist -- it is not
+        // linked from the player, deliberately, so browse is the only way in.
+        assert!(BROWSE_HTML.contains("/review"), "no way to reach the review page");
+    }
+
+    /// The review page and its routes have to agree about the URLs, which is
+    /// the seam a jsdom check cannot see: it mocks `fetch`, so a page asking
+    /// for a route the server never registered still passes there.
+    #[test]
+    fn the_review_routes_match_what_the_page_asks_for() {
+        assert!(REVIEW_JS.contains(REVIEW_QUEUE_ROUTE));
+        assert!(REVIEW_JS.contains(REVIEW_DECIDE_PREFIX));
+        // The three decisions the page can send, and the only three
+        // `PlayerStore::record_review` accepts. One added on either side alone
+        // is the bug this is here to catch.
+        for decision in ["reassigned", "kept", "deferred"] {
+            assert!(REVIEW_JS.contains(decision), "page cannot send {decision}");
+            assert!(
+                crate::db::PlayerStore::open(&std::path::PathBuf::from(":memory:"))
+                    .map(|s| s.record_review(1, decision, Some("m")).is_ok())
+                    .unwrap_or(false),
+                "the store rejects {decision}, which the page can send"
+            );
+        }
     }
 
     /// Names reach the browser resolved, and carry where they came from

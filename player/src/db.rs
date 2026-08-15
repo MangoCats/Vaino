@@ -646,6 +646,48 @@ pub struct ReviewItem {
     pub score: Option<f64>,
     /// What it says the audio is instead, best first.
     pub suggested: Vec<Suggestion>,
+    /// True when a suggestion carries the same title as the library's --
+    /// the stored id names a *different recording of the same song*: another
+    /// pressing, a remaster, a 5.1 mix, a compilation's own entry.
+    ///
+    /// This is the common case by a wide margin and it is a much smaller
+    /// problem than a wrong song. Both are worth showing and they are not
+    /// worth the same attention, so the queue leads with the ones where the
+    /// names disagree too.
+    pub same_song: bool,
+}
+
+/// Strip what differs between two spellings of one title without changing
+/// which song it is: bracketed qualifiers, punctuation, case, leading article.
+///
+/// Deliberately blunt. It decides how a row is *labelled and ordered*, never
+/// whether anything is changed, so a wrong answer costs a misfiled card.
+fn same_title(a: &str, b: &str) -> bool {
+    fn norm(s: &str) -> String {
+        let mut out = String::new();
+        let mut depth = 0usize;
+        for ch in s.chars() {
+            match ch {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                _ if depth == 0 => out.push(ch.to_ascii_lowercase()),
+                _ => {}
+            }
+        }
+        let cleaned: String = out
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+            .collect();
+        let t = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+        for article in ["the ", "a ", "an "] {
+            if let Some(rest) = t.strip_prefix(article) {
+                return rest.to_string();
+            }
+        }
+        t
+    }
+    let (x, y) = (norm(a), norm(b));
+    !x.is_empty() && x == y
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -758,23 +800,38 @@ impl Library {
         let rows = st
             .query_map([limit as i64], |r| {
                 let raw: Option<String> = r.get(3)?;
+                // A malformed payload becomes an empty list rather than an
+                // error: the row is still worth showing, minus its options.
+                let suggested: Vec<Suggestion> = raw
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                let title: Option<String> = r.get(4)?;
+                let same_song = match &title {
+                    Some(t) => suggested
+                        .iter()
+                        .any(|s| s.title.as_deref().is_some_and(|st| same_title(t, st))),
+                    None => false,
+                };
                 Ok(ReviewItem {
                     passage_id: r.get(0)?,
                     stored_mbid: r.get(1)?,
                     score: r.get(2)?,
-                    // A malformed payload becomes an empty list rather than an
-                    // error: the row is still worth showing, minus its options.
-                    suggested: raw
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default(),
-                    title: r.get(4)?,
+                    suggested,
+                    title,
                     artist: r.get(5)?,
                     album: r.get(6)?,
+                    same_song,
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))
+        let mut items: Vec<ReviewItem> = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        // Names that disagree first. Within each group the strongest match
+        // leads, which is the order the query already produced -- `sort_by_key`
+        // is stable, so that ordering survives.
+        items.sort_by_key(|i| i.same_song);
+        Ok(items)
     }
 
     /// How much reviewing there is to do, and how much has been done.
@@ -939,6 +996,40 @@ mod tests {
         assert_eq!(q[0].suggested.len(), 1);
         assert_eq!(q[0].suggested[0].mbid, "rec-real");
         assert_eq!(q[0].suggested[0].title.as_deref(), Some("Right Song"));
+    }
+
+    /// Most contradictions on this library are the same song under a different
+    /// recording id -- another pressing, a remaster, a 5.1 mix. That is a much
+    /// smaller problem than a passage playing under the wrong name, and the
+    /// queue leads with the ones where the names disagree too.
+    #[test]
+    fn a_different_pressing_is_told_apart_from_a_wrong_song() {
+        assert!(same_title("Why Worry", "Why Worry (5.1 mix)"));
+        assert!(same_title("Rock 'n' Roll Suicide", "Rock ’n’ Roll Suicide"));
+        assert!(same_title("There Must Be an Angel (Playing With My Heart)",
+                           "There Must Be an Angel (long version)"));
+        assert!(same_title("The Chain", "Chain"), "a leading article is not a song");
+        assert!(!same_title("Take My Breath Away", "S.M.D.U."));
+        assert!(!same_title("", "Anything"), "an empty title matches nothing");
+
+        let c = reviewable();
+        // A second passage whose audio is a different song entirely. It is the
+        // weaker match of the two, so if it still comes first the ordering is
+        // by kind and not merely by score.
+        c.execute_batch(
+            "INSERT INTO passages VALUES (4,1,'radio',0,1000,NULL,NULL,NULL,'src');
+             INSERT INTO passage_recordings VALUES (4,'rec-p',1.0,'s');
+             INSERT INTO recordings VALUES ('rec-p','Wrong Song');
+             INSERT INTO id_checks VALUES (4,'rec-p','contradicted',0.91,
+                 '[{\"mbid\":\"rec-q\",\"title\":\"Wrong Song (remaster)\",\"score\":0.91}]','t');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.review_queue(50).unwrap();
+        assert_eq!(q.len(), 2);
+        assert_eq!(q[0].passage_id, 2, "the disagreeing names lead");
+        assert!(!q[0].same_song);
+        assert!(q[1].same_song, "a remaster of the same title is not a wrong song");
     }
 
     /// A decided passage leaves the queue, or the same question is asked for

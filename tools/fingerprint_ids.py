@@ -42,6 +42,7 @@ import argparse
 import concurrent.futures
 import gzip
 import json
+import pathlib
 import os
 import sqlite3
 import subprocess
@@ -256,13 +257,18 @@ def merge(db: str, side: str) -> int:
     if not os.path.exists(side):
         say(f"nothing to merge: {side} does not exist")
         return 1
-    conn = sqlite3.connect(db, timeout=60)
+    # uri=True so ATTACH below may use a `file:` URI. A plain path is still
+    # treated as a plain path; only strings starting with `file:` are parsed.
+    conn = sqlite3.connect(db, timeout=60, uri=True)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("""CREATE TABLE IF NOT EXISTS id_checks (
         passage_id   INTEGER PRIMARY KEY REFERENCES passages(passage_id) ON DELETE CASCADE,
         stored_mbid  TEXT NOT NULL, verdict TEXT NOT NULL, score REAL,
         suggested    TEXT, checked_at TEXT NOT NULL)""")
-    conn.execute("ATTACH DATABASE ? AS side", (f"file:{side}?mode=ro",))
+    # `as_uri()` rather than an f-string: this path contains a space, and an
+    # unencoded one makes SQLite reject the URI outright.
+    side_uri = pathlib.Path(side).resolve().as_uri() + "?mode=ro"
+    conn.execute("ATTACH DATABASE ? AS side", (side_uri,))
     conn.execute("""INSERT OR REPLACE INTO main.id_checks
                     SELECT * FROM side.id_checks""")
     # The fingerprints belong in the cache the schema already provides for them.
