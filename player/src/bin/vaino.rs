@@ -37,6 +37,26 @@ async fn main() {
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);
 
+    // The listening -- plays, preferences, programmes -- is the one thing in
+    // that file nothing can rebuild `[REQ-LIB-160]`. One snapshot now, so a
+    // library that has never been backed up stops being so within a second of
+    // starting, then hourly for as long as it runs.
+    {
+        let backup_db = db.clone();
+        std::thread::Builder::new()
+            .name("vaino-backup".into())
+            .spawn(move || loop {
+                match vaino_player::backup::snapshot(&backup_db) {
+                    Ok(p) => println!("listener state backed up to {}", p.display()),
+                    // Never fatal: a player that stops playing because it could
+                    // not write a backup has turned a precaution into the fault.
+                    Err(e) => eprintln!("listener backup failed ({e}); playback continues"),
+                }
+                std::thread::sleep(Duration::from_secs(3600));
+            })
+            .ok();
+    }
+
     // Album names and the browse index come from the files' own tags, and
     // reading them takes ~18 s for five thousand files. Doing it here, in the
     // background, is the difference between a feature that works and one that

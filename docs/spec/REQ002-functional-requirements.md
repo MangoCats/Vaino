@@ -155,7 +155,23 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 >
 > ### Recorded 2026-08-14, from the "what next" review
 >
-> **Listener state has no backup, and it is not reproducible** *(durability, highest consequence)*. The library file holds 37,206 plays, 3,261 preferences, 8 programmes, 49 seeds and 24 occasion points, and the player writes to it continuously. Sampo can rebuild the library from the audio files; it cannot rebuild the listening history, and the Director is worthless without it. One interrupted write on a Pi takes all of it. The fix is small — a periodic snapshot through the SQLite backup API to a rotating file, the same mechanism the test copies already use.
+**`[REQ-LIB-160]` The listening is backed up; the library is not.** The library file holds two kinds of thing with opposite recovery stories. The **library** — files, passages, recordings, flavor — is derived from the audio on disk, and Sampo can grind it out again from nothing but time. The **listening** — 37,206 plays, 3,261 preferences, the programmes and their seeds — comes from years of a person using the thing, and nothing can reproduce it. Lose it and the Program Director is a random shuffle with opinions it can no longer justify.
+
+Only the second is copied, and that choice is what makes the scheme work: **2.4 MB against a 553 MB library, 0.4%**. A backup small enough to take hourly is a backup that gets taken.
+
+> **A copy, not a dump.** The output is a real SQLite file — openable, queryable, restorable by attaching it. A schema-and-INSERTs text dump needs a working player to be useful, and the moment a backup matters is the moment there isn't one.
+>
+> **Written under a temporary name and renamed.** Rename is atomic; a copy interrupted half way leaves a `.part` nobody will trust rather than a truncated file that looks fine.
+>
+> **The snapshot owns the connection and the library is attached `mode=ro`.** Two reasons, the second being the one that matters: `ATTACH` cannot create a database from a read-only connection, and this way a mistake in the copy cannot write to the thing being protected.
+>
+> **Rotating, not overwriting** — seven generations. Corruption unnoticed for a day would otherwise be faithfully copied over the last good snapshot; damage now has to outrun the whole set.
+>
+> **Never fatal.** A player that stops playing because it could not write a backup has turned a precaution into the fault. Failures are reported and playback continues.
+>
+> Taken once at startup and hourly thereafter, on its own thread, off the audio path. `cargo run --example backup_now` takes one by hand — before a migration, or to check the thing works before trusting it to. Verified against the live 553 MB library **while Sampo was writing to it**: 37,206 plays copied, and the derived library correctly absent.
+
+> ~~**Listener state has no backup, and it is not reproducible**~~ *(resolved by `[REQ-LIB-160]`)*. The library file holds 37,206 plays, 3,261 preferences, 8 programmes, 49 seeds and 24 occasion points, and the player writes to it continuously. Sampo can rebuild the library from the audio files; it cannot rebuild the listening history, and the Director is worthless without it. One interrupted write on a Pi takes all of it. The fix is small — a periodic snapshot through the SQLite backup API to a rotating file, the same mechanism the test copies already use.
 >
 > **Taste is unbuilt** `[REQ-PD-150]` *(feature)*. `listener_likes` holds nothing. It is the one substantial Director capability specified and not implemented, and `[SPEC-DIR-210/215/220]` are open design rather than settled, so it starts as a design conversation. Browse is its natural home: that is where a listener is looking at a track when they form an opinion about it.
 >
