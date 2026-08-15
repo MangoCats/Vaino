@@ -111,7 +111,14 @@ const Vaino = (() => {
   //
   // Nothing is asked of the server until a skin asks: a 404 is the normal
   // answer for a file with no embedded picture, not an error to report.
-  function showArt(img, passageId) {
+  // The back of the sleeve, for skins that show it. Separate route, same
+  // dance: a passage with no back cover is the normal case, not an error, so
+  // the element hides on 404 exactly as the front does.
+  function showBackArt(img, passageId) {
+    return showArt(img, passageId, true);
+  }
+
+  function showArt(img, passageId, back) {
     if (!img) return;
     if (passageId == null) {
       img.hidden = true;
@@ -123,7 +130,7 @@ const Vaino = (() => {
     img.hidden = true;                 // stay hidden until it is known to exist
     img.onload = () => { img.hidden = false; };
     img.onerror = () => { img.hidden = true; };
-    img.src = `/art/${passageId}`;
+    img.src = back ? `/art/${passageId}/back` : `/art/${passageId}`;
   }
 
   // The edit controls for one queued passage, wired and ready to append.
@@ -416,5 +423,6 @@ const Vaino = (() => {
     queueControls,
     named,
     badge,
+    showBackArt,
   };
 })();

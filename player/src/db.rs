@@ -92,6 +92,29 @@ pub(crate) const TAG_TABLE: &str = "
     CREATE INDEX IF NOT EXISTS idx_file_tags_album ON file_tags(album);
     CREATE INDEX IF NOT EXISTS idx_file_tags_artist ON file_tags(artist);";
 
+/// Cover art fetched from the Cover Art Archive `[REQ-VIS-170]`.
+///
+/// Keyed by **release**, not by folder. A directory can hold more than one
+/// album -- which is exactly the case on the DAO rips that make up most of
+/// this library's missing art -- and `folder.jpg` cannot tell them apart.
+///
+/// Written only by `tools/fetch_cover_art.py`; the player reads it. It is a
+/// permanent cache in the sense `[SPEC-SA-020]` gives the lowlevel features:
+/// derived from an external service, expensive to obtain, and pointless to
+/// re-derive on every rebuild.
+///
+/// Front and back, because MuLibPlay carried both and its interface showed
+/// both side by side. Nothing else is stored: MuLibPlay's back covers are
+/// 35.6 MB of its 80.5 MB of art, and a third image nobody displays would be
+/// the same bargain again.
+pub(crate) const ART_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS cover_art (
+        release_mbid TEXT PRIMARY KEY,
+        front        BLOB,
+        back         BLOB,
+        source       TEXT NOT NULL,
+        fetched_at   TEXT NOT NULL);";
+
 /// Judgements a person has made about a questionable recording id
 /// `[REQ-LIB-165]`.
 ///
@@ -431,6 +454,10 @@ impl PlayerStore {
         // than returning nothing. Created here because this is the player's
         // only writable handle; filling it is `tagscan`'s job.
         conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        // Same reasoning as the tag table above: created by whoever holds a
+        // writable handle, so the read path never meets a missing table.
+        // Filling it is `tools/fetch_cover_art.py`'s job.
+        conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
@@ -1108,6 +1135,44 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// The stored cover for a passage's chosen release `[REQ-VIS-170]`.
+    ///
+    /// Looked up through the release Sampo chose, so a folder holding two
+    /// albums gives each its own cover. Absent table, absent row and a blob
+    /// too small to be a picture all mean the same thing to the caller: no
+    /// art, show nothing.
+    pub fn stored_art(&self, passage_id: i64, back: bool) -> Option<crate::tags::Artwork> {
+        if !self.has_table("cover_art") {
+            return None;
+        }
+        let col = if back { "back" } else { "front" };
+        let data: Vec<u8> = self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT a.{col} FROM cover_art a \
+                       JOIN release_recordings rr ON rr.release_mbid = a.release_mbid \
+                       JOIN passage_recordings pr ON pr.mbid = rr.mbid \
+                      WHERE pr.passage_id = ?1 AND rr.chosen = 1 \
+                        AND a.{col} IS NOT NULL LIMIT 1"
+                ),
+                [passage_id],
+                |r| r.get(0),
+            )
+            .ok()?;
+        if data.len() < crate::tags::MIN_ART_BYTES {
+            return None;
+        }
+        // Sniffed rather than stored: the archive serves JPEG and PNG, and a
+        // wrong Content-Type would render as a broken image.
+        let media_type = if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
+        Some(crate::tags::Artwork { media_type: media_type.into(), data })
+    }
+
     /// How much reviewing there is to do, and how much has been done.
     ///
     /// Returned even when `id_checks` has never been created -- the pass may
@@ -1367,6 +1432,65 @@ mod tests {
         for (name, rank, _) in SEVERITIES {
             assert!(rank < 6, "{name} has no place in the order");
         }
+    }
+
+    /// Art is looked up through the **release**, so a folder holding two albums
+    /// gives each its own cover -- which is the case `folder.jpg` cannot serve,
+    /// and the one the DAO rips in this library actually present.
+    #[test]
+    fn stored_art_is_found_through_the_chosen_release() {
+        let c = reviewable();
+        let big = vec![0xFFu8; 512];          // large enough to be a picture
+        c.execute_batch(ART_TABLE).unwrap();
+        c.execute(
+            "INSERT INTO releases (mbid,title,source) VALUES ('rel-1','A Record','mb')", [])
+            .unwrap();
+        c.execute(
+            "INSERT INTO release_recordings (release_mbid,mbid,source,chosen) \
+             VALUES ('rel-1','aaaaaaaa-0000-0000-0000-000000000001','mb',1)", [])
+            .unwrap();
+        // A PNG magic number in front, so the sniffer has something to find.
+        let mut png = vec![0x89u8, b'P', b'N', b'G'];
+        png.extend(std::iter::repeat(0u8).take(600));
+        c.execute("INSERT INTO cover_art VALUES ('rel-1',?1,?2,'test','t')",
+                  rusqlite::params![big.clone(), png])
+            .unwrap();
+        let lib = Library { conn: c };
+        let front = lib.stored_art(2, false).expect("front cover");
+        assert_eq!(front.media_type, "image/jpeg");
+        assert_eq!(front.data.len(), 512);
+        assert!(lib.stored_art(2, true).is_some(), "the back is stored too");
+        assert!(lib.stored_art(999, false).is_none(), "unknown passage, no art");
+    }
+
+    /// A blob too small to be a picture is not a picture. MuLibPlay applied the
+    /// same floor: a truncated download would otherwise render as a broken
+    /// image, which reads as a fault in the player rather than a gap in data.
+    #[test]
+    fn a_blob_too_small_to_be_a_picture_is_not_offered() {
+        let c = reviewable();
+        c.execute_batch(ART_TABLE).unwrap();
+        c.execute(
+            "INSERT INTO releases (mbid,title,source) VALUES ('rel-1','A Record','mb')", [])
+            .unwrap();
+        c.execute(
+            "INSERT INTO release_recordings (release_mbid,mbid,source,chosen) \
+             VALUES ('rel-1','aaaaaaaa-0000-0000-0000-000000000001','mb',1)", [])
+            .unwrap();
+        c.execute("INSERT INTO cover_art VALUES ('rel-1',?1,NULL,'test','t')",
+                  rusqlite::params![vec![0u8; crate::tags::MIN_ART_BYTES - 1]])
+            .unwrap();
+        let lib = Library { conn: c };
+        assert!(lib.stored_art(2, false).is_none());
+    }
+
+    /// A library with no `cover_art` table at all -- one Sampo has never
+    /// fetched for -- must answer "no art", not fail the request.
+    #[test]
+    fn a_library_without_the_art_table_simply_has_no_art() {
+        let lib = Library { conn: fixture() };
+        assert!(lib.stored_art(2, false).is_none());
+        assert!(lib.stored_art(2, true).is_none());
     }
 
     /// A passage with no real id is not a *questionable* identification, it is

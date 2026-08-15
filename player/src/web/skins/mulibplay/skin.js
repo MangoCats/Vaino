@@ -63,6 +63,9 @@
     pair('fromword', 'album', s.album, s.album_source, 'album');
     $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
     Vaino.showArt($('art'), s.passage_id);
+    // The original showed the back of the sleeve beside the front when it
+    // had one -- 559 of its 675 albums did. Hidden by itself when absent.
+    Vaino.showBackArt($('artback'), s.passage_id);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
     lit($('b-play'), s.playing);
     lit($('b-pause'), !s.playing);

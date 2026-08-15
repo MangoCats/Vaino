@@ -54,7 +54,13 @@ body { background-color: black; color: #ccc; }
 }
 
 /* The original showed its cover at 200px, centred, above the title line. */
-#art { height: 200px; max-width: 100%; object-fit: contain; margin-top: 1rem; }
+#art, #artback { height: 200px; max-width: 100%; object-fit: contain;
+                 margin-top: 1rem; }
+/* Two sleeves side by side need air between them; one alone is unchanged. */
+#artback { margin-left: 8px; }
+/* Narrow screens stack rather than shrink: this layout exists to be read
+   from a phone, and two 200px sleeves do not fit across one. */
+@media (max-width: 30rem) { #artback { margin-left: 0; } }
 .nowplaying { font-weight: bold; font-size: 1.15rem; margin: 1rem 0 .2rem; }
 .nowplaying i { font-weight: normal; color: #888; }
 .elapsed { color: #888; }

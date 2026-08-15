@@ -94,6 +94,7 @@ async function run(skin) {
   const { window } = dom;
   const errors = [];
   window.console.error = (...a) => errors.push(a.join(' '));
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
 
   // jsdom does not fetch subresources, so <link>/<script> onload would never
   // fire and core's loader would wait forever. Fire them; we run skin.js below.
@@ -179,6 +180,23 @@ async function run(skin) {
   }
   if (artOk) errors.push('cover art: ' + artOk);
 
+  // A skin that shows the back of the sleeve must ask the back route for it.
+  // MuLibPlay put front and back side by side and 559 of its 675 albums had a
+  // back; pointing both <img> at the same URL would show the front twice and
+  // look deliberate.
+  const back = window.document.getElementById('artback');
+  if (back) {
+    const front = art && art.getAttribute('src');
+    const bsrc = back.getAttribute('src');
+    check(/\/art\/\d+\/back$/.test(bsrc || ''),
+          `back cover should come from the back route, got ${bsrc}`);
+    check(bsrc !== front, 'front and back must not be the same image');
+    // Absent is the common case, so it must hide on 404 rather than show a
+    // broken image beside a good cover.
+    back.dispatchEvent(new window.Event('error'));
+    check(back.hidden, 'a missing back cover must hide, not render broken');
+  }
+
   // The transport must be wired, and the picker populated from the catalogue.
   window.document.querySelector('[data-cmd="skip"]').onclick();
   // Volume must round-trip through the shared fader curve, not a per-skin copy.
@@ -191,7 +209,6 @@ async function run(skin) {
 
   const title = window.document.getElementById('title');
   const queue = window.document.getElementById('queue');
-  const check = (cond, msg) => { if (!cond) errors.push(msg); };
 
   // Provenance must be VISIBLE, not a tooltip `[REQ-VIS-120]` -- that is the
   // whole point of the change, and a badge that renders nowhere would still

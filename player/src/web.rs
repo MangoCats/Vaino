@@ -187,6 +187,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
         .route("/art/:passage_id", get(cover_art))
+        .route("/art/:passage_id/back", get(cover_art_back))
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
@@ -442,11 +443,46 @@ async fn cover_art(
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
 ) -> axum::response::Response {
     // Both the query and the file read block, so they belong off the runtime.
+    art_response(ui, passage_id, false).await
+}
+
+/// The back of the sleeve `[REQ-VIS-170]`, for skins that show it.
+async fn cover_art_back(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    art_response(ui, passage_id, true).await
+}
+
+/// One passage's cover, from wherever it can be found.
+///
+/// Three sources, cheapest first `[REQ-VIS-170]`:
+///
+/// 1. **the audio file's own picture** -- 64% of this library carries one;
+/// 2. **a cover file beside it** -- `folder.jpg` and its spellings, which 83%
+///    of the remaining files have. It was already on disk and nothing looked;
+/// 3. **the fetched archive**, keyed by the release Sampo chose, which is the
+///    only one of the three that can tell two albums in one folder apart.
+///
+/// A back cover skips step 1: embedded back covers are vanishingly rare, and
+/// `artwork()` deliberately falls back to *any* picture, which would return
+/// the front and label it the back.
+async fn art_response(ui: Ui, passage_id: i64, back: bool) -> axum::response::Response {
     let db = ui.db.clone();
     let found = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open(&db).ok()?;
-        let path = lib.passage_path(passage_id).ok()?;
-        crate::tags::artwork(&path)
+        let path = lib.passage_path(passage_id).ok();
+        if !back {
+            if let Some(a) = path.as_deref().and_then(crate::tags::artwork) {
+                if a.data.len() >= crate::tags::MIN_ART_BYTES {
+                    return Some(a);
+                }
+            }
+        }
+        if let Some(a) = path.as_deref().and_then(|p| crate::tags::sibling_art(p, back)) {
+            return Some(a);
+        }
+        lib.stored_art(passage_id, back)
     })
     .await;
 
