@@ -153,6 +153,36 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 >
 > **`web.rs` mixes routing, serialisation, browse, art and queue verbs** *(maintainability, deferred)*. Not urgent; treat as a priority at the next refactor, being the file most likely to keep growing.
 >
+> ### Recorded 2026-08-15: recording ids are not trustworthy
+>
+> **A sample of 2,000 radio passages, checked against the files' own tags** — evidence the ids did not come from:
+>
+> | | | |
+> |---|---:|---|
+> | agree on title and artist | 61.0 % | |
+> | right artist, title differs | **33.9 %** | a mixture, see below |
+> | right title, artist differs | 2.4 % | usually a credit difference |
+> | agree on neither | **2.8 %** | plainly wrong |
+>
+> **2.8 % are simply the wrong song** — ~220 passages. Two examples sit next to each other: passages tagged *Magic Man* and *How Can I Refuse* by Heart carry MBIDs for *Breakdown* and *Learning to Fly* by Tom Petty. A whole album mis-assigned.
+>
+> **The 33.9 % is a mixture, and its shape is the diagnosis.** Some is legitimate naming variation — `Stoned Immaculate` against `Angels and Sailors / Stoned Immaculate`, `Karn Evil 9: 1st Impression, Part 2` against `Karn Evil 9`. But much of it is the **wrong track of the right album**: `Suffragette City` against `Ziggy Stardust`, `Woman` against `Happy Xmas (War Is Over)`, `Gemini Dream` against `Dr. Livingstone, I Presume`. Adjacent tracks, same artist.
+>
+> That pattern says the ids were assigned **by position within a matched album**. Any offset — a bonus track, a hidden track, an edition whose running order differs — shifts every id after it, which is exactly what MuLibPlay's migration would produce and what MCR-SPEC033's cascade `[AM-STG5-010]` exists to absorb.
+>
+> **Why this cannot be fixed by better metadata matching.** The ids may have been *derived* from metadata; checking them against metadata is checking a claim against its own source. Tags agreeing proves the derivation was self-consistent, not that it was right.
+>
+> **The reliable scheme is the audio itself** `[SPEC-SA-035]`, `[SPEC-SA-060]`. Chromaprint over the passage's decoded samples, looked up through AcoustID, returns the recordings that actually sound like this audio. It is independent of every tag, every filename and every album match, and it is the only evidence that is. The shape:
+>
+> 1. `fpcalc` over each passage's span — not the file, since a DAO rip is forty passages in one file.
+> 2. AcoustID lookup, rate-limited and cached like the release fetch, keyed on `audio_md5` so a re-run asks nothing twice.
+> 3. **Agrees** → the id is confirmed by evidence it did not come from. **Disagrees** → record both and the confidence, and prefer the fingerprint. **No match** → leave the id alone and mark it unverified; absence of a fingerprint is not evidence against one.
+> 4. Every outcome to `ingest_decisions` `[REQ-VIS-110]`, because the whole point is that a listener can see which names are known and which are merely believed.
+>
+> Needs `fpcalc` (not installed here; ARM64 builds exist `[SPEC-SA-018]`) and an AcoustID application key. At one lookup per second the library is about two hours — the same order as the release fetch, and resumable the same way.
+>
+> **Until then, `[REQ-VIS-120]` matters more than it looked.** A name Vaino shows may be wrong, and the interface says nothing about how confident it is. Provenance display was already required; this makes it urgent.
+
 > ### Recorded 2026-08-14, from the "what next" review
 >
 **`[REQ-LIB-160]` The listening is backed up; the library is not.** The library file holds two kinds of thing with opposite recovery stories. The **library** — files, passages, recordings, flavor — is derived from the audio on disk, and Sampo can grind it out again from nothing but time. The **listening** — 37,206 plays, 3,261 preferences, the programmes and their seeds — comes from years of a person using the thing, and nothing can reproduce it. Lose it and the Program Director is a random shuffle with opinions it can no longer justify.
