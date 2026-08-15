@@ -182,6 +182,8 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 > Needs `fpcalc` (not installed here; ARM64 builds exist `[SPEC-SA-018]`) and an AcoustID application key. At one lookup per second the library is about two hours — the same order as the release fetch, and resumable the same way.
 >
 > **Until then, `[REQ-VIS-120]` matters more than it looked.** A name Vaino shows may be wrong, and the interface says nothing about how confident it is. Provenance display was already required; this makes it urgent.
+>
+> *Both done 2026-08-15. The fingerprint pass is `[REQ-LIB-165]` above — built on ffmpeg's chromaprint muxer rather than `fpcalc`, so the extra binary never became a prerequisite. Provenance is now shown in all three skins rather than as a tooltip in one, which is the same point made below.*
 
 > ### Recorded 2026-08-14, from the "what next" review
 >
@@ -214,6 +216,26 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 > Verified end to end against a copy of the real library: 37,206 plays, damaged to 34,429, restored to 37,206, with 2 orphaned plays kept.
 >
 > Taken once at startup and hourly thereafter, on its own thread, off the audio path. `cargo run --example backup_now` takes one by hand — before a migration, or to check the thing works before trusting it to. Verified against the live 553 MB library **while Sampo was writing to it**: 37,206 plays copied, and the derived library correctly absent.
+
+**`[REQ-LIB-165]` Recording ids are checked against the audio, and a person settles the disputes.** Every recording MBID in this library arrived by one route: `source` on all 16,157 rows of `passage_recordings` reads `inherited:mulib`. They are therefore all exactly as good as one migration, and a wrong one is invisible — the player shows a real title by a real artist, and it is simply the wrong song. Nothing downstream can catch it, because everything downstream trusts the id.
+
+Comparing an id against the file's own tags is the obvious check and a weak one: the ids may well have been *derived* from those tags, in which case agreement proves only that a copy matches its original. A fingerprint owes nothing to either. Chromaprint reduces the audio to how it actually sounds, AcoustID maps that to what other people have identified the same sound as, and neither has ever seen this library's metadata.
+
+> **Fingerprint the passage, not the file.** A passage is a slice — `start_ms` to `end_ms` — and in this library the median file holds a good deal that is not the song. The first pass fingerprinted whole files and called 3,940 of 8,078 passages unmatched. That was a finding about the tool, not about AcoustID: among the "unmatched" were *Magical Mystery Tour*, Cat Stevens' *Greatest Hits* and four Jimmy Buffett records. The correlation was total — where the passage covers the file, 3,732 confirmed against 335 unmatched; where it is a partial slice, 104 against 3,605. The passage's own duration must be sent too, because AcoustID filters candidates by length.
+>
+> **Confirmation is lenient, contradiction is strict.** The stored id counts as confirmed if it appears anywhere in a match scoring 0.50 or better — AcoustID clusters recordings that sound identical, so an id appearing second is still a match. Calling one *wrong* needs 0.90. The two errors are not equally costly: a wrongly confirmed id stays as wrong as it already was, while a wrongly contradicted one sends a person to review something that was fine, and the queue is only useful if nearly everything in it deserves to be there.
+>
+> **`unmatched` is not a finding.** It means AcoustID has no entry for the audio, which says nothing about whether the stored id is right. Those passages are recorded and deliberately kept out of the review queue; there are enough of them to bury every real case.
+>
+> **The pass reads the library read-only and writes to a sidecar.** Sampo holds the write lock for a minute at a time, so a two-hour pass sharing it would spend most of its life waiting — and a pass that cannot write to the library also cannot damage it. `--merge` folds the findings in once the library is quiet.
+>
+> **ffmpeg's chromaprint muxer, not fpcalc.** The same library, already installed, so identification does not become a second binary the build depends on. Validated against AcoustID on known-good files before it was trusted: scores 0.986 to 0.995, with the stored id present every time.
+>
+> **The review page shows the two claims side by side and can play the passage.** Hearing it is the only thing that settles a case the names cannot, and it goes through the ordinary queue verb rather than a new audio route `[REQ-VIS-185]`.
+>
+> **A decision is recorded; it is not applied.** Judgements go to `id_reviews`, which the player owns, and `tools/apply_reviews.py` folds accepted ones into `passage_recordings` as a separate, rehearse-by-default step. Reassigning an id changes what a passage *is*, and play history is keyed by recording — doing it silently from a web click would re-attribute every past play of it. It also leaves the read-only guard on the library intact.
+>
+> **Nothing to review must not look like a broken page.** `id_checks` is written by the pass, not by the player, so on a library where it has never run the table is absent — and a query naming a missing table fails outright rather than returning nothing. That exact mistake blanked the browse page twice. The page distinguishes "never looked", "found nothing" and "all dealt with".
 
 > ~~**Listener state has no backup, and it is not reproducible**~~ *(resolved by `[REQ-LIB-160]`)*. The library file holds 37,206 plays, 3,261 preferences, 8 programmes, 49 seeds and 24 occasion points, and the player writes to it continuously. Sampo can rebuild the library from the audio files; it cannot rebuild the listening history, and the Director is worthless without it. One interrupted write on a Pi takes all of it. The fix is small — a periodic snapshot through the SQLite backup API to a rotating file, the same mechanism the test copies already use.
 >
@@ -276,6 +298,12 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 **`[REQ-VIS-110]` How was this identified?** Every ingest decision is a durable record: which stage matched, at what confidence, which candidates were rejected `[SPEC-SA-085]`. This is what converts an undocumented ritual `[GDE-BMK-050]` into a reviewable process.
 
 **`[REQ-VIS-120]` Is this data trustworthy?** Every flavor value displays its provenance and measured accuracy `[SPEC-SC-070]`. A user must be able to see whether a value came from the dump, was locally computed at a stated error, or was entered by hand.
+
+> **Names carry their provenance visibly, in every skin** *(2026-08-15)*. It began as a tooltip in one skin of three, which is no use at all on a phone — the device this interface is mostly read from, and one with no hover. `named()` and `badge()` live in `core.js` so all three skins mark names the same way and each styles `.src` in its own idiom: gold for MuLibPlay, where gold already means "this is the one"; full-brightness LCD green for WinAmp, against half-lit for everything less certain.
+>
+> Only names that are *shown* are marked. WinAmp has no album line, so an album badge there would qualify something invisible, and its badges live in the stat row rather than the marquee — the marquee scrolls and is cloned to make the wrap seamless, so a badge inside it would drift off the panel and then appear twice.
+>
+> The badge is a separate element, so anything reading the name still gets the bare name. The check asserts the badges render, that at least two distinct sources appear, and that the name remains a text node of its own — and it was confirmed to fail when the display is reverted, which is the only way to know an assertion is doing anything.
 
 **`[REQ-VIS-130]`** Automatically computed boundaries, lead-in/lead-out points and gain are **reviewable and overridable** through a waveform view `[SPEC-SA-080]`. Manual edits outrank computed values permanently and are never silently recomputed.
 
