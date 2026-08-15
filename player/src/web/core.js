@@ -64,6 +64,45 @@ const Vaino = (() => {
     },
   };
 
+  // ---- provenance --------------------------------------------------------
+  // Where a displayed name came from `[REQ-VIS-120]`.
+  //
+  // "The MusicBrainz Recording title" and "whatever this file's ID3 tag says"
+  // are different claims, and nothing in the name itself betrays which one you
+  // are reading: both arrive as ordinary text, and one of them is a stem of a
+  // filename with the underscores taken out. This library is a migration whose
+  // every recording id came from one source, so the difference is not academic.
+  //
+  // Visible rather than on hover, which is where it used to be: a tooltip is
+  // no use on the phone this interface is mostly read from, and a claim you
+  // have to go looking for is one nobody checks.
+  const SOURCE = {
+    musicbrainz: { mark: 'MB', label: 'MusicBrainz' },
+    tags: { mark: 'tag', label: 'the file tags' },
+    filename: { mark: 'file', label: 'the filename' },
+    unknown: { mark: '?', label: 'nowhere' },
+  };
+
+  function badge(source, what) {
+    const s = SOURCE[source] || SOURCE.unknown;
+    const b = document.createElement('span');
+    b.className = 'src';
+    b.dataset.src = source || 'unknown';
+    b.textContent = s.mark;
+    // The long form stays on hover for anyone who wants the sentence.
+    b.title = `${what} from ${s.label}`;
+    return b;
+  }
+
+  // Put `text` in `el` and hang its provenance off the end. No badge on an
+  // empty name: there is no claim to qualify, and "unknown from nowhere" is
+  // noise rather than information.
+  function named(el, text, source, what) {
+    if (!el) return;
+    el.textContent = text ?? '';
+    if (text) el.appendChild(badge(source, what));
+  }
+
   // ---- cover art ---------------------------------------------------------
   // A URL and the load/error dance around it. The URL because core owns every
   // route; the dance because all three skins would otherwise carry the same
@@ -375,5 +414,7 @@ const Vaino = (() => {
     queue: (id, action) => post(`/queue/${id}/${action}`),
 
     queueControls,
+    named,
+    badge,
   };
 })();

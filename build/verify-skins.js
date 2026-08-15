@@ -191,12 +191,36 @@ async function run(skin) {
 
   const title = window.document.getElementById('title');
   const queue = window.document.getElementById('queue');
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+
+  // Provenance must be VISIBLE, not a tooltip `[REQ-VIS-120]` -- that is the
+  // whole point of the change, and a badge that renders nowhere would still
+  // leave every other assertion here passing. The fixture names a MusicBrainz
+  // title against a tag-sourced album, so a skin that hard-codes one marker
+  // for the whole snapshot fails: at least two different sources must show.
+  const badges = [...window.document.querySelectorAll('.src')];
+  check(badges.length > 0, 'no provenance badge rendered anywhere');
+  check(badges.every(b => b.textContent.trim()),
+        'a provenance badge rendered empty');
+  check(badges.every(b => b.title && /from /.test(b.title)),
+        'a provenance badge carries no explanation on hover');
+  check(badges.some(b => b.dataset.src === 'musicbrainz'),
+        'the MusicBrainz-sourced name is not marked as one');
+  // The badge must not be mistakeable for part of the name: it is a separate
+  // element, so anything wanting the bare name can still get it.
+  if (title) {
+    check([...title.childNodes].some(n => n.nodeType === 3 &&
+          n.textContent.includes('A Passage With Reasons')),
+          'the title text is not a text node of its own');
+  }
+
   const ok = errors.length === 0 && posted.length === 2 && opts === skins.length
              && posted[1] === '/volume/-18';
   if (!ok) failures++;
   console.log(
     `${skin.padEnd(11)} ${ok ? 'OK  ' : 'FAIL'}  ` +
     `title=${JSON.stringify((title && title.textContent) || '').slice(0, 30).padEnd(32)} ` +
+    `badges=${badges.length} ` +
     `queue=${queue ? queue.children.length : '-'} rows  posted=${JSON.stringify(posted)}  ` +
     `picker=${opts}`);
   for (const e of errors) console.log('    ! ' + e);

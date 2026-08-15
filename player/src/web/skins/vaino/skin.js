@@ -121,20 +121,29 @@
     $('stages').textContent = w.stages ?? '';
   }
 
+  // The byline is two independent claims that happen to share a line, so each
+  // half carries its own provenance: a MusicBrainz artist beside an album that
+  // is only a file tag is the common case here, and averaging the two into one
+  // marker would describe neither.
+  function showByline(s) {
+    const el = $('byline');
+    el.textContent = '';
+    const part = (text, source, what) => {
+      if (!text) return;
+      if (el.firstChild) el.appendChild(document.createTextNode(' — '));
+      const span = document.createElement('span');
+      Vaino.named(span, text, source, what);
+      el.appendChild(span);
+    };
+    part(s.artist, s.artist_source, 'artist');
+    part(s.album, s.album_source, 'album');
+  }
+
   // Each message is a complete snapshot, so rendering is a pure function of
   // the last one received. No accumulated client state means no drift.
-  // Names carry where they came from, because "the MusicBrainz Recording title"
-  // and "whatever this file's ID3 tag says" are different claims [REQ-VIS-120].
-  // On hover rather than inline: it matters when you ask, not at every glance.
-  const SOURCE = { musicbrainz: 'MusicBrainz', tags: 'the file tags',
-                   filename: 'the filename', unknown: 'nowhere' };
-
   Vaino.subscribe(s => {
-    $('title').textContent = s.title ?? '—';
-    $('title').title = `title from ${SOURCE[s.title_source] ?? s.title_source}`;
-    $('byline').textContent = [s.artist, s.album].filter(Boolean).join(' — ');
-    $('byline').title =
-      `artist from ${SOURCE[s.artist_source]}, album from ${SOURCE[s.album_source]}`;
+    Vaino.named($('title'), s.title ?? '—', s.title_source, 'title');
+    showByline(s);
     $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
     Vaino.showArt($('art'), s.passage_id);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;

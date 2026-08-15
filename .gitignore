@@ -65,3 +65,6 @@ data/essentia/svm_beta1/
 secrets/
 *.key
 .env
+
+# Build-time only: the skin check renders into jsdom. Never shipped.
+node_modules/

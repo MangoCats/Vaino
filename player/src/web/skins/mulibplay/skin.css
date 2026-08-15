@@ -93,3 +93,14 @@ hr { border: none; border-top: 1px solid #333; margin: 1.2rem 0; }
 .why { color: #999; font-size: .9rem; text-align: left; }
 .skinbar { margin-top: 1.5rem; color: #666; font-size: .8rem; }
 .mulib select { font: inherit; background: #111; color: #ccc; border: 1px solid #402080; }
+
+/* Provenance [REQ-VIS-120], in the original's palette: gold is "this is the
+   good one" everywhere else on this page, so MusicBrainz gets the gold and
+   everything less certain stays in the grey the body text uses. Sized for a
+   phone held at arm's length, which is what this layout exists for. */
+.src { font-size: 11px; font-weight: bold; letter-spacing: .04em;
+       vertical-align: super; margin-left: 4px; padding: 1px 4px;
+       border: 1px solid #402080; border-radius: 6px; color: #888;
+       white-space: nowrap; }
+.src[data-src="musicbrainz"] { color: #d0a000; border-color: #d0a000; }
+.src[data-src="filename"], .src[data-src="unknown"] { border-style: dashed; }

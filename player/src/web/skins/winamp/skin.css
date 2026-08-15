@@ -120,3 +120,11 @@ body { background: #101014; color: #d8d8dc;
 .wa label { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; opacity: .8; }
 .wa input[type=number] { font: inherit; font-size: 10px; width: 4ch;
   background: var(--lcd-bg); color: var(--lcd); border: 1px solid var(--bevel-lo); }
+
+/* Provenance [REQ-VIS-120], as another reading on the LCD -- which is what
+   this idiom does with every other fact it knows. Full green for the claim
+   that came from MusicBrainz, half-lit for the ones that did not. */
+.src { font-family: inherit; font-size: 9px; letter-spacing: .06em;
+       margin-left: 3px; padding: 0 2px; border: 1px solid;
+       color: var(--lcd); opacity: .45; white-space: nowrap; }
+.src[data-src="musicbrainz"] { opacity: 1; }

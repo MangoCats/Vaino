@@ -50,16 +50,17 @@
   }
 
 
-  // Hide the connecting word along with the value it introduces.
-  const pair = (wordId, valueId, text) => {
-    $(valueId).textContent = text ?? '';
+  // Hide the connecting word along with the value it introduces, and let the
+  // value carry where it came from `[REQ-VIS-120]`.
+  const pair = (wordId, valueId, text, source, what) => {
+    Vaino.named($(valueId), text, source, what);
     $(wordId).hidden = !text;
   };
 
   Vaino.subscribe(s => {
-    $('title').textContent = s.title ?? '—';
-    pair('byword', 'artist', s.artist);
-    pair('fromword', 'album', s.album);
+    Vaino.named($('title'), s.title ?? '—', s.title_source, 'title');
+    pair('byword', 'artist', s.artist, s.artist_source, 'artist');
+    pair('fromword', 'album', s.album, s.album_source, 'album');
     $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
     Vaino.showArt($('art'), s.passage_id);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;

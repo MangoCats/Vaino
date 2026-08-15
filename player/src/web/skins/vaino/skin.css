@@ -80,3 +80,16 @@
 .skinbar { display: flex; justify-content: flex-end; gap: .4rem;
            align-items: center; font-size: .75rem; color: var(--dim);
            margin-top: 2rem; }
+
+/* Provenance [REQ-VIS-120]. Small, raised and dim: present at every glance,
+   but never competing with the name it qualifies. MusicBrainz is the claim
+   worth trusting, so it is the one drawn in ink; a name taken from a filename
+   is a guess and is drawn as one. */
+.src { font-size: .625rem; font-weight: 600; letter-spacing: .04em;
+       vertical-align: super; margin-left: .28em; padding: .05em .3em;
+       border-radius: 3px; border: 1px solid var(--line); color: var(--dim);
+       white-space: nowrap; }
+.src[data-src="musicbrainz"] { color: var(--bg); background: var(--dim);
+                               border-color: var(--dim); }
+.src[data-src="filename"], .src[data-src="unknown"] { opacity: .7;
+                               border-style: dashed; }

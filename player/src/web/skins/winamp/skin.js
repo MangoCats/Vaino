@@ -47,7 +47,14 @@
     $('stat').textContent =
       `${clock(s.duration_ms)} · ${s.queue_len ?? 0} queued` +
       (s.plays ? ` · ${s.plays} plays` : '') +
-      (s.underrun_samples ? ` · ${s.underrun_samples} under` : '');
+      (s.underrun_samples ? ` · ${s.underrun_samples} under` : '') + ' ';
+    // Provenance rides in the stat row rather than the marquee: the marquee
+    // scrolls and is cloned to make the wrap seamless, so a badge in there
+    // would drift off the panel and then appear twice `[REQ-VIS-120]`. Only
+    // the names this skin actually shows are qualified -- it has no album
+    // line, so an album badge would be marking something invisible.
+    $('stat').appendChild(Vaino.badge(s.title_source, 'title'));
+    if (s.artist) $('stat').appendChild(Vaino.badge(s.artist_source, 'artist'));
     $('state').textContent =
       Vaino.status === 'connected' ? (s.playing ? '▶ playing' : '❚❚ paused')
                                    : '… reconnecting';
