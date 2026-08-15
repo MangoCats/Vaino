@@ -228,7 +228,15 @@ def main():
         errors.append(f"dangling tag {t} cited at {locs[0]} but never defined")
     for t, locs in sorted(defs.items()):
         if len(locs) > 1 and t not in KNOWN_COLLISIONS:
-            warnings.append(f"tag {t} defined {len(locs)}x: {', '.join(locs)}")
+            # Usually REQ001's summary table restating a detail entry, which is
+            # deliberate. It stays a warning rather than being taught away,
+            # because the same pattern hides real conflicts: [REQ-PD-050] once
+            # meant "rotation hard lockout" in the table and "occasion
+            # weighting" in the detail, and a citation elsewhere meant the
+            # second. Suppressing the shape would have suppressed that.
+            same_doc = len({l.rsplit(":", 1)[0] for l in locs}) == 1
+            hint = " -- summary table and detail? check they still agree" if same_doc else ""
+            warnings.append(f"tag {t} defined {len(locs)}x: {', '.join(locs)}{hint}")
 
     # 5 -- line-count governance, advisory
     for p in vaino_docs():
