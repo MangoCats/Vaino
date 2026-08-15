@@ -91,9 +91,26 @@ else
     skins_note="skins NOT checked (node missing)"
 fi
 
+# The Python tools are outside cargo's reach too. `apply_reviews` rewrites what
+# a passage IS, and shipped once in a state where it could not write at all, so
+# it does not get to be untested `[REQ-LIB-165]`.
+echo
+echo "== Tools (optional: needs python) =="
+tools_note=""
+if command -v python >/dev/null 2>&1; then
+    python "$ROOT/tools/test_apply_reviews.py" || fail=$((fail+1))
+elif command -v python3 >/dev/null 2>&1; then
+    python3 "$ROOT/tools/test_apply_reviews.py" || fail=$((fail+1))
+else
+    tools_note="tools NOT checked (python missing)"
+fi
+
 echo
 if [ -n "$mem_note" ]; then
     echo "$mem_note"
+fi
+if [ -n "$tools_note" ]; then
+    echo "$tools_note"
 fi
 if [ -n "$skins_note" ]; then
     echo "$skins_note"

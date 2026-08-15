@@ -31,6 +31,8 @@
   // either on by default would bury the cases actually worth judging under
   // the ones that are not. Both stay one tap away.
   const GRADE = {
+    'no-mbid':      { label: 'no MBID',       on: true,
+                      why: 'no MusicBrainz id at all — a migration placeholder' },
     'wrong-song':   { label: 'wrong song',    on: true,
                       why: 'neither the title nor the performer matches' },
     'wrong-artist': { label: 'wrong artist',  on: true,
@@ -44,6 +46,13 @@
   };
   const ORDER = Object.keys(GRADE);
   const showing = new Set(ORDER.filter(k => GRADE[k].on));
+  // Decided cards are their own chip rather than a grade: a judgement can be
+  // any severity, and what you want when looking for one is "the ones I have
+  // answered", not "the wrong-artist ones I have answered".
+  let showDecided = false;
+  // How a recorded decision reads when the card is met again.
+  const SAID = { kept: 'kept as it was', reassigned: 'reassigned',
+                 deferred: 'left for later' };
 
   // One card: the two competing claims, then what can be done about it.
   function card(item) {
@@ -104,6 +113,49 @@
     claims.appendChild(theirs);
     box.appendChild(claims);
 
+    // Which album to call it. A recording is on many releases -- the album,
+    // the remaster, three compilations -- and without an answer the name is
+    // picked by release date, which is a guess. Fetched only when a candidate
+    // is chosen, because most cards are never reassigned.
+    const albums = el('div', 'albums');
+    albums.hidden = true;
+    box.appendChild(albums);
+
+    let releaseChoice = null;
+    async function offerAlbums(mbid) {
+      albums.textContent = '';
+      albums.hidden = false;
+      releaseChoice = null;
+      albums.appendChild(el('h2', null, 'Call the album'));
+      let list = [];
+      try {
+        const r = await fetch(`/review/releases/${encodeURIComponent(mbid)}`);
+        if (r.ok) list = await r.json();
+      } catch { /* offered, not required: the album can stay as it is */ }
+      if (!list.length) {
+        albums.appendChild(el('p', 'sub',
+          'No releases known for this recording yet — the album will keep ' +
+          'coming from the file’s own tag.'));
+        return;
+      }
+      const sel = document.createElement('select');
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'leave the album as it is';
+      sel.appendChild(none);
+      for (const rel of list) {
+        const o = document.createElement('option');
+        o.value = rel.mbid;
+        o.textContent = [rel.title, rel.date && rel.date.slice(0, 4),
+                         rel.status, rel.track_count && `${rel.track_count} tracks`]
+                          .filter(Boolean).join(' · ');
+        if (rel.chosen) o.selected = true;
+        sel.appendChild(o);
+      }
+      releaseChoice = () => sel.value;
+      albums.appendChild(sel);
+    }
+
     const acts = el('div', 'acts');
     const said = el('span', 'said');
 
@@ -122,14 +174,22 @@
     const keep = el('button', null, 'Keep ours');
     const later = el('button', null, 'Decide later');
 
-    opts.addEventListener('change', () => { use.disabled = !picked(); });
+    opts.addEventListener('change', () => {
+      const p = picked();
+      use.disabled = !p;
+      if (p) offerAlbums(p.value);
+    });
     const picked = () =>
       box.querySelector(`input[name="pick-${item.passage_id}"]:checked`);
 
     const settle = async (decision, mbid, phrase) => {
       for (const b of [use, keep, later]) b.disabled = true;
-      const q = mbid ? `?mbid=${encodeURIComponent(mbid)}` : '';
-      const r = await fetch(`/review/${item.passage_id}/${decision}${q}`,
+      const q = new URLSearchParams();
+      if (mbid) q.set('mbid', mbid);
+      const rel = releaseChoice && releaseChoice();
+      if (rel) q.set('release', rel);
+      const qs = q.toString() ? `?${q}` : '';
+      const r = await fetch(`/review/${item.passage_id}/${decision}${qs}`,
                             { method: 'POST' });
       if (r.ok) {
         // Remembered on the item, not just on the element: toggling a filter
@@ -138,14 +198,40 @@
         item.decided = phrase;
         box.classList.add('done');
         said.textContent = phrase;
+        reopen.hidden = false;
         tally.decided++;
         showTally();
+        showFilters();
       } else {
         // Re-arm rather than leaving a dead card: a failed write must not look
-        // like a recorded decision.
-        said.textContent = `could not record that (${r.status})`;
+        // like a recorded decision. The server sends the reason as text, and
+        // "already applied to the library" is exactly what has to be read.
+        const why = await r.text().catch(() => '');
+        said.textContent = why || `could not record that (${r.status})`;
         keep.disabled = later.disabled = false;
         use.disabled = !picked();
+      }
+    };
+
+    // Undo. Withdrawing a judgement that has only been recorded is a delete;
+    // one already written into the library is not, and the server refuses it
+    // with the reason, which lands in `said` above.
+    const reopen = el('button', null, 'Undo');
+    reopen.title = 'withdraw this decision and put the card back in the queue';
+    reopen.onclick = async () => {
+      reopen.disabled = true;
+      const r = await fetch(`/review/${item.passage_id}/reopen`, { method: 'POST' });
+      if (r.ok) {
+        delete item.decision;
+        delete item.decided;
+        tally.decided = Math.max(0, tally.decided - 1);
+        showTally();
+        showFilters();
+        showCards();
+      } else {
+        said.textContent = (await r.text().catch(() => '')) ||
+                           `could not undo that (${r.status})`;
+        reopen.disabled = false;
       }
     };
 
@@ -156,12 +242,18 @@
     keep.onclick = () => settle('kept', null, 'kept as it was');
     later.onclick = () => settle('deferred', null, 'left for later');
 
-    acts.append(play, el('span', 'spacer'), said, use, keep, later);
+    acts.append(play, el('span', 'spacer'), said, use, keep, later, reopen);
     box.appendChild(acts);
-    if (item.decided) {
+
+    // A judgement already on record -- from this session or a previous one --
+    // renders settled, with undo as the only live control.
+    const already = item.decided || (item.decision && SAID[item.decision]);
+    if (already) {
       box.classList.add('done');
-      said.textContent = item.decided;
+      said.textContent = item.applied ? `${already}, applied to the library` : already;
       for (const b of [use, keep, later]) b.disabled = true;
+    } else {
+      reopen.hidden = true;
     }
     return box;
   }
@@ -206,11 +298,13 @@
 
   // One chip per grade, each carrying its own count, so the size of each kind
   // of problem is visible before deciding which to work through.
+  const isDecided = i => Boolean(i.decision || i.decided);
+
   function showFilters() {
     const host = $('filters');
     host.textContent = '';
     const counts = {};
-    for (const i of items) counts[i.severity] = (counts[i.severity] || 0) + 1;
+    for (const i of items) if (!isDecided(i)) counts[i.severity] = (counts[i.severity] || 0) + 1;
     for (const key of ORDER) {
       const n = counts[key] || 0;
       const b = el('button', `chip ${key}`, `${GRADE[key].label} ${n}`);
@@ -224,12 +318,26 @@
       };
       host.appendChild(b);
     }
+    // Decided, so a judgement can be found again and undone. Off by default:
+    // the queue's job is to shorten as it is worked through.
+    const n = items.filter(isDecided).length;
+    const d = el('button', 'chip decided', `decided ${n}`);
+    d.title = 'judgements already recorded — open one to undo it';
+    d.disabled = n === 0;
+    d.setAttribute('aria-pressed', String(showDecided));
+    d.onclick = () => {
+      showDecided = !showDecided;
+      d.setAttribute('aria-pressed', String(showDecided));
+      showCards();
+    };
+    host.appendChild(d);
   }
 
   function showCards() {
     const cards = $('cards');
     cards.textContent = '';
-    const shown = items.filter(i => showing.has(i.severity));
+    const shown = items.filter(i =>
+      isDecided(i) ? showDecided : showing.has(i.severity));
     for (const item of shown) cards.appendChild(card(item));
 
     $('note').textContent =

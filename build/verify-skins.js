@@ -370,19 +370,38 @@ async function runReview() {
         suggested: [{ mbid: 'rec-51', title: 'Why Worry (5.1 mix)',
                       artist: 'Dire Straits', score: 0.99 }] },
       { passage_id: 24, stored_mbid: 'rec-unk', title: 'Obscure', artist: null,
-        album: null, score: null, severity: 'unverified', rank: 4, suggested: [] },
+        album: null, score: null, severity: 'unverified', rank: 5, suggested: [] },
+      // Already judged in an earlier session, and already written into the
+      // library -- the case undo must refuse rather than silently drop.
+      { passage_id: 25, stored_mbid: 'rec-done', title: 'Settled', artist: 'Someone',
+        album: null, score: 0.95, severity: 'wrong-song', rank: 1, suggested: [],
+        decision: 'reassigned', chosen_mbid: 'rec-new', applied: true },
     ],
   };
+  const RELEASES = [
+    { mbid: 'rel-1', title: 'The Album', date: '1985-01-01', status: 'Official',
+      track_count: 12, chosen: false },
+    { mbid: 'rel-2', title: 'A Later Compilation', date: '2004-01-01',
+      status: 'Official', track_count: 20, chosen: false },
+  ];
   const posted = [];
   let writeFails = false;
   window.fetch = (url, opts) => {
     if (opts && opts.method === 'POST') {
       posted.push(url);
-      return Promise.resolve({ ok: !writeFails, status: writeFails ? 500 : 204 });
+      if (/\/25\/reopen$/.test(url)) {
+        // What the server says about withdrawing an applied decision.
+        return Promise.resolve({ ok: false, status: 409,
+          text: () => Promise.resolve('already applied to the library; use --revert') });
+      }
+      return Promise.resolve({ ok: !writeFails, status: writeFails ? 500 : 204,
+                               text: () => Promise.resolve('') });
     }
     if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
     if (url === '/review/queue')
       return Promise.resolve({ ok: true, json: () => Promise.resolve(QUEUE) });
+    if (url.startsWith('/review/releases/'))
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(RELEASES) });
     return Promise.resolve({ ok: false, status: 404 });
   };
   // jsdom does not fetch `<script src>`; the page's scripts are injected the
@@ -447,11 +466,55 @@ async function runReview() {
   radio.checked = true;
   radio.dispatchEvent(new window.Event('change', { bubbles: true }));
   check(!btn('Use the match').disabled, 'choosing a candidate must arm the button');
+
+  // Choosing a candidate offers the albums it appears on. Without an answer
+  // the album is picked by release date, which is a guess.
+  await settle();
+  const sel = first.querySelector('.albums select');
+  check(sel, 'choosing a candidate should offer which album to call it');
+  if (sel) {
+    check(sel.options.length === RELEASES.length + 1,
+          `${sel && sel.options.length} album options, want ${RELEASES.length + 1} with "leave as is"`);
+    check(sel.options[0].value === '', 'leaving the album alone must be an option');
+    sel.value = 'rel-2';
+  }
+
   btn('Use the match').onclick();
   await settle();
-  check(posted[1] === '/review/21/reassigned?mbid=rec-real',
-        `reassignment must name the recording, got ${posted[1]}`);
+  check(posted[1] === '/review/21/reassigned?mbid=rec-real&release=rel-2',
+        `reassignment must carry recording and album, got ${posted[1]}`);
   check(first.classList.contains('done'), 'a settled card should read as settled');
+
+  // Undo. It appears only once a decision exists, and puts the card back.
+  const undo = () => btn('Undo');
+  check(undo() && !undo().hidden, 'a settled card must offer an undo');
+  undo().onclick();
+  await settle();
+  check(posted[2] === '/review/21/reopen', `undo should reopen, got ${posted[2]}`);
+  const reopened = cards().find(c => c.dataset.passage === '21');
+  check(reopened && !reopened.classList.contains('done'),
+        'after undo the card must be answerable again');
+
+  // Decided cards from earlier sessions are off by default and reachable.
+  check(!cards().some(c => c.dataset.passage === '25'),
+        'a previously-decided card must not clutter the working queue');
+  const decidedChip = [...window.document.querySelectorAll('.chip')]
+                        .find(b => b.className.includes('decided'));
+  check(decidedChip, 'no chip for decided');
+  decidedChip.onclick();
+  await settle();
+  const settled = cards().find(c => c.dataset.passage === '25');
+  check(settled, 'the decided chip must reveal earlier judgements');
+  if (settled) {
+    check(/applied/.test(settled.textContent),
+          'a decision already written to the library must say so');
+    // Undo must refuse it, and the reason has to be readable.
+    const u = [...settled.querySelectorAll('button')].find(b => b.textContent === 'Undo');
+    u.onclick();
+    await settle();
+    check(/--revert/.test(settled.textContent),
+          `a refused undo must explain itself, got "${settled.textContent.slice(-80)}"`);
+  }
 
   // A card with no candidates can still be kept -- that is a real answer.
   const second = cards()[1];

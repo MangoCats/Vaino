@@ -68,10 +68,55 @@ def cached_names(conn: sqlite3.Connection, passage_id: int) -> dict:
     return out
 
 
+def revert(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
+    """Put back what a reassignment replaced `[REQ-LIB-165]`.
+
+    The page can withdraw a decision that was only recorded; it refuses once
+    the decision has been applied, because deleting the row would leave the
+    library changed with nothing left saying what it used to be or why. This
+    is that other half: restore `previous_mbid`, then clear the record, in one
+    transaction so it cannot half-happen.
+    """
+    row = conn.execute(
+        "SELECT decision, chosen_mbid, previous_mbid, applied_at "
+        "  FROM id_reviews WHERE passage_id = ?1", (passage_id,)).fetchone()
+    if not row:
+        say(f"passage {passage_id}: no decision recorded")
+        return 1
+    decision, chosen, previous, applied_at = row
+    if decision != "reassigned" or not applied_at:
+        # Nothing was written, so there is nothing to put back -- and the page
+        # can withdraw this one itself.
+        say(f"passage {passage_id}: '{decision}'"
+            + ("" if applied_at else ", never applied")
+            + " -- withdraw it on the review page instead")
+        return 1
+    if not previous:
+        say(f"passage {passage_id}: no previous id was recorded, so there is "
+            f"nothing to restore. The current id is {chosen}.")
+        return 1
+
+    say(f"passage {passage_id}: {chosen} -> {previous} (restoring)")
+    if not commit:
+        say("\nnothing was written. Re-run with --commit to do it.")
+        return 0
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("DELETE FROM passage_recordings WHERE passage_id = ?1", (passage_id,))
+    conn.execute(
+        "INSERT INTO passage_recordings (passage_id, mbid, weight, source) "
+        "VALUES (?1, ?2, 1.0, 'inherited:mulib')", (passage_id, previous))
+    conn.execute("DELETE FROM id_reviews WHERE passage_id = ?1", (passage_id,))
+    conn.commit()
+    say("reverted; the passage is back in the review queue")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--revert", type=int, metavar="PASSAGE_ID",
+                    help="undo an applied reassignment and re-open it for review")
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db, timeout=60)
@@ -84,11 +129,15 @@ def main() -> int:
         say("no reviews recorded yet")
         return 1
 
+    if args.revert is not None:
+        return revert(conn, args.revert, args.commit)
+
     pending = conn.execute(
-        """SELECT r.passage_id, r.chosen_mbid, pr.mbid
+        """SELECT r.passage_id, r.chosen_mbid, pr.mbid, r.chosen_release_mbid
              FROM id_reviews r
              JOIN passage_recordings pr ON pr.passage_id = r.passage_id
             WHERE r.decision = 'reassigned' AND r.chosen_mbid IS NOT NULL
+              AND r.applied_at IS NULL
               AND pr.mbid <> r.chosen_mbid
             ORDER BY r.passage_id""").fetchall()
 
@@ -102,12 +151,12 @@ def main() -> int:
     if not pending:
         return 0
 
-    applied = new_recordings = new_artists = unnamed = 0
+    applied = new_recordings = new_artists = unnamed = albums_set = 0
     skipped: list[tuple[int, str]] = []
     if args.commit:
         conn.execute("BEGIN IMMEDIATE")
 
-    for passage_id, new_mbid, old_mbid in pending:
+    for passage_id, new_mbid, old_mbid, release_mbid in pending:
         names = cached_names(conn, passage_id)
         info = names.get(new_mbid)
         title = (info or {}).get("title")
@@ -153,6 +202,30 @@ def main() -> int:
             conn.execute(
                 "INSERT INTO passage_recordings (passage_id, mbid, weight, source) "
                 "VALUES (?1, ?2, 1.0, ?3)", (passage_id, new_mbid, SOURCE))
+
+            # The preferred album, if one was named. `ALBUM_EXPR` orders by
+            # `chosen DESC` then release date, so marking one release chosen
+            # is how a person's answer beats the by-date guess. Exactly one
+            # per recording, hence clearing the others first.
+            if release_mbid:
+                conn.execute(
+                    "UPDATE release_recordings SET chosen = 0 WHERE mbid = ?1",
+                    (new_mbid,))
+                if conn.execute(
+                    "UPDATE release_recordings SET chosen = 1 "
+                    " WHERE mbid = ?1 AND release_mbid = ?2",
+                    (new_mbid, release_mbid)).rowcount:
+                    albums_set += 1
+                else:
+                    say(f"    (release {release_mbid} is not linked to this "
+                        f"recording; album left as it was)")
+
+            # Stamped so the decision is known to have reached the library.
+            # Undo on the page refuses once this is set: withdrawing the record
+            # would strand the change with nothing saying why it was made.
+            conn.execute(
+                "UPDATE id_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
+                (passage_id,))
         applied += 1
         if applied <= 10:
             say(f"  passage {passage_id}: {old_mbid} -> {new_mbid}  ({title})")
@@ -168,7 +241,7 @@ def main() -> int:
     if args.commit:
         conn.commit()
         say(f"\napplied {applied}; added {new_recordings} recording(s), "
-            f"{new_artists} artist link(s)")
+            f"{new_artists} artist link(s), set {albums_set} preferred album(s)")
         say("Play history keyed to the OLD recording stays with the old id: "
             "those plays did happen, and to what the passage was then.")
     else:

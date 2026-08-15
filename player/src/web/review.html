@@ -39,6 +39,7 @@
                 border: 1px solid currentColor; white-space: nowrap; }
   /* Worst reads hottest. `different-id` and `unverified` are deliberately
      cool: they are the bulk of the list and the least worth arguing about. */
+  .card .kind.no-mbid      { color: #ff6b6b; }
   .card .kind.wrong-song   { color: #ff8a75; }
   .card .kind.wrong-artist { color: #ffb4a2; }
   .card .kind.wrong-title  { color: #ffd6a2; }
@@ -56,6 +57,7 @@
                                         border-color: currentColor;
                                         box-shadow: inset 0 0 0 1px currentColor; }
   .filters .chip[disabled] { opacity: .2; cursor: default; }
+  .filters .chip.no-mbid[aria-pressed="true"]      { color: #ff6b6b; }
   .filters .chip.wrong-song[aria-pressed="true"]   { color: #ff8a75; }
   .filters .chip.wrong-artist[aria-pressed="true"] { color: #ffb4a2; }
   .filters .chip.wrong-title[aria-pressed="true"]  { color: #ffd6a2; }
@@ -87,6 +89,15 @@
   .acts .spacer { flex: 1; }
   .card.done { opacity: .45; }
   .card .said { font-size: .8125rem; opacity: .8; }
+  /* Which album to call it. Appears only once a candidate is chosen. */
+  .albums { margin-top: .6rem; padding-top: .5rem;
+            border-top: 1px solid rgba(128,128,128,.18); }
+  .albums h2 { font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+               margin: 0 0 .3rem; opacity: .55; font-weight: 600; }
+  .albums select { font: inherit; max-width: 100%; padding: .45rem .4rem;
+                   background: transparent; color: inherit; border-radius: 4px;
+                   border: 1px solid rgba(128,128,128,.45); }
+  .albums .sub { font-size: .8125rem; opacity: .7; margin: 0; }
 
   .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
   .note.bad { opacity: 1; }

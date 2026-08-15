@@ -193,6 +193,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/review", get(|| async { ([REVALIDATE], Html(REVIEW_HTML)) }))
         .route("/review.js", get(|| async { js(REVIEW_JS) }))
         .route(REVIEW_QUEUE_ROUTE, get(review_queue))
+        .route("/review/releases/:mbid", get(review_releases))
         .route("/review/:passage_id/:decision", post(record_review))
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
@@ -376,18 +377,54 @@ async fn record_review(
     State(ui): State<Ui>,
     axum::extract::Path((passage_id, decision)): axum::extract::Path<(i64, String)>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> StatusCode {
+) -> axum::response::Response {
     let db = ui.db.clone();
     let mbid = q.get("mbid").cloned();
+    let release = q.get("release").cloned();
     let done = tokio::task::spawn_blocking(move || {
-        let store = crate::db::PlayerStore::open(&db).ok()?;
-        store.record_review(passage_id, &decision, mbid.as_deref()).ok()
+        let store = crate::db::PlayerStore::open(&db)
+            .map_err(|e| e.message().to_string())?;
+        // `reopen` is the undo. It is a decision verb like the others from the
+        // page's point of view, and a different operation underneath, so it
+        // routes here rather than growing a second endpoint shape.
+        if decision == "reopen" {
+            store.clear_review(passage_id).map_err(|e| e.message().to_string())
+        } else {
+            store
+                .record_review(passage_id, &decision, mbid.as_deref(), release.as_deref())
+                .map_err(|e| e.message().to_string())
+        }
     })
     .await;
     match done {
-        Ok(Some(())) => StatusCode::NO_CONTENT,
-        Ok(None) => StatusCode::BAD_REQUEST,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        // The reason travels back as text. A refusal a person cannot read is
+        // one they will retry, and "already applied to the library" is
+        // precisely what they need to be told.
+        Ok(Err(why)) => (StatusCode::CONFLICT, why).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// The releases a recording appears on `[REQ-LIB-165]`, for naming the album.
+///
+/// Fetched when a candidate is chosen rather than shipped with the queue: a
+/// recording can be on dozens of releases, and sending them for every
+/// candidate of every card would be most of the payload for something almost
+/// none of them will be asked about.
+async fn review_releases(
+    State(ui): State<Ui>,
+    axum::extract::Path(mbid): axum::extract::Path<String>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        serde_json::to_value(lib.releases_for(&mbid).ok()?).ok()
+    })
+    .await;
+    match out {
+        Ok(Some(v)) => axum::Json(v).into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -711,7 +748,7 @@ mod tests {
             assert!(REVIEW_JS.contains(decision), "page cannot send {decision}");
             assert!(
                 crate::db::PlayerStore::open(&std::path::PathBuf::from(":memory:"))
-                    .map(|s| s.record_review(1, decision, Some("m")).is_ok())
+                    .map(|s| s.record_review(1, decision, Some("m"), None).is_ok())
                     .unwrap_or(false),
                 "the store rejects {decision}, which the page can send"
             );

@@ -24,6 +24,20 @@ pub enum DbError {
     Query(String),
 }
 
+impl DbError {
+    /// The message without the "query:" / "open database:" prefix.
+    ///
+    /// Some of these are refusals meant for a person to read -- "already
+    /// applied to the library" -- and reach a browser as the explanation of a
+    /// 409. Prefixing that with the name of an internal error variant tells
+    /// the reader nothing and makes a considered refusal look like a crash.
+    pub fn message(&self) -> &str {
+        match self {
+            DbError::Open(e) | DbError::Query(e) => e,
+        }
+    }
+}
+
 impl std::fmt::Display for DbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -104,6 +118,37 @@ pub(crate) const REVIEW_TABLE: &str = "
         decision    TEXT NOT NULL,
         chosen_mbid TEXT,
         decided_at  TEXT NOT NULL);";
+
+/// Columns added to `id_reviews` after the first version of it shipped.
+///
+/// `previous_mbid` is what makes an applied decision reversible: once
+/// `apply_reviews` has rewritten `passage_recordings`, the old id exists
+/// nowhere else, and an undo with nothing to restore is not an undo.
+///
+/// `applied_at` is the difference between a judgement that can simply be
+/// withdrawn and one that has already changed the library. The page must not
+/// offer the same button for both.
+pub(crate) const REVIEW_COLUMNS: [&str; 3] = [
+    "chosen_release_mbid TEXT",
+    "previous_mbid TEXT",
+    "applied_at TEXT",
+];
+
+/// Create `id_reviews` and bring it up to date, in one place.
+///
+/// The table and the columns added to it later are two halves of one schema,
+/// and anything that builds one without the other gets a table the queries
+/// cannot read. That is not hypothetical: the test fixture did exactly that
+/// and every review test failed on `no such column`.
+pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    for column in REVIEW_COLUMNS {
+        // Already-present columns fail here, which is the expected path on
+        // every start after the first.
+        let _ = conn.execute(&format!("ALTER TABLE id_reviews ADD COLUMN {column}"), []);
+    }
+    Ok(())
+}
 
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
@@ -386,7 +431,7 @@ impl PlayerStore {
         // than returning nothing. Created here because this is the player's
         // only writable handle; filling it is `tagscan`'s job.
         conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
-        conn.execute_batch(REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        ensure_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
         // that only runs behind the background scan, so a library whose scan
@@ -432,6 +477,7 @@ impl PlayerStore {
         passage_id: i64,
         decision: &str,
         chosen_mbid: Option<&str>,
+        chosen_release_mbid: Option<&str>,
     ) -> Result<(), DbError> {
         let mbid = match decision {
             "reassigned" => match chosen_mbid.filter(|m| !m.is_empty()) {
@@ -445,16 +491,74 @@ impl PlayerStore {
             "kept" | "deferred" => None,
             other => return Err(DbError::Query(format!("unknown decision {other:?}"))),
         };
+        let release = chosen_release_mbid.filter(|m| !m.is_empty() && decision == "reassigned");
+
+        // Changing a judgement that has already been written into the library
+        // is not a matter of overwriting a row -- the old id has to be put back
+        // first, and only `apply_reviews` may touch `passage_recordings`.
+        let applied: Option<String> = self
+            .conn
+            .query_row("SELECT applied_at FROM id_reviews WHERE passage_id = ?1",
+                       [passage_id], |r| r.get(0))
+            .unwrap_or(None);
+        if applied.is_some() {
+            return Err(DbError::Query(
+                "this decision has already been applied to the library; \
+                 revert it with tools/apply_reviews.py --revert before changing it"
+                    .into(),
+            ));
+        }
+
+        // What the passage says NOW, captured before anything replaces it. An
+        // applied reassignment overwrites the only copy of the old id, so
+        // without this an undo would have nothing to restore.
+        let previous: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT mbid FROM passage_recordings WHERE passage_id = ?1 \
+                  ORDER BY weight DESC, mbid LIMIT 1",
+                [passage_id], |r| r.get(0))
+            .ok();
+
         self.conn
             .execute(
-                "INSERT INTO id_reviews (passage_id, decision, chosen_mbid, decided_at)
-                 VALUES (?1, ?2, ?3, datetime('now'))
+                "INSERT INTO id_reviews
+                     (passage_id, decision, chosen_mbid, chosen_release_mbid,
+                      previous_mbid, decided_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
                  ON CONFLICT(passage_id) DO UPDATE SET
                      decision = excluded.decision,
                      chosen_mbid = excluded.chosen_mbid,
+                     chosen_release_mbid = excluded.chosen_release_mbid,
+                     previous_mbid = excluded.previous_mbid,
                      decided_at = excluded.decided_at",
-                rusqlite::params![passage_id, decision, mbid],
+                rusqlite::params![passage_id, decision, mbid, release, previous],
             )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Withdraw a judgement `[REQ-LIB-165]`.
+    ///
+    /// Only one that has not been applied. Once `apply_reviews` has rewritten
+    /// `passage_recordings`, deleting the review row would strand the library
+    /// on a change with no record of why it was made or what it replaced --
+    /// an undo that leaves the thing it was undoing in place. Reverting an
+    /// applied decision is `apply_reviews --revert`, which puts the old id
+    /// back and clears the row in one transaction.
+    pub fn clear_review(&self, passage_id: i64) -> Result<(), DbError> {
+        let applied: Option<String> = self
+            .conn
+            .query_row("SELECT applied_at FROM id_reviews WHERE passage_id = ?1",
+                       [passage_id], |r| r.get(0))
+            .map_err(|_| DbError::Query("no decision recorded for that passage".into()))?;
+        if applied.is_some() {
+            return Err(DbError::Query(
+                "already applied to the library; use tools/apply_reviews.py --revert".into(),
+            ));
+        }
+        self.conn
+            .execute("DELETE FROM id_reviews WHERE passage_id = ?1", [passage_id])
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
@@ -664,11 +768,36 @@ pub struct ReviewItem {
     pub score: Option<f64>,
     /// What it says the audio is instead, best first.
     pub suggested: Vec<Suggestion>,
-    /// How wrong this looks, worst first. See `Severity`.
+    /// How wrong this looks, worst first. See `SEVERITIES`.
     pub severity: &'static str,
     /// Rank of `severity`, so the page can sort and group without keeping its
     /// own copy of the order.
     pub rank: u8,
+    /// The judgement already recorded, if any. Present so a decision can be
+    /// looked at again and withdrawn: a review tool whose every answer is
+    /// final is one you have to be careful with rather than one you can think
+    /// in `[REQ-LIB-165]`.
+    pub decision: Option<String>,
+    pub chosen_mbid: Option<String>,
+    pub chosen_release_mbid: Option<String>,
+    /// Set once `apply_reviews` has written the change into the library. A
+    /// decision that has only been recorded can be withdrawn outright; one
+    /// that has been applied has to be reverted, which is a different act and
+    /// gets a different button.
+    pub applied: bool,
+}
+
+/// A release the chosen recording appears on, for naming the album
+/// `[REQ-LIB-165]`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReleaseOption {
+    pub mbid: String,
+    pub title: String,
+    pub date: Option<String>,
+    pub status: Option<String>,
+    pub track_count: Option<i64>,
+    /// Already the preferred one for this recording.
+    pub chosen: bool,
 }
 
 /// How badly a stored id disagrees with the audio `[REQ-LIB-165]`.
@@ -681,13 +810,33 @@ pub struct ReviewItem {
 /// The grades are the same distinctions `verify_ids.py` drew against the file
 /// tags -- title agrees, artist agrees, neither -- applied here to evidence
 /// that is actually independent.
-pub const SEVERITIES: [(&str, u8, &str); 5] = [
-    ("wrong-song", 0, "neither the title nor the performer matches"),
-    ("wrong-artist", 1, "same title, different performer"),
-    ("wrong-title", 2, "same performer, different title"),
-    ("different-id", 3, "the same recording under another MBID"),
-    ("unverified", 4, "AcoustID does not know this audio; not evidence"),
+pub const SEVERITIES: [(&str, u8, &str); 6] = [
+    ("no-mbid", 0, "no MusicBrainz id at all -- a migration placeholder"),
+    ("wrong-song", 1, "neither the title nor the performer matches"),
+    ("wrong-artist", 2, "same title, different performer"),
+    ("wrong-title", 3, "same performer, different title"),
+    ("different-id", 4, "the same recording under another MBID"),
+    ("unverified", 5, "AcoustID does not know this audio; not evidence"),
 ];
+
+/// Does this even look like a MusicBrainz id?
+///
+/// The migration left 44 passages carrying `local:track:N`, which is not an
+/// MBID and never was -- and two passages share `local:track:827`, so they do
+/// not even identify a track uniquely. Everything downstream keys on this
+/// string: play history, rotation, naming. A passage carrying one is not a
+/// *questionable* identification, it is an absent one.
+///
+/// Shape-checked rather than prefix-checked, so any other non-conforming id
+/// the migration produced is caught too, not just the one spelling of it.
+pub fn is_mbid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
 
 /// Grade one disagreement.
 ///
@@ -697,25 +846,38 @@ pub const SEVERITIES: [(&str, u8, &str); 5] = [
 /// no candidate names one, then the artist cannot be *wrong*, and grading it
 /// `wrong-artist` would invent a dispute out of two silences. In that case the
 /// title decides alone.
-fn grade(title: Option<&str>, artist: Option<&str>, suggested: &[Suggestion]) -> (&'static str, u8) {
+fn grade(
+    stored_mbid: &str,
+    title: Option<&str>,
+    artist: Option<&str>,
+    suggested: &[Suggestion],
+) -> (&'static str, u8) {
+    // Checked before anything else, and regardless of what the audio says: a
+    // passage with no real id is broken whether or not AcoustID recognises it,
+    // and it cannot be "the same recording under another MBID" when it has
+    // none. These lead the queue because they are certain rather than merely
+    // likely -- and because a fingerprint match gives them their first real id.
+    if !is_mbid(stored_mbid) {
+        return ("no-mbid", 0);
+    }
     if suggested.is_empty() {
-        return ("unverified", 4);
+        return ("unverified", 5);
     }
     let title_ok = title.is_some_and(|t| {
         suggested.iter().any(|s| s.title.as_deref().is_some_and(|x| same_title(t, x)))
     });
     let comparable = artist.is_some() && suggested.iter().any(|s| s.artist.is_some());
     if !comparable {
-        return if title_ok { ("different-id", 3) } else { ("wrong-song", 0) };
+        return if title_ok { ("different-id", 4) } else { ("wrong-song", 1) };
     }
     let artist_ok = artist.is_some_and(|a| {
         suggested.iter().any(|s| s.artist.as_deref().is_some_and(|x| same_title(a, x)))
     });
     match (title_ok, artist_ok) {
-        (true, true) => ("different-id", 3),
-        (true, false) => ("wrong-artist", 1),
-        (false, true) => ("wrong-title", 2),
-        (false, false) => ("wrong-song", 0),
+        (true, true) => ("different-id", 4),
+        (true, false) => ("wrong-artist", 2),
+        (false, true) => ("wrong-title", 3),
+        (false, false) => ("wrong-song", 1),
     }
 }
 
@@ -848,14 +1010,19 @@ impl Library {
         if !self.has_table("id_checks") || !self.has_table("id_reviews") {
             return Ok(Vec::new());
         }
+        // Decided passages come back too, carrying their judgement, so that a
+        // decision can be found again and withdrawn. They are a separate grade
+        // on the page and switched off by default, so working through the
+        // queue still shortens it.
         let sql = format!(
             "SELECT c.passage_id, c.stored_mbid, c.score, c.suggested, \
-                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR} \
+                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
+                    v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at \
                FROM id_checks c \
                JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
                LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
+               LEFT JOIN id_reviews v ON v.passage_id = c.passage_id \
               WHERE c.verdict IN ('contradicted', 'unmatched') \
-                AND c.passage_id NOT IN (SELECT passage_id FROM id_reviews) \
               ORDER BY c.score DESC, c.passage_id LIMIT ?1"
         );
         let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
@@ -869,10 +1036,13 @@ impl Library {
                     .unwrap_or_default();
                 let title: Option<String> = r.get(4)?;
                 let artist: Option<String> = r.get(5)?;
-                let (severity, rank) = grade(title.as_deref(), artist.as_deref(), &suggested);
+                let stored_mbid: String = r.get(1)?;
+                let (severity, rank) =
+                    grade(&stored_mbid, title.as_deref(), artist.as_deref(), &suggested);
+                let applied_at: Option<String> = r.get(10)?;
                 Ok(ReviewItem {
                     passage_id: r.get(0)?,
-                    stored_mbid: r.get(1)?,
+                    stored_mbid,
                     score: r.get(2)?,
                     suggested,
                     title,
@@ -880,6 +1050,10 @@ impl Library {
                     album: r.get(6)?,
                     severity,
                     rank,
+                    decision: r.get(7)?,
+                    chosen_mbid: r.get(8)?,
+                    chosen_release_mbid: r.get(9)?,
+                    applied: applied_at.is_some(),
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -891,6 +1065,47 @@ impl Library {
         // ordering survives.
         items.sort_by_key(|i| i.rank);
         Ok(items)
+    }
+
+    /// Releases this recording appears on, for choosing which album to call it
+    /// `[REQ-LIB-165]`.
+    ///
+    /// A recording is on many releases -- the album, the remaster, three
+    /// compilations -- and `ALBUM_EXPR` picks by `chosen DESC` then date. That
+    /// resolves ties by age, which is a guess. This lets the answer be stated.
+    ///
+    /// Only releases Sampo has already fetched can be offered. A recording new
+    /// to the library has none, and the album then falls back to the file's own
+    /// tag, which is the designed fallback rather than a failure.
+    pub fn releases_for(&self, recording_mbid: &str) -> Result<Vec<ReleaseOption>, DbError> {
+        if !self.has_table("release_recordings") {
+            return Ok(Vec::new());
+        }
+        let mut st = self
+            .conn
+            .prepare(
+                "SELECT rel.mbid, rel.title, rel.release_date, rel.status, \
+                        rel.track_count, COALESCE(rr.chosen, 0) \
+                   FROM release_recordings rr \
+                   JOIN releases rel ON rel.mbid = rr.release_mbid \
+                  WHERE rr.mbid = ?1 \
+                  ORDER BY rr.chosen DESC, rel.release_date, rel.title",
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map([recording_mbid], |r| {
+                Ok(ReleaseOption {
+                    mbid: r.get(0)?,
+                    title: r.get(1)?,
+                    date: r.get(2)?,
+                    status: r.get(3)?,
+                    track_count: r.get(4)?,
+                    chosen: r.get::<_, i64>(5)? != 0,
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
     }
 
     /// How much reviewing there is to do, and how much has been done.
@@ -1003,8 +1218,8 @@ mod tests {
              INSERT INTO passages VALUES (1,1,'album',0,300000,NULL,NULL,NULL,'src');
              INSERT INTO passages VALUES (2,1,'radio',1200,298000,3000,4000,-2.5,'src');
              -- passage 2 is a medley: two recordings, the heavier one wins
-             INSERT INTO passage_recordings VALUES (2,'rec-light',0.3,'s'),
-                                                   (2,'rec-main',0.9,'s');",
+             INSERT INTO passage_recordings VALUES (2,'aaaaaaaa-0000-0000-0000-00000000000f',0.3,'s'),
+                                                   (2,'aaaaaaaa-0000-0000-0000-000000000001',0.9,'s');",
         )
         .unwrap();
         c
@@ -1034,16 +1249,17 @@ mod tests {
                  source TEXT, release_group TEXT, status TEXT, primary_type TEXT,
                  secondary_types TEXT, country TEXT, track_count INTEGER);
              CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, mbid TEXT);
-             INSERT INTO recordings VALUES ('rec-main','Wrong Song',NULL,'s');
+             INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-000000000001','Wrong Song',NULL,'s');
              CREATE TABLE id_checks (passage_id INTEGER PRIMARY KEY, stored_mbid TEXT NOT NULL,
                  verdict TEXT NOT NULL, score REAL, suggested TEXT, checked_at TEXT NOT NULL);
              INSERT INTO id_checks VALUES
-                 (2,'rec-main','contradicted',0.97,
-                  '[{\"mbid\":\"rec-real\",\"title\":\"Right Song\",\"artist\":\"A Band\",\"score\":0.97}]','t');",
+                 (2,'aaaaaaaa-0000-0000-0000-000000000001','contradicted',0.97,
+                  '[{\"mbid\":\"aaaaaaaa-0000-0000-0000-000000000002\",\
+                     \"title\":\"Right Song\",\"artist\":\"A Band\",\"score\":0.97}]','t');",
         )
         .unwrap();
         c.execute_batch(TAG_TABLE).unwrap();
-        c.execute_batch(REVIEW_TABLE).unwrap();
+        ensure_review_table(&c).unwrap();
         c
     }
 
@@ -1055,8 +1271,8 @@ mod tests {
         let c = reviewable();
         c.execute_batch(
             "INSERT INTO passages VALUES (3,1,'radio',0,1000,NULL,NULL,NULL,'src');
-             INSERT INTO passage_recordings VALUES (3,'rec-x',1.0,'s');
-             INSERT INTO id_checks VALUES (3,'rec-x','confirmed',0.99,NULL,'t');",
+             INSERT INTO passage_recordings VALUES (3,'aaaaaaaa-0000-0000-0000-000000000005',1.0,'s');
+             INSERT INTO id_checks VALUES (3,'aaaaaaaa-0000-0000-0000-000000000005','confirmed',0.99,NULL,'t');",
         )
         .unwrap();
         let lib = Library { conn: c };
@@ -1064,7 +1280,7 @@ mod tests {
         assert_eq!(q.len(), 1, "a confirmed id is not a question");
         assert_eq!(q[0].passage_id, 2);
         assert_eq!(q[0].suggested.len(), 1);
-        assert_eq!(q[0].suggested[0].mbid, "rec-real");
+        assert_eq!(q[0].suggested[0].mbid, "aaaaaaaa-0000-0000-0000-000000000002");
         assert_eq!(q[0].suggested[0].title.as_deref(), Some("Right Song"));
     }
 
@@ -1088,9 +1304,9 @@ mod tests {
         // by kind and not merely by score.
         c.execute_batch(
             "INSERT INTO passages VALUES (4,1,'radio',0,1000,NULL,NULL,NULL,'src');
-             INSERT INTO passage_recordings VALUES (4,'rec-p',1.0,'s');
-             INSERT INTO recordings VALUES ('rec-p','Wrong Song',NULL,'s');
-             INSERT INTO id_checks VALUES (4,'rec-p','contradicted',0.91,
+             INSERT INTO passage_recordings VALUES (4,'aaaaaaaa-0000-0000-0000-000000000003',1.0,'s');
+             INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-000000000003','Wrong Song',NULL,'s');
+             INSERT INTO id_checks VALUES (4,'aaaaaaaa-0000-0000-0000-000000000003','contradicted',0.91,
                  '[{\"mbid\":\"rec-q\",\"title\":\"Wrong Song (remaster)\",\"score\":0.91}]','t');",
         )
         .unwrap();
@@ -1115,7 +1331,8 @@ mod tests {
             artist: a.map(str::to_string),
             score: 0.9,
         };
-        let g = |t, a, sug: &[Suggestion]| grade(t, a, sug).0;
+        let real = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let g = |t, a, sug: &[Suggestion]| grade(real, t, a, sug).0;
 
         assert_eq!(g(Some("Why Worry"), Some("Dire Straits"),
                      &[s(Some("Why Worry (5.1 mix)"), Some("Dire Straits"))]),
@@ -1148,8 +1365,39 @@ mod tests {
                    "wrong-artist");
         // And the grades stay in step with the table the page reads.
         for (name, rank, _) in SEVERITIES {
-            assert!(rank < 5, "{name} has no place in the order");
+            assert!(rank < 6, "{name} has no place in the order");
         }
+    }
+
+    /// A passage with no real id is not a *questionable* identification, it is
+    /// an absent one. The migration left 44 of them carrying `local:track:N`,
+    /// two of which share a number, so they do not even identify a track.
+    /// Everything downstream keys on this string.
+    #[test]
+    fn a_passage_with_no_mbid_leads_the_queue() {
+        assert!(is_mbid("68684e6b-37d2-487e-8ee2-d21e28fa1589"));
+        assert!(!is_mbid("local:track:827"));
+        assert!(!is_mbid(""));
+        assert!(!is_mbid("68684e6b37d2487e8ee2d21e28fa1589"), "no dashes is not an MBID");
+        assert!(!is_mbid("68684e6b-37d2-487e-8ee2-d21e28fa158g"), "g is not hex");
+        assert!(!is_mbid("68684e6b-37d2-487e-8ee2-d21e28fa1589x"), "too long");
+
+        // Graded before the audio is consulted at all: a placeholder is broken
+        // whether or not AcoustID recognises the sound, and cannot be "the
+        // same recording under another MBID" when it has no id to differ from.
+        let c = reviewable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES (6,1,'radio',0,1000,NULL,NULL,NULL,'src');
+             INSERT INTO recordings VALUES ('local:track:827','Some Track',NULL,'s');
+             INSERT INTO passage_recordings VALUES (6,'local:track:827',1.0,'s');
+             INSERT INTO id_checks VALUES (6,'local:track:827','unmatched',NULL,NULL,'t');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.review_queue(50).unwrap();
+        assert_eq!(q[0].passage_id, 6, "a missing id outranks every wrong one");
+        assert_eq!(q[0].severity, "no-mbid");
+        assert_eq!(q[0].rank, 0);
     }
 
     /// `unmatched` reaches the page so it can be asked for deliberately, but
@@ -1160,22 +1408,23 @@ mod tests {
         let c = reviewable();
         c.execute_batch(
             "INSERT INTO passages VALUES (5,1,'radio',0,1000,NULL,NULL,NULL,'src');
-             INSERT INTO passage_recordings VALUES (5,'rec-u',1.0,'s');
-             INSERT INTO id_checks VALUES (5,'rec-u','unmatched',NULL,NULL,'t');",
+             INSERT INTO passage_recordings VALUES (5,'aaaaaaaa-0000-0000-0000-000000000006',1.0,'s');
+             INSERT INTO id_checks VALUES (5,'aaaaaaaa-0000-0000-0000-000000000006','unmatched',NULL,NULL,'t');",
         )
         .unwrap();
         let lib = Library { conn: c };
         let q = lib.review_queue(50).unwrap();
         let u = q.iter().find(|i| i.passage_id == 5).expect("unmatched must be reachable");
         assert_eq!(u.severity, "unverified");
-        assert_eq!(u.rank, 4, "and it must sort behind every real finding");
+        assert_eq!(u.rank, 5, "and it must sort behind every real finding");
         assert_eq!(q[0].passage_id, 2, "a real contradiction still leads");
     }
 
-    /// A decided passage leaves the queue, or the same question is asked for
-    /// ever and the list never shortens.
+    /// A decided passage comes back carrying its judgement, so it can be found
+    /// again and withdrawn. It is a separate grade on the page and off by
+    /// default, so the working queue still shortens as it is answered.
     #[test]
-    fn a_decision_takes_the_passage_out_of_the_queue() {
+    fn a_decision_is_remembered_and_can_be_withdrawn() {
         let tmp = std::env::temp_dir().join(format!("vaino-rev-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         {
@@ -1184,14 +1433,25 @@ mod tests {
         }
         let store = PlayerStore::open(&tmp).unwrap();
         let lib = Library::open(&tmp).unwrap();
-        assert_eq!(lib.review_queue(50).unwrap().len(), 1);
+        assert!(lib.review_queue(50).unwrap()[0].decision.is_none());
 
-        store.record_review(2, "kept", None).unwrap();
-        assert!(lib.review_queue(50).unwrap().is_empty());
+        store.record_review(2, "kept", None, None).unwrap();
+        let q = lib.review_queue(50).unwrap();
+        assert_eq!(q[0].decision.as_deref(), Some("kept"),
+                   "a decided card must still be findable");
+        assert!(!q[0].applied, "recorded is not applied");
         assert_eq!(lib.review_progress().decided, 1);
 
+        // Undo: the judgement is withdrawn and the passage is a question again.
+        store.clear_review(2).unwrap();
+        assert!(lib.review_queue(50).unwrap()[0].decision.is_none());
+        assert_eq!(lib.review_progress().decided, 0);
+        assert!(store.clear_review(2).is_err(), "nothing to withdraw twice");
+
+        store.record_review(2, "kept", None, None).unwrap();
+
         // Changing one's mind overwrites rather than duplicating.
-        store.record_review(2, "reassigned", Some("rec-real")).unwrap();
+        store.record_review(2, "reassigned", Some("aaaaaaaa-0000-0000-0000-000000000002"), None).unwrap();
         assert_eq!(lib.review_progress().decided, 1);
         let (d, m): (String, Option<String>) = store
             .conn
@@ -1199,8 +1459,47 @@ mod tests {
                        [], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();
         assert_eq!(d, "reassigned");
-        assert_eq!(m.as_deref(), Some("rec-real"));
+        assert_eq!(m.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000002"));
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A judgement already written into the library cannot be withdrawn by
+    /// deleting the record of it: that would leave `passage_recordings`
+    /// changed with nothing left saying what it used to be or why. Undo on the
+    /// page refuses, and says to use `apply_reviews --revert`, which restores
+    /// the old id and clears the row together.
+    #[test]
+    fn an_applied_decision_cannot_be_quietly_withdrawn() {
+        let tmp = std::env::temp_dir().join(format!("vaino-rev3-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = reviewable();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        let lib = Library::open(&tmp).unwrap();
+        let new_id = "aaaaaaaa-0000-0000-0000-000000000002";
+        store.record_review(2, "reassigned", Some(new_id), None).unwrap();
+
+        // What the old id was is captured when the decision is made, because
+        // applying it overwrites the only other copy.
+        let previous: Option<String> = store
+            .conn
+            .query_row("SELECT previous_mbid FROM id_reviews WHERE passage_id = 2",
+                       [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(previous.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000001"));
+
+        // `apply_reviews` stamps this once the library has been changed.
+        store.conn.execute(
+            "UPDATE id_reviews SET applied_at = datetime('now') WHERE passage_id = 2", [])
+            .unwrap();
+
+        assert!(store.clear_review(2).is_err(), "an applied decision must not just vanish");
+        assert!(store.record_review(2, "kept", None, None).is_err(),
+                "nor be silently overwritten by a different answer");
+        let q = lib.review_queue(50).unwrap();
+        assert!(q[0].applied, "the page has to be able to show it as applied");
     }
 
     /// The vocabulary is enforced where it is written, because that is the only
@@ -1215,10 +1514,10 @@ mod tests {
             c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
         }
         let store = PlayerStore::open(&tmp).unwrap();
-        assert!(store.record_review(2, "reassigned", None).is_err());
-        assert!(store.record_review(2, "reassigned", Some("")).is_err());
-        assert!(store.record_review(2, "nonsense", None).is_err());
-        assert!(store.record_review(2, "deferred", None).is_ok());
+        assert!(store.record_review(2, "reassigned", None, None).is_err());
+        assert!(store.record_review(2, "reassigned", Some(""), None).is_err());
+        assert!(store.record_review(2, "nonsense", None, None).is_err());
+        assert!(store.record_review(2, "deferred", None, None).is_ok());
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -1271,7 +1570,7 @@ mod tests {
     fn a_medley_passage_yields_one_row_and_the_heaviest_recording() {
         let lib = Library { conn: fixture() };
         let e = lib.passage(2).unwrap();
-        assert_eq!(e.mbid.as_deref(), Some("rec-main"), "highest weight wins");
+        assert_eq!(e.mbid.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000001"), "highest weight wins");
         assert_eq!(lib.random_radio(10).unwrap().len(), 1, "one row, not two");
     }
 
@@ -1294,7 +1593,7 @@ mod tests {
                      played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);",
             )
             .unwrap();
-        st.record_play(7, Some("rec-main")).unwrap();
+        st.record_play(7, Some("aaaaaaaa-0000-0000-0000-000000000001")).unwrap();
         st.record_play(8, None).unwrap();
         let rows: Vec<(i64, Option<String>)> = st
             .conn
@@ -1304,7 +1603,7 @@ mod tests {
             .unwrap()
             .map(|r| r.unwrap())
             .collect();
-        assert_eq!(rows, vec![(7, Some("rec-main".into())), (8, None)],
+        assert_eq!(rows, vec![(7, Some("aaaaaaaa-0000-0000-0000-000000000001".into())), (8, None)],
                    "an unidentified passage still records a play");
         let _ = std::fs::remove_file(&p);
     }
