@@ -286,6 +286,12 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 >
 > **Taste is unbuilt** `[REQ-PD-150]` *(feature)*. `listener_likes` holds nothing. It is the one substantial Director capability specified and not implemented, and `[SPEC-DIR-210/215/220]` are open design rather than settled, so it starts as a design conversation. Browse is its natural home: that is where a listener is looking at a track when they form an opinion about it.
 >
+> **Sampo is specified as a separate project but ships inside this repository under Vaino's licence** *(licensing, decision needed)*. `[SPEC-SA-010]` says Sampo is *"a separate project: own repository, own licence, own platform envelope"*, and `[GDE-ARC-018]` sets the direction deliberately — Vaino MIT, Sampo AGPL-3.0, because Essentia is AGPL and MIT code may be incorporated into an AGPL work while the reverse is not true. In the tree as it stands there is **one `LICENSE`, and it says MIT**, covering `tools/` along with everything else.
+>
+> The *architectural* separation is real and holds: different languages, separate binaries, and `[SPEC-SA-015]`'s single channel — the shared SQLite file — with no linked code in either direction. What has not happened is the legal separation the specs describe. `tools/` also mixes Sampo's pipeline with research scripts and dev utilities, so the line to cut along is not yet drawn.
+>
+> Worth settling before anything is published rather than after: a licence is far cheaper to arrange than to re-arrange, and contributors who send patches to an MIT tree have been told something about the terms. The decision is genuinely open — split the repository as specified, relicense `tools/` in place, or record that the spec overreached and Sampo stays MIT because nothing AGPL is actually distributed here. Any of the three is fine; the current silent mismatch is not.
+>
 > **Nothing starts the player on boot** *(deployment)*. The Dockerfiles are build targets, not deployment.
 >
 > **Errors are invisible on an appliance** *(operability)*. Sixteen `eprintln!` sites across engine, session, output and tags — decode failures, dropped passages, unstorable tag rows — all to stderr, on a headless machine with no terminal. Underruns and lock failures now reach the UI; the same treatment for recent faults would make them findable without a shell.
