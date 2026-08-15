@@ -167,7 +167,6 @@
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
     $('state').textContent = s.playing ? 'playing' : 'paused';
     $('under').textContent = s.underrun_samples;
-    $('queuelen').textContent = s.queue_len ?? 0;
     showQueue(s);
     showProgram(s);
     showVolume(s);

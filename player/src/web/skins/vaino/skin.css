@@ -26,9 +26,12 @@
   button { font: inherit; padding: .5rem 1.1rem; border: 1px solid var(--line);
            background: transparent; color: inherit; border-radius: 6px; cursor: pointer; }
   button:hover { border-color: var(--dim); }
-  dl { display: grid; grid-template-columns: auto 1fr; gap: .3rem 1rem;
-       font-size: .875rem; color: var(--dim); margin: 0; }
-  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  /* Two equal columns, so Underruns starts exactly at the half-way point
+     however wide the page is. */
+  .status { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem 1rem;
+            font-size: .8125rem; color: var(--dim); margin: .5rem 0 0; }
+  .status b { font-weight: 600; color: var(--fg);
+              font-variant-numeric: tabular-nums; }
   section { border-top: 1px solid var(--line); margin-top: 1.75rem; padding-top: 1.25rem; }
   h2 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
        color: var(--dim); font-weight: 600; margin: 0 0 .6rem; }
