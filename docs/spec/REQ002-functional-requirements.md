@@ -165,7 +165,11 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 >
 > **The snapshot owns the connection and the library is attached `mode=ro`.** Two reasons, the second being the one that matters: `ATTACH` cannot create a database from a read-only connection, and this way a mistake in the copy cannot write to the thing being protected.
 >
-> **Rotating, not overwriting** — seven generations. Corruption unnoticed for a day would otherwise be faithfully copied over the last good snapshot; damage now has to outrun the whole set.
+> **Grandfather-father-son retention**, because the value of an old snapshot is not that it is old but that it *predates whatever went wrong*. Damage noticed the same afternoon needs yesterday; damage noticed at Christmas needs March; a preference quietly corrupted two years ago needs a copy from before it. So: **one per day for seven days, one per month for twelve months, one per year indefinitely**, and always the newest whatever else happens. Within a period the latest is kept — it holds the most listening.
+>
+> Three years of six-hourly snapshots thin from 4,380 files to **20**: 10.5 GB to 48 MB. The yearly tier is unbounded on purpose; a decade of them is ten files.
+>
+> The date arithmetic is written out rather than imported — Howard Hinnant's civil-from-days, exact for every date this will see. Approximating a year as 365.25 days drifts a day a century and would silently file a snapshot under the wrong year, which is how the only copy of a year goes missing.
 >
 > **Never fatal.** A player that stops playing because it could not write a backup has turned a precaution into the fault. Failures are reported and playback continues.
 >

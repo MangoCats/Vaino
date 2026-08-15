@@ -47,12 +47,37 @@ pub const LISTENER_TABLES: &[&str] = &[
     "player_state",
 ];
 
-/// How many snapshots to keep before the oldest is dropped.
+/// How far back each tier reaches `[REQ-LIB-160]`.
 ///
-/// Seven, taken hourly, is most of a day of history — long enough that damage
-/// has to go unnoticed for a shift before it reaches every copy, short enough
-/// that the set stays small beside the library it sits next to.
-pub const KEEP: usize = 7;
+/// Grandfather-father-son, because the value of an old snapshot is not that it
+/// is old but that it predates whatever went wrong. Damage noticed the same
+/// afternoon needs yesterday; damage noticed at Christmas needs March; a
+/// preference quietly corrupted two years ago needs a copy from before it.
+///
+/// At 2.4 MB apiece the whole ladder is a few hundred megabytes after a
+/// decade, which is less than the library it protects.
+pub const KEEP_DAYS: usize = 7;
+pub const KEEP_MONTHS: usize = 12;
+
+/// Calendar year, month and day for a Unix timestamp, UTC.
+///
+/// Written out rather than pulled in: the player has no date dependency and
+/// this is the only thing that ever needed one. Howard Hinnant's civil-from-
+/// days, which is exact for every date this will ever see -- no approximation
+/// by 365.25, which drifts a day every century and would silently file a
+/// snapshot under the wrong year.
+fn civil(secs: i64) -> (i64, u32, u32) {
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
 
 /// Where snapshots live: beside the library, in their own directory, so a
 /// glob for `*.db` in the data directory cannot sweep them up as libraries.
@@ -130,28 +155,60 @@ pub fn snapshot(db: &Path) -> Result<PathBuf, DbError> {
     Ok(out)
 }
 
-/// Drop the oldest snapshots beyond [`KEEP`].
+/// Thin the snapshots to the retention ladder.
 ///
-/// Failure here is deliberately silent: an undeletable old snapshot is untidy,
-/// and refusing to take new ones over it would turn tidiness into data loss.
+/// One per day for the last week, one per month for the last year, one per
+/// year for ever, and always the newest whatever else happens. Within a period
+/// the LATEST is kept: it is the one holding the most listening.
+///
+/// Failure is deliberately silent. An undeletable old snapshot is untidy, and
+/// refusing to take new ones over it would turn tidiness into data loss.
 fn prune(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let mut snaps: Vec<PathBuf> = entries
+    let mut snaps: Vec<(i64, PathBuf)> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("listener-") && n.ends_with(".db"))
-        })
+        .filter_map(|p| Some((stamp_of(&p)?, p)))
         .collect();
-    if snaps.len() <= KEEP {
+    if snaps.is_empty() {
         return;
     }
-    // The name carries the timestamp, so sorting by name sorts by age.
-    snaps.sort();
-    for old in &snaps[..snaps.len() - KEEP] {
-        let _ = std::fs::remove_file(old);
+    // Newest first, so the first seen in any period is the one to keep.
+    snaps.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut keep: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    keep.insert(snaps[0].1.clone());          // the newest, always
+
+    let mut days: Vec<(i64, u32, u32)> = Vec::new();
+    let mut months: Vec<(i64, u32)> = Vec::new();
+    let mut years: Vec<i64> = Vec::new();
+    for (secs, path) in &snaps {
+        let (y, m, d) = civil(*secs);
+        if !days.contains(&(y, m, d)) && days.len() < KEEP_DAYS {
+            days.push((y, m, d));
+            keep.insert(path.clone());
+        }
+        if !months.contains(&(y, m)) && months.len() < KEEP_MONTHS {
+            months.push((y, m));
+            keep.insert(path.clone());
+        }
+        // Yearly has no limit: a decade of them is ten files.
+        if !years.contains(&y) {
+            years.push(y);
+            keep.insert(path.clone());
+        }
     }
+    for (_, path) in &snaps {
+        if !keep.contains(path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// The timestamp a snapshot's name carries, or `None` if it is not one.
+fn stamp_of(path: &Path) -> Option<i64> {
+    let name = path.file_name()?.to_str()?;
+    let rest = name.strip_prefix("listener-")?.strip_suffix(".db")?;
+    rest.parse().ok()
 }
 
 #[cfg(test)]
@@ -211,20 +268,56 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
-    /// Rotation has to bite, or the directory grows without limit.
+    /// The date arithmetic has to be exact, because a snapshot filed under the
+    /// wrong year is one that survives when it should go, or goes when it is
+    /// the only copy of that year.
     #[test]
-    fn only_the_newest_snapshots_are_kept() {
+    fn civil_dates_are_exact_at_the_awkward_boundaries() {
+        assert_eq!(civil(0), (1970, 1, 1));
+        assert_eq!(civil(86_399), (1970, 1, 1), "one second before midnight");
+        assert_eq!(civil(86_400), (1970, 1, 2));
+        assert_eq!(civil(951_782_400), (2000, 2, 29), "a leap day in a leap century");
+        assert_eq!(civil(1_709_164_800), (2024, 2, 29));
+        assert_eq!(civil(1_735_689_599), (2024, 12, 31), "one second before new year");
+        assert_eq!(civil(1_735_689_600), (2025, 1, 1));
+    }
+
+    /// Three years of hourly snapshots must thin to a ladder, not a pile.
+    #[test]
+    fn retention_keeps_a_day_a_month_and_a_year() {
         let tmp = std::env::temp_dir().join(format!("vaino-bk3-{}", std::process::id()));
         let dir = tmp.join("listener-backups");
         std::fs::create_dir_all(&dir).unwrap();
-        for i in 0..KEEP + 3 {
-            std::fs::write(dir.join(format!("listener-{i:04}.db")), b"x").unwrap();
+
+        // Every six hours for three years, ending "now". Six-hourly rather
+        // than hourly only to keep the test quick: it exercises every tier
+        // identically and writes a quarter of the files.
+        let now = 1_800_000_000i64;
+        let mut made = 0;
+        for h in 0..(4 * 365 * 3) {
+            let t = now - h * 21_600;
+            std::fs::write(dir.join(format!("listener-{t}.db")), b"x").unwrap();
+            made += 1;
         }
         prune(&dir);
-        let left = std::fs::read_dir(&dir).unwrap().count();
-        assert_eq!(left, KEEP, "the oldest are dropped");
-        // ...and it is the OLDEST that go: the newest name must survive.
-        assert!(dir.join(format!("listener-{:04}.db", KEEP + 2)).exists());
+
+        let left: Vec<i64> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| stamp_of(&e.ok()?.path()))
+            .collect();
+        // Seven days + twelve months + four calendar years, minus the overlaps
+        // where one file satisfies several tiers at once.
+        assert!(made > 4_000, "the pile really was a pile");
+        assert!(left.len() <= KEEP_DAYS + KEEP_MONTHS + 5,
+                "thinned to a ladder, got {}", left.len());
+        assert!(left.len() >= KEEP_DAYS, "and the recent week survives: {}", left.len());
+        assert!(left.contains(&now), "the newest is always kept");
+
+        // A snapshot from each of the three years must remain, or "one per
+        // year indefinitely" is not what happened.
+        let years: std::collections::HashSet<i64> =
+            left.iter().map(|t| civil(*t).0).collect();
+        assert!(years.len() >= 3, "one per year survives: {years:?}");
         std::fs::remove_dir_all(&tmp).ok();
     }
 }
