@@ -365,6 +365,10 @@ impl PlayerStore {
         // was already complete never reached it and browsing died on a missing
         // column. A query naming a column that does not exist fails outright;
         // it does not return nothing.
+        for column in ["skip_fade_ms INTEGER", "skip_lead_ms INTEGER"] {
+            let _ = conn.execute(
+                &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
+        }
         for column in ["chosen INTEGER DEFAULT 0", "position INTEGER", "disc INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
@@ -373,6 +377,54 @@ impl PlayerStore {
     }
 
     /// Save the resume point `[REQ-AUD-140]`.
+    /// The listener's settings `[REQ-VIS-155]`.
+    ///
+    /// Separate from `save`, which runs every second to keep the resume point
+    /// current. These change when someone moves a control and not otherwise,
+    /// so writing them on that schedule would be a write per second to record
+    /// that nothing had happened.
+    ///
+    /// Volume was already a column here and was never written to it -- the
+    /// resume point saved position and playing state and quietly left the
+    /// level behind, so it came back at full scale every start.
+    pub fn save_settings(&self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64)
+        -> Result<(), DbError>
+    {
+        self.conn
+            .execute(
+                "INSERT INTO player_state (id, volume, skip_fade_ms, skip_lead_ms, updated_at)
+                 VALUES (1, ?1, ?2, ?3, datetime('now'))
+                 ON CONFLICT(id) DO UPDATE SET
+                     volume = excluded.volume,
+                     skip_fade_ms = excluded.skip_fade_ms,
+                     skip_lead_ms = excluded.skip_lead_ms,
+                     updated_at = excluded.updated_at",
+                rusqlite::params![volume as f64, skip_fade_ms as i64, skip_lead_ms as i64],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Volume, skip fade and skip lead as they were left.
+    ///
+    /// Absent columns and absent rows both mean "never saved", which is a
+    /// first run and not a fault: the caller keeps its defaults.
+    pub fn load_settings(&self) -> Option<(f32, u64, u64)> {
+        self.conn
+            .query_row(
+                "SELECT volume, skip_fade_ms, skip_lead_ms FROM player_state WHERE id = 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<f64>>(0)?.unwrap_or(1.0) as f32,
+                        r.get::<_, Option<i64>>(1)?.unwrap_or(crate::SKIP_FADE_MS as i64) as u64,
+                        r.get::<_, Option<i64>>(2)?.unwrap_or(crate::SKIP_LEAD_MS as i64) as u64,
+                    ))
+                },
+            )
+            .ok()
+    }
+
     pub fn save(&self, passage_id: Option<i64>, position_ms: u64, playing: bool)
         -> Result<(), DbError>
     {

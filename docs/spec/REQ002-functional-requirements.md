@@ -195,7 +195,7 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 >
 > **The HTTP surface has no authentication of any kind** *(security, decision needed)*. Anyone on the network can play, skip, reorder and browse the library. That may be right for a home LAN, but it should be a recorded decision rather than an accident.
 >
-> **`skip_fade_ms` and `skip_lead_ms` do not survive a restart** *(small)*. Volume does; the resume row is the obvious home for both.
+> ~~**`skip_fade_ms` and `skip_lead_ms` do not survive a restart**~~ *(resolved by `[REQ-VIS-155]`, which found volume did not persist either)*.
 >
 > **Several audible choices have never been listened to** *(needs ears, not development)*: the skip fade curve `Exponential` against `Cosine` and `Linear`; whether 72 dB of fader travel gives enough resolution where the listening actually happens; whether 1.5 s of crossfade overlap on a skip reads as a transition or a muddle; and whether losing the mute detent at the bottom of the fader matters. Each is a one-word or one-constant change.
 >
@@ -344,6 +344,14 @@ Ordering is by disc, then track number, then title. **Unnumbered tracks sort aft
 > **The controls sit to the left of the title, in fixed-width columns**, ordered × then ↑ then ↓. A column of identical buttons is one target to learn; buttons that shift with the length of a title are three. The list markers went with them — a number in front of the controls would put two unrelated things in the same column.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
+
+**`[REQ-VIS-155]` What the listener sets, the player remembers.** Master volume, skip fade and skip lead survive a restart. They are written the moment a control moves rather than on the resume point's one-second timer: they change when a hand moves them and not otherwise, so saving them on that schedule would be a write per second to record that nothing had happened — and a setting that survives everything except a crash before the next tick is not really saved.
+
+> **Volume already had a column and was never written to it.** The resume row saved position and playing state and quietly left the level behind, so it came back at full scale every start. That had been true since the row existed, and reads as "it persists" from the schema alone.
+>
+> Values from disk are clamped exactly as values from the network are — a number that has been sitting in a file deserves no more trust than one that just arrived.
+>
+> Verified across a real restart: −24.5 dB, 6 s fade and 1.2 s lead were set, the player stopped and started, and all three came back unchanged.
 
 **`[REQ-VIS-160]` The listening surface is skinnable, and the skin is the only part that may differ.** A skin is three files — `skin.html`, `skin.css`, `skin.js` — and nothing else. It never opens a socket, never builds a URL, and never carries a copy of a control law.
 

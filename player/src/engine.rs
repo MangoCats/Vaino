@@ -300,10 +300,12 @@ impl Engine {
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetSkipFade(ms)) => {
                     self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
+                    self.remember_settings();
                 }
                 Ok(Command::SetSkipLead(ms)) => {
                     self.skip_lead_ms =
                         ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
+                    self.remember_settings();
                 }
                 Ok(Command::SetVolume(v)) => {
                     self.volume = v.clamp(0.0, 1.0);
@@ -312,6 +314,7 @@ impl Engine {
                     if let Some(o) = &self.out {
                         o.volume.set(self.volume);
                     }
+                    self.remember_settings();
                 }
                 Ok(Command::Enqueue(e)) => self.queue.push(e),
                 Ok(Command::EnqueueNext(e)) => self.queue.push_front(e),
@@ -464,6 +467,33 @@ impl Engine {
                 self.dropped.push(entry.passage_id);
             }
         }
+    }
+
+    /// Write the settings down, now rather than on a timer.
+    ///
+    /// They change when a hand moves a control, which is rare and deliberate,
+    /// and a setting that survives everything except the crash that happens
+    /// before the next tick is not really saved. Best-effort: failing to
+    /// record a volume must never interrupt the music.
+    fn remember_settings(&self) {
+        if let Some(store) = &self.store {
+            if let Err(e) = store.save_settings(self.volume, self.skip_fade_ms, self.skip_lead_ms)
+            {
+                eprintln!("save settings: {e}");
+            }
+        }
+    }
+
+    /// Put back what was last chosen. Clamped on the way in, because a value
+    /// from disk deserves no more trust than one from the network.
+    pub fn apply_settings(&mut self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64) {
+        self.volume = volume.clamp(0.0, 1.0);
+        if let Some(o) = &self.out {
+            o.volume.set(self.volume);
+        }
+        self.skip_fade_ms = skip_fade_ms.min(crate::SKIP_FADE_MAX_MS);
+        self.skip_lead_ms =
+            skip_lead_ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
     }
 
     /// Passages that were chosen but could not be opened, taken once.

@@ -166,6 +166,12 @@ impl Session {
 
     /// Hand the engine its store, its resume offset, and a full queue.
     pub fn prime(&mut self, engine: &mut Engine) {
+        // Before the store is handed over, since it is the thing that holds
+        // them: volume and the skip shape as they were last left
+        // `[REQ-VIS-155]`.
+        if let Some((v, fade, lead)) = self.store.as_ref().and_then(|s| s.load_settings()) {
+            engine.apply_settings(v, fade, lead);
+        }
         if let Some(s) = self.store.take() {
             engine.attach_store(s);
         }
