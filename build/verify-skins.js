@@ -231,8 +231,33 @@ async function run(skin) {
           'the title text is not a text node of its own');
   }
 
-  const ok = errors.length === 0 && posted.length === 2 && opts === skins.length
-             && posted[1] === '/volume/-18';
+  // A skin that moves settings behind a gear must be able to open it again.
+  // The controls stay in the DOM either way -- the bindings attach once at
+  // load -- so the check is that the panels actually swap.
+  const gear = window.document.getElementById('gear');
+  if (gear) {
+    const main = window.document.getElementById('panel-main');
+    const set = window.document.getElementById('panel-settings');
+    check(main && set, 'a gear needs both panels to switch between');
+    check(!main.hidden && set.hidden, 'settings must start closed');
+    gear.onclick();
+    check(main.hidden && !set.hidden, 'the gear must open the settings screen');
+    check(gear.getAttribute('aria-expanded') === 'true', 'aria-expanded must follow');
+    // The controls moved there must still be wired to the engine.
+    const fade = window.document.getElementById('skipfade');
+    check(fade && typeof fade.onchange === 'function',
+          'the skip control must still be bound after the move');
+    fade.value = 3;
+    fade.onchange();
+    check(posted.includes('/skip/fade/3000'),
+          `a moved control must still reach the engine, posted ${JSON.stringify(posted)}`);
+    gear.onclick();
+    check(!main.hidden && set.hidden, 'the gear must close it again');
+  }
+
+  const expectedPosts = gear ? 3 : 2;
+  const ok = errors.length === 0 && posted.length === expectedPosts
+             && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;
   console.log(
     `${skin.padEnd(11)} ${ok ? 'OK  ' : 'FAIL'}  ` +

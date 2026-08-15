@@ -12,6 +12,22 @@
   const showQueue = Vaino.bindQueue(
     $('queue'), q => (q.artist ? `${q.title} — ${q.artist}` : q.title));
 
+  // The settings screen `[REQ-VIS-160]`. The skip shape and the programme are
+  // set once and then left alone, so they no longer sit in the reading path
+  // between the transport and the queue.
+  //
+  // A panel swap rather than a second page: the settings are driven by the
+  // same snapshot as everything else, and a separate page would need its own
+  // socket to show the programme currently in force. Both panels stay in the
+  // DOM, so the bindings below attach once and keep working either way.
+  const gear = $('gear');
+  gear.onclick = () => {
+    const open = gear.getAttribute('aria-expanded') !== 'true';
+    gear.setAttribute('aria-expanded', String(open));
+    $('panel-main').hidden = open;
+    $('panel-settings').hidden = !open;
+  };
+
   // Seconds here, milliseconds on the wire: seconds are what the listener is
   // choosing, milliseconds are what the mixer counts in.
   const skipFade = $('skipfade'), skipLead = $('skiplead');

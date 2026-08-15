@@ -1,5 +1,7 @@
 <main>
   <h1>Vaino</h1>
+
+  <div id="panel-main">
   <div class="np">
     <img id="art" alt="" hidden>
     <div>
@@ -17,18 +19,6 @@
     <button data-cmd="skip">Skip</button>
     <label id="vol"><input type="range" id="volume" min="0" max="1" step="any" value="1"><span id="volnum">0.0 dB</span></label>
   </div>
-  <div class="skipcfg">
-    <label>skip fade <input type="number" id="skipfade" step="0.1"> s</label>
-    <label>next starts at <input type="number" id="skiplead" step="0.1"> s</label>
-    <span id="skipoverlap"></span>
-  </div>
-
-  <div class="progline">
-    <label for="prog">Programme</label>
-    <select id="prog"></select>
-    <span id="progmode"></span>
-  </div>
-
   <section>
     <h2>Up next</h2>
     <ol id="queue"><li class="empty">nothing queued</li></ol>
@@ -53,9 +43,36 @@
     <p id="stages"></p>
   </section>
 
+  </div><!-- /panel-main -->
+
+  <!-- Its own screen rather than a strip under the transport: these are
+       set once and then left alone, and they were taking the eye every
+       time it went to the queue. -->
+  <section id="panel-settings" hidden>
+    <h2>Settings</h2>
+    <div class="setting">
+      <label for="skipfade">Skip fade</label>
+      <span><input type="number" id="skipfade" step="0.1"> s</span>
+      <p>How long the outgoing track takes to fade when you skip.</p>
+    </div>
+    <div class="setting">
+      <label for="skiplead">Next starts at</label>
+      <span><input type="number" id="skiplead" step="0.1"> s</span>
+      <p id="skipoverlap"></p>
+    </div>
+    <div class="setting">
+      <label for="prog">Programme</label>
+      <span><select id="prog"></select></span>
+      <p id="progmode"></p>
+    </div>
+  </section>
+
   <div id="link">Connecting…</div>
 
-  <div class="skinbar"><a href="/browse">Browse the library →</a>
+  <div class="skinbar">
+    <button type="button" id="gear" aria-expanded="false"
+            title="Settings">⚙</button>
+    <a href="/browse">Browse the library →</a>
     <label for="skinpick">Skin</label>
     <select id="skinpick" data-skins></select></div>
 </main>
