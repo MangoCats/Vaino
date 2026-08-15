@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Apply a Gaia chain to lowlevel features, and check it against the reference.
 
 Route 2 `[GDE-FEX-067]`. The predictor and its verification are one tool on

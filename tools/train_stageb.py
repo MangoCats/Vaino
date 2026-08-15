@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [GDE-FEX-065] Route 3, step 2: distil AcousticBrainz's highlevel classifiers.
 

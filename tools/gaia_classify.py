@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Classify lowlevel features into the 71-dimension flavor vector.
 
 The production path for route 2 `[GDE-FEX-102]`: load the 18 Gaia chains once,

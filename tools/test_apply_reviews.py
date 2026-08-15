@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for `apply_reviews.py` `[REQ-LIB-165]`.
 
 This tool had no tests, and the first version of it could not apply anything

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Are the recording MBIDs on these passages actually right?
 
 Every name Vaino shows, every rotation decision and every play it records is

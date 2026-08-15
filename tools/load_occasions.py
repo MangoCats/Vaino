@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Load MuLibPlay's four seasonal curves as data `[SPEC-DIR-134]`.
 
 MuLibPlay hardcoded `[C]`, `[W]`, `[S]` and `[K]` into a `switch`, which is why

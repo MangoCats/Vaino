@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Check every recording MBID against the audio itself `[REQ-LIB-165]`.
 
 Every recording id in this library arrived the same way -- `source` on all

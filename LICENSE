@@ -1,3 +1,17 @@
+This repository holds two works under two licences. See LICENSING.md.
+
+  * Everything EXCEPT tools/ -- the Vaino player (player/), the specifications
+    (docs/) and the build checks (build/) -- is MIT, as set out below.
+
+  * tools/ is Sampo, the library builder, and is licensed under the GNU Affero
+    General Public License v3.0 or later. Its terms are in tools/LICENSE.
+
+The two never link: they are separate programs in separate languages that
+communicate only through a shared SQLite file. Nothing under AGPL is
+incorporated into the MIT-licensed player.
+
+----------------------------------------------------------------------------
+
 MIT License
 
 Copyright (c) 2026 Vaino Project Contributors

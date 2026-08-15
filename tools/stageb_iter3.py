@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [GDE-FEX-100] Stage B iteration 3: consolidate iteration 2's confirmed findings.
 

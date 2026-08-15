@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [LOG-I5-050] Recompute the reproducibility floor on OUR library.
 

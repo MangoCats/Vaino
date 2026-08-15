@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Repair `files.duration_ms` from the decoded length `[REQ-LIB-145]`.
 
 `[SPEC-SC-030]` specifies `duration_ms` as **decoded, not header-claimed**, and

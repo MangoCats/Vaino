@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Re-derive the pool parameters against the local library `[SPEC-DIR-200]`.
 
 `excl_pool`, `rand_pool` and `decay` were tuned by MuLibPlay over 8,116

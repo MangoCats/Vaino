@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 Documentation governance checks [GOV-DOC-010..040].
 

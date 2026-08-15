@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 Retrain the final Stage B model selection and PERSIST it [LOG-I5-030].
 

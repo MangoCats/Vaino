@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Sampo S3, release half: fill `releases` and `release_recordings` [SPEC-SA-030].
 
 Vaino knows 7,912 recordings and not one release, which is why every album name

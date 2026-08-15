@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [GDE-FEX-100] Stage B iteration 4: close the gap iteration 3 left open.
 

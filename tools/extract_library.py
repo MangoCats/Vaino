@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Extract lowlevel features and classify them into flavor `[GDE-FEX-102]`.
 
 Two stages, deliberately separate:

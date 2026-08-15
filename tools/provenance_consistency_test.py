@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [SPEC-FD-130] Does provenance consistency beat per-track accuracy?
 

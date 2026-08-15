@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [GDE-FEX-050] Tier 0 harvest: extract library flavor vectors from the archived
 AcousticBrainz highlevel dumps.

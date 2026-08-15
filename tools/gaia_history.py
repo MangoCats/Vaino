@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Read Gaia .history transformation chains [GDE-FEX-065] route 2.
 
 A .history file is a Qt QDataStream serialisation of the transformation chain

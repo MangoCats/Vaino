@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Sampo S3, third pass: the track listing of each chosen release.
 
 The browse endpoint that finds candidate releases returns `media` without the

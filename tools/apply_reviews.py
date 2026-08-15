@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Fold reviewed id decisions into the library `[REQ-LIB-165]`.
 
 The review page records judgements and changes nothing else. This is the step

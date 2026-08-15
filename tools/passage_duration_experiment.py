@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [SPEC-SA-090] Does slice duration degrade flavor?
 

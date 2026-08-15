@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Sampo S3, selection half: which release is a file actually from?
 
 A recording appears on many releases -- 86 of them for one track in this

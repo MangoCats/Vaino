@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Re-derive the flavor constants on locally extracted values `[SPEC-FD-090]`.
 
 `β_c` and `w_c` are properties of *a corpus scored by a particular pipeline*,
