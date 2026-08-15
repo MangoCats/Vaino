@@ -68,3 +68,13 @@ secrets/
 
 # Build-time only: the skin check renders into jsdom. Never shipped.
 node_modules/
+
+# Third-party model weights: 4.6 MB of ONNX, fetched by scratch/download_models.py.
+# Binary blobs age badly in a repository and these are reproducible.
+models/
+
+# Compiled output. The Go binaries are 34 MB of a closed evaluation.
+__pycache__/
+*.pyc
+go/vaino.exe
+go/vaino-arm64
