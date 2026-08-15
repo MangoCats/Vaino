@@ -78,6 +78,16 @@
   .opts li { display: flex; gap: .45rem; align-items: flex-start;
              padding: .3rem .1rem; }
   .opts input { margin: .3rem 0 0; width: 1.1rem; height: 1.1rem; flex: none; }
+  /* The label fills the row and is the click target. A 1.1rem radio is a poor
+     one on a phone, and the candidate reads as plain text until you find that
+     the whole line is selectable. */
+  .opts label { flex: 1; min-width: 0; cursor: pointer; }
+  .opts li:hover { background: rgba(128,128,128,.10); border-radius: 4px; }
+  .opts li:has(input:checked) { background: rgba(128,128,128,.16);
+                                border-radius: 4px; }
+  /* The "nothing to choose from" case: prose, not a dead option. */
+  .opts li.none { display: block; font-size: .875rem; opacity: .75;
+                  padding: .35rem .1rem; }
   .opts .pct { font-size: .75rem; opacity: .6; font-variant-numeric: tabular-nums; }
 
   .acts { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .6rem;

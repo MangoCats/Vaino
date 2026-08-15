@@ -455,16 +455,32 @@ async function runReview() {
 
   // A reassignment with nothing chosen must be impossible to send.
   check(btn('Use the match').disabled, '"Use the match" must start disabled');
+  check(/choose one/i.test(btn('Use the match').title || ''),
+        'a disabled button must say what would enable it');
   btn('Use the match').onclick();
   check(posted.length === 0, 'an unarmed reassignment must not post');
+
+  // Passage 22 has no candidates at all -- 23 of the 44 no-mbid cards on the
+  // real library are like this, and no-mbid leads the queue, so it is the
+  // first thing a reviewer meets. A control that can never work must not be
+  // offered: greyed says "not yet", and the truth is "not ever, here".
+  const noCand = cards().find(c => c.dataset.passage === '22');
+  const noCandUse = [...noCand.querySelectorAll('button')]
+                      .find(b => b.textContent === 'Use the match');
+  check(noCandUse && noCandUse.hidden,
+        '"Use the match" must be hidden when there is nothing to match to');
+  check(/nothing to compare|nothing here to reassign/i.test(noCand.textContent),
+        'a card with no candidates must say why, not just show an empty list');
 
   // Auditioning goes through the ordinary queue verb rather than a new route.
   btn('Play now').onclick();
   check(posted[0] === '/queue/21/now', `audition should queue the passage, got ${posted[0]}`);
 
+  // A real click, not a synthesised change event: dispatching `change` by
+  // hand proves the handler works, which is not the same as proving a person
+  // clicking the control reaches it.
   const radio = first.querySelector('input[type=radio]');
-  radio.checked = true;
-  radio.dispatchEvent(new window.Event('change', { bubbles: true }));
+  radio.click();
   check(!btn('Use the match').disabled, 'choosing a candidate must arm the button');
 
   // Choosing a candidate offers the albums it appears on. Without an answer

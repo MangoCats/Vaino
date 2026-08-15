@@ -106,8 +106,18 @@
       li.appendChild(el('span', 'pct', pct(s.score)));
       opts.appendChild(li);
     }
+    // Nothing to choose between. On this library that is 23 of the 44 `no-mbid`
+    // cards and every `unverified` one -- and `no-mbid` leads the queue, so it
+    // is most likely the first thing anyone meets. Say what the card is for
+    // instead of leaving a dead control to be poked at.
     if (!(item.suggested || []).length) {
-      opts.appendChild(el('li', null, 'nothing named — the match carried no recording'));
+      opts.appendChild(el('li', 'none',
+        item.severity === 'no-mbid'
+          ? 'This passage carries no MusicBrainz id, and AcoustID does not ' +
+            'recognise the audio either — so there is nothing here to reassign ' +
+            'it to. It needs identifying by hand, or a better fingerprint.'
+          : 'AcoustID has no entry for this audio. That is not evidence for or ' +
+            'against the stored id — there is simply nothing to compare.'));
     }
     theirs.appendChild(opts);
     claims.appendChild(theirs);
@@ -174,11 +184,23 @@
     const keep = el('button', null, 'Keep ours');
     const later = el('button', null, 'Decide later');
 
+    const hasCandidates = (item.suggested || []).length > 0;
+    // A control that can never work should not be offered at all. Presenting it
+    // greyed says "not yet"; the truth is "not ever, on this card".
+    if (!hasCandidates) use.hidden = true;
+
     opts.addEventListener('change', () => {
       const p = picked();
       use.disabled = !p;
+      // Why it is disabled, where the disabled thing is. Without this the
+      // precondition is invisible: the radios read as decoration, and the
+      // button reads as broken.
+      use.title = p ? 'record this as the right recording'
+                    : 'choose one of the matches above first';
       if (p) offerAlbums(p.value);
     });
+    use.title = hasCandidates ? 'choose one of the matches above first'
+                              : 'nothing to reassign this to';
     const picked = () =>
       box.querySelector(`input[name="pick-${item.passage_id}"]:checked`);
 
