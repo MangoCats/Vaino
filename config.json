@@ -1,8 +1,0 @@
-{
-  "music_dir": "C:\\Users\\Mango Cat\\Music",
-  "db_path": "vaino.db",
-  "host": "0.0.0.0",
-  "port": 8000,
-  "volume": 80,
-  "supported_extensions": [".mp3", ".flac", ".wav", ".ogg", ".m4a"]
-}

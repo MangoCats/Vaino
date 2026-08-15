@@ -157,14 +157,14 @@ Two deliberate, documented asymmetries worth preserving:
 
 That is not agreement — that is **copying**. **7,481 of 8,215 rows (91%) are bit-identical** to MuLibPlay's values to within 1e-6. Only **292 rows (3.6%)** carry the ONNX extractor's signature (3-decimal rounding, `[0.02, 0.98]` clamp). The claim that Essentia/ONNX replaced AcousticBrainz was never tested at scale; the data looks excellent only because it was borrowed from its predecessor.
 
-**`[GDE-V1-020]` The ONNX extractor is technically broken.** [src/audio/onnx_extractor.py](../src/audio/onnx_extractor.py), four independent defects, any one of which invalidates the output:
+**`[GDE-V1-020]` The ONNX extractor is technically broken.** [src/audio/onnx_extractor.py](https://github.com/MangoCats/Vaino/blob/archive/v1-python-and-go-evaluation/src/audio/onnx_extractor.py), four independent defects, any one of which invalidates the output:
 
 1. **Decimation is not resampling.** `samples[::int(sr/16000)]` gives `step = 2` for 44.1 kHz → **22,050 Hz**, then labels it 16,000 Hz. No anti-alias filter, so the result is aliased *and* time-scaled.
 2. **A 3-second sample stands in for the whole track.** 187 frames × 256 hop ≈ 2.99 s, taken from the file's midpoint. AcousticBrainz aggregates over the entire recording.
 3. **Wrong compression.** `log10(max(1e-5, magnitude))` on an unnormalized filterbank, where Essentia's `TensorflowInputMusiCNN` uses `log10(1 + 10000·x)` on normalized power mel. MusicNN receives out-of-distribution input.
 4. **Discrimination discarded** by clamping to `[0.02, 0.98]` and rounding to 3 decimals.
 
-**`[GDE-V1-030]` The lag has one cause: whole-file decode.** `AudioEngine._load_audio_file` calls `miniaudio.decode_file(file_path)` — the entire file into a NumPy array — while holding `self._lock`, from a synchronous FastAPI handler ([engine.py:226](../src/audio/engine.py)). Play/skip latency is therefore proportional to *whole-file* decode time.
+**`[GDE-V1-030]` The lag has one cause: whole-file decode.** `AudioEngine._load_audio_file` calls `miniaudio.decode_file(file_path)` — the entire file into a NumPy array — while holding `self._lock`, from a synchronous FastAPI handler ([engine.py:226](https://github.com/MangoCats/Vaino/blob/archive/v1-python-and-go-evaluation/src/audio/engine.py)). Play/skip latency is therefore proportional to *whole-file* decode time.
 
 For this library's largest file (244.9 min): **~2.6 GB** decoded at int16, **~5.2 GB** at float32. That is not slow on a Pi Zero 2W — it is impossible. Compare McRhythm's 5.3 MB streaming buffer `[GDE-MCR-020]`. **A ~1000× memory difference.**
 
