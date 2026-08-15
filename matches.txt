@@ -1,0 +1,168 @@
+C:\Users\Mango Cat\Dev\MuLibPlay\albumController.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\artistController.cpp:
+  QList<qint32> trackList = de->tracksByArtist( artistId );
+
+  foreach ( qint32 trackId, trackList )
+
+C:\Users\Mango Cat\Dev\MuLibPlay\cut.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\database.cpp:
+  td.append( STR_PAIR { "programId"          , "INTEGER PRIMARY KEY" } );
+
+  td.append( STR_PAIR { "trackList"          , "TEXT"                } );
+
+  checkTable( "programs", td );
+
+C:\Users\Mango Cat\Dev\MuLibPlay\debugController.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\description.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\filedownloader.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\global.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\main.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\maintController.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\mulibController.cpp:
+      bool  timedProgram = false;
+
+            if ( i.key() == "timedProgram" )
+
+              timedProgram = true;
+
+            if ( timedProgram )
+
+            body.append( QString( "<p><input type='checkbox' id='timedProgram' name='timedProgram' value='true'%1/><label for='timedProgram'> Autoselect by clock time</label></p>" ).arg( po->md->autoSelectStation ? " checked" : "" ) );
+
+C:\Users\Mango Cat\Dev\MuLibPlay\musicdirector.cpp:
+  query.prepare( "SELECT * FROM programs;" );
+
+        { QStringList tids = query.value( "trackList" ).toString().split( QChar('\n'), QString::SkipEmptyParts );
+
+  query.prepare( "SELECT * FROM programs;" );
+
+ *   typically called once at program start then the structures are updated as each
+
+{ QList<qint32>trackList = coreTracks;
+
+  if ( trackList.size() <= maxSeeds )
+
+    return trackList;
+
+  foreach ( qint32 trackId, trackList )
+
+//   foreach ( qint32 track, trackList )
+
+  foreach ( qint32 trackId, trackList )
+
+  if ( artistList.size() < trackList.size() )
+
+                  { trackList.removeAll( aTrackId );
+
+                    if ( trackList.size() <= maxSeeds )
+
+                      return trackList;
+
+  // trackList = playtimeTrackMap.values().mid( 0, maxSeeds );
+
+  // foreach ( qint32 track, trackList )
+
+C:\Users\Mango Cat\Dev\MuLibPlay\playout.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\radioController.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\requestmapper.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\sigwatch.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\trackController.cpp:
+  QList<qint32> trackList = de->tracksByArtist( artistId );
+
+  foreach ( qint32 trackId, trackList )
+
+    { body.append( "<form action='/mulib' method='get' id='trackList'>\n" );
+
+        { body.append( "<form action='/mulib' method='get' id='trackList'>\n" );
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpconnectionhandler.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpconnectionhandlerpool.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpcookie.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpglobal.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httplistener.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httprequest.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httprequesthandler.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpresponse.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpsession.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpsessionstore.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\staticfilecontroller.cpp:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\albumController.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\artistController.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\cut.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\database.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\debugController.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\description.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\filedownloader.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\global.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\maintController.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\mulibController.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\musicdirector.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\playout.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\radioController.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\requestmapper.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\sigwatch.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\trackController.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpconnectionhandler.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpconnectionhandlerpool.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpcookie.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpglobal.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httplistener.h:
+      separate QSettings instance that is not used by other parts of the program.
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httprequest.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httprequesthandler.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpresponse.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpsession.h:
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\httpsessionstore.h:
+      separate QSettings instance that is not used by other parts of the program.
+
+C:\Users\Mango Cat\Dev\MuLibPlay\httpserver\staticfilecontroller.h:
+      separate QSettings instance that is not used by other parts of the program.
+

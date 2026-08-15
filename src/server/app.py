@@ -20,6 +20,24 @@ logger = logging.getLogger(__name__)
 class VolumePayload(BaseModel):
     volume: float
 
+class ProgramPayload(BaseModel):
+    name: str
+    start_time: str
+    track_ids: str = ""
+
+class TrackRatingsPayload(BaseModel):
+    rotation: Optional[float] = None
+    recovery: Optional[float] = None
+    restraint: Optional[float] = None
+    profanity: Optional[float] = None
+    occasions: Optional[str] = None
+
+class ArtistRatingsPayload(BaseModel):
+    rotation: Optional[float] = None
+    recovery: Optional[float] = None
+    restraint: Optional[float] = None
+    streak_length: Optional[float] = None
+
 def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, skip_throttle_seconds: float = 5.0) -> FastAPI:
     app = FastAPI(title="Vaino Audio Engine & Server", version="0.1.0")
     manager = ConnectionManager()
@@ -176,6 +194,124 @@ def create_app(db: Database, audio_engine: AudioEngine, scanner: MediaScanner, s
     def set_volume(payload: VolumePayload):
         audio_engine.set_volume(payload.volume)
         return audio_engine.get_status()
+
+    @app.get("/api/v1/programs")
+    def get_programs():
+        programs = db.get_all_programs()
+        pd = getattr(audio_engine, 'program_director', None)
+        if not pd and db:
+            from src.audio.selector import ProgramDirector
+            pd = ProgramDirector(db)
+            audio_engine.program_director = pd
+
+        active_prog = pd.get_active_program() if pd else None
+        active_id = active_prog['id'] if active_prog else None
+        
+        results = []
+        for p in programs:
+            target_vec = pd.compute_program_target_vector(p) if pd else None
+            p_dict = dict(p)
+            p_dict["is_active"] = (p["id"] == active_id)
+            p_dict["target_vector"] = target_vec
+
+            # Resolve full track title, artist, album for reference_tracks
+            t_ids = [tid.strip() for tid in (p.get("track_ids") or "").split("\n") if tid.strip()]
+            ref_tracks = []
+            if t_ids:
+                conn_tmp = db.get_connection()
+                try:
+                    for tid in t_ids:
+                        t_row = conn_tmp.execute("SELECT id, title, artist, album, duration_ms FROM tracks WHERE id = ?", (tid,)).fetchone()
+                        if t_row:
+                            ref_tracks.append(dict(t_row))
+                finally:
+                    db.close_connection(conn_tmp)
+            p_dict["reference_tracks"] = ref_tracks
+
+            results.append(p_dict)
+        return {
+            "programs": results,
+            "active_program_id": active_id,
+            "use_clock_autoselect": getattr(audio_engine.program_director, 'use_clock_autoselect', True) if hasattr(audio_engine, 'program_director') else True
+        }
+
+    @app.post("/api/v1/programs")
+    def create_program(payload: ProgramPayload):
+        prog = db.save_program(payload.name, payload.start_time, payload.track_ids)
+        return prog
+
+    @app.put("/api/v1/programs/{program_id}")
+    def update_program(program_id: int, payload: ProgramPayload):
+        prog = db.update_program(program_id, payload.name, payload.start_time, payload.track_ids)
+        if not prog:
+            raise HTTPException(status_code=404, detail="Program not found")
+        return prog
+
+    @app.delete("/api/v1/programs/{program_id}")
+    def delete_program(program_id: int):
+        success = db.delete_program(program_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Program not found")
+        return {"status": "deleted"}
+
+    @app.post("/api/v1/programs/import-mulib")
+    def import_mulib_programs():
+        count = db.import_mulib_programs()
+        return {"imported": count, "programs": db.get_all_programs()}
+
+    @app.post("/api/v1/programs/toggle-autoselect")
+    def toggle_program_autoselect(payload: dict):
+        enabled = payload.get("enabled", True)
+        if hasattr(audio_engine, 'program_director'):
+            audio_engine.program_director.use_clock_autoselect = enabled
+        return {"use_clock_autoselect": enabled}
+
+    @app.get("/api/v1/ratings/track/{track_id}")
+    def get_track_ratings(track_id: str):
+        ratings = db.get_track_ratings(track_id)
+        if not ratings:
+            raise HTTPException(status_code=404, detail="Track not found")
+        return ratings
+
+    @app.put("/api/v1/ratings/track/{track_id}")
+    def update_track_ratings(track_id: str, payload: TrackRatingsPayload):
+        res = db.update_track_ratings(
+            track_id=track_id,
+            rotation=payload.rotation,
+            recovery=payload.recovery,
+            restraint=payload.restraint,
+            profanity=payload.profanity,
+            occasions=payload.occasions
+        )
+        if not res:
+            raise HTTPException(status_code=404, detail="Track not found")
+        return res
+
+    @app.get("/api/v1/ratings/artist/{artist_name}")
+    def get_artist_ratings(artist_name: str):
+        return db.get_artist_ratings(artist_name)
+
+    @app.put("/api/v1/ratings/artist/{artist_name}")
+    def update_artist_ratings(artist_name: str, payload: ArtistRatingsPayload):
+        return db.update_artist_ratings(
+            artist_name=artist_name,
+            rotation=payload.rotation,
+            recovery=payload.recovery,
+            restraint=payload.restraint,
+            streak_length=payload.streak_length
+        )
+
+    @app.get("/api/v1/ratings/artists")
+    def get_all_artist_ratings():
+        return db.get_all_artist_ratings()
+
+    @app.post("/api/v1/ratings/import-mulib")
+    def import_mulib_preferences(payload: Optional[dict] = None):
+        mulib_path = (payload or {}).get("mulib_path", r"C:\Users\Mango Cat\Dev\MuLibPlay\mulib.db")
+        res = db.import_mulib_preferences(mulib_path)
+        if res.get("status") == "ERROR":
+            raise HTTPException(status_code=400, detail=res.get("error"))
+        return res
 
     @app.get("/api/v1/library/tracks")
     def list_tracks(limit: int = 100, offset: int = 0, query: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None, letter: Optional[str] = None):

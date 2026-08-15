@@ -20,7 +20,45 @@ CREATE TABLE IF NOT EXISTS tracks (
     artist_sort_name TEXT,
     album_sort_name TEXT,
     title_sort_name TEXT,
+    ab_acoustic REAL,
+    ab_aggressive REAL,
+    ab_bright REAL,
+    ab_danceable REAL,
+    ab_female REAL,
+    ab_happy REAL,
+    ab_instrumental REAL,
+    ab_party REAL,
+    ab_relaxed REAL,
+    ab_sad REAL,
+    ab_tonal REAL,
+    play_count INTEGER DEFAULT 0,
+    last_played_at DATETIME DEFAULT NULL,
+    rotation REAL DEFAULT 0.0,
+    recovery REAL DEFAULT 0.778,
+    restraint REAL DEFAULT 0.0,
+    profanity REAL DEFAULT 0.0,
+    occasions TEXT DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS artist_ratings (
+    artist_id TEXT PRIMARY KEY,
+    artist_name TEXT NOT NULL UNIQUE,
+    artist_sort_name TEXT NOT NULL,
+    play_count INTEGER DEFAULT 0,
+    last_played_at DATETIME DEFAULT NULL,
+    rotation REAL DEFAULT 0.778,
+    recovery REAL DEFAULT 0.778,
+    restraint REAL DEFAULT 0.0,
+    streak_length REAL DEFAULT 0.0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS track_relations (
+    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    related_track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    relationship_weight REAL DEFAULT 1.0,
+    PRIMARY KEY (track_id, related_track_id)
 );
 
 CREATE TABLE IF NOT EXISTS track_audio_descriptors (
@@ -44,9 +82,17 @@ CREATE TABLE IF NOT EXISTS play_history (
     completed BOOLEAN DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS programs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    start_time TEXT NOT NULL,
+    track_ids TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_file_path ON tracks(file_path);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
+
 
 CREATE TABLE IF NOT EXISTS track_artists (
     track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,

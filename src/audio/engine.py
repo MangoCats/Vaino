@@ -7,6 +7,7 @@ import sounddevice as sd
 import miniaudio
 
 from .crossfader import DualBufferCrossfader, calculate_ramp
+from .selector import ProgramDirector
 from ..db.database import Database
 
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +20,7 @@ class AudioEngine:
     """
     def __init__(self, db: Optional[Database] = None, on_state_change: Optional[Callable[[], None]] = None):
         self.db = db
+        self.program_director = ProgramDirector(db) if db else None
         self.state = "IDLE"  # IDLE, PLAYING, PAUSED, STOPPED
         self.volume = 0.8    # 0.0 to 1.0
         self.current_track: Optional[Dict[str, Any]] = None
@@ -301,6 +303,11 @@ class AudioEngine:
                 self._stream.start()
 
             self.state = "PLAYING"
+            if self.db and self.current_track and self.current_track.get("id"):
+                try:
+                    self.db.record_play(self.current_track["id"])
+                except Exception as rperr:
+                    logger.debug(f"Error recording play statistics: {rperr}")
             self._replenish_queue_if_needed()
 
         self._notify_state_change()

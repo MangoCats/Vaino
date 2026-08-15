@@ -438,9 +438,24 @@ function switchView(targetView) {
     const targetBlock = document.getElementById(`view-container-${targetView}`);
     if (targetBlock) targetBlock.style.display = 'block';
 
-    if (targetView === 'tracks') fetchLibrary(1);
-    else if (targetView === 'artists') fetchArtists();
-    else if (targetView === 'albums') fetchAlbums(currentArtistFilter);
+    const letterBar = document.getElementById('letter-nav-bar');
+    const searchBox = document.querySelector('.search-box');
+    const breadcrumbBar = document.getElementById('filter-breadcrumb-bar');
+    const countBadge = document.getElementById('library-count-badge');
+
+    if (targetView === 'programs') {
+        if (letterBar) letterBar.style.display = 'none';
+        if (searchBox) searchBox.style.display = 'none';
+        if (breadcrumbBar) breadcrumbBar.style.display = 'none';
+        if (countBadge) countBadge.textContent = 'Time-of-Day Rotation Slots';
+        loadPrograms();
+    } else {
+        if (letterBar) letterBar.style.display = 'flex';
+        if (searchBox) searchBox.style.display = 'block';
+        if (targetView === 'tracks') fetchLibrary(1);
+        else if (targetView === 'artists') fetchArtists();
+        else if (targetView === 'albums') fetchAlbums(currentArtistFilter);
+    }
 }
 
 function renderLibrary(tracks, offset = 0) {
@@ -732,7 +747,7 @@ function renderQueue(currentTrack, queueList) {
         const isLast = actualIdx === totalQueued - 1;
 
         return `
-            <div class="queue-item-card">
+            <div class="queue-item-card" data-queue-idx="${actualIdx}" data-title="${escapeHtml(item.title)}">
                 <div class="queue-item-details">
                     <img src="${artSrc}" class="queue-item-art">
                     <div class="queue-item-text">
@@ -744,13 +759,38 @@ function renderQueue(currentTrack, queueList) {
                     ${!isFirst ? `<button class="btn-queue-action" onclick="moveQueueItem(${actualIdx}, ${actualIdx - 1})" title="Move Up">▲</button>` : ''}
                     ${!isLast ? `<button class="btn-queue-action" onclick="moveQueueItem(${actualIdx}, ${actualIdx + 1})" title="Move Down">▼</button>` : ''}
                     <button class="btn-queue-action" onclick="openDescriptorsModal('${item.id}')" title="View Acoustic Descriptors">🧠</button>
-                    <button class="btn-queue-action btn-queue-delete" onclick="removeQueueItem(${actualIdx})" title="Remove from Queue">🗑</button>
+                    <button class="btn-queue-action btn-queue-delete" onclick="removeQueueItem(${actualIdx}, event)" title="Remove from Queue">🗑</button>
                 </div>
             </div>
         `;
     }).join('');
 
     updateQueuePagination(totalQueued);
+}
+
+function showToast(message) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'toast-notification';
+    toast.innerHTML = `<span>${escapeHtml(message)}</span>`;
+    container.appendChild(toast);
+
+    requestAnimationFrame(() => {
+        toast.classList.add('toast-visible');
+    });
+
+    setTimeout(() => {
+        toast.classList.remove('toast-visible');
+        setTimeout(() => {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 350);
+    }, 3000);
 }
 
 function updateQueuePagination(totalQueued) {
@@ -784,6 +824,7 @@ async function enqueueTrack(trackId, playNext = false) {
             body: JSON.stringify({ track_id: trackId, play_next: playNext })
         });
         const status = await res.json();
+        showToast(playNext ? '➕ Track added to play next' : '📥 Track added to queue');
         updateUI(status);
     } catch (e) {
         console.error('Error enqueuing track:', e);
@@ -798,6 +839,7 @@ async function enqueueAlbum(albumName, playNext = false) {
             body: JSON.stringify({ album_name: albumName, play_next: playNext })
         });
         const status = await res.json();
+        showToast(playNext ? `➕ Album "${albumName}" added next` : `📥 Album "${albumName}" added to queue`);
         updateUI(status);
     } catch (e) {
         console.error('Error enqueuing album:', e);
@@ -818,13 +860,34 @@ async function moveQueueItem(fromIndex, toIndex) {
     }
 }
 
-async function removeQueueItem(index) {
+async function removeQueueItem(index, event) {
+    let cardEl = null;
+    if (event && event.target) {
+        cardEl = event.target.closest('.queue-item-card');
+    }
+    if (!cardEl) {
+        cardEl = document.querySelector(`.queue-item-card[data-queue-idx="${index}"]`);
+    }
+
+    let trackTitle = '';
+    if (cardEl) {
+        trackTitle = cardEl.getAttribute('data-title') || '';
+        cardEl.classList.add('queue-item-removing');
+    }
+
+    if (trackTitle) {
+        showToast(`🗑 Removed "${trackTitle}" from queue`);
+    } else {
+        showToast(`🗑 Track removed from queue`);
+    }
+
     try {
         const res = await fetch(`/api/v1/queue/remove/${index}`, { method: 'DELETE' });
         const status = await res.json();
         updateUI(status);
     } catch (e) {
         console.error('Error removing queue item:', e);
+        if (cardEl) cardEl.classList.remove('queue-item-removing');
     }
 }
 
@@ -832,6 +895,7 @@ async function clearQueue() {
     try {
         const res = await fetch('/api/v1/queue/clear', { method: 'DELETE' });
         const status = await res.json();
+        showToast('🗑 Queue cleared');
         updateUI(status);
     } catch (e) {
         console.error('Error clearing queue:', e);
@@ -1149,6 +1213,426 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+// --- Time-of-Day Programs & Slot Editor Management ---
+let currentPrograms = [];
+let editingProgramRefTrackIds = [];
+
+async function loadPrograms() {
+    const gridEl = document.getElementById('programs-grid');
+    if (!gridEl) return;
+
+    try {
+        const res = await fetch('/api/v1/programs');
+        if (!res.ok) throw new Error('Failed to load programs');
+        const data = await res.json();
+
+        currentPrograms = data.programs || [];
+        const activeId = data.active_program_id;
+        const toggleEl = document.getElementById('autoselect-toggle');
+        if (toggleEl) {
+            toggleEl.checked = data.use_clock_autoselect !== false;
+        }
+
+        renderProgramsTimeline(currentPrograms, activeId);
+        renderProgramsGrid(currentPrograms, activeId);
+    } catch (e) {
+        gridEl.innerHTML = `<div class="loading-cell" style="color: var(--danger-color);">Error loading programs: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function getEffectiveTimeRanges(programs) {
+    if (!programs || programs.length === 0) return {};
+    const sorted = [...programs].sort((a, b) => a.start_time.localeCompare(b.start_time));
+    const ranges = {};
+    for (let i = 0; i < sorted.length; i++) {
+        const curr = sorted[i];
+        const next = sorted[(i + 1) % sorted.length];
+        ranges[curr.id] = {
+            start: curr.start_time,
+            end: next.start_time,
+            label: `${curr.start_time} – ${next.start_time}`
+        };
+    }
+    return ranges;
+}
+
+function renderProgramsTimeline(programs, activeId) {
+    const barEl = document.getElementById('programs-timeline-bar');
+    if (!barEl) return;
+    if (!programs || programs.length === 0) {
+        barEl.innerHTML = '<div style="padding: 10px; color: var(--text-muted);">No time slot programs configured.</div>';
+        return;
+    }
+
+    const sorted = [...programs].sort((a, b) => a.start_time.localeCompare(b.start_time));
+    const parseMins = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+    const firstStartMins = parseMins(sorted[0].start_time);
+    const lastProg = sorted[sorted.length - 1];
+
+    let html = '';
+
+    // 1. Midnight Wrap-Around Segment (00:00 to first start time)
+    if (firstStartMins > 0) {
+        const pctWidth = (firstStartMins / 1440) * 100;
+        const isActive = lastProg.id === activeId;
+        html += `
+            <div class="timeline-segment ${isActive ? 'active' : ''}" style="width: ${pctWidth.toFixed(2)}%;" title="${escapeHtml(lastProg.name)} (00:00 - ${sorted[0].start_time})">
+                <span class="segment-name">${escapeHtml(lastProg.name)}</span>
+                <span class="segment-time">00:00 – ${sorted[0].start_time}</span>
+            </div>
+        `;
+    }
+
+    // 2. Main Segments across the day (04:00 to 24:00)
+    for (let i = 0; i < sorted.length; i++) {
+        const p = sorted[i];
+        const startMins = parseMins(p.start_time);
+        const nextStartMins = (i < sorted.length - 1) ? parseMins(sorted[i + 1].start_time) : 1440;
+        const durationMins = nextStartMins - startMins;
+        const pctWidth = (durationMins / 1440) * 100;
+        const isActive = p.id === activeId;
+        const endLabel = (i < sorted.length - 1) ? sorted[i + 1].start_time : '24:00';
+
+        html += `
+            <div class="timeline-segment ${isActive ? 'active' : ''}" style="width: ${pctWidth.toFixed(2)}%;" title="${escapeHtml(p.name)} (${p.start_time} - ${endLabel})">
+                <span class="segment-name">${escapeHtml(p.name)}</span>
+                <span class="segment-time">${p.start_time} – ${endLabel}</span>
+            </div>
+        `;
+    }
+
+    barEl.innerHTML = html;
+}
+
+function renderProgramsGrid(programs, activeId) {
+    const gridEl = document.getElementById('programs-grid');
+    if (!gridEl) return;
+    if (!programs || programs.length === 0) {
+        gridEl.innerHTML = '<div class="loading-cell">No time-slot programs configured. Click "+ Add Time Slot" or "Re-sync Defaults".</div>';
+        return;
+    }
+
+    const effectiveRanges = getEffectiveTimeRanges(programs);
+
+    gridEl.innerHTML = programs.map(p => {
+        const isActive = p.id === activeId;
+        const refCount = p.track_ids ? p.track_ids.split('\n').filter(Boolean).length : 0;
+        const targetVec = p.target_vector || {};
+        const rangeLabel = effectiveRanges[p.id] ? effectiveRanges[p.id].label : p.start_time;
+
+        const getPct = (val) => (val !== undefined && val !== null) ? Math.round(val * 100) : 50;
+        const ac = getPct(targetVec.ab_acoustic);
+        const da = getPct(targetVec.ab_danceable);
+        const rx = getPct(targetVec.ab_relaxed);
+        const ag = getPct(targetVec.ab_aggressive);
+
+        return `
+            <div class="program-card ${isActive ? 'active-slot' : ''}" data-program-id="${p.id}">
+                <div class="program-card-header">
+                    <div class="program-title-group">
+                        <span class="program-name">${escapeHtml(p.name)}</span>
+                        <span class="program-time-badge">🕒 Effective: ${rangeLabel}</span>
+                    </div>
+                    ${isActive ? '<span class="active-pill">🔥 ACTIVE NOW</span>' : ''}
+                </div>
+
+                <div class="program-card-body">
+                    <div class="program-metric-row">
+                        <span class="metric-label">Seed Reference Tracks:</span>
+                        <span class="metric-val">${refCount} seed tracks</span>
+                    </div>
+
+                    <div class="profile-bars-grid">
+                        <div class="profile-bar-item">
+                            <span class="pbar-label">Acoustic: <strong>${ac}%</strong></span>
+                            <div class="pbar-track"><div class="pbar-fill" style="width: ${ac}%;"></div></div>
+                        </div>
+                        <div class="profile-bar-item">
+                            <span class="pbar-label">Danceable: <strong>${da}%</strong></span>
+                            <div class="pbar-track"><div class="pbar-fill" style="width: ${da}%;"></div></div>
+                        </div>
+                        <div class="profile-bar-item">
+                            <span class="pbar-label">Relaxed: <strong>${rx}%</strong></span>
+                            <div class="pbar-track"><div class="pbar-fill" style="width: ${rx}%;"></div></div>
+                        </div>
+                        <div class="profile-bar-item">
+                            <span class="pbar-label">Aggressive: <strong>${ag}%</strong></span>
+                            <div class="pbar-track"><div class="pbar-fill" style="width: ${ag}%;"></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="program-card-actions">
+                    <button class="btn-control btn-secondary btn-sm btn-edit-program" data-id="${p.id}">✏️ Edit Slot</button>
+                    <button class="btn-control btn-danger btn-sm btn-delete-program" data-id="${p.id}">🗑 Delete</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Program Event Listeners & Modals
+const programsGridEl = document.getElementById('programs-grid');
+if (programsGridEl) {
+    programsGridEl.addEventListener('click', (e) => {
+        const editBtn = e.target.closest('.btn-edit-program');
+        const delBtn = e.target.closest('.btn-delete-program');
+        if (editBtn) {
+            const pid = parseInt(editBtn.getAttribute('data-id'));
+            openProgramModal(pid);
+        } else if (delBtn) {
+            const pid = parseInt(delBtn.getAttribute('data-id'));
+            deleteProgramSlot(pid);
+        }
+    });
+}
+
+const btnAddProgram = document.getElementById('btn-add-program');
+if (btnAddProgram) btnAddProgram.addEventListener('click', () => openProgramModal(null));
+
+const btnImportMulibProgs = document.getElementById('btn-import-mulib-progs');
+if (btnImportMulibProgs) {
+    btnImportMulibProgs.addEventListener('click', async () => {
+        try {
+            const res = await fetch('/api/v1/programs/import-mulib', { method: 'POST' });
+            if (res.ok) {
+                loadPrograms();
+            }
+        } catch (e) {
+            console.error('Error importing mulib programs:', e);
+        }
+    });
+}
+
+const autoselectToggle = document.getElementById('autoselect-toggle');
+if (autoselectToggle) {
+    autoselectToggle.addEventListener('change', async (e) => {
+        try {
+            await fetch('/api/v1/programs/toggle-autoselect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: e.target.checked })
+            });
+        } catch (err) {
+            console.error('Error toggling autoselect:', err);
+        }
+    });
+}
+
+// Program Editor Modal Functions
+const programModalOverlay = document.getElementById('program-modal-overlay');
+const btnCloseProgramModal = document.getElementById('btn-close-program-modal');
+const btnCancelProgram = document.getElementById('btn-cancel-program');
+const programForm = document.getElementById('program-form');
+let editingProgramRefTracks = []; // List of track objects [{id, title, artist, album}, ...]
+
+function openProgramModal(programId = null) {
+    const titleEl = document.getElementById('program-modal-title');
+    const idInput = document.getElementById('program-id-input');
+    const nameInput = document.getElementById('program-name-input');
+    const timeInput = document.getElementById('program-time-input');
+
+    if (programId) {
+        const p = currentPrograms.find(prog => prog.id === programId);
+        if (p) {
+            titleEl.textContent = '🕒 Edit Time Slot Program';
+            idInput.value = p.id;
+            nameInput.value = p.name;
+            timeInput.value = p.start_time;
+            editingProgramRefTracks = p.reference_tracks ? [...p.reference_tracks] : [];
+        }
+    } else {
+        titleEl.textContent = '🕒 Create New Time Slot Program';
+        idInput.value = '';
+        nameInput.value = '';
+        timeInput.value = '12:00';
+        editingProgramRefTracks = [];
+    }
+
+    renderProgramRefTracks();
+    if (programModalOverlay) programModalOverlay.style.display = 'flex';
+}
+
+function renderProgramRefTracks() {
+    const listEl = document.getElementById('program-ref-tracks-list');
+    if (!listEl) return;
+
+    if (editingProgramRefTracks.length === 0) {
+        listEl.innerHTML = '<div class="empty-notice">No reference seed tracks added yet. Click "+ Add Track" below to pick reference songs.</div>';
+        return;
+    }
+
+    listEl.innerHTML = editingProgramRefTracks.map(t => `
+        <div class="ref-track-chip" data-id="${t.id}">
+            <div class="ref-track-details">
+                <span class="ref-track-title">🎵 ${escapeHtml(t.title)}</span>
+                <span class="ref-track-artist">by ${escapeHtml(t.artist)}${t.album ? ` • ${escapeHtml(t.album)}` : ''}</span>
+            </div>
+            <button type="button" class="btn-remove-ref" data-id="${t.id}" title="Remove seed track">✕</button>
+        </div>
+    `).join('');
+}
+
+function closeProgramModal() {
+    if (programModalOverlay) programModalOverlay.style.display = 'none';
+}
+
+if (btnCloseProgramModal) btnCloseProgramModal.addEventListener('click', closeProgramModal);
+if (btnCancelProgram) btnCancelProgram.addEventListener('click', closeProgramModal);
+
+if (programForm) {
+    programForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const idVal = document.getElementById('program-id-input').value;
+        const nameVal = document.getElementById('program-name-input').value.trim();
+        const timeVal = document.getElementById('program-time-input').value;
+        const trackIdsVal = editingProgramRefTracks.map(t => t.id).join('\n');
+
+        try {
+            const url = idVal ? `/api/v1/programs/${idVal}` : '/api/v1/programs';
+            const method = idVal ? 'PUT' : 'POST';
+            const res = await fetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: nameVal, start_time: timeVal, track_ids: trackIdsVal })
+            });
+
+            if (res.ok) {
+                closeProgramModal();
+                loadPrograms();
+            }
+        } catch (e) {
+            console.error('Error saving program:', e);
+        }
+    });
+}
+
+async function deleteProgramSlot(programId) {
+    if (!confirm('Are you sure you want to delete this time slot program?')) return;
+    try {
+        const res = await fetch(`/api/v1/programs/${programId}`, { method: 'DELETE' });
+        if (res.ok) {
+            loadPrograms();
+        }
+    } catch (e) {
+        console.error('Error deleting program:', e);
+    }
+}
+
+// Track Picker Modal Functions
+const pickerModalOverlay = document.getElementById('picker-modal-overlay');
+const btnClosePickerModal = document.getElementById('btn-close-picker-modal');
+const btnOpenTrackPicker = document.getElementById('btn-open-track-picker');
+const pickerSearchInput = document.getElementById('picker-search-input');
+const pickerResultsList = document.getElementById('picker-results-list');
+
+if (btnOpenTrackPicker) {
+    btnOpenTrackPicker.addEventListener('click', () => {
+        if (pickerModalOverlay) pickerModalOverlay.style.display = 'flex';
+        if (pickerSearchInput) {
+            pickerSearchInput.value = '';
+            pickerSearchInput.focus();
+            searchPickerTracks('');
+        }
+    });
+}
+
+if (btnClosePickerModal) {
+    btnClosePickerModal.addEventListener('click', () => {
+        if (pickerModalOverlay) pickerModalOverlay.style.display = 'none';
+    });
+}
+
+let pickerTimeout;
+if (pickerSearchInput) {
+    pickerSearchInput.addEventListener('input', (e) => {
+        clearTimeout(pickerTimeout);
+        pickerTimeout = setTimeout(() => searchPickerTracks(e.target.value), 250);
+    });
+}
+
+async function searchPickerTracks(query) {
+    if (!pickerResultsList) return;
+    try {
+        const res = await fetch(`/api/v1/library/tracks?limit=50&query=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        const tracks = data.tracks || [];
+
+        if (tracks.length === 0) {
+            pickerResultsList.innerHTML = '<div class="loading-cell">No matching tracks found in library.</div>';
+            return;
+        }
+
+        const selectedIds = editingProgramRefTracks.map(t => t.id);
+
+        pickerResultsList.innerHTML = `
+            <table class="picker-table">
+                <thead>
+                    <tr>
+                        <th>Track Title</th>
+                        <th>Artist(s)</th>
+                        <th>Album</th>
+                        <th>Duration</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tracks.map(t => {
+                        const isSelected = selectedIds.includes(t.id);
+                        return `
+                            <tr class="picker-row ${isSelected ? 'selected' : ''}">
+                                <td><strong class="picker-track-title">${escapeHtml(t.title)}</strong></td>
+                                <td><span class="picker-track-artist">${escapeHtml(t.artist)}</span></td>
+                                <td><span class="picker-track-album">${escapeHtml(t.album || '-')}</span></td>
+                                <td>${formatTime(t.duration_ms)}</td>
+                                <td>
+                                    <button type="button" class="btn-action-sm ${isSelected ? 'btn-selected' : 'btn-select-seed'}" data-id="${t.id}" data-title="${escapeHtml(t.title)}" data-artist="${escapeHtml(t.artist)}" data-album="${escapeHtml(t.album || '')}">
+                                        ${isSelected ? '✓ Added' : '+ Add to Slot'}
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (e) {
+        pickerResultsList.innerHTML = `<div class="loading-cell" style="color: var(--danger-color);">Error searching tracks: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+if (pickerResultsList) {
+    pickerResultsList.addEventListener('click', (e) => {
+        const addBtn = e.target.closest('.btn-select-seed');
+        if (addBtn) {
+            const tid = addBtn.getAttribute('data-id');
+            const title = addBtn.getAttribute('data-title');
+            const artist = addBtn.getAttribute('data-artist');
+            const album = addBtn.getAttribute('data-album');
+
+            if (!editingProgramRefTracks.some(t => t.id === tid)) {
+                editingProgramRefTracks.push({ id: tid, title, artist, album });
+                renderProgramRefTracks();
+                addBtn.textContent = '✓ Added';
+                addBtn.classList.remove('btn-select-seed');
+                addBtn.classList.add('btn-selected');
+            }
+        }
+    });
+}
+
+const refTracksListEl = document.getElementById('program-ref-tracks-list');
+if (refTracksListEl) {
+    refTracksListEl.addEventListener('click', (e) => {
+        const removeBtn = e.target.closest('.btn-remove-ref');
+        if (removeBtn) {
+            const tid = removeBtn.getAttribute('data-id');
+            editingProgramRefTracks = editingProgramRefTracks.filter(t => t.id !== tid);
+            renderProgramRefTracks();
+        }
+    });
+}
+
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
@@ -1157,3 +1641,4 @@ window.addEventListener('DOMContentLoaded', () => {
     fetchStatus();
     setInterval(fetchStatus, 2000); // Periodic fallback polling every 2s to guarantee 100% sync
 });
+

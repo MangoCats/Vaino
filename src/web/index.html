@@ -98,6 +98,7 @@
                         <button class="view-tab active" data-view="tracks">🎵 Tracks</button>
                         <button class="view-tab" data-view="artists">🎙️ Artists</button>
                         <button class="view-tab" data-view="albums">💿 Albums</button>
+                        <button class="view-tab" data-view="programs">🕒 Time-of-Day Programs</button>
                     </div>
 
                     <div class="search-box">
@@ -239,6 +240,40 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Programs Grid View Container -->
+                <div id="view-container-programs" class="view-content-block" style="display: none;">
+                    <!-- Programs Controls Header -->
+                    <div class="programs-top-bar">
+                        <div class="programs-toggle-group">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="autoselect-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="toggle-label">Autoselect by Clock Time</span>
+                        </div>
+                        <div class="programs-action-buttons">
+                            <button class="btn-control btn-secondary" id="btn-import-mulib-progs" title="Import default programs from MuLibPlay">🔄 Re-sync Defaults</button>
+                            <button class="btn-control btn-primary" id="btn-add-program">+ Add Time Slot</button>
+                        </div>
+                    </div>
+
+                    <!-- 24-Hour Clock Timeline Bar -->
+                    <div class="timeline-bar-container">
+                        <div class="timeline-label">24-Hour Time Slot Timeline</div>
+                        <div class="timeline-bar" id="programs-timeline-bar">
+                            <!-- Populated dynamically -->
+                        </div>
+                        <div class="timeline-clock-ticks">
+                            <span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span><span>23:59</span>
+                        </div>
+                    </div>
+
+                    <!-- Programs Cards Grid -->
+                    <div class="programs-grid" id="programs-grid">
+                        <div class="loading-cell">Loading time-slot programs...</div>
+                    </div>
+                </div>
             </section>
         </main>
     </div>
@@ -306,6 +341,66 @@
             </div>
             <div class="modal-body" id="descriptors-modal-body">
                 <div class="loading-cell">Loading audio descriptors...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Program Slot Editor Modal -->
+    <div class="modal-overlay" id="program-modal-overlay" style="display: none;">
+        <div class="modal-dialog program-modal">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h3 id="program-modal-title">🕒 Edit Time Slot Program</h3>
+                    <span class="modal-subtitle">Configure time boundary and reference seed tracks</span>
+                </div>
+                <button class="btn-icon-close" id="btn-close-program-modal" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <form id="program-form">
+                    <input type="hidden" id="program-id-input">
+                    <div class="form-group">
+                        <label for="program-name-input">Program Name:</label>
+                        <input type="text" id="program-name-input" class="form-input" placeholder="e.g. Morning Mellow" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="program-time-input">Start Time (HH:MM boundary):</label>
+                        <input type="time" id="program-time-input" class="form-input" required>
+                    </div>
+                    <div class="form-group">
+                        <div class="ref-tracks-header">
+                            <label>Reference Preference Tracks:</label>
+                            <button type="button" class="btn-control btn-secondary btn-sm" id="btn-open-track-picker">+ Add Track</button>
+                        </div>
+                        <div class="ref-tracks-list" id="program-ref-tracks-list">
+                            <div class="empty-notice">No reference seed tracks added yet.</div>
+                        </div>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn-control btn-secondary" id="btn-cancel-program">Cancel</button>
+                        <button type="submit" class="btn-control btn-primary">Save Time Slot</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Track Picker Search Modal -->
+    <div class="modal-overlay" id="picker-modal-overlay" style="display: none;">
+        <div class="modal-dialog picker-modal">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h3>🎵 Select Seed Track</h3>
+                    <span class="modal-subtitle">Search library for reference preference track</span>
+                </div>
+                <button class="btn-icon-close" id="btn-close-picker-modal" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="search-box">
+                    <input type="text" id="picker-search-input" placeholder="Search track title, artist, or album...">
+                </div>
+                <div class="picker-results-list" id="picker-results-list">
+                    <div class="loading-cell">Search tracks above...</div>
+                </div>
             </div>
         </div>
     </div>
