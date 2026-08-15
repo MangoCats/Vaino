@@ -141,17 +141,19 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 >
 > Recorded from the review of 2026-08-14 so they are not rediscovered from scratch. Each was judged, not missed.
 >
+> **Audited 2026-08-15**, because a debt list that reports finished work as outstanding is worse than no list: it spends the reader's attention on nothing and teaches them to distrust the rest of it. Every entry was checked against the code rather than against memory. Two had been resolved and are struck through with what settles them; two carried line counts that had drifted; one — the display-name rule — was found to be exactly right as written and left alone.
+>
 > **Position freezes briefly at a handover** *(cosmetic, accepted)*. When the passage being displayed leaves `live` before the next becomes audible, its reported position holds its last value instead of advancing. Bounded by the ring depth and invisible unless watched closely `[REQ-AUD-164]`.
 >
-> **A passage that fails to open is dropped by the engine but still counted as queued by the Director** *(correctness, outstanding)*. `prepare_next` advances past it while `note_queued` has already recorded it, so rotation history counts a passage that never played. Needs the engine to report dropped passages and the Director to forget them.
+> ~~**A passage that fails to open is dropped by the engine but still counted as queued by the Director**~~ *(correctness, resolved)*. `prepare_next` advanced past it while `note_queued` had already recorded it, so rotation history counted a passage that never played. The engine now collects them — `Engine::dropped`, pushed at both drop sites — and `take_dropped()` is drained in `session.rs`, which tells the Director to forget them. **Verified 2026-08-15**, by following the value from where it is pushed to where it is consumed.
 >
 > **The display-name rule is stated twice** *(SSOT, outstanding)*. `QueueEntry::title` resolves MusicBrainz → tag → **filename**; the browse SQL resolves MusicBrainz → tag and then filters the rest out. An untitled, unidentified passage therefore plays under its filename but is absent from Browse. Measured at **0 passages** on the present library, so it is latent rather than active `[REQ-VIS-170]`, `[REQ-VIS-180]`.
 >
-> **The three skins each carry the same behaviour** *(DRY, outstanding)*. Volume drag handling, queue rendering and the fader conversion appear in all three; the programme `<select>` rebuild in two. Roughly 200 lines that belong behind optional binders in `core.js`, leaving a fourth skin nothing to reimplement `[REQ-VIS-160]`.
+> ~~**The three skins each carry the same behaviour**~~ *(DRY, resolved)*. Volume drag handling, queue rendering and the fader conversion appeared in all three. They now live behind binders in `core.js` — `bindVolume`, `bindQueue`, `bindProgram`, `queueRow`, `showArt`, `named`, `badge` — and the three skins are 79, 166 and 85 lines, each calling into core ten to twelve times. **Verified 2026-08-15.** WinAmp remains the proof the contract is real: a fixed-width appliance with its own geometry and a scrolling title, needing nothing the document-shaped skins did not `[REQ-VIS-160]`.
 >
-> **`publish()` makes presentation policy inside the audio engine** *(maintainability, outstanding)*. Which passage the listener is on, and how much queue a display gets, are display decisions living in `engine.rs` at 722 lines.
+> **`publish()` makes presentation policy inside the audio engine** *(maintainability, outstanding)*. Which passage the listener is on, and how much queue a display gets, are display decisions living in `engine.rs` — **1,088 lines** as of 2026-08-15, not the 722 first recorded.
 >
-> **`web.rs` mixes routing, serialisation, browse, art and queue verbs** *(maintainability, deferred)*. Not urgent; treat as a priority at the next refactor, being the file most likely to keep growing.
+> **`db.rs` and `web.rs` each mix several concerns** *(maintainability, deferred)*. `web.rs` was named first at **837 lines** — routing, serialisation, browse, art and queue verbs. **`db.rs` is now the larger problem at 1,635 lines**, holding the read path (`Library`), the write path (`PlayerStore`), the browse SQL and the identification-review logic. Most of that growth is the id-review work of 2026-08-15, so the entry that predicted "the file most likely to keep growing" was right about the shape and wrong about the file. `db/browse.rs`, `db/review.rs` and `db/naming.rs` fall out along seams that already exist.
 >
 > ### Recorded 2026-08-15: recording ids are not trustworthy
 >
@@ -296,7 +298,7 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 >
 > **Nothing starts the player on boot** *(deployment)*. The Dockerfiles are build targets, not deployment.
 >
-> **Errors are invisible on an appliance** *(operability)*. Sixteen `eprintln!` sites across engine, session, output and tags — decode failures, dropped passages, unstorable tag rows — all to stderr, on a headless machine with no terminal. Underruns and lock failures now reach the UI; the same treatment for recent faults would make them findable without a shell.
+> **Errors are invisible on an appliance** *(operability)*. Seventeen `eprintln!` sites across engine, session, output and tags (sixteen when first counted; the settings writer added one) — decode failures, dropped passages, unstorable tag rows — all to stderr, on a headless machine with no terminal. Underruns and lock failures now reach the UI; the same treatment for recent faults would make them findable without a shell.
 >
 > **The HTTP surface has no authentication of any kind** *(security, decision needed)*. Anyone on the network can play, skip, reorder and browse the library. That may be right for a home LAN, but it should be a recorded decision rather than an accident.
 >
