@@ -236,6 +236,22 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 > **A decision is recorded; it is not applied.** Judgements go to `id_reviews`, which the player owns, and `tools/apply_reviews.py` folds accepted ones into `passage_recordings` as a separate, rehearse-by-default step. Reassigning an id changes what a passage *is*, and play history is keyed by recording — doing it silently from a web click would re-attribute every past play of it. It also leaves the read-only guard on the library intact.
 >
 > **Nothing to review must not look like a broken page.** `id_checks` is written by the pass, not by the player, so on a library where it has never run the table is absent — and a query naming a missing table fails outright rather than returning nothing. That exact mistake blanked the browse page twice. The page distinguishes "never looked", "found nothing" and "all dealt with".
+>
+> **First full run, 2026-08-15, all 8,078 radio passages in 57 minutes:**
+>
+> | verdict | count | share |
+> |---|---:|---:|
+> | confirmed | 6,591 | 82.0% |
+> | contradicted | 567 | 7.0% |
+> | unmatched | 864 | 10.7% |
+> | inconclusive | 17 | 0.2% |
+> | unreadable | 0 | 0% |
+>
+> So **82% of the migrated ids are now confirmed by evidence they did not come from**, which is the first independent word on them that has ever existed. Of the 7,158 the fingerprint could settle either way, 7.9% are wrong.
+>
+> **But 93% of the contradictions are the same song under a different recording id** — "Why Worry" against "Why Worry (5.1 mix)", two Bowie ids for one *Rock 'n' Roll Suicide*, an album cut against a long version. That is tidiness, not misidentification. Only **41 passages have names that disagree as well**, and those are the queue actually worth a person's attention. Sorting them apart is most of what makes the page usable: 41 cards can be worked through in a sitting, 567 will not be.
+>
+> The 89 `local:track:N` placeholder ids from the migration were checked too: 21 contradicted, 23 unmatched, and the rest carry no passage. They are not MBIDs at all and want their own repair rather than case-by-case review.
 
 > ~~**Listener state has no backup, and it is not reproducible**~~ *(resolved by `[REQ-LIB-160]`)*. The library file holds 37,206 plays, 3,261 preferences, 8 programmes, 49 seeds and 24 occasion points, and the player writes to it continuously. Sampo can rebuild the library from the audio files; it cannot rebuild the listening history, and the Director is worthless without it. One interrupted write on a Pi takes all of it. The fix is small — a periodic snapshot through the SQLite backup API to a rotating file, the same mechanism the test copies already use.
 >
