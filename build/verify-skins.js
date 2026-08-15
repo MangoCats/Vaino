@@ -358,9 +358,19 @@ async function runReview() {
     items: [
       { passage_id: 21, stored_mbid: 'rec-wrong', title: 'Wrong Song',
         artist: 'Some Band', album: 'Some Record', score: 0.97,
+        severity: 'wrong-song', rank: 0,
         suggested: [{ mbid: 'rec-real', title: 'Right Song', artist: 'A Band', score: 0.97 }] },
       { passage_id: 22, stored_mbid: 'rec-other', title: 'Another', artist: null,
-        album: null, score: 0.93, suggested: [] },
+        album: null, score: 0.93, severity: 'wrong-song', rank: 0, suggested: [] },
+      // The bulk of a real library, and off by default: if these render
+      // without being asked for, the serious cases are buried again.
+      { passage_id: 23, stored_mbid: 'rec-press', title: 'Why Worry',
+        artist: 'Dire Straits', album: 'Brothers in Arms', score: 0.99,
+        severity: 'different-id', rank: 3,
+        suggested: [{ mbid: 'rec-51', title: 'Why Worry (5.1 mix)',
+                      artist: 'Dire Straits', score: 0.99 }] },
+      { passage_id: 24, stored_mbid: 'rec-unk', title: 'Obscure', artist: null,
+        album: null, score: null, severity: 'unverified', rank: 4, suggested: [] },
     ],
   };
   const posted = [];
@@ -391,8 +401,34 @@ async function runReview() {
 
   const check = (cond, msg) => { if (!cond) errors.push(msg); };
   const cards = () => [...window.document.querySelectorAll('.card')];
-  check(cards().length === 2, `${cards().length} cards, want 2`);
+  const chip = name => [...window.document.querySelectorAll('.chip')]
+                         .find(b => b.className.includes(name));
+
+  // Severity triage is the point of the page: on this library the serious
+  // cases are 41 against 526, so anything that renders the bulk by default
+  // buries them.
+  check(cards().length === 2, `${cards().length} cards shown, want the 2 serious ones`);
+  check(!cards().some(c => c.dataset.passage === '23'),
+        'a different-pressing case must not show until asked for');
   check(/8,?078/.test($('tally').textContent), 'the tally should report what was checked');
+
+  // Every grade gets a chip carrying its own count, so the size of each kind
+  // of problem is visible before choosing what to work through.
+  check(chip('different-id'), 'no chip for different-id');
+  check(/1\b/.test(chip('different-id').textContent),
+        `the chip should carry its count, got "${chip('different-id').textContent}"`);
+  check(chip('different-id').getAttribute('aria-pressed') === 'false',
+        'different-id must start off');
+  check(chip('wrong-song').getAttribute('aria-pressed') === 'true',
+        'wrong-song must start on');
+
+  chip('different-id').onclick();
+  check(cards().length === 3, `after enabling, ${cards().length} cards, want 3`);
+  chip('wrong-song').onclick();
+  check(cards().length === 1, `after disabling wrong-song, ${cards().length}, want 1`);
+  chip('wrong-song').onclick();          // back to the starting selection
+  chip('different-id').onclick();
+  check(cards().length === 2, 'toggling back must restore the original list');
 
   const first = cards()[0];
   const btn = label => [...first.querySelectorAll('button')]

@@ -646,15 +646,59 @@ pub struct ReviewItem {
     pub score: Option<f64>,
     /// What it says the audio is instead, best first.
     pub suggested: Vec<Suggestion>,
-    /// True when a suggestion carries the same title as the library's --
-    /// the stored id names a *different recording of the same song*: another
-    /// pressing, a remaster, a 5.1 mix, a compilation's own entry.
-    ///
-    /// This is the common case by a wide margin and it is a much smaller
-    /// problem than a wrong song. Both are worth showing and they are not
-    /// worth the same attention, so the queue leads with the ones where the
-    /// names disagree too.
-    pub same_song: bool,
+    /// How wrong this looks, worst first. See `Severity`.
+    pub severity: &'static str,
+    /// Rank of `severity`, so the page can sort and group without keeping its
+    /// own copy of the order.
+    pub rank: u8,
+}
+
+/// How badly a stored id disagrees with the audio `[REQ-LIB-165]`.
+///
+/// A single "contradicted" flag is one bit, and one bit cannot tell a passage
+/// playing under a completely wrong name from a remaster with its own MBID.
+/// On this library that difference is 41 cases against 526, so it decides
+/// whether the queue is worth opening.
+///
+/// The grades are the same distinctions `verify_ids.py` drew against the file
+/// tags -- title agrees, artist agrees, neither -- applied here to evidence
+/// that is actually independent.
+pub const SEVERITIES: [(&str, u8, &str); 5] = [
+    ("wrong-song", 0, "neither the title nor the performer matches"),
+    ("wrong-artist", 1, "same title, different performer"),
+    ("wrong-title", 2, "same performer, different title"),
+    ("different-id", 3, "the same recording under another MBID"),
+    ("unverified", 4, "AcoustID does not know this audio; not evidence"),
+];
+
+/// Grade one disagreement.
+///
+/// Absent evidence is never treated as agreement -- a suggestion whose artist
+/// disagrees is a real finding. But a field nobody has an opinion about is not
+/// a disagreement either: if the library holds no artist for the passage, or
+/// no candidate names one, then the artist cannot be *wrong*, and grading it
+/// `wrong-artist` would invent a dispute out of two silences. In that case the
+/// title decides alone.
+fn grade(title: Option<&str>, artist: Option<&str>, suggested: &[Suggestion]) -> (&'static str, u8) {
+    if suggested.is_empty() {
+        return ("unverified", 4);
+    }
+    let title_ok = title.is_some_and(|t| {
+        suggested.iter().any(|s| s.title.as_deref().is_some_and(|x| same_title(t, x)))
+    });
+    let comparable = artist.is_some() && suggested.iter().any(|s| s.artist.is_some());
+    if !comparable {
+        return if title_ok { ("different-id", 3) } else { ("wrong-song", 0) };
+    }
+    let artist_ok = artist.is_some_and(|a| {
+        suggested.iter().any(|s| s.artist.as_deref().is_some_and(|x| same_title(a, x)))
+    });
+    match (title_ok, artist_ok) {
+        (true, true) => ("different-id", 3),
+        (true, false) => ("wrong-artist", 1),
+        (false, true) => ("wrong-title", 2),
+        (false, false) => ("wrong-song", 0),
+    }
 }
 
 /// Strip what differs between two spellings of one title without changing
@@ -792,7 +836,7 @@ impl Library {
                FROM id_checks c \
                JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
                LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
-              WHERE c.verdict = 'contradicted' \
+              WHERE c.verdict IN ('contradicted', 'unmatched') \
                 AND c.passage_id NOT IN (SELECT passage_id FROM id_reviews) \
               ORDER BY c.score DESC, c.passage_id LIMIT ?1"
         );
@@ -806,31 +850,28 @@ impl Library {
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
                 let title: Option<String> = r.get(4)?;
-                let same_song = match &title {
-                    Some(t) => suggested
-                        .iter()
-                        .any(|s| s.title.as_deref().is_some_and(|st| same_title(t, st))),
-                    None => false,
-                };
+                let artist: Option<String> = r.get(5)?;
+                let (severity, rank) = grade(title.as_deref(), artist.as_deref(), &suggested);
                 Ok(ReviewItem {
                     passage_id: r.get(0)?,
                     stored_mbid: r.get(1)?,
                     score: r.get(2)?,
                     suggested,
                     title,
-                    artist: r.get(5)?,
+                    artist,
                     album: r.get(6)?,
-                    same_song,
+                    severity,
+                    rank,
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
         let mut items: Vec<ReviewItem> = rows
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| DbError::Query(e.to_string()))?;
-        // Names that disagree first. Within each group the strongest match
-        // leads, which is the order the query already produced -- `sort_by_key`
-        // is stable, so that ordering survives.
-        items.sort_by_key(|i| i.same_song);
+        // Worst first. Within a grade the strongest match leads, which is the
+        // order the query already produced -- `sort_by_key` is stable, so that
+        // ordering survives.
+        items.sort_by_key(|i| i.rank);
         Ok(items)
     }
 
@@ -977,21 +1018,21 @@ mod tests {
         c
     }
 
-    /// Only contradictions reach a person. `unmatched` means AcoustID has no
-    /// entry for the audio, which is not evidence about the stored id -- and
-    /// there are thousands of them, enough to bury every real finding.
+    /// Confirmed ids never reach a person: 6,591 of them here, and there is
+    /// nothing to decide about a passage the audio agrees with. What does
+    /// reach the page arrives with the candidates that dispute it.
     #[test]
-    fn only_contradicted_ids_are_put_up_for_review() {
+    fn settled_ids_stay_out_of_the_queue() {
         let c = reviewable();
         c.execute_batch(
             "INSERT INTO passages VALUES (3,1,'radio',0,1000,NULL,NULL,NULL,'src');
              INSERT INTO passage_recordings VALUES (3,'rec-x',1.0,'s');
-             INSERT INTO id_checks VALUES (3,'rec-x','unmatched',NULL,NULL,'t');",
+             INSERT INTO id_checks VALUES (3,'rec-x','confirmed',0.99,NULL,'t');",
         )
         .unwrap();
         let lib = Library { conn: c };
         let q = lib.review_queue(50).unwrap();
-        assert_eq!(q.len(), 1, "the unmatched passage must not be queued");
+        assert_eq!(q.len(), 1, "a confirmed id is not a question");
         assert_eq!(q[0].passage_id, 2);
         assert_eq!(q[0].suggested.len(), 1);
         assert_eq!(q[0].suggested[0].mbid, "rec-real");
@@ -1027,9 +1068,79 @@ mod tests {
         let lib = Library { conn: c };
         let q = lib.review_queue(50).unwrap();
         assert_eq!(q.len(), 2);
-        assert_eq!(q[0].passage_id, 2, "the disagreeing names lead");
-        assert!(!q[0].same_song);
-        assert!(q[1].same_song, "a remaster of the same title is not a wrong song");
+        assert_eq!(q[0].passage_id, 2, "the worse grade leads, despite a lower score");
+        assert_eq!(q[0].severity, "wrong-song");
+        assert_eq!(q[1].severity, "different-id",
+                   "a remaster of the same title is not a wrong song");
+        assert!(q[0].rank < q[1].rank);
+    }
+
+    /// Severity is what makes the queue usable: 41 cases against 526 on this
+    /// library, and one bit cannot tell them apart. Absent evidence must never
+    /// count as agreement -- a suggestion with no artist cannot confirm one.
+    #[test]
+    fn a_disagreement_is_graded_by_how_much_disagrees() {
+        let s = |t: Option<&str>, a: Option<&str>| Suggestion {
+            mbid: "x".into(),
+            title: t.map(str::to_string),
+            artist: a.map(str::to_string),
+            score: 0.9,
+        };
+        let g = |t, a, sug: &[Suggestion]| grade(t, a, sug).0;
+
+        assert_eq!(g(Some("Why Worry"), Some("Dire Straits"),
+                     &[s(Some("Why Worry (5.1 mix)"), Some("Dire Straits"))]),
+                   "different-id");
+        assert_eq!(g(Some("Alice the Camel"), Some("Baby Reflections"),
+                     &[s(Some("Alice the Camel"), Some("Kimmy / Steve"))]),
+                   "wrong-artist");
+        assert_eq!(g(Some("Take My Breath Away"), Some("Berlin"),
+                     &[s(Some("S.M.D.U."), Some("Berlin"))]),
+                   "wrong-title");
+        assert_eq!(g(Some("Take My Breath Away"), Some("Berlin"),
+                     &[s(Some("S.M.D.U."), Some("Brock Landars"))]),
+                   "wrong-song");
+        assert_eq!(g(Some("Anything"), Some("Anyone"), &[]), "unverified",
+                   "no match at all is not evidence of a wrong song");
+        // Two silences are not a disagreement. When no candidate states an
+        // artist there is nothing to dispute, so the title decides alone --
+        // grading this `wrong-artist` would invent a case for someone to
+        // adjudicate out of missing data.
+        assert_eq!(g(Some("Why Worry"), Some("Dire Straits"),
+                     &[s(Some("Why Worry"), None)]),
+                   "different-id");
+        assert_eq!(g(Some("Why Worry"), None,
+                     &[s(Some("Why Worry"), Some("Dire Straits"))]),
+                   "different-id", "a passage with no artist has none to be wrong");
+        // But a candidate that names a DIFFERENT artist is a real finding, and
+        // must not be softened by a second candidate that names none.
+        assert_eq!(g(Some("Why Worry"), Some("Dire Straits"),
+                     &[s(Some("Why Worry"), Some("Someone Else")), s(Some("Why Worry"), None)]),
+                   "wrong-artist");
+        // And the grades stay in step with the table the page reads.
+        for (name, rank, _) in SEVERITIES {
+            assert!(rank < 5, "{name} has no place in the order");
+        }
+    }
+
+    /// `unmatched` reaches the page so it can be asked for deliberately, but
+    /// it is graded lowest and the page leaves it off by default. It is 864
+    /// passages here, and defaulting it on would bury the 41 that matter.
+    #[test]
+    fn unmatched_is_reachable_but_graded_lowest() {
+        let c = reviewable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES (5,1,'radio',0,1000,NULL,NULL,NULL,'src');
+             INSERT INTO passage_recordings VALUES (5,'rec-u',1.0,'s');
+             INSERT INTO id_checks VALUES (5,'rec-u','unmatched',NULL,NULL,'t');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.review_queue(50).unwrap();
+        let u = q.iter().find(|i| i.passage_id == 5).expect("unmatched must be reachable");
+        assert_eq!(u.severity, "unverified");
+        assert_eq!(u.rank, 4, "and it must sort behind every real finding");
+        assert_eq!(q[0].passage_id, 2, "a real contradiction still leads");
     }
 
     /// A decided passage leaves the queue, or the same question is asked for

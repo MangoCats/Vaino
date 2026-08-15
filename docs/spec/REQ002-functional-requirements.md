@@ -249,7 +249,21 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 >
 > So **82% of the migrated ids are now confirmed by evidence they did not come from**, which is the first independent word on them that has ever existed. Of the 7,158 the fingerprint could settle either way, 7.9% are wrong.
 >
-> **But 93% of the contradictions are the same song under a different recording id** — "Why Worry" against "Why Worry (5.1 mix)", two Bowie ids for one *Rock 'n' Roll Suicide*, an album cut against a long version. That is tidiness, not misidentification. Only **41 passages have names that disagree as well**, and those are the queue actually worth a person's attention. Sorting them apart is most of what makes the page usable: 41 cards can be worked through in a sitting, 567 will not be.
+> **But most contradictions are the same song under a different recording id** — "Why Worry" against "Why Worry (5.1 mix)", two Bowie ids for one *Rock 'n' Roll Suicide*, an album cut against a long version. That is tidiness, not misidentification.
+>
+> **So findings are graded, and the queue is listed by severity.** One bit cannot tell a passage playing under a completely wrong name from a remaster with its own MBID, and on this library that difference is 87 cases against 1,346. The grades are the distinctions `verify_ids.py` already drew against the file tags — title agrees, artist agrees, neither — applied to evidence that is actually independent:
+>
+> | grade | count | shown by default |
+> |---|---:|:--:|
+> | `wrong-song` — neither title nor performer matches | 17 | ✓ |
+> | `wrong-artist` — same title, different performer | 46 | ✓ |
+> | `wrong-title` — same performer, different title | 24 | ✓ |
+> | `different-id` — the same recording under another MBID | 480 | |
+> | `unverified` — AcoustID does not know this audio | 866 | |
+>
+> The page opens on **87 cards**, worst first, and each grade is a chip carrying its own count so the size of every kind of problem is visible before choosing what to work through. The two large, low-value classes are one tap away rather than absent — including `unmatched`, which is reachable deliberately but never by default, because 866 non-findings would bury the 17 that matter.
+>
+> **Two silences are not a disagreement.** Absent evidence never counts as agreement — a candidate naming a different artist is a real finding even if another names none — but where the library holds no artist, or no candidate states one, the artist cannot be *wrong* and the title decides alone. Grading that `wrong-artist` would invent a dispute out of missing data and send someone to adjudicate it.
 >
 > The 89 `local:track:N` placeholder ids from the migration were checked too: 21 contradicted, 23 unmatched, and the rest carry no passage. They are not MBIDs at all and want their own repair rather than case-by-case review.
 

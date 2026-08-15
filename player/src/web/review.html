@@ -37,8 +37,28 @@
   .card .kind { font-size: .6875rem; letter-spacing: .06em; text-transform: uppercase;
                 font-weight: 600; padding: .1rem .4rem; border-radius: 3px;
                 border: 1px solid currentColor; white-space: nowrap; }
-  .card .kind.differs { color: #ffb4a2; }
-  .card .kind.same { color: #9aa; opacity: .8; }
+  /* Worst reads hottest. `different-id` and `unverified` are deliberately
+     cool: they are the bulk of the list and the least worth arguing about. */
+  .card .kind.wrong-song   { color: #ff8a75; }
+  .card .kind.wrong-artist { color: #ffb4a2; }
+  .card .kind.wrong-title  { color: #ffd6a2; }
+  .card .kind.different-id { color: #9aa; opacity: .85; }
+  .card .kind.unverified   { color: #889; opacity: .8; }
+
+  /* The filter row. Sized for a thumb, and pressed state must be obvious at a
+     glance or the list looks wrong rather than filtered. */
+  .filters { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 .8rem; }
+  .filters .chip { font: inherit; font-size: .8125rem; min-height: 2.4rem;
+                   padding: 0 .7rem; cursor: pointer; border-radius: 999px;
+                   background: transparent; color: inherit;
+                   border: 1px solid rgba(128,128,128,.45); opacity: .55; }
+  .filters .chip[aria-pressed="true"] { opacity: 1; font-weight: 600;
+                                        border-color: currentColor;
+                                        box-shadow: inset 0 0 0 1px currentColor; }
+  .filters .chip[disabled] { opacity: .2; cursor: default; }
+  .filters .chip.wrong-song[aria-pressed="true"]   { color: #ff8a75; }
+  .filters .chip.wrong-artist[aria-pressed="true"] { color: #ffb4a2; }
+  .filters .chip.wrong-title[aria-pressed="true"]  { color: #ffd6a2; }
 
   /* The two claims, side by side on a desktop and stacked on a phone. */
   .claims { display: flex; gap: .7rem; flex-wrap: wrap; }
@@ -78,6 +98,9 @@
     <a class="back" href="/">← player</a>
   </header>
   <p class="tally" id="tally"></p>
+  <!-- One chip per grade, each with its own count: the size of each kind of
+       problem is visible before choosing which to work through. -->
+  <div class="filters" id="filters"></div>
   <div id="cards"></div>
   <p class="note" id="note"></p>
 </div>
