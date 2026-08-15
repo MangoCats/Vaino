@@ -4,8 +4,13 @@
 
 Measured on this library: 1,986 files carry no embedded picture, and 1,656 of
 them (83%) already have a `folder.jpg` beside them -- the player now looks
-there and needs nothing from the network. This covers what is left: **309
-releases**, about five minutes at one request a second.
+there and needs nothing from the network. Those folders are asked about
+anyway, and deliberately: `folder.jpg` is one image, and the archive also
+carries the **back** of the sleeve, which no folder convention provides.
+
+So this asks about every release behind an art-less file -- **484** on this
+library, not the 309 whose folders have nothing. One manifest request each
+tells the archive's answer exactly, then at most one download per side.
 
 Keyed by **release**, not by folder. A directory can hold more than one album,
 which is exactly the case on the DAO rips that make up most of the remaining
@@ -24,6 +29,7 @@ division that requirement exists to protect. Nothing here runs on the appliance.
 """
 
 import argparse
+import json
 import sqlite3
 import sys
 import time
@@ -40,6 +46,16 @@ BASE = "https://coverartarchive.org"
 # one MuLibPlay applied before it.
 MIN_BYTES = 256
 
+# **Thumbnails, not the originals.** The archive serves full-resolution scans:
+# measured here at 2.9 MB average and one at 18.8 MB, against MuLibPlay's 68 KB
+# average for the same job. Fetching originals would have added roughly 1.2 GB
+# to a 978 MB library to fill a 200-pixel-tall box.
+#
+# Which size is chosen happens in `covers()` below, from the manifest.
+# No thumbnail should approach this. A hit means the archive served something
+# unexpected and it is not worth putting in the library.
+MAX_BYTES = 2_000_000
+
 DDL = """
 CREATE TABLE IF NOT EXISTS cover_art (
     release_mbid TEXT PRIMARY KEY,
@@ -55,8 +71,8 @@ def say(text: str) -> None:
     print(text.encode(enc, "replace").decode(enc), flush=True)
 
 
-def get(url: str) -> bytes | None:
-    """One image, or `None` if the archive has not got it.
+def get(url: str, want_json: bool = False) -> bytes | None:
+    """One image or manifest, or `None` if the archive has not got it.
 
     A 404 is the ordinary answer for a release nobody has photographed, and is
     not worth a retry or a mention. 503 means slow down.
@@ -67,6 +83,8 @@ def get(url: str) -> bytes | None:
         try:
             with urllib.request.urlopen(req, timeout=45) as r:
                 data = r.read()
+            if want_json:
+                return data
             return data if len(data) >= MIN_BYTES else None
         except urllib.error.HTTPError as e:
             if e.code == 404:
@@ -98,9 +116,10 @@ def main() -> int:
     conn.executescript(DDL)
     conn.commit()
 
-    # Releases that a passage with no local art actually needs. Files whose
-    # folder already holds a cover are excluded: the player reads those
-    # directly, so fetching them would be 1,656 requests for nothing.
+    # Every release behind a file with no EMBEDDED picture. Folders that
+    # already hold a `folder.jpg` are not excluded -- SQL cannot see the
+    # filesystem, and they are worth asking about regardless for the back
+    # cover the folder convention has no place for.
     todo = conn.execute(
         """SELECT DISTINCT rr.release_mbid
              FROM passages p
@@ -115,22 +134,58 @@ def main() -> int:
     if args.limit:
         todo = todo[:args.limit]
 
-    say(f"{len(todo)} release(s) to ask about  (~{len(todo) * GAP / 60:.0f} min)\n")
+    # A manifest plus up to two images, each followed by the courtesy gap.
+    say(f"{len(todo)} release(s) to ask about  "
+        f"(~{len(todo) * GAP * 2.5 / 60:.0f} min)\n")
     if not todo:
         return 0
 
     fronts = backs = neither = 0
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
-    for i, mbid in enumerate(todo, 1):
-        front = get(f"{BASE}/release/{mbid}/front")
+    def covers(mbid: str, group: bool = False) -> tuple[bytes | None, bytes | None]:
+        """The front and back of one release, via its manifest.
+
+        **One request to find out what exists**, then at most one download per
+        side. The obvious alternative -- ask for `/front-500`, fall back to
+        `-250`, fall back to the original, and the same again for the back --
+        is up to nine requests, most of them 404s, and measured at 84 seconds
+        per release. The manifest costs about four and answers exactly.
+        """
+        what = "release-group" if group else "release"
+        raw = get(f"{BASE}/{what}/{mbid}", want_json=True)
         time.sleep(GAP)
+        if raw is None:
+            return None, None
+        try:
+            images = json.loads(raw).get("images", [])
+        except (json.JSONDecodeError, AttributeError):
+            return None, None
+
+        def pick(flag: str) -> bytes | None:
+            for im in images:
+                if not im.get(flag):
+                    continue
+                thumbs = im.get("thumbnails") or {}
+                # 500 is the smallest with headroom over a 200px box on a
+                # high-density screen; 250 for releases that lack it. The
+                # original is never taken -- that is what cost 2.9 MB a cover.
+                url = thumbs.get("500") or thumbs.get("250")
+                if not url:
+                    continue
+                data = get(url)
+                time.sleep(GAP)
+                if data is not None and len(data) <= MAX_BYTES:
+                    return data
+            return None
+
+        return pick("front"), pick("back")
+
+    for i, mbid in enumerate(todo, 1):
+        front, back = covers(mbid)
         # The release group is the fallback for a front only. A back cover
         # belongs to a particular pressing, so the group's is not this one's.
         if front is None:
-            front = get(f"{BASE}/release-group/{mbid}/front")
-            time.sleep(GAP)
-        back = get(f"{BASE}/release/{mbid}/back")
-        time.sleep(GAP)
+            front, _ = covers(mbid, group=True)
 
         conn.execute(
             "INSERT OR REPLACE INTO cover_art VALUES (?1,?2,?3,'coverartarchive',?4)",
