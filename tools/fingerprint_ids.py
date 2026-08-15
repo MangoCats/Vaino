@@ -55,9 +55,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import secret  # noqa: E402
 
 # fpcalc fingerprints the first 120 seconds and AcoustID's index is built from
-# that, so a whole-file fingerprint would be asking a different question.
+# that, so a longer fingerprint would be asking a different question.
 FP_SECONDS = 120
-FP_KEY = f"chromaprint:{FP_SECONDS}:base64"
+
+
+def fp_key(start_ms: int, end_ms: int) -> str:
+    """Cache key for one passage's fingerprint.
+
+    The slice is part of the key because one file can hold several passages,
+    and their fingerprints are of different audio. Keying on the file alone
+    would let the first passage's answer be served for all of them.
+    """
+    return f"chromaprint:{start_ms}-{end_ms}:{FP_SECONDS}:base64"
 
 # Present anywhere in the acoustic cluster at this score or better, and the
 # stored id stands. AcoustID groups recordings that sound identical, so an id
@@ -86,7 +95,11 @@ CREATE TABLE IF NOT EXISTS id_checks (
     checked_at   TEXT    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS fingerprints (
-    audio_md5    TEXT PRIMARY KEY,
+    -- By PASSAGE, not by file: one file can hold several passages and their
+    -- fingerprints are of different audio.
+    passage_id   INTEGER PRIMARY KEY,
+    audio_md5    TEXT NOT NULL,
+    slice_key    TEXT NOT NULL,
     fingerprint  TEXT NOT NULL,
     response     TEXT,
     fetched_at   TEXT NOT NULL
@@ -110,18 +123,31 @@ def say(text: str) -> None:
 
 # ---------------------------------------------------------------- fingerprints
 
-def fingerprint(path: str) -> str | None:
-    """The audio as Chromaprint hears it, or `None` if it would not decode.
+def fingerprint(path: str, start_ms: int, end_ms: int) -> str | None:
+    """The **passage** as Chromaprint hears it, or `None` if it would not decode.
 
     ffmpeg carries the chromaprint muxer, which is the same library fpcalc
     wraps -- validated against AcoustID on known-good files before this was
     trusted, scoring 0.986 to 0.995 with the stored id present every time.
     Using it avoids making a second binary a prerequisite of the build.
+
+    **From `start_ms`, not from the top of the file.** A passage is a slice: in
+    this library the median file holds a fair amount that is not the song, and
+    fingerprinting the file instead of the passage asks about the wrong audio.
+    That mistake, made once, marked 3,940 passages "unmatched" -- including
+    every track of *Magical Mystery Tour*, which AcoustID of course knows
+    perfectly well. Each of them matched, and matched the id already stored,
+    the moment the fingerprint started where the song does.
     """
+    seconds = max(0.0, (end_ms - start_ms) / 1000.0)
     try:
         done = subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error",
-             "-t", str(FP_SECONDS), "-i", path,
+             # Seek before -i: for audio this is both accurate and far faster
+             # than decoding up to the mark and discarding it.
+             "-ss", f"{start_ms / 1000.0:.3f}",
+             "-t", f"{min(float(FP_SECONDS), seconds):.3f}",
+             "-i", path,
              "-f", "chromaprint", "-fp_format", "base64", "-"],
             capture_output=True, timeout=120,
         )
@@ -143,6 +169,9 @@ def lookup(key: str, items: list[tuple]) -> dict[int, list]:
     fields = {"client": key, "meta": "recordings", "batch": "1"}
     for i, (_, _, dur, fp) in enumerate(items):
         fields[f"fingerprint.{i}"] = fp
+        # The PASSAGE's length. AcoustID filters candidates by duration, so
+        # sending the file's length for a passage that is a slice of it rules
+        # out the very recording being looked for.
         fields[f"duration.{i}"] = str(max(1, int(dur / 1000)))
     body = gzip.compress(urllib.parse.urlencode(fields).encode())
     req = urllib.request.Request(
@@ -237,14 +266,14 @@ def merge(db: str, side: str) -> int:
     conn.execute("""INSERT OR REPLACE INTO main.id_checks
                     SELECT * FROM side.id_checks""")
     # The fingerprints belong in the cache the schema already provides for them.
+    # `slice_key` is the request key, so two passages of one file stay distinct.
     conn.execute(
         "INSERT OR REPLACE INTO main.identification_cache "
-        "SELECT audio_md5,'fpcalc',?1,fingerprint,fetched_at FROM side.fingerprints",
-        (FP_KEY,))
+        "SELECT audio_md5,'fpcalc',slice_key,fingerprint,fetched_at FROM side.fingerprints")
     conn.execute(
         "INSERT OR REPLACE INTO main.identification_cache "
-        "SELECT audio_md5,'acoustid',?1,response,fetched_at FROM side.fingerprints "
-        "WHERE response IS NOT NULL", (FP_KEY,))
+        "SELECT audio_md5,'acoustid',slice_key,response,fetched_at FROM side.fingerprints "
+        "WHERE response IS NOT NULL")
     n = conn.execute("SELECT COUNT(*) FROM main.id_checks").fetchone()[0]
     conn.commit()
     conn.execute("DETACH DATABASE side")
@@ -277,7 +306,8 @@ def main() -> int:
     done_already = {r[0] for r in side.execute("SELECT passage_id FROM id_checks")} \
         if not args.recheck else set()
     rows = lib.execute("""
-        SELECT p.passage_id, f.path, f.duration_ms, pr.mbid, f.audio_md5
+        SELECT p.passage_id, f.path, p.end_ms - p.start_ms, pr.mbid, f.audio_md5,
+               p.start_ms, p.end_ms
           FROM passages p
           JOIN files f ON f.file_id = p.file_id
           JOIN passage_recordings pr ON pr.passage_id = p.passage_id
@@ -297,10 +327,12 @@ def main() -> int:
     started = time.time()
     done_n = 0
 
-    known_fp = {r[0]: r[1] for r in side.execute("SELECT audio_md5, fingerprint FROM fingerprints")}
+    known_fp = {(r[0], r[1]): r[2] for r in
+                side.execute("SELECT passage_id, slice_key, fingerprint FROM fingerprints")}
 
-    def cached_fp(md5: str, path: str) -> str | None:
-        return known_fp.get(md5) or fingerprint(path)
+    def cached_fp(row) -> str | None:
+        pid, path, _dur, _mbid, _md5, start, end = row
+        return known_fp.get((pid, fp_key(start, end))) or fingerprint(path, start, end)
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=DECODE_JOBS)
     try:
@@ -308,14 +340,14 @@ def main() -> int:
             chunk = todo[start:start + BATCH]
             # Decode in parallel; the lookup that follows is one request, and
             # waiting on ffmpeg serially would dominate the whole run.
-            fps = list(pool.map(lambda r: cached_fp(r[4], r[1]), chunk))
+            fps = list(pool.map(cached_fp, chunk))
 
             ready, unreadable = [], []
             for row, fp in zip(chunk, fps):
                 (ready if fp else unreadable).append((row, fp))
 
             now = time.strftime("%Y-%m-%dT%H:%M:%S")
-            for (pid, _path, _dur, mbid, _md5), _ in unreadable:
+            for (pid, _path, _dur, mbid, _md5, _s, _e), _ in unreadable:
                 side.execute(
                     "INSERT OR REPLACE INTO id_checks VALUES (?1,?2,'unreadable',NULL,NULL,?3)",
                     (pid, mbid, now))
@@ -330,15 +362,16 @@ def main() -> int:
                     time.sleep(REQUEST_GAP)
                     continue
 
-                for i, ((pid, _path, _dur, mbid, md5), fp) in enumerate(ready):
+                for i, ((pid, _path, _dur, mbid, md5, s_ms, e_ms), fp) in enumerate(ready):
                     verdict, score, suggested = judge(mbid, results.get(i, []))
                     side.execute(
                         "INSERT OR REPLACE INTO id_checks VALUES (?1,?2,?3,?4,?5,?6)",
                         (pid, mbid, verdict, score,
                          json.dumps(suggested) if suggested else None, now))
                     side.execute(
-                        "INSERT OR REPLACE INTO fingerprints VALUES (?1,?2,?3,?4)",
-                        (md5, fp, json.dumps(results.get(i, [])), now))
+                        "INSERT OR REPLACE INTO fingerprints VALUES (?1,?2,?3,?4,?5,?6)",
+                        (pid, md5, fp_key(s_ms, e_ms), fp,
+                         json.dumps(results.get(i, [])), now))
                     counts[verdict] = counts.get(verdict, 0) + 1
                 time.sleep(REQUEST_GAP)
 
