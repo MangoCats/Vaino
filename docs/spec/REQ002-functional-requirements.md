@@ -263,6 +263,14 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 >
 > The page opens on **87 cards**, worst first, and each grade is a chip carrying its own count so the size of every kind of problem is visible before choosing what to work through. The two large, low-value classes are one tap away rather than absent — including `unmatched`, which is reachable deliberately but never by default, because 866 non-findings would bury the 17 that matter.
 >
+> **Exercised against a live server, which found two faults nothing else could** *(2026-08-15)*. Run on a copy of the real library, so the writes were real:
+>
+> **Browsing albums had become quadratic.** Album names are looked up by *recording*, and `release_recordings` is keyed `(release_mbid, mbid)` — the lookup uses the second column of the primary key, so no index applies and SQLite scans the table once per passage. Free while the table was empty; at Sampo's 304,334 rows against 8,078 passages, `/review/queue` timed out past 120 s and `/browse/albums` ran past **400 s**. No commit caused it — the data grew under code that never changed, which is the kind of regression with nothing to bisect. An index on `release_recordings(mbid)` takes the review queue to **0.50 s** and album browsing to **7.0 s**.
+>
+> **`apply_reviews` could never have applied anything.** `recordings.title` and `recordings.source` are both `NOT NULL`; the writer supplied neither, and used `INSERT OR IGNORE`, which turns a constraint violation into nothing happening — so the row was silently skipped and the foreign key failed on the statement after. It now supplies `source`, inserts explicitly where a later statement depends on the row existing, and *refuses* a reassignment whose recording has no cached name rather than writing a nameless one. The tests missed it because the fixture declared `recordings(mbid, title)` with no constraints at all and accepted writes the real schema rejects; it now matches SPEC008 including `NOT NULL`.
+>
+> The full loop is verified: passage 8034, labelled *"The Four Seasons: Spring: I. Allegro"* by Various Artists, is in fact Bach's Air from BWV 1068. Reassigned on the page, applied by the tool, and browse then names it correctly with its three artists linked.
+>
 > **Two silences are not a disagreement.** Absent evidence never counts as agreement — a candidate naming a different artist is a real finding even if another names none — but where the library holds no artist, or no candidate states one, the artist cannot be *wrong* and the title decides alone. Grading that `wrong-artist` would invent a dispute out of missing data and send someone to adjudicate it.
 >
 > The 89 `local:track:N` placeholder ids from the migration were checked too: 21 contradicted, 23 unmatched, and the rest carry no passage. They are not MBIDs at all and want their own repair rather than case-by-case review.
