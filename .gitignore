@@ -57,3 +57,11 @@ data/*.log
 data/missing_files.json
 player/target/
 data/essentia/svm_beta1/
+
+# Credentials. Never committed, never in a commit message, never in a log line.
+# An AcoustID application key is not a password, but it is tied to an account
+# and this repository is public: a key in history is a key that has to be
+# rotated, and rewriting history to remove one is worse than never adding it.
+secrets/
+*.key
+.env
