@@ -243,8 +243,24 @@ if [ -n "$SPEAKER" ]; then
     if bt_is Paired; then
         ok "paired"
     else
-        bluetoothctl --timeout 25 scan on >/dev/null 2>&1 || true
-        bluetoothctl pair "$SPEAKER" >/dev/null 2>&1 || true
+        # An AGENT must be registered or nothing answers the pairing
+        # request: `pair` returns, the device never completes, and BlueZ is
+        # left holding a trust policy for a pairing that does not exist. This
+        # is why the earlier runs reported success and left `Paired: no`.
+        # NoInputNoOutput is right for a headless box with no keypad -- it
+        # accepts "just works" pairing, which is what a speaker offers.
+        bluetoothctl --timeout 30 <<'BT' >/dev/null 2>&1 || true
+power on
+agent NoInputNoOutput
+default-agent
+scan on
+BT
+        sleep 2
+        bluetoothctl <<BT >/dev/null 2>&1 || true
+agent NoInputNoOutput
+default-agent
+pair $SPEAKER
+BT
         # The RESULT is checked, not the exit code: `bluetoothctl pair` reports
         # success for a pairing that does not persist, which is how this script
         # once announced "paired CHANGED" for a device left unpaired.
