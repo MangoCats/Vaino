@@ -266,6 +266,7 @@ restarting a service.
 | :--- | :--- | :--- |
 | Wi-Fi AP SSID | `Vaino` | `hostapd.conf`, restart `hostapd` |
 | Wi-Fi AP password | `Vaino321` | `hostapd.conf`, restart `hostapd` |
+| Wi-Fi band | `2.4` \| `5` \| `both` | `hostapd.conf` `hw_mode`/`channel` |
 | Bluetooth audio device for auto-connect | none | `bluetoothctl` / BlueZ D-Bus |
 | Paired-device list maintenance | — | BlueZ; pair, trust, forget |
 
@@ -282,6 +283,26 @@ it is not a secret.** `Vaino321` is a *first-boot* credential, and the setup
 page must say so plainly and invite a change. An appliance shipping a known
 password on an open access point is a fair description of the problem, not a
 convenience.
+
+**`[PI-SET-032]` The band setting is limited by the radio, not by hostapd.**
+The Pi Zero 2 W's wireless part is 2.4 GHz only — it has no 5 GHz radio at
+all. On the primary target the setting therefore has one legal value, and the
+interface must say so rather than offer a choice that cannot be honoured.
+
+On a Pi 3B+/4/5 both bands exist, but **`both` is not a single-radio
+capability**: one radio serves one band at a time. Simultaneous dual-band
+needs a second interface — a USB adapter — with its own `hostapd` instance.
+
+So the setting is offered as three values, and what is *selectable* is decided
+at runtime from the adapter's capabilities:
+
+- `2.4` — always available;
+- `5` — only where the hardware has a 5 GHz radio;
+- `both` — only where a second wireless interface is present.
+
+A stored value the current hardware cannot honour falls back to 2.4 GHz and
+says so, rather than leaving `hostapd` failing to start with no access point
+and no way in `[PI-SET-036]`.
 
 **`[PI-SET-035]` Not partition B, and the reason is that the risk was never
 about the partition.** Putting `hostapd.conf` on B looks attractive — B is
@@ -313,6 +334,26 @@ C is already a factory reset `[PI-DB-035]`, and under this arrangement it
 restores the *published* credentials `[PI-SET-030]` — so a listener who has
 forgotten what they set can always get back in by clearing the partition the
 design already treats as expendable.
+
+**`[PI-SET-037]` The override does not appreciably delay the interface.**
+Reading it costs a `stat` and a few hundred bytes; what it adds is an ordering
+dependency — `hostapd` must wait for C to be mounted. Mounting a small
+filesystem on the same card is tens of milliseconds, against `hostapd`'s own
+bring-up of the radio, beacon and DHCP server, which is seconds. The override
+is noise by two orders of magnitude.
+
+Two things keep it that way:
+
+- **`nofail` on the C mount, with a short timeout.** The one case that could
+  actually cost time is `fsck` on an unclean C, and it must not be permitted
+  to hold the boot. If C is not there promptly, boot proceeds on A's default
+  and the access point comes up with the published credentials — which is the
+  same recovery path as a factory reset.
+- **Audio does not wait for any of this.** `[REQ-HW-010B]`'s one-second budget
+  is the audio path's, and it depends on partition B and the sound device, not
+  on the network. The web interface is explicitly allowed to arrive later
+  `[REQ-HW-010B]`; a listener hears music before a browser could have
+  connected either way.
 
 **`[PI-SET-040]` Bluetooth pairing is stateful and belongs on partition C.**
 BlueZ keeps its keys under `/var/lib/bluetooth`, which must therefore be
