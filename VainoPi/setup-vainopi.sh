@@ -169,9 +169,17 @@ After=local-fs.target sound.target
 ExecStart=/usr/local/bin/vaino /srv/library/vaino.db --port 5720
 Restart=always
 RestartSec=2
-User=vaino
+# Runs as the LOGIN user, not a service account. PipeWire is a per-user
+# session bus and its socket is owned by that user; a separate `vaino` account
+# cannot reach it, which presents as ALSA "Host is down" beside a speaker that
+# is paired and connected -- and, because nothing then holds the A2DP stream,
+# as a speaker that connects and disconnects a few seconds later.
+#
+# A dedicated account is the right shape for the appliance `[PI001]`, and it
+# needs PipeWire running system-wide or a shared socket to work. That is a
+# decision for the appliance image, not for the machine under test.
+User=RUNUSER
 Nice=-5
-# PipeWire lives in the login user's session; the service reaches it there.
 Environment=XDG_RUNTIME_DIR=/run/user/RUNUID
 Environment=PULSE_SERVER=unix:/run/user/RUNUID/pulse/native
 
@@ -179,6 +187,7 @@ Environment=PULSE_SERVER=unix:/run/user/RUNUID/pulse/native
 WantedBy=multi-user.target
 EOF
 WANT_UNIT="${WANT_UNIT//RUNUID/$RUN_UID}"
+WANT_UNIT="${WANT_UNIT//RUNUSER/$RUN_USER}"
 if [ ! -f "$UNIT" ] || [ "$(cat "$UNIT")" != "$WANT_UNIT" ]; then
     printf '%s\n' "$WANT_UNIT" > "$UNIT"
     systemctl daemon-reload

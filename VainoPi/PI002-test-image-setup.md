@@ -164,6 +164,35 @@ understood.
 
 ---
 
+## 6a. Findings from the first hardware run (2026-08-16)
+
+**`[PI2-RUN-010]` It plays.** Music reached a Marshall Middleton over A2DP
+from a Pi Zero 2 W. Measured alongside: **26.5 MB RSS** against the 30 MB of
+`[REQ-HW-010A]`, **15.2 s** boot (4.4 kernel + 10.8 userspace), **59-62 °C**
+bare-board with `throttled=0x0` -- no heatsink needed, and no undervoltage.
+
+**`[PI2-RUN-020]` SBC at 44,100 Hz, and no resampling.** The sink negotiated
+SBC; Vaino logged `output: default @ 44100 Hz, 2 ch`. Source and sink match,
+so `rubato` never runs `[PI2-RATE-010]`.
+
+**`[PI2-RUN-030]` The player holds the device it opened at startup.** This is
+the open problem. The Bluetooth link drops a few seconds after connecting and
+stays down; a two-minute sample with ssh idle showed the link up for 2 of 40
+readings, with no bluetoothd error and no underrun. What the same sample shows
+is `stream=0` throughout: **nothing was holding the A2DP stream open**, so
+BlueZ suspended an idle link, correctly.
+
+The cause is ordering. `cpal` opens the default sink once, at startup. On an
+appliance the speaker connects *after* boot, so the default sink Vaino opened
+was the null one and it never followed the change. Restarting the player after
+the speaker connects is the workaround; following sink changes -- or waiting
+for a real sink before opening -- is the fix, and it is a change to the player
+rather than to the image.
+
+Ruled out along the way: Wi-Fi/Bluetooth coexistence on the shared radio (the
+drop happens with ssh idle), thermal throttling, undervoltage, decode headroom
+(no underruns), and the pairing itself (paired, trusted, connected).
+
 ## 7. What this image is not
 
 No read-only root, no overlay, no three partitions, no privileged settings
