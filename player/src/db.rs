@@ -1031,16 +1031,19 @@ impl Library {
         // -- and a query naming a missing table FAILS rather than returning
         // nothing. That exact mistake blanked the browse page twice. Nothing to
         // review is a legitimate state and must not look like a broken page.
-        // Deliberately-local ids are excluded, not graded. A recording ingested
-        // from a folder that has no MusicBrainz entry -- self-published music,
-        // a live capture -- carries `local:audio:<md5>` and `source =
-        // 'local:ingest'`, and it is *correct*. Grading it `no-mbid` would put
-        // it at the top of the queue for ever, asking a question with no
-        // answer, and burying the placeholders that genuinely need one.
+        // A locally-ingested id is excluded only when AcoustID also drew a
+        // blank. Both halves matter:
         //
-        // The distinction is the source, not the shape of the id: the
-        // migration's `local:track:N` carries `inherited:mulib` and stays in
-        // the queue, because that one really is a broken identification.
+        // * `local:ingest` + `unmatched` is self-published music -- nothing
+        //   can name it, and asking a person would be an unanswerable question
+        //   parked at the top of the queue for ever.
+        // * `local:ingest` + `contradicted` is a commercial album ingested
+        //   from a folder, where AcoustID *does* know what it is. That is the
+        //   most useful row in the queue: a placeholder with the real
+        //   recording sitting beside it, ready to accept.
+        //
+        // The migration's `local:track:N` carries `inherited:mulib`, so it is
+        // never excluded on either count -- it really is a broken id.
         //
         // `id_reviews` is checked too: it is created by `PlayerStore::open`,
         // which any running server has done, but this handle does not itself
@@ -1061,9 +1064,10 @@ impl Library {
                LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
                LEFT JOIN id_reviews v ON v.passage_id = c.passage_id \
               WHERE c.verdict IN ('contradicted', 'unmatched') \
-                AND NOT EXISTS (SELECT 1 FROM passage_recordings pr \
-                                 WHERE pr.passage_id = c.passage_id \
-                                   AND pr.source = 'local:ingest') \
+                AND NOT (c.verdict = 'unmatched' \
+                         AND EXISTS (SELECT 1 FROM passage_recordings pr \
+                                      WHERE pr.passage_id = c.passage_id \
+                                        AND pr.source = 'local:ingest')) \
               ORDER BY c.score DESC, c.passage_id LIMIT ?1"
         );
         let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
@@ -1562,8 +1566,23 @@ mod tests {
         let lib = Library { conn: c };
         let q = lib.review_queue(50).unwrap();
         let ids: Vec<i64> = q.iter().map(|i| i.passage_id).collect();
-        assert!(!ids.contains(&7), "deliberately local must not be queued");
+        assert!(!ids.contains(&7),
+                "self-published + unmatched: nothing can name it, so do not ask");
         assert!(ids.contains(&8), "a migration placeholder must still be queued");
+
+        // But a locally-ingested track AcoustID *can* name is the most useful
+        // row there is: a placeholder with the real recording beside it.
+        lib.conn.execute_batch(
+            "INSERT INTO passages VALUES (9,1,'radio',0,1000,NULL,NULL,NULL,'ingest:whole-file');
+             INSERT INTO recordings VALUES ('local:audio:def','Some Album Track',NULL,'local:ingest');
+             INSERT INTO passage_recordings VALUES (9,'local:audio:def',1.0,'local:ingest');
+             INSERT INTO id_checks VALUES (9,'local:audio:def','contradicted',0.98,
+                 '[{\"mbid\":\"aaaaaaaa-0000-0000-0000-00000000000c\",\"title\":\"Some Album Track\",\"score\":0.98}]','t');")
+            .unwrap();
+        let q2 = lib.review_queue(50).unwrap();
+        let ids2: Vec<i64> = q2.iter().map(|i| i.passage_id).collect();
+        assert!(ids2.contains(&9),
+                "a local id AcoustID can name must be offered for review");
         assert_eq!(
             q.iter().find(|i| i.passage_id == 8).unwrap().severity,
             "no-mbid"

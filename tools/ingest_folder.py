@@ -106,8 +106,14 @@ def main() -> int:
         say(f"not a folder: {args.folder}")
         return 1
 
+    # Normalised to the platform's own separators. The first run of this stored
+    # paths exactly as they were typed -- "C:/a/b\file.mp3" from a
+    # forward-slash argument -- while the migrated 5,590 were pure backslash.
+    # Nothing broke, because `audio_md5` is UNIQUE and catches a re-import
+    # regardless of spelling, but a scan comparing disk against `files.path`
+    # then reports already-imported audio as missing.
     files = sorted(
-        os.path.join(dp, n)
+        os.path.normpath(os.path.join(dp, n))
         for dp, _, ns in os.walk(args.folder)
         for n in ns if n.lower().endswith(AUDIO))
     if not files:
