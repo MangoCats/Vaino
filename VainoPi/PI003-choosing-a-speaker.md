@@ -125,6 +125,31 @@ successfully says nothing about whether anyone can hear it -- the dummy accepts
 audio perfectly -- so a reopen that lands there is marked failed and the retry
 loop keeps looking. The player will not report itself recovered into silence.
 
+**`[PI3-API-050]` Routes fronting the helper. Built.** `GET /audio/speakers`
+lists; `POST /audio/speakers/:verb/:address` acts. The verb is an enum rather
+than a string passed through, so an unknown one cannot reach the helper, and
+the address is validated again in the player -- the helper's check is the one
+that must not be bypassed, this one makes a malformed address a 400 with an
+explanation rather than a non-zero exit nobody reads.
+
+`use` reopens the output **as part of the same request** `[PI3-UI-020]`. Doing
+it server-side rather than in the browser means no caller can forget the step
+that makes the choice audible.
+
+Every reply carries `audible`, which is the question a listener actually has.
+It is `null` rather than `false` when the stream is not linked yet: "we could
+not tell" and "it is not working" want different responses, and collapsing them
+is how a fault stays hidden. The reply also waits for the reopen to land before
+reporting -- reading immediately returned `sink:null` with `dummy:false`, which
+reads as healthy and was merely early.
+
+Choosing a speaker from silence, in one call:
+
+    before  {"sink":"Dummy Output","dummy":true,"known":true}
+    POST    /audio/speakers/use/20:64:DE:CF:F3:AD
+    reply   {"audible":true,"state":"connected","reopened":true,
+             "output":{"sink":"MIDDLETON","dummy":false,"known":true}}
+
 **`[PI3-API-040]` Surface the recovery count `[REQ-VIS-140]`.** A link that
 drops and recovers repeatedly is a range or battery problem, and a number
 climbing in the diagnostics is how anyone would know. Silent recovery is right

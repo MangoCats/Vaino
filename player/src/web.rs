@@ -16,9 +16,11 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+
+use crate::bluetooth;
 use serde::Serialize;
 
 use crate::engine::{Command, EngineHandle, Placement, PlayerState};
@@ -217,6 +219,9 @@ pub fn router(ui: Ui) -> Router {
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/audio/sink", get(audio_sink))
+        .route("/audio/speakers", get(speakers))
+        .route("/audio/speakers/:verb", post(speaker_verb))
+        .route("/audio/speakers/:verb/:address", post(speaker_verb_on))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/skip/fade/:ms", post(set_skip_fade))
@@ -638,6 +643,77 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
 /// settings panel is the only thing that needs it.
 async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
     axum::Json(crate::sink::current())
+}
+
+async fn speakers() -> Response {
+    bt_reply(bluetooth::run(bluetooth::Verb::List, None), false)
+}
+
+/// Verbs that name no device: `scan`.
+async fn speaker_verb(
+    State(ui): State<Ui>,
+    axum::extract::Path(verb): axum::extract::Path<String>,
+) -> Response {
+    let Some(v) = bluetooth::Verb::parse(&verb) else {
+        return (StatusCode::NOT_FOUND, "unknown verb").into_response();
+    };
+    if v.needs_address() {
+        return (StatusCode::BAD_REQUEST, "verb needs a device").into_response();
+    }
+    let _ = &ui;
+    bt_reply(bluetooth::run(v, None), false)
+}
+
+/// Verbs that name a device. `use` reopens the player output as part of the
+/// same request `[PI3-UI-020]`: the stream does not dependably follow a change
+/// of default sink, so a selection that stopped at the helper would look like
+/// it worked and be silent. Doing it here rather than in the browser means no
+/// caller can forget the step that makes the choice audible.
+async fn speaker_verb_on(
+    State(ui): State<Ui>,
+    axum::extract::Path((verb, address)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let Some(v) = bluetooth::Verb::parse(&verb) else {
+        return (StatusCode::NOT_FOUND, "unknown verb").into_response();
+    };
+    let result = bluetooth::run(v, Some(&address));
+    let reopen = result.is_ok() && matches!(v, bluetooth::Verb::Use | bluetooth::Verb::Pair);
+    if reopen {
+        ui.handle.send(Command::ReopenOutput);
+        // Wait for the reopen to land before reporting where the audio went.
+        // Reading the sink immediately gives sink:null with dummy:false, which
+        // reads as healthy and is merely early -- the precise shape of
+        // reassuring answer that hid this fault in the first place.
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+    }
+    bt_reply(result, reopen)
+}
+
+/// One shape for every speaker reply, so the panel has one thing to read.
+fn bt_reply(result: Result<serde_json::Value, String>, reopened: bool) -> Response {
+    match result {
+        Ok(mut v) => {
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("reopened".into(), reopened.into());
+                // The answer the listener actually cares about, and the one
+                // the helper cannot give: where the audio ended up
+                // `[PI3-API-020]`.
+                let where_to = crate::sink::current();
+                // An unlinked stream is not a working one. Saying so keeps
+                // "we could not tell" distinct from "it is fine".
+                if where_to.known && where_to.sink.is_none() {
+                    obj.insert("audible".into(), serde_json::Value::Null);
+                } else {
+                    obj.insert("audible".into(), (!where_to.dummy).into());
+                }
+                if let Ok(s) = serde_json::to_value(where_to) {
+                    obj.insert("output".into(), s);
+                }
+            }
+            axum::Json(v).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
 }
 
 /// Controls are named rather than numbered so the wire stays readable and an
