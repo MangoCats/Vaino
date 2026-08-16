@@ -2,7 +2,7 @@
 
 **Implementation Guide — Tier 3**
 
-Step-by-step build of a Pi Zero 2W as a Vaino appliance. Implements the hardware and storage model in [embedded-hardware.md](embedded-hardware.md) and the requirements in [REQ002 §6](spec/REQ002-functional-requirements.md#6-appliance--hw).
+Step-by-step build of a Pi Zero 2W as a Vaino appliance. Implements the hardware and storage model in [embedded-hardware.md](embedded-hardware.md) and the requirements in [REQ002 §6](../docs/spec/REQ002-functional-requirements.md#6-appliance--hw).
 
 > **Status: UNVALIDATED.** Written from specification and the target's known constraints; not yet executed on hardware. Each step carries a **Verify** line — record the actual result, and correct this document where reality disagrees. MuLibPlay's Pi notes decayed into scattered tips precisely because nothing was checked back in.
 

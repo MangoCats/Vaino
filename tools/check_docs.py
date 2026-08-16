@@ -108,7 +108,11 @@ def in_reference_section(heading):
 
 def vaino_docs():
     """Vaino-authored markdown. docs/inherited/README.md is ours, not inherited."""
-    out = glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")
+    # VainoPi/ is documentation too -- the Raspberry Pi work was moved out of
+    # docs/ so the appliance material sits with the image build that uses it,
+    # and a checker that cannot see it reports its tags as dangling.
+    out = (glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")
+           + glob.glob("VainoPi/*.md"))
     out = [p for p in out if INHERITED_DIR not in p]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
