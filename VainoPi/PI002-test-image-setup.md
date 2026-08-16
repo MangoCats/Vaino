@@ -209,6 +209,26 @@ fails with ssh idle), thermal throttling and undervoltage (59-62 C,
 trusted, connected), and sink selection (the stream demonstrably attached to
 MIDDLETON before failing).
 
+**`[PI2-RUN-040]` Resolved.** The cause was `[PI3-WHY-010]`: PipeWire offers a
+`Dummy Output` when no sink is present, and the ALSA bridge binds a stream to
+whichever node was default when it opened. A player started before the speaker
+connects plays perfectly into that dummy, reports itself healthy, and leaves
+the speaker with no audio to hold A2DP open -- which is heard as a drop a few
+seconds in, and sends anyone investigating straight to Bluetooth.
+
+Fixed by `vaino-wait-sink` (the unit will not start against a dummy), a
+`--device` flag, and output recovery in the engine. Measured with audio
+genuinely flowing, confirmed by `pw-top` and by ear across two tracks:
+**40/40 samples connected over two minutes, no errors, no recoveries.**
+
+**`[PI2-RUN-050]` Interference was not the cause, and is not being designed
+around.** `radio-silence-test.sh` can take the shared radio out of the
+measurement entirely -- one antenna serves Wi-Fi and Bluetooth, so a reading
+taken over ssh competes with what it measures -- and its `KEEP_WIFI=1` control
+arm measures the same thing with the radio up. The control arm is clean, so the
+dark arm has not been run. It is the tool to reach for if unexplained
+connection problems appear later `[PI3-NOT-010]`.
+
 ## 7. What this image is not
 
 No read-only root, no overlay, no three partitions, no privileged settings
