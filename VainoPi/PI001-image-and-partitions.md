@@ -283,6 +283,37 @@ page must say so plainly and invite a change. An appliance shipping a known
 password on an open access point is a fair description of the problem, not a
 convenience.
 
+**`[PI-SET-035]` Not partition B, and the reason is that the risk was never
+about the partition.** Putting `hostapd.conf` on B looks attractive — B is
+written rarely and attended, which is the same profile as an AP config change.
+But a single small config file is made safe by *how* it is written, not by
+where it lives: write a temporary file, `fsync`, `rename`. Rename is atomic,
+so the reader sees the old file or the new one and never a half-written one.
+`backup.rs` already does exactly this for the same reason.
+
+Once the write is atomic, B's advantage disappears and two disadvantages
+remain:
+
+- **It couples the network to the library.** B is a gigabyte of ext4 that must
+  mount before `hostapd` could read its config. If B is corrupt — the case we
+  explicitly plan to survive by rebuilding from Sampo — there would be no
+  access point, and therefore no way to reach the appliance to fix it. The
+  recovery path must not depend on the largest thing that can break.
+- **It widens the wrong window.** Changing an SSID would mean remounting the
+  entire library partition read-write for a reason that has nothing to do with
+  music.
+
+**`[PI-SET-036]` So: a default on A, an override on C.** The stock
+`hostapd.conf` ships on the read-only system partition and is always present.
+The helper writes an override to C, atomically. At boot, use the override if
+it exists and parses; otherwise fall back to A's default.
+
+That gives the recovery property the appliance actually needs. Reinitialising
+C is already a factory reset `[PI-DB-035]`, and under this arrangement it
+restores the *published* credentials `[PI-SET-030]` — so a listener who has
+forgotten what they set can always get back in by clearing the partition the
+design already treats as expendable.
+
 **`[PI-SET-040]` Bluetooth pairing is stateful and belongs on partition C.**
 BlueZ keeps its keys under `/var/lib/bluetooth`, which must therefore be
 bind-mounted to C like `/var/log` `[PI-A-020]` — otherwise every pairing is
