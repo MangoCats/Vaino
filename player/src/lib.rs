@@ -67,6 +67,22 @@ pub const SKIP_FADE_MAX_MS: u64 = 10_000;
 /// costs nothing extra because the incoming passage is already decoded
 /// `[REQ-AUD-160]`.
 pub const SKIP_LEAD_MS: u64 = 500;
+/// How often the resume point is written `[REQ-VIS-155]`.
+///
+/// Every write lands on the appliance's most volatile partition
+/// `[PI-C-010]`, and this is the only one that happens continuously and
+/// unattended -- so it is the write rate that decides how much of that
+/// partition's life is spent with a write in flight.
+///
+/// Five seconds rather than one, which is what it was. The cost of the longer
+/// interval is bounded and small: at most this much playback position is lost
+/// to a power cut, and the *interesting* transitions -- passage change, pause,
+/// resume -- bypass the throttle entirely and are written the moment they
+/// happen. So the setting trades a few seconds of position, never an event.
+pub const RESUME_SAVE_MS: u64 = 5_000;
+pub const RESUME_SAVE_MIN_MS: u64 = 1_000;
+pub const RESUME_SAVE_MAX_MS: u64 = 300_000;
+
 pub const SKIP_LEAD_MIN_MS: u64 = 100;
 pub const SKIP_LEAD_MAX_MS: u64 = 2_000;
 

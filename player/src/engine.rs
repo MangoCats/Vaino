@@ -25,7 +25,7 @@ use crate::BUFFER_FRAMES;
 /// How often the resume point reaches the database during steady playback.
 /// Losing at most this much position to a power cut is a fair trade for not
 /// writing to storage thousands of times a second.
-const SAVE_EVERY: Duration = Duration::from_secs(5);
+
 
 /// A passage currently decoding and/or sounding.
 struct Live {
@@ -66,6 +66,7 @@ pub struct PlayerState {
     /// Skip transition shape `[REQ-AUD-162]`, so a UI can show what it will do.
     pub skip_fade_ms: u64,
     pub skip_lead_ms: u64,
+    pub resume_save_ms: u64,
     pub active_streams: usize,
     pub underrun_samples: u64,
     /// Times the callback could not take the output lock at all. Distinct from
@@ -114,6 +115,8 @@ pub enum Command {
     SetSkipFade(u64),
     /// How long after a skip the next passage starts, in ms `[REQ-AUD-162]`.
     SetSkipLead(u64),
+    /// How often the resume point is written, in ms `[REQ-VIS-155]`.
+    SetResumeSave(u64),
     Enqueue(QueueEntry),
     /// Put a passage next rather than last, for a browsed choice
     /// `[REQ-VIS-180]`.
@@ -179,6 +182,10 @@ pub struct Engine {
     /// starts where the library says it starts.
     pending_resume: Option<u64>,
     last_save: Instant,
+    /// How often the resume point is written `[REQ-VIS-155]`. Configurable
+    /// because every one of these writes lands on the appliance's most
+    /// volatile partition `[PI-C-010]`.
+    resume_save_ms: u64,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -227,6 +234,7 @@ impl Engine {
             store: None,
             pending_resume: None,
             last_save: Instant::now(),
+            resume_save_ms: crate::RESUME_SAVE_MS,
             saved: None,
             recorded: None,
             shown: None,
@@ -300,6 +308,11 @@ impl Engine {
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetSkipFade(ms)) => {
                     self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
+                    self.remember_settings();
+                }
+                Ok(Command::SetResumeSave(ms)) => {
+                    self.resume_save_ms =
+                        ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
                     self.remember_settings();
                 }
                 Ok(Command::SetSkipLead(ms)) => {
@@ -477,7 +490,8 @@ impl Engine {
     /// record a volume must never interrupt the music.
     fn remember_settings(&self) {
         if let Some(store) = &self.store {
-            if let Err(e) = store.save_settings(self.volume, self.skip_fade_ms, self.skip_lead_ms)
+            if let Err(e) = store.save_settings(self.volume, self.skip_fade_ms, self.skip_lead_ms,
+                                       self.resume_save_ms)
             {
                 eprintln!("save settings: {e}");
             }
@@ -486,7 +500,10 @@ impl Engine {
 
     /// Put back what was last chosen. Clamped on the way in, because a value
     /// from disk deserves no more trust than one from the network.
-    pub fn apply_settings(&mut self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64) {
+    pub fn apply_settings(&mut self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
+                          resume_save_ms: u64) {
+        self.resume_save_ms =
+            resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
         self.volume = volume.clamp(0.0, 1.0);
         if let Some(o) = &self.out {
             o.volume.set(self.volume);
@@ -683,7 +700,8 @@ impl Engine {
         let Some(store) = &self.store else { return };
         let key = (self.live.first().map(|l| l.entry.passage_id).unwrap_or(-1), self.playing);
         let changed = self.saved != Some(key);
-        if !force && !changed && self.last_save.elapsed() < SAVE_EVERY {
+        let every = Duration::from_millis(self.resume_save_ms);
+        if !force && !changed && self.last_save.elapsed() < every {
             return;
         }
         let (id, pos) = match self.live.first() {
@@ -783,6 +801,7 @@ impl Engine {
             s.volume = self.volume;
             s.skip_fade_ms = self.skip_fade_ms;
             s.skip_lead_ms = self.skip_lead_ms;
+            s.resume_save_ms = self.resume_save_ms;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.lock_failures = self.out.as_ref().map_or(0, |o| o.diagnostics().1);
@@ -798,7 +817,7 @@ impl Engine {
 /// Save on the way out, wherever "out" happens to be. Callers exit by several
 /// routes -- a Shutdown command, an empty queue, or simply dropping the engine
 /// -- and putting the final save in each of them would be three chances to
-/// forget one. The periodic save is up to `SAVE_EVERY` stale, so this is what
+/// forget one. The periodic save is up to `resume_save_ms` stale, so this is what
 /// keeps a clean exit from costing those seconds.
 impl Drop for Engine {
     fn drop(&mut self) {

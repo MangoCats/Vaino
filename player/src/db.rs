@@ -465,7 +465,8 @@ impl PlayerStore {
         // was already complete never reached it and browsing died on a missing
         // column. A query naming a column that does not exist fails outright;
         // it does not return nothing.
-        for column in ["skip_fade_ms INTEGER", "skip_lead_ms INTEGER"] {
+        for column in ["skip_fade_ms INTEGER", "skip_lead_ms INTEGER",
+                       "resume_save_ms INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
         }
@@ -601,19 +602,22 @@ impl PlayerStore {
     /// Volume was already a column here and was never written to it -- the
     /// resume point saved position and playing state and quietly left the
     /// level behind, so it came back at full scale every start.
-    pub fn save_settings(&self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64)
-        -> Result<(), DbError>
+    pub fn save_settings(&self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
+                         resume_save_ms: u64) -> Result<(), DbError>
     {
         self.conn
             .execute(
-                "INSERT INTO player_state (id, volume, skip_fade_ms, skip_lead_ms, updated_at)
-                 VALUES (1, ?1, ?2, ?3, datetime('now'))
+                "INSERT INTO player_state
+                     (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, datetime('now'))
                  ON CONFLICT(id) DO UPDATE SET
                      volume = excluded.volume,
                      skip_fade_ms = excluded.skip_fade_ms,
                      skip_lead_ms = excluded.skip_lead_ms,
+                     resume_save_ms = excluded.resume_save_ms,
                      updated_at = excluded.updated_at",
-                rusqlite::params![volume as f64, skip_fade_ms as i64, skip_lead_ms as i64],
+                rusqlite::params![volume as f64, skip_fade_ms as i64, skip_lead_ms as i64,
+                                  resume_save_ms as i64],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
@@ -623,16 +627,17 @@ impl PlayerStore {
     ///
     /// Absent columns and absent rows both mean "never saved", which is a
     /// first run and not a fault: the caller keeps its defaults.
-    pub fn load_settings(&self) -> Option<(f32, u64, u64)> {
+    pub fn load_settings(&self) -> Option<(f32, u64, u64, u64)> {
         self.conn
             .query_row(
-                "SELECT volume, skip_fade_ms, skip_lead_ms FROM player_state WHERE id = 1",
+                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms                    FROM player_state WHERE id = 1",
                 [],
                 |r| {
                     Ok((
                         r.get::<_, Option<f64>>(0)?.unwrap_or(1.0) as f32,
                         r.get::<_, Option<i64>>(1)?.unwrap_or(crate::SKIP_FADE_MS as i64) as u64,
                         r.get::<_, Option<i64>>(2)?.unwrap_or(crate::SKIP_LEAD_MS as i64) as u64,
+                        r.get::<_, Option<i64>>(3)?.unwrap_or(crate::RESUME_SAVE_MS as i64) as u64,
                     ))
                 },
             )
@@ -1689,6 +1694,30 @@ mod tests {
                 "nor be silently overwritten by a different answer");
         let q = lib.review_queue(50).unwrap();
         assert!(q[0].applied, "the page has to be able to show it as applied");
+    }
+
+    /// The resume-save interval persists like the others `[REQ-VIS-155]`, and
+    /// a value from disk is clamped on the way in -- every one of these writes
+    /// lands on the appliance's most volatile partition `[PI-C-010]`, so the
+    /// setting that governs how many there are must not be settable to zero by
+    /// a corrupted row.
+    #[test]
+    fn the_resume_interval_persists_and_is_clamped() {
+        let tmp = std::env::temp_dir().join(format!("vaino-rs2-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let store = PlayerStore::open(&tmp).unwrap();
+        assert!(store.load_settings().is_none(), "nothing saved yet");
+
+        store.save_settings(0.5, 2_000, 500, 30_000).unwrap();
+        let (v, fade, lead, resume) = store.load_settings().unwrap();
+        assert!((v - 0.5).abs() < 1e-6);
+        assert_eq!((fade, lead, resume), (2_000, 500, 30_000));
+
+        // A library written before this column existed reads as the default,
+        // not as zero -- which would be a write every tick.
+        store.conn.execute("UPDATE player_state SET resume_save_ms = NULL", []).unwrap();
+        assert_eq!(store.load_settings().unwrap().3, crate::RESUME_SAVE_MS);
+        let _ = std::fs::remove_file(&tmp);
     }
 
     /// The vocabulary is enforced where it is written, because that is the only

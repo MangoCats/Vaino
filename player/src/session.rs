@@ -169,8 +169,8 @@ impl Session {
         // Before the store is handed over, since it is the thing that holds
         // them: volume and the skip shape as they were last left
         // `[REQ-VIS-155]`.
-        if let Some((v, fade, lead)) = self.store.as_ref().and_then(|s| s.load_settings()) {
-            engine.apply_settings(v, fade, lead);
+        if let Some((v, fade, lead, resume)) = self.store.as_ref().and_then(|s| s.load_settings()) {
+            engine.apply_settings(v, fade, lead, resume);
         }
         if let Some(s) = self.store.take() {
             engine.attach_store(s);

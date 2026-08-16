@@ -55,6 +55,13 @@ pub struct SkipShape {
     pub fade_max_ms: u64,
     pub lead_min_ms: u64,
     pub lead_max_ms: u64,
+    /// How often the resume point is written `[REQ-VIS-155]`. Here rather than
+    /// in a settings object of its own because the page already binds this
+    /// group, and the bounds travel with the value for the same reason the
+    /// skip bounds do -- so the control offers exactly what the engine accepts.
+    pub resume_save_ms: u64,
+    pub resume_save_min_ms: u64,
+    pub resume_save_max_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -169,6 +176,9 @@ impl From<&PlayerState> for Snapshot {
                 fade_max_ms: crate::SKIP_FADE_MAX_MS,
                 lead_min_ms: crate::SKIP_LEAD_MIN_MS,
                 lead_max_ms: crate::SKIP_LEAD_MAX_MS,
+                resume_save_ms: s.resume_save_ms,
+                resume_save_min_ms: crate::RESUME_SAVE_MIN_MS,
+                resume_save_max_ms: crate::RESUME_SAVE_MAX_MS,
             },
             program: None,
             program_manual: false,
@@ -203,6 +213,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/volume/:db", post(set_volume))
         .route("/skip/fade/:ms", post(set_skip_fade))
         .route("/skip/lead/:ms", post(set_skip_lead))
+        .route("/resume/save/:ms", post(set_resume_save))
         .route("/program/:id", post(set_program))
         .with_state(ui)
 }
@@ -454,6 +465,15 @@ async fn why_for(
         Some(v) => axum::Json(v).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// How often the resume point is written `[REQ-VIS-155]`.
+async fn set_resume_save(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetResumeSave(ms));
+    StatusCode::NO_CONTENT
 }
 
 /// The passage's cover art `[REQ-VIS-170]`.

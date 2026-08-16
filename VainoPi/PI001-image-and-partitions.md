@@ -201,8 +201,20 @@ adds a second copy of bytes SQLite has already made durable itself.
 
 On an SD card the cost is not theoretical. Flash erases in blocks far larger
 than a SQLite page, so the controller already amplifies small writes; doubling
-them at the filesystem layer compounds it, and the write pattern here is
-exactly the bad case — a resume-point update every second, forever.
+them at the filesystem layer compounds it, and the write pattern here is a
+steady drip that never stops.
+
+**`[PI-FS-015]` How steady is now a setting.** The resume point is written on
+an interval that defaults to **5 seconds** and is adjustable from the Vaino
+skin's settings panel, 1 s to 5 min `[REQ-VIS-155]`. On an appliance this is
+the single largest source of unattended writes, so it is the one number that
+most directly decides how much of partition C's life is spent with a write in
+flight — and it belongs to the installation, not to the source.
+
+Lengthening it costs bounded and small: at most that much playback position
+after a power cut. Passage changes, pause and resume bypass the interval and
+are written the moment they happen, so what the setting trades is a few
+seconds of position, never an event.
 
 **`[PI-FS-020]` The real comparison is ext4 `data=ordered` against f2fs.**
 

@@ -46,7 +46,8 @@ const SPARSE = {
   title_source: 'unknown', artist_source: 'unknown', album_source: 'unknown',
   queue_len: 0, queue: [], volume_db: -72.0, fader_min_db: -72.0,
   program: null, program_manual: false, programs: [],
-  skip: { fade_ms: 0, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000 },
+  skip: { fade_ms: 0, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000,
+          resume_save_ms: 5000, resume_save_min_ms: 1000, resume_save_max_ms: 300000 },
   underrun_samples: 0, why: null,
 };
 
@@ -66,7 +67,8 @@ const RICH = {
   volume_db: -12.5,
   program: 'Mellow', program_manual: true,
   programs: [{ id: 1, name: 'Mellow', start: '20:00' }, { id: 2, name: 'Prog', start: '09:00' }],
-  skip: { fade_ms: 2000, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000 },
+  skip: { fade_ms: 2000, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000,
+          resume_save_ms: 5000, resume_save_min_ms: 1000, resume_save_max_ms: 300000 },
   why: {
     program: 'Mellow', weight: 0.8123, decayed_weight: 0.4211, pool_weight: 3120.5,
     pool_size: 8078, share_pct: 0.0135,
@@ -255,6 +257,14 @@ async function run(skin) {
           'the skip control must still be bound after the move');
     fade.value = 3;
     fade.onchange();
+    // The resume interval is bound in the same panel and must reach the engine.
+    const rs = window.document.getElementById('resumesave');
+    if (rs) {
+      check(rs.value === '5.0', `resume interval should show 5.0 s, got ${rs.value}`);
+      rs.value = 30; rs.onchange();
+      check(posted.includes('/resume/save/30000'),
+            `resume interval must post, got ${JSON.stringify(posted)}`);
+    }
     check(posted.includes('/skip/fade/3000'),
           `a moved control must still reach the engine, posted ${JSON.stringify(posted)}`);
     gear.onclick();
@@ -297,7 +307,7 @@ async function run(skin) {
     check(nowrow.classList.contains('picked'), 'the playing track must be pickable again');
   }
 
-  const expectedPosts = gear ? (nowrow ? 4 : 3) : 2;
+  const expectedPosts = gear ? (nowrow ? 5 : 4) : 2;
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;

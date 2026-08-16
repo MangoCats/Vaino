@@ -64,6 +64,8 @@
   const skipFade = $('skipfade'), skipLead = $('skiplead');
   skipFade.onchange = () => Vaino.skipFade(skipFade.value * 1000);
   skipLead.onchange = () => Vaino.skipLead(skipLead.value * 1000);
+  const resumeSave = $('resumesave');
+  resumeSave.onchange = () => Vaino.resumeSave(resumeSave.value * 1000);
 
   // Each term is shown separately, never just the product: a single number
   // cannot be argued with, and arguing with it is the point [SPEC-DIR-190].
@@ -98,6 +100,11 @@
       skipLead.value = (k.lead_ms / 1000).toFixed(1);
     }
     $('skipoverlap').textContent = overlap(k);
+    if (k.resume_save_ms != null && document.activeElement !== resumeSave) {
+      resumeSave.min = k.resume_save_min_ms / 1000;
+      resumeSave.max = k.resume_save_max_ms / 1000;
+      resumeSave.value = (k.resume_save_ms / 1000).toFixed(1);
+    }
   }
 
   function renderWhy(w) {

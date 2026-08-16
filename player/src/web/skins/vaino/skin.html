@@ -70,6 +70,13 @@
       <p id="skipoverlap"></p>
     </div>
     <div class="setting">
+      <label for="resumesave">Save position every</label>
+      <span><input type="number" id="resumesave" step="0.5"> s</span>
+      <p>How often the playback position is written to disk. Longer means
+         fewer writes on an appliance's flash; at worst this much position is
+         lost to a power cut. Track changes and pause are always saved at once.</p>
+    </div>
+    <div class="setting">
       <label for="prog">Programme</label>
       <span><select id="prog"></select></span>
       <p id="progmode"></p>
