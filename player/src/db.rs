@@ -1031,6 +1031,17 @@ impl Library {
         // -- and a query naming a missing table FAILS rather than returning
         // nothing. That exact mistake blanked the browse page twice. Nothing to
         // review is a legitimate state and must not look like a broken page.
+        // Deliberately-local ids are excluded, not graded. A recording ingested
+        // from a folder that has no MusicBrainz entry -- self-published music,
+        // a live capture -- carries `local:audio:<md5>` and `source =
+        // 'local:ingest'`, and it is *correct*. Grading it `no-mbid` would put
+        // it at the top of the queue for ever, asking a question with no
+        // answer, and burying the placeholders that genuinely need one.
+        //
+        // The distinction is the source, not the shape of the id: the
+        // migration's `local:track:N` carries `inherited:mulib` and stays in
+        // the queue, because that one really is a broken identification.
+        //
         // `id_reviews` is checked too: it is created by `PlayerStore::open`,
         // which any running server has done, but this handle does not itself
         // guarantee it.
@@ -1050,6 +1061,9 @@ impl Library {
                LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
                LEFT JOIN id_reviews v ON v.passage_id = c.passage_id \
               WHERE c.verdict IN ('contradicted', 'unmatched') \
+                AND NOT EXISTS (SELECT 1 FROM passage_recordings pr \
+                                 WHERE pr.passage_id = c.passage_id \
+                                   AND pr.source = 'local:ingest') \
               ORDER BY c.score DESC, c.passage_id LIMIT ?1"
         );
         let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
@@ -1522,6 +1536,38 @@ mod tests {
         assert_eq!(q[0].passage_id, 6, "a missing id outranks every wrong one");
         assert_eq!(q[0].severity, "no-mbid");
         assert_eq!(q[0].rank, 0);
+    }
+
+    /// Music that has no MusicBrainz entry is not a fault to be reviewed.
+    /// Self-published audio ingested from a folder carries a local id on
+    /// purpose; asking a person about it would put an unanswerable question at
+    /// the top of the queue for ever. The migration's placeholders stay,
+    /// because those really are broken identifications -- the difference is
+    /// the source, not the shape of the id.
+    #[test]
+    fn a_deliberately_local_id_is_not_a_review_finding() {
+        let c = reviewable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES (7,1,'radio',0,1000,NULL,NULL,NULL,'ingest:whole-file');
+             INSERT INTO recordings VALUES ('local:audio:abc','My Own Song',NULL,'local:ingest');
+             INSERT INTO passage_recordings VALUES (7,'local:audio:abc',1.0,'local:ingest');
+             INSERT INTO id_checks VALUES (7,'local:audio:abc','unmatched',NULL,NULL,'t');
+             -- and a migration placeholder, which must still be asked about
+             INSERT INTO passages VALUES (8,1,'radio',0,1000,NULL,NULL,NULL,'src');
+             INSERT INTO recordings VALUES ('local:track:827','Something',NULL,'s');
+             INSERT INTO passage_recordings VALUES (8,'local:track:827',1.0,'inherited:mulib');
+             INSERT INTO id_checks VALUES (8,'local:track:827','unmatched',NULL,NULL,'t');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.review_queue(50).unwrap();
+        let ids: Vec<i64> = q.iter().map(|i| i.passage_id).collect();
+        assert!(!ids.contains(&7), "deliberately local must not be queued");
+        assert!(ids.contains(&8), "a migration placeholder must still be queued");
+        assert_eq!(
+            q.iter().find(|i| i.passage_id == 8).unwrap().severity,
+            "no-mbid"
+        );
     }
 
     /// `unmatched` reaches the page so it can be asked for deliberately, but
