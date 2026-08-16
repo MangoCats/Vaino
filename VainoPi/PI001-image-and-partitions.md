@@ -267,8 +267,55 @@ restarting a service.
 | Wi-Fi AP SSID | `Vaino` | `hostapd.conf`, restart `hostapd` |
 | Wi-Fi AP password | `Vaino321` | `hostapd.conf`, restart `hostapd` |
 | Wi-Fi band | `2.4` \| `5` \| `both` | `hostapd.conf` `hw_mode`/`channel` |
+| Network mode | `ap` \| `client` \| `both` | `hostapd` / `wpa_supplicant` |
+| Client SSID + password | none | `wpa_supplicant.conf` |
+| Development mode | **off** | `sshd`, diagnostics |
 | Bluetooth audio device for auto-connect | none | `bluetoothctl` / BlueZ D-Bus |
 | Paired-device list maintenance | — | BlueZ; pair, trust, forget |
+
+**`[PI-SET-012]` Three network modes, and they are not all simultaneous.**
+
+| Mode | For | Default |
+| :--- | :--- | :--- |
+| **Access point** | direct connection, no infrastructure | on |
+| **Client** | join a house network; reachable from anywhere on it | off |
+| **Development** | SSH and diagnostics | **off** |
+
+Access point and client are *not* freely combinable. One radio does one job:
+concurrent AP+STA exists on some chips through `nl80211`, but both interfaces
+must share a channel and the arrangement is fragile — which means the client
+network dictates the AP's channel, and losing the client association can take
+the access point with it. On a Pi Zero 2 W, treat them as **alternatives**,
+and offer both at once only where a second interface is present, exactly as
+`both` bands are treated `[PI-SET-032]`.
+
+**`[PI-SET-014]` Every one of these settings can destroy the means of undoing
+itself.** Switching to client mode with a mistyped password leaves an
+appliance with no access point, on no network, with no screen. This is the
+same hazard as an unhonourable band `[PI-SET-036]`, and it deserves a stronger
+answer than a fallback, because here the configuration is *valid* — it simply
+does not work.
+
+**Confirm-or-revert.** Apply the new configuration, then require the browser
+to re-connect and confirm within a timeout — five minutes is generous. If no
+confirmation arrives, restore the previous configuration and restart the
+services. The listener who mistyped a password sees the appliance come back on
+its old settings rather than needing a card reader.
+
+This is worth building once, in the helper, rather than per setting: it is the
+only mechanism that makes a network change safe to attempt from the device
+being reconfigured.
+
+**`[PI-SET-016]` Development mode is off by default and says what it costs.**
+It enables `sshd` and whatever diagnostics are useful. Two conditions:
+
+- **Key-only, or a password the listener sets.** `[PI-SET-030]`'s published
+  first-boot credential must never reach `sshd` — a known password on an
+  appliance that may be on a house network is a different order of exposure
+  from a known password on an access point in one room.
+- **It survives reboot but is visible.** A mode that quietly stays on is worse
+  than one that must be re-enabled; the settings page should show it as active
+  rather than leaving the state to memory.
 
 **`[PI-SET-020]` These need a privileged helper, and that is the design
 problem.** The player runs unprivileged and partition A is read-only. So the
