@@ -125,6 +125,67 @@ def segment(path: str, medium: str = "cd", min_track_s: float = MIN_TRACK_S,
     return best[2]
 
 
+# ------------------------------------------------------------- identification
+
+def identify(path: str, start: float, end: float, key: str):
+    """What AcoustID calls the audio between two marks, or `None`.
+
+    The acceptance test that generalises `[AFS-MB-030]`. Choosing a threshold
+    by track count needs the count to be right, and a pressing that differs
+    from MusicBrainz by two or three tracks -- which is the normal state of a
+    special edition -- can never satisfy it. Whether a segment *identifies*
+    asks nothing about the total: a boundary in the wrong place cuts a song in
+    half and matches nothing, which is the signal worth having.
+    """
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    fp = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.2f}",
+         "-t", f"{min(120.0, end - start):.2f}", "-i", path,
+         "-f", "chromaprint", "-fp_format", "base64", "-"],
+        capture_output=True).stdout.decode("ascii", "ignore").strip()
+    if not fp:
+        return None
+    q = urllib.parse.urlencode({"client": key, "duration": str(int(end - start)),
+                                "fingerprint": fp, "meta": "recordings"})
+    req = urllib.request.Request("https://api.acoustid.org/v2/lookup", data=q.encode(),
+                                 headers={"User-Agent": "Vaino/0.1"})
+    try:
+        d = json.load(urllib.request.urlopen(req, timeout=45))
+    except Exception:                                     # noqa: BLE001
+        return None
+    for r in d.get("results") or []:
+        for rec in r.get("recordings") or []:
+            if rec.get("title"):
+                artists = ", ".join(a.get("name", "") for a in rec.get("artists") or [])
+                return f"{rec['title']} — {artists}" if artists else rec["title"]
+    return None
+
+
+def propose(path: str, key: str, samples: int = 8, grid=SWEEP):
+    """The threshold whose segments identify best, and its boundaries."""
+    total = duration(path)
+    if total is None:
+        return None
+    best = None
+    for db in grid:
+        spans = spans_at(path, db, total)
+        if not spans:
+            continue
+        step = max(1, len(spans) // samples)
+        picks = list(range(0, len(spans), step))[:samples]
+        hits = sum(1 for i in picks if identify(path, *spans[i], key) is not None)
+        rate = hits / len(picks)
+        say(f"    {db:>4} dB: {len(spans):3d} segments, {hits}/{len(picks)} identified")
+        if best is None or rate > best[0]:
+            best = (rate, db, spans)
+        if rate == 1.0:
+            break
+    return best
+
+
 # ------------------------------------------------------------------ validate
 
 def validate(db: str, limit: int, medium: str, tolerance: float) -> int:
