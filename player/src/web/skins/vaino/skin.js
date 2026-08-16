@@ -211,6 +211,9 @@
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
     $('state').textContent = s.playing ? 'playing' : 'paused';
+    // The ground shifts with it, so the state is legible without reading.
+    $('devmode').hidden = !s.dev_mode;
+    document.body.classList.toggle('dev', Boolean(s.dev_mode));
     $('under').textContent = s.underrun_samples;
     showQueue(s);
     showProgram(s);

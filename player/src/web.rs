@@ -128,6 +128,10 @@ pub struct Snapshot {
     pub program: Option<String>,
     pub program_manual: bool,
     pub programs: Vec<ProgramItem>,
+    /// Development mode is on `[PI-SET-016]`: sshd and diagnostics are
+    /// running. Always false off the appliance -- the setting belongs to the
+    /// Pi's privileged helper, and the player only reports what it is told.
+    pub dev_mode: bool,
     pub underrun_samples: u64,
     /// Output-lock contention `[REQ-VIS-140]`. Non-zero means the callback was
     /// kept waiting, which sounds like a click rather than a gap.
@@ -183,6 +187,7 @@ impl From<&PlayerState> for Snapshot {
             program: None,
             program_manual: false,
             programs: Vec::new(),
+            dev_mode: s.dev_mode,
             underrun_samples: s.underrun_samples,
             lock_failures: s.lock_failures,
             why: None,

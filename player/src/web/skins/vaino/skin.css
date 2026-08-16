@@ -99,6 +99,17 @@
         background: transparent; border: 1px solid transparent;
         border-radius: 6px; }
 #gear:hover { color: var(--fg); border-color: var(--line); }
+/* Development mode [PI-SET-016]. Two signals rather than one: a notation
+   beside the gear that names it, and a ground shifted from grey to wine so
+   the state is legible from across the room and cannot be left on by
+   forgetting. The badge says which mode; the colour says there is one. */
+#devmode { color: #e8b4b8; border: 1px solid currentColor; border-radius: 999px;
+           padding: .1rem .5rem; font-size: .6875rem; font-weight: 600;
+           letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+body.dev { --bg: #2a1418; --line: #4a2830; }
+@media (prefers-color-scheme: light) {
+  body.dev { --bg: #f6eaec; --line: #d8bcc2; }
+}
 #gear[aria-expanded="true"] { color: var(--fg); border-color: var(--line);
                               background: var(--line); }
 

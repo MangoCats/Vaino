@@ -48,7 +48,7 @@ const SPARSE = {
   program: null, program_manual: false, programs: [],
   skip: { fade_ms: 0, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000,
           resume_save_ms: 5000, resume_save_min_ms: 1000, resume_save_max_ms: 300000 },
-  underrun_samples: 0, why: null,
+  underrun_samples: 0, why: null, dev_mode: false,
 };
 
 // A snapshot carrying a full Program Director explanation -- the richest
@@ -305,6 +305,22 @@ async function run(skin) {
     nowrow.onclick();
     await new Promise(r => setTimeout(r, 20));
     check(nowrow.classList.contains('picked'), 'the playing track must be pickable again');
+  }
+
+  // Development mode must be visible, not remembered `[PI-SET-016]`: a
+  // notation that names it and a ground that shifts, both driven by the
+  // snapshot so a mode left on cannot look like a mode switched off.
+  const dev = window.document.getElementById('devmode');
+  if (dev) {
+    check(dev.hidden, 'diagnostics notation must be hidden when dev_mode is false');
+    check(!window.document.body.classList.contains('dev'),
+          'the wine ground must be off when dev_mode is false');
+    sock.onmessage({ data: JSON.stringify({ ...RICH, dev_mode: true }) });
+    check(!dev.hidden, 'diagnostics notation must appear when dev_mode is true');
+    check(window.document.body.classList.contains('dev'),
+          'the ground must shift when dev_mode is true');
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    check(dev.hidden, 'and clear again when it goes off');
   }
 
   const expectedPosts = gear ? (nowrow ? 5 : 4) : 2;

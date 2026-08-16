@@ -67,6 +67,8 @@ pub struct PlayerState {
     pub skip_fade_ms: u64,
     pub skip_lead_ms: u64,
     pub resume_save_ms: u64,
+    /// Reported to the browser so the interface can show it `[PI-SET-016]`.
+    pub dev_mode: bool,
     pub active_streams: usize,
     pub underrun_samples: u64,
     /// Times the callback could not take the output lock at all. Distinct from

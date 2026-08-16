@@ -302,6 +302,11 @@ confirmation arrives, restore the previous configuration and restart the
 services. The listener who mistyped a password sees the appliance come back on
 its old settings rather than needing a card reader.
 
+The listener confirms the selection explicitly — a button, not merely a page
+that loaded. A browser can re-connect to a cached page without the appliance
+being reachable at all, so the confirmation has to be a round trip the device
+answers.
+
 This is worth building once, in the helper, rather than per setting: it is the
 only mechanism that makes a network change safe to attempt from the device
 being reconfigured.
@@ -313,9 +318,14 @@ It enables `sshd` and whatever diagnostics are useful. Two conditions:
   first-boot credential must never reach `sshd` — a known password on an
   appliance that may be on a house network is a different order of exposure
   from a known password on an access point in one room.
-- **It survives reboot but is visible.** A mode that quietly stays on is worse
-  than one that must be re-enabled; the settings page should show it as active
-  rather than leaving the state to memory.
+- **It survives reboot but is visible, on the main screen.** A mode that
+  quietly stays on is worse than one that must be re-enabled, and a state
+  shown only on the settings page is a state nobody checks. Two signals, both
+  driven by `dev_mode` in the snapshot: a **notation beside the settings gear**
+  that names it, and the **ground shifted from dark grey to dark wine red**.
+  The badge says which mode; the colour says there is one, from across the
+  room and without reading. *Implemented in the Vaino skin 2026-08-16; the
+  flag is always false until the appliance helper sets it.*
 
 **`[PI-SET-020]` These need a privileged helper, and that is the design
 problem.** The player runs unprivileged and partition A is read-only. So the
