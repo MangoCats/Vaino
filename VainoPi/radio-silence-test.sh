@@ -14,6 +14,21 @@
 # Idempotent: re-runnable, leaves no state behind but its log.
 set -uo pipefail
 
+# Must run as the LOGIN user, never under sudo. PipeWire is per-user: under
+# sudo, XDG_RUNTIME_DIR resolves to root's and every flow check reads zero
+# while the link samples still look perfect -- a false pass of precisely the
+# kind this script exists to prevent. It sudoes internally where it needs to.
+if [ "$(id -u)" = "0" ]; then
+    echo "run as the login user, not with sudo (PipeWire is per-user)" >&2
+    exit 1
+fi
+
+# KEEP_WIFI=1 runs the identical measurement with the radio left UP -- the
+# control arm. Comparing a dark run against a remembered impression of a
+# previous one compares two different procedures; running the same sampling,
+# the same flow checks and the same log format either way is what makes the
+# two numbers subtractable.
+KEEP_WIFI="${KEEP_WIFI:-0}"
 SPEAKER="${SPEAKER:-20:64:DE:CF:F3:AD}"
 SECONDS_DOWN="${SECONDS_DOWN:-120}"
 IFACE="${IFACE:-wlan0}"
@@ -23,11 +38,14 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 say() { echo "$*" | sudo tee -a "$LOG" >/dev/null; }
 
 # The deadman. Armed FIRST and independent of this process: whatever happens
-# below, the interface comes back up at the deadline.
-sudo systemd-run --on-active="$((SECONDS_DOWN + 30))" --timer-property=AccuracySec=1s \
+# below, the interface comes back up at the deadline. Not needed for the
+# control arm, which never lowers the interface and so can never strand the
+# machine.
+[ "$KEEP_WIFI" = "1" ] || sudo systemd-run --on-active="$((SECONDS_DOWN + 30))" --timer-property=AccuracySec=1s \
      --unit=vaino-wifi-restore --quiet \
      /bin/sh -c "rfkill unblock wifi; ip link set $IFACE up; systemctl restart wpa_supplicant 2>/dev/null; nmcli radio wifi on 2>/dev/null" \
   || { echo "could not arm the restore timer; refusing to take the radio down"; exit 1; }
+[ "$KEEP_WIFI" = "1" ] && LOG="${LOG%.log}.wifi-up.log"
 
 sudo touch "$LOG"; sudo chmod 644 "$LOG"
 say "=== radio silence test $(date -Is) ==="
@@ -57,30 +75,44 @@ fi
 # per-node quantum activity, so a node that is merely connected reads zero
 # where one that is playing does not.
 sleep 4
-flow_before=$(pw-top -b -n 2 2>/dev/null | grep -ci middleton || echo 0)
-say "flow check before: $flow_before middleton rows in pw-top"
+flow_before=$(pw-top -b -n 2 2>/dev/null | grep -ci 'alsa_playback.vaino' || echo 0)
+say "flow check before: $flow_before vaino rows in pw-top"
+if [ "$flow_before" -lt 1 ]; then
+    say "ABORT: no audio flowing; the test would measure silence"
+    sudo systemctl stop vaino-wifi-restore.timer 2>/dev/null
+    exit 1
+fi
 
 # Everything from here runs with no network. Sample locally into the log.
-say "--- wifi down $(date -Is) ---"
-sudo nmcli radio wifi off 2>/dev/null || sudo ip link set "$IFACE" down
+if [ "$KEEP_WIFI" = "1" ]; then
+    say "--- wifi UP (control arm) $(date -Is) ---"
+    say "link: $(iw dev "$IFACE" link 2>/dev/null | grep -i signal | tr -s ' ')"
+else
+    say "--- wifi down $(date -Is) ---"
+    sudo nmcli radio wifi off 2>/dev/null || sudo ip link set "$IFACE" down
+fi
 
 ok=0; n=$((SECONDS_DOWN / 3))
 for _ in $(seq 1 "$n"); do
     bluetoothctl info "$SPEAKER" 2>/dev/null | grep -qi 'Connected: yes' && ok=$((ok + 1))
     sleep 3
 done
-say "connected while dark: $ok/$n"
-say "flow while dark:      $(pw-top -b -n 2 2>/dev/null | grep -ci middleton) rows"
-say "stream while dark:    $(wpctl status | grep -c 'MIDDLETON:playback') links"
-say "errors while dark:"
+arm=$([ "$KEEP_WIFI" = "1" ] && echo "wifi up" || echo "dark")
+say "connected while $arm: $ok/$n"
+say "flow while $arm:      $(pw-top -b -n 2 2>/dev/null | grep -ci 'alsa_playback.vaino') rows"
+say "links while $arm:     $(wpctl status | grep -c 'MIDDLETON:playback')"
+say "errors while $arm:"
 journalctl -u vaino --since "-${SECONDS_DOWN}s" --no-pager 2>/dev/null \
   | grep -iE 'error|recover' | tail -10 | sudo tee -a "$LOG" >/dev/null
 
-say "--- wifi up $(date -Is) ---"
-sudo nmcli radio wifi on 2>/dev/null || sudo ip link set "$IFACE" up
-sudo systemctl stop vaino-wifi-restore.timer 2>/dev/null
-sudo systemctl reset-failed vaino-wifi-restore.timer 2>/dev/null
-
-for _ in $(seq 1 30); do ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && break; sleep 2; done
-say "=== done, network back $(date -Is) ==="
+if [ "$KEEP_WIFI" != "1" ]; then
+    say "--- wifi up $(date -Is) ---"
+    sudo nmcli radio wifi on 2>/dev/null || sudo ip link set "$IFACE" up
+    sudo systemctl stop vaino-wifi-restore.timer 2>/dev/null
+    sudo systemctl reset-failed vaino-wifi-restore.timer 2>/dev/null
+    for _ in $(seq 1 30); do ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && break; sleep 2; done
+    say "=== done, network back $(date -Is) ==="
+else
+    say "=== done, radio never lowered $(date -Is) ==="
+fi
 echo "$LOG"
