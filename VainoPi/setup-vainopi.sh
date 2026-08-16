@@ -227,24 +227,55 @@ fi
 if [ -n "$SPEAKER" ]; then
     echo "bluetooth $SPEAKER"
     systemctl is-active --quiet bluetooth || systemctl start bluetooth
-    if bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q "Paired: yes"; then
+    rfkill unblock bluetooth 2>/dev/null || true
+
+    bt_is() { bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q "$1: yes"; }
+
+    # A device can be trusted but not paired -- BlueZ keeps `trust` as a
+    # standalone policy, so a pairing that failed or was later dropped leaves
+    # a half-state that looks reassuring and cannot connect. Clear it before
+    # trying again, or `pair` fails against the stale record for ever.
+    if ! bt_is Paired && bluetoothctl info "$SPEAKER" >/dev/null 2>&1; then
+        bluetoothctl remove "$SPEAKER" >/dev/null 2>&1 || true
+        did "cleared stale record (trusted but not paired)"
+    fi
+
+    if bt_is Paired; then
         ok "paired"
     else
-        bluetoothctl --timeout 20 scan on >/dev/null 2>&1 || true
-        bluetoothctl pair "$SPEAKER" >/dev/null 2>&1 && did "paired" \
-            || note "pair" "FAILED — put the speaker in pairing mode"
+        bluetoothctl --timeout 25 scan on >/dev/null 2>&1 || true
+        bluetoothctl pair "$SPEAKER" >/dev/null 2>&1 || true
+        # The RESULT is checked, not the exit code: `bluetoothctl pair` reports
+        # success for a pairing that does not persist, which is how this script
+        # once announced "paired CHANGED" for a device left unpaired.
+        if bt_is Paired; then
+            did "paired"
+        else
+            note "pair" "FAILED — hold the speaker's Bluetooth button until it flashes, then re-run"
+        fi
     fi
+
     # `trust` is the step people miss: without it the speaker pairs, works,
-    # and never reconnects after a reboot. [PI2-BT-010]
-    if bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q "Trusted: yes"; then
-        ok "trusted"
-    else
-        bluetoothctl trust "$SPEAKER" >/dev/null 2>&1 && did "trusted" || true
+    # and never reconnects after a reboot. [PI2-BT-010] Only meaningful once
+    # paired, so it is not claimed before that.
+    if bt_is Paired; then
+        if bt_is Trusted; then ok "trusted"
+        else bluetoothctl trust "$SPEAKER" >/dev/null 2>&1 && did "trusted" || true
+        fi
+        if bt_is Connected; then
+            ok "connected"
+        else
+            bluetoothctl connect "$SPEAKER" >/dev/null 2>&1 || true
+            bt_is Connected && did "connected"                 || note "connect" "not connected — is the speaker powered on?"
+        fi
     fi
-    bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q "Connected: yes" \
-        && ok "connected" \
-        || { bluetoothctl connect "$SPEAKER" >/dev/null 2>&1 && did "connected" \
-             || note "connect" "not connected — is it powered on?"; }
+
+    # The sink is what the player actually needs; pairing is only the means.
+    if sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$RUN_UID"          pactl list short sinks 2>/dev/null | grep -qi bluez; then
+        ok "PipeWire sink present"
+    else
+        note "sink" "no bluez sink yet — the player will report no audio device"
+    fi
 fi
 
 echo
