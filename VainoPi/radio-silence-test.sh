@@ -39,7 +39,26 @@ say "before: $(wpctl status | sed -n '/Sinks:/,/Sink endpoints/p' | grep '\*' | 
 say "stream: $(wpctl status | grep -A2 'Streams:' | grep -c playback) links"
 
 systemctl is-active --quiet vaino || sudo systemctl start vaino
-curl -s -X POST localhost:5720/api/play >/dev/null 2>&1
+sleep 3
+
+# The control route is /command/:name -- there is no /api prefix, and state
+# arrives over a websocket rather than by GET. Worth being exact about: a test
+# that silently 404s its own play command measures a PAUSED stream holding an
+# idle link, which looks like a pass and proves nothing.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:5720/command/play || echo 000)
+say "play command: HTTP $code"
+if [ "$code" != "204" ]; then
+    say "ABORT: play was not accepted; the test would measure silence"
+    sudo systemctl stop vaino-wifi-restore.timer 2>/dev/null
+    exit 1
+fi
+
+# Prove audio is actually moving before taking the radio down. pw-top reports
+# per-node quantum activity, so a node that is merely connected reads zero
+# where one that is playing does not.
+sleep 4
+flow_before=$(pw-top -b -n 2 2>/dev/null | grep -ci middleton || echo 0)
+say "flow check before: $flow_before middleton rows in pw-top"
 
 # Everything from here runs with no network. Sample locally into the log.
 say "--- wifi down $(date -Is) ---"
@@ -51,6 +70,7 @@ for _ in $(seq 1 "$n"); do
     sleep 3
 done
 say "connected while dark: $ok/$n"
+say "flow while dark:      $(pw-top -b -n 2 2>/dev/null | grep -ci middleton) rows"
 say "stream while dark:    $(wpctl status | grep -c 'MIDDLETON:playback') links"
 say "errors while dark:"
 journalctl -u vaino --since "-${SECONDS_DOWN}s" --no-pager 2>/dev/null \
