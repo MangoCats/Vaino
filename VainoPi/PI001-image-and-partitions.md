@@ -254,6 +254,49 @@ not a finding.
 
 ---
 
+## 5b. Appliance settings
+
+**`[PI-SET-010]` Settings that only exist on the appliance.** The skip times
+and the resume interval `[REQ-VIS-155]` are player settings and belong in
+`player_state` on partition C. These are different: they configure the *host*,
+not the player, and applying one means writing an OS config file and
+restarting a service.
+
+| Setting | Default | Applied by |
+| :--- | :--- | :--- |
+| Wi-Fi AP SSID | `Vaino` | `hostapd.conf`, restart `hostapd` |
+| Wi-Fi AP password | `Vaino321` | `hostapd.conf`, restart `hostapd` |
+| Bluetooth audio device for auto-connect | none | `bluetoothctl` / BlueZ D-Bus |
+| Paired-device list maintenance | — | BlueZ; pair, trust, forget |
+
+**`[PI-SET-020]` These need a privileged helper, and that is the design
+problem.** The player runs unprivileged and partition A is read-only. So the
+web UI cannot write `hostapd.conf` directly: it must hand a *validated*
+request to a small root helper over a socket, which writes the file and
+restarts the unit. The helper's job is to accept a fixed vocabulary and refuse
+everything else — a web form that can write arbitrary text into a system
+config as root is a remote shell with extra steps.
+
+**`[PI-SET-030]` The default AP password is published in this repository, so
+it is not a secret.** `Vaino321` is a *first-boot* credential, and the setup
+page must say so plainly and invite a change. An appliance shipping a known
+password on an open access point is a fair description of the problem, not a
+convenience.
+
+**`[PI-SET-040]` Bluetooth pairing is stateful and belongs on partition C.**
+BlueZ keeps its keys under `/var/lib/bluetooth`, which must therefore be
+bind-mounted to C like `/var/log` `[PI-A-020]` — otherwise every pairing is
+forgotten at reboot, since the overlay is discarded.
+
+**`[PI-SET-050]` Tone control is Vaino's own, not the speaker's.** No
+Bluetooth profile carries tone settings: A2DP carries audio and AVRCP carries
+transport and metadata. A speaker's bass and treble are reachable only through
+whatever proprietary protocol its own app speaks. So if Vaino is to offer tone
+control, it belongs in the player's signal path before transmission, where it
+works with every speaker rather than one model.
+
+---
+
 ## 6. Toward an image build
 
 **`[PI-IMG-010]` The deliverable is a script, not a procedure.** A documented
