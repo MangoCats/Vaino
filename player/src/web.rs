@@ -658,6 +658,7 @@ const REVIEW_JS: &str = include_str!("web/review.js");
 const REVIEW_QUEUE_ROUTE: &str = "/review/queue";
 /// The prefix every decision is posted to. The page builds the rest of the
 /// path from the passage id, so only the stem can be shared.
+#[cfg(test)]
 const REVIEW_DECIDE_PREFIX: &str = "/review/";
 const CORE: &str = include_str!("web/core.js");
 
