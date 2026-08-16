@@ -1,0 +1,28 @@
+#!/bin/sh
+# Block until PipeWire has a sink that is not the Dummy Output.
+#
+# Bluetooth is the slow case: BlueZ has to auto-connect a trusted device after
+# the radio comes up, which takes several seconds after the graph is ready.
+# Exits 0 regardless -- a player with no speaker should still come up and say
+# so in its interface, which is more use than a service that refuses to run.
+set -eu
+DEADLINE=${VAINO_SINK_WAIT:-45}
+i=0
+while [ "$i" -lt "$DEADLINE" ]; do
+    if wpctl status 2>/dev/null |
+       sed -n '/Sinks:/,/^ *├─ [A-Z]/p' |
+       grep -qv 'Dummy Output' 2>/dev/null &&
+       wpctl status 2>/dev/null |
+       sed -n '/Sinks:/,/Sink endpoints/p' |
+       grep -q '[0-9]\+\.' &&
+     ! wpctl status 2>/dev/null |
+       sed -n '/Sinks:/,/Sink endpoints/p' |
+       grep '\*' | grep -q 'Dummy Output'; then
+        echo "vaino-wait-sink: real sink present after ${i}s"
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+echo "vaino-wait-sink: no real sink after ${DEADLINE}s; starting anyway" >&2
+exit 0

@@ -76,6 +76,8 @@ pub struct PlayerState {
     /// lock-free ring, starvation for more buffering. Surfaced rather than
     /// merely counted -- a diagnostic nobody can read is not one.
     pub lock_failures: u64,
+    /// Output reopenings after a failure `[IMPL-AUD-020]`.
+    pub out_recoveries: u64,
     /// Samples handed to the device but not yet played. Playback is NOT over
     /// while this is non-zero: the output ring holds ~14 s, so a short passage
     /// can be fully submitted before a single sample is audible.
@@ -167,6 +169,13 @@ pub struct Engine {
     /// it fed so promoting it costs nothing but the move.
     ready: Option<Live>,
     out: Option<Output>,
+    /// When to next try reviving a failed output `[IMPL-AUD-020]`.
+    ///
+    /// Retries are spaced rather than continuous because the usual reason a
+    /// sink is gone is that someone carried the speaker out of range, and
+    /// reopening an absent ALSA device several thousand times a second costs a
+    /// core for no benefit.
+    out_retry_at: Option<std::time::Instant>,
     out_rate: u32,
     out_channels: usize,
     scratch: Vec<f32>,
@@ -207,6 +216,10 @@ pub struct Engine {
     /// expose [REQ-AUD-142].
     underruns_playing: u64,
     last_raw_underruns: u64,
+    /// Times the output has been reopened after a failure. Surfaced as a
+    /// diagnostic because a link that keeps dropping is a hardware or range
+    /// problem, and silent recovery would hide exactly that `[REQ-VIS-140]`.
+    out_recoveries: u64,
 }
 
 impl Engine {
@@ -223,6 +236,8 @@ impl Engine {
             live: Vec::new(),
             ready: None,
             out,
+            out_retry_at: None,
+            out_recoveries: 0,
             out_rate,
             out_channels,
             scratch: vec![0.0; 2048 * out_channels],
@@ -280,11 +295,49 @@ impl Engine {
     ///
     /// Returns samples submitted, so a caller can pace itself when there is no
     /// device applying back-pressure.
+    /// Interval between attempts to revive a failed output `[IMPL-AUD-020]`.
+    const OUT_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Reopen the output device after the stream reported an error.
+    ///
+    /// A Bluetooth sink reports EIO once and then stops calling back: without
+    /// this the player goes on decoding, mixing and reporting itself healthy
+    /// into a stream nobody is draining, which is what a listener experiences
+    /// as "it just stopped" with nothing in the interface to say so.
+    ///
+    /// Recovery is silent on success by design -- a speaker that drops for a
+    /// second and returns should not require anyone to do anything -- but every
+    /// attempt is counted, so a link failing repeatedly is visible as a number
+    /// rather than inferred from the sound.
+    fn recover_output(&mut self) {
+        let Some(out) = self.out.as_mut() else { return };
+        if !out.failed() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self.out_retry_at.is_some_and(|t| now < t) {
+            return;
+        }
+        self.out_retry_at = Some(now + Self::OUT_RETRY);
+        self.out_recoveries += 1;
+        match out.recover() {
+            Ok(name) => {
+                eprintln!("output recovered on {name}");
+                self.out_retry_at = None;
+                // The stream comes back stopped; only resume it if the listener
+                // had not paused in the meantime.
+                out.set_playing(self.playing);
+            }
+            Err(e) => eprintln!("output recovery failed, retrying: {e}"),
+        }
+    }
+
     pub fn tick(&mut self) -> usize {
         self.drain_commands();
         if self.shutdown {
             return 0;
         }
+        self.recover_output();
         self.admit_due();
         // Prepare AFTER admitting, so this readies the passage that is next
         // once the admission has moved the queue on.
@@ -807,6 +860,7 @@ impl Engine {
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.lock_failures = self.out.as_ref().map_or(0, |o| o.diagnostics().1);
+            s.out_recoveries = self.out_recoveries;
             s.output_buffered = self
                 .out
                 .as_ref()

@@ -13,6 +13,7 @@
 //! ring, the callback drains it. The ring decouples the two so a slow decode
 //! costs latency rather than a dropout.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -94,7 +95,11 @@ impl Volume {
 pub struct Output {
     // Also the pause control: the callback drains whether or not we are
     // submitting, so stopping the CONSUMER means stopping this stream.
-    stream: cpal::Stream,
+    //
+    // Optional only so that recovery can drop it and leave the device closed
+    // for the moment between attempts; it is Some at every point a caller can
+    // observe.
+    stream: Option<cpal::Stream>,
     pub state: Arc<Mutex<OutputState>>,
     /// Applied in the callback `[REQ-AUD-152]`, so a change is heard at the
     /// device rather than after the ring drains.
@@ -102,6 +107,12 @@ pub struct Output {
     pub sample_rate: u32,
     pub channels: usize,
     pub device_name: String,
+    /// Set by the stream's error callback, cleared by a successful `recover`.
+    failed: Arc<AtomicBool>,
+    /// The device *selector* rather than the device: recovery has to re-resolve
+    /// the name, because the sink it names may be a different ALSA object by
+    /// the time it comes back.
+    requested: Option<String>,
 }
 
 #[derive(Debug)]
@@ -160,6 +171,21 @@ impl Output {
     pub fn open_device(name: Option<&str>, ring_capacity_samples: usize)
         -> Result<Self, OutputError>
     {
+        let state = Arc::new(Mutex::new(OutputState::new(ring_capacity_samples)));
+        Self::attach(name.map(str::to_string), state, Volume::new(1.0))
+    }
+
+    /// Open the device and start a stream against an *existing* ring and
+    /// volume.
+    ///
+    /// Split out of `open_device` so recovery can replace a dead stream
+    /// without replacing the buffer the mixer writes into. Swapping the state
+    /// too would leave the mixer filling a ring that nothing reads, which is a
+    /// worse failure than the one being recovered from `[IMPL-AUD-020]`.
+    fn attach(requested: Option<String>, state: Arc<Mutex<OutputState>>, volume: Volume)
+        -> Result<Self, OutputError>
+    {
+        let name = requested.as_deref();
         let host = cpal::default_host();
         let device = match name {
             Some(want) => {
@@ -182,13 +208,21 @@ impl Output {
         let channels = config.channels as usize;
         let sample_rate = config.sample_rate.0;
 
-        let state = Arc::new(Mutex::new(OutputState::new(ring_capacity_samples)));
         let cb_state = Arc::clone(&state);
 
         // One closure per sample format. `fill` holds all the logic so the
         // format arms stay trivial and cannot diverge.
-        let err_fn = |e| eprintln!("output stream error: {e}");
-        let volume = Volume::new(1.0);
+        //
+        // Recording the failure is the point. A Bluetooth sink that goes away
+        // reports EIO here exactly once and then simply stops calling back, so
+        // a handler that only logs leaves a player which is silent, holds no
+        // link, and still looks healthy from every side `[IMPL-AUD-020]`.
+        let failed = Arc::new(AtomicBool::new(false));
+        let cb_failed = Arc::clone(&failed);
+        let err_fn = move |e| {
+            eprintln!("output stream error: {e}");
+            cb_failed.store(true, Ordering::Relaxed);
+        };
         let stream = match sample_format {
             SampleFormat::F32 => {
                 let cb_vol = volume.clone();
@@ -236,7 +270,46 @@ impl Output {
         .map_err(|e| OutputError::Build(e.to_string()))?;
 
         stream.play().map_err(|e| OutputError::Build(e.to_string()))?;
-        Ok(Self { stream, state, volume, sample_rate, channels, device_name })
+        Ok(Self { stream: Some(stream), state, volume, sample_rate, channels,
+                  device_name, failed, requested })
+    }
+
+    /// Has the stream reported an error it will not recover from itself?
+    pub fn failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
+    }
+
+    /// Rebuild the stream after a failure, keeping the ring and the volume.
+    ///
+    /// The ring is deliberately drained first. Its contents are audio that was
+    /// mixed for a moment now several seconds past; playing it on reconnection
+    /// would replay that moment, and a listener hears a stutter rather than a
+    /// gap `[REQ-AUD-142]`. A gap is the honest rendering of a sink that went
+    /// away.
+    ///
+    /// Returns the new device name on success. Failure is expected and not
+    /// exceptional -- the sink is often still absent -- so the caller is meant
+    /// to retry rather than to treat this as fatal.
+    pub fn recover(&mut self) -> Result<String, OutputError> {
+        if let Ok(mut s) = self.state.lock() {
+            s.ring.clear();
+        }
+        // Release the dead device *before* opening it again. ALSA will refuse
+        // the second open while the first handle is alive, so building the new
+        // stream first and assigning over the old one -- the obvious ordering --
+        // fails every time on exactly the sink this exists for.
+        self.stream = None;
+        let fresh = Self::attach(
+            self.requested.clone(),
+            Arc::clone(&self.state),
+            self.volume.clone(),
+        )?;
+        self.stream = fresh.stream;
+        self.failed = fresh.failed;
+        self.sample_rate = fresh.sample_rate;
+        self.channels = fresh.channels;
+        self.device_name = fresh.device_name.clone();
+        Ok(fresh.device_name)
     }
 
     /// Start or stop the device callback.
@@ -252,10 +325,11 @@ impl Output {
     pub fn set_playing(&self, on: bool) -> bool {
         // play() and pause() return different error types, so normalise early
         // rather than let that detail leak into the caller.
+        let Some(stream) = self.stream.as_ref() else { return false };
         let r = if on {
-            self.stream.play().map_err(|e| e.to_string())
+            stream.play().map_err(|e| e.to_string())
         } else {
-            self.stream.pause().map_err(|e| e.to_string())
+            stream.pause().map_err(|e| e.to_string())
         };
         if let Err(e) = &r {
             eprintln!("output {}: {e}", if on { "play" } else { "pause" });

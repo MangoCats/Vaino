@@ -136,6 +136,7 @@ pub struct Snapshot {
     /// Output-lock contention `[REQ-VIS-140]`. Non-zero means the callback was
     /// kept waiting, which sounds like a click rather than a gap.
     pub lock_failures: u64,
+    pub out_recoveries: u64,
     /// The full weight decomposition for what is playing `[REQ-VIS-100]`.
     /// Null when the passage was not chosen by the Director -- a resumed
     /// passage, or one queued before the log was populated -- so the panel can
@@ -190,6 +191,7 @@ impl From<&PlayerState> for Snapshot {
             dev_mode: s.dev_mode,
             underrun_samples: s.underrun_samples,
             lock_failures: s.lock_failures,
+            out_recoveries: s.out_recoveries,
             why: None,
         }
     }

@@ -166,6 +166,13 @@ Description=Vaino
 After=local-fs.target sound.target
 
 [Service]
+# Wait for a real sink before starting. PipeWire always offers a "Dummy
+# Output" when no hardware is present, and the ALSA bridge binds a stream to
+# whichever node was default when it opened -- so a player started before the
+# speaker connects plays flawlessly into the dummy for ever, reports itself
+# healthy, and leaves the speaker with no audio to hold A2DP open. That is the
+# disconnect-a-few-seconds-in symptom, and this is where it is fixed.
+ExecStartPre=/usr/local/bin/vaino-wait-sink
 ExecStart=/usr/local/bin/vaino /srv/library/vaino.db --port 5720
 Restart=always
 RestartSec=2

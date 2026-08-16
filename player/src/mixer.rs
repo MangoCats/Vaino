@@ -24,6 +24,17 @@ impl RingBuffer {
         Self { buf: vec![0.0; capacity_samples].into_boxed_slice(), head: 0, len: 0 }
     }
 
+    /// Discard everything buffered, keeping the allocation.
+    ///
+    /// For recovery after an output failure: what the ring holds then is audio
+    /// mixed for a moment already several seconds gone, and playing it out on
+    /// reconnection would replay that moment `[IMPL-AUD-020]`. The samples are
+    /// left in place because nothing reads past `len`.
+    pub fn clear(&mut self) {
+        self.head = 0;
+        self.len = 0;
+    }
+
     pub fn capacity(&self) -> usize {
         self.buf.len()
     }
@@ -293,6 +304,28 @@ mod tests {
         assert!(outgoing.windows(2).all(|w| w[1] < w[0]), "{outgoing:?}");
     }
     use crate::fade::{Curve, Fade};
+
+    #[test]
+    fn ring_clear_discards_stale_audio_and_still_wraps() {
+        let mut r = RingBuffer::new(8);
+        r.write(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let mut out = [0.0; 3];
+        r.read(&mut out);                 // leave head mid-buffer, as in life
+        r.clear();
+        assert_eq!(r.len(), 0);
+        let mut nothing = [9.9; 4];
+        assert_eq!(r.read(&mut nothing), 0, "cleared ring must yield nothing");
+        assert_eq!(nothing, [9.9; 4], "and must not touch the caller's buffer");
+
+        // The reason this matters: after an output failure the ring holds audio
+        // from a moment now several seconds gone, and playing it on
+        // reconnection is a stutter rather than a gap `[IMPL-AUD-020]`. A clear
+        // that only reset the length would replay it on the next wrap.
+        assert_eq!(r.write(&[1.0; 8]), 8, "full capacity available after clear");
+        let mut all = [0.0; 8];
+        assert_eq!(r.read(&mut all), 8);
+        assert_eq!(all, [1.0; 8], "no stale samples resurface");
+    }
 
     #[test]
     fn ring_wraps_without_loss() {

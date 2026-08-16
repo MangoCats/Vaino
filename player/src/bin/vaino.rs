@@ -5,7 +5,13 @@
 //! owns it; the web server runs on tokio and touches playback only through
 //! [`EngineHandle`], which is the whole control surface `[REQ-VIS-140]`.
 //!
-//! Usage:  vaino <vaino.db> [--port N] [--depth N]
+//! Usage:  vaino <vaino.db> [--port N] [--depth N] [--device NAME]
+//!
+//! `--device` takes a case-insensitive substring of the output device name.
+//! It matters more than it looks: PipeWire offers a `Dummy Output` whenever no
+//! real sink is present, and a Bluetooth speaker that is momentarily absent at
+//! startup leaves the player attached to that dummy -- playing perfectly into
+//! nothing, and reporting itself healthy `[IMPL-AUD-010]`.
 
 use std::path::PathBuf;
 use std::sync::mpsc::sync_channel;
@@ -17,6 +23,14 @@ use vaino_player::output::Output;
 use vaino_player::session::{Explanations, Session, SharedControls};
 use vaino_player::web;
 use vaino_player::BUFFER_FRAMES;
+
+/// A string-valued flag, absent when not given.
+fn text_flag(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
 
 fn flag(args: &[String], name: &str, default: usize) -> usize {
     args.iter()
@@ -30,12 +44,13 @@ fn flag(args: &[String], name: &str, default: usize) -> usize {
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: vaino <vaino.db> [--port N] [--depth N]");
+        eprintln!("usage: vaino <vaino.db> [--port N] [--depth N] [--device NAME]");
         std::process::exit(2);
     }
     let db = PathBuf::from(&args[0]);
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);
+    let device = text_flag(&args, "--device");
 
     // The listening -- plays, preferences, programmes -- is the one thing in
     // that file nothing can rebuild `[REQ-LIB-160]`. One snapshot now, so a
@@ -84,7 +99,7 @@ async fn main() {
     let (tx, rx) = sync_channel(1);
     std::thread::Builder::new()
         .name("vaino-engine".into())
-        .spawn(move || engine_thread(db, depth, tx))
+        .spawn(move || engine_thread(db, depth, device, tx))
         .expect("spawn engine thread");
 
     let (handle, why, controls) = match rx.recv() {
@@ -113,6 +128,7 @@ async fn main() {
 fn engine_thread(
     db: PathBuf,
     depth: usize,
+    device: Option<String>,
     tx: std::sync::mpsc::SyncSender<(
         vaino_player::engine::EngineHandle,
         Explanations,
@@ -130,7 +146,7 @@ fn engine_thread(
 
     // A missing device must not stop the process: the UI still needs to come
     // up and say so, which is more use than exiting silently.
-    let out = match Output::open(BUFFER_FRAMES * 2) {
+    let out = match Output::open_device(device.as_deref(), BUFFER_FRAMES * 2) {
         Ok(o) => {
             println!("output: {} @ {} Hz, {} ch", o.device_name, o.sample_rate, o.channels);
             Some(o)
