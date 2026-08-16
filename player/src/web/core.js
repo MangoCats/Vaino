@@ -233,9 +233,16 @@ const Vaino = (() => {
   // The skin supplies the element it wants and how the row should read; the
   // order and the controls are the same everywhere because they are the same
   // idea everywhere `[REQ-VIS-185]`.
-  function queueRow(item, label, tag = 'li') {
+  function queueRow(item, label, tag = 'li', opts = {}) {
     const row = document.createElement(tag);
-    row.appendChild(queueControls(item.passage_id, item.editable));
+    row.dataset.passage = item.passage_id;
+    if (item.editable === false) row.dataset.locked = '1';
+    // A skin may put ONE set of controls beside a selected row instead of a
+    // set on every row. Both are honest arrangements; which suits depends on
+    // whether the skin has a notion of a selected track.
+    if (opts.controls !== false) {
+      row.appendChild(queueControls(item.passage_id, item.editable));
+    }
     const title = document.createElement('span');
     title.className = 'qtitle';
     title.textContent = label(item) + ' ';
@@ -249,7 +256,7 @@ const Vaino = (() => {
 
   // The whole list, including the empty case, which every skin got wrong in
   // its own way before this.
-  function bindQueue(container, label, tag = 'li', empty = 'nothing queued') {
+  function bindQueue(container, label, tag = 'li', empty = 'nothing queued', opts = {}) {
     return s => {
       container.textContent = '';
       const items = s.queue || [];
@@ -260,7 +267,19 @@ const Vaino = (() => {
         container.appendChild(none);
         return;
       }
-      for (const q of items) container.appendChild(queueRow(q, label, tag));
+      // Read per render, not per bind: the rows are rebuilt on every snapshot
+      // and the selection changes between them, so a value captured when the
+      // binder was made would mark the wrong row for ever. A function is
+      // accepted for exactly that reason.
+      const sel = typeof opts.selected === 'function' ? opts.selected() : opts.selected;
+      for (const q of items) {
+        const row = queueRow(q, label, tag, opts);
+        // Selection is the skin's idea; the row only reports the click and
+        // wears the mark the skin asks for.
+        if (opts.onPick) row.onclick = () => opts.onPick(q.passage_id);
+        if (sel != null && sel === q.passage_id) row.classList.add('picked');
+        container.appendChild(row);
+      }
     };
   }
 

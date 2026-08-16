@@ -114,6 +114,12 @@ async function run(skin) {
     const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
     if (m) return Promise.resolve({ text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
     if (/^\/art\//.test(url)) return Promise.reject(new Error('no art in a test DOM'));
+    // An explanation for a queued passage, so the panel's fetch path is
+    // exercised rather than only its failure path.
+    if (/^\/why\/\d+$/.test(url)) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(
+        { ...RICH.why, program: 'Queued Reasons' }) });
+    }
     return Promise.reject(new Error('unexpected fetch ' + url));
   };
 
@@ -255,7 +261,43 @@ async function run(skin) {
     check(!main.hidden && set.hidden, 'the gear must close it again');
   }
 
-  const expectedPosts = gear ? 3 : 2;
+  // Picking which track the explanation panel describes `[REQ-VIS-100]`.
+  // The skin that does this shows ONE control set beside the picked row, so
+  // the rows must not carry their own -- two ways to move a track is how they
+  // drift apart.
+  const nowrow = window.document.getElementById('nowrow');
+  if (nowrow) {
+    const rows = () => [...window.document.querySelectorAll('#queue li')];
+    check(nowrow.classList.contains('picked'),
+          'the playing track must be picked to begin with');
+    check(rows().every(r => !r.querySelector('.qedit')),
+          'rows must not carry controls when the skin uses one shared set');
+    check(window.document.getElementById('qpick').hidden,
+          'the shared controls belong to a queued row, not the playing one');
+
+    rows()[0].onclick();
+    await new Promise(r => setTimeout(r, 20));
+    check(!nowrow.classList.contains('picked'), 'picking a queued row unpicks the playing one');
+    check(rows()[0].classList.contains('picked'), 'the picked row must be marked');
+    const qp = window.document.getElementById('qpick');
+    check(!qp.hidden, 'picking a queued row must reveal the controls');
+    check(qp.querySelector('.qedit'), 'the shared set must hold the edit controls');
+    // The panel must now describe the PICKED track, not the playing one.
+    check(/Queued Reasons/.test(window.document.getElementById('why').textContent),
+          'the explanation must follow the pick');
+    check(/Next One/.test(window.document.getElementById('whotitle').textContent),
+          'the heading must name the track being explained');
+    // And they must act on the picked passage, not on whatever was first.
+    qp.querySelectorAll('button')[0].onclick(new window.Event('click'));
+    check(posted.some(u => u === '/queue/1/remove'),
+          `the shared controls must act on the picked passage, posted ${JSON.stringify(posted)}`);
+
+    nowrow.onclick();
+    await new Promise(r => setTimeout(r, 20));
+    check(nowrow.classList.contains('picked'), 'the playing track must be pickable again');
+  }
+
+  const expectedPosts = gear ? (nowrow ? 4 : 3) : 2;
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;

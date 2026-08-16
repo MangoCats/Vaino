@@ -2,7 +2,10 @@
   <h1>Vaino</h1>
 
   <div id="panel-main">
-  <div class="np">
+  <!-- The playing track is a selectable row like the queued ones: the panel
+       below explains whichever is picked, and "the one playing" has to be
+       reachable again after picking something else. -->
+  <div class="np" id="nowrow">
     <img id="art" alt="" hidden>
     <div>
       <div id="title">—</div>
@@ -27,11 +30,17 @@
   </div>
   <section>
     <h2>Up next</h2>
+    <!-- One control set for whichever row is picked, rather than a set on
+         every row. -->
+    <div class="qpick" id="qpick" hidden>
+      <span id="qpickname">—</span>
+      <span id="qpickctl"></span>
+    </div>
     <ol id="queue"><li class="empty">nothing queued</li></ol>
   </section>
 
   <section>
-    <h2>Why this track?</h2>
+    <h2>Why <span id="whotitle">this track</span>?</h2>
     <div id="why">Waiting for a selection…</div>
     <table id="terms" hidden>
       <tbody></tbody>

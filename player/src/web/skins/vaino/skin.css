@@ -114,3 +114,20 @@
                                border-color: var(--dim); }
 .src[data-src="filename"], .src[data-src="unknown"] { opacity: .7;
                                border-style: dashed; }
+
+/* Picking a track to explain [REQ-VIS-100]. The playing row and every queued
+   row are selectable; exactly one is marked, and the panel below describes it.
+   A left rule rather than a fill: the mark has to survive on the now-playing
+   block, which already carries cover art and three lines of type. */
+#nowrow, #queue li:not(.empty) { cursor: pointer;
+    border-left: 3px solid transparent; padding-left: .5rem; }
+#nowrow.picked, #queue li.picked { border-left-color: currentColor;
+    background: color-mix(in srgb, currentColor 6%, transparent); }
+#nowrow:hover, #queue li:not(.empty):hover {
+    background: color-mix(in srgb, currentColor 4%, transparent); }
+
+/* One control set, beside the row it acts on. */
+.qpick { display: flex; align-items: center; gap: .6rem; font-size: .8125rem;
+         color: var(--dim); margin: 0 0 .6rem; padding-left: .5rem; }
+#qpickname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#qpickctl { margin-left: auto; }
