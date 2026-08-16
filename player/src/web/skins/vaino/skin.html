@@ -76,6 +76,22 @@
          fewer writes on an appliance's flash; at worst this much position is
          lost to a power cut. Track changes and pause are always saved at once.</p>
     </div>
+    <div class="setting" id="speakers">
+      <label>Speaker</label>
+      <span>
+        <button type="button" id="bt-scan">Find a speaker</button>
+      </span>
+      <p id="bt-hint">Where the music is playing.</p>
+      <ul id="bt-list" aria-live="polite"></ul>
+    </div>
+    <div class="setting" id="bt-confirm" hidden>
+      <label>Can you hear it?</label>
+      <span>
+        <button type="button" id="bt-yes">Yes, keep it</button>
+        <button type="button" id="bt-no">No, go back</button>
+      </span>
+      <p id="bt-countdown"></p>
+    </div>
     <div class="setting">
       <label for="prog">Programme</label>
       <span><select id="prog"></select></span>

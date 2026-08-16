@@ -253,4 +253,169 @@
       ctl.appendChild(Vaino.queueControls(on.passage_id, on.editable));
     }
   }
+
+  // ------------------------------------------------------------- speakers
+  // Choosing a speaker `[PI3-UI-010]`. The states shown are the ones the
+  // system reports, not the ones we hoped for: 'playing' and 'connected' are
+  // different rows because a speaker can be linked while the audio goes
+  // somewhere else entirely, and showing a tick for that is the lie that hid
+  // this fault for two days `[PI3-WHY-010]`.
+  const STATE_TEXT = {
+    playing:   ['Playing here', null],
+    connected: ['Connected, but silent', 'Use this one'],
+    paired:    ['Known', 'Connect'],
+    found:     ['In range', 'Pair'],
+    stale:     ['Needs re-pairing', 'Repair'],
+  };
+  const VERB = { connected: 'use', paired: 'use', found: 'pair', stale: 'repair' };
+
+  let previous = null;   // the speaker to fall back to, for confirm-or-revert
+  let countdown = null;
+
+  function speakerRow(d, output) {
+    const li = document.createElement('li');
+    // A device is only 'playing' if the audio is demonstrably reaching it.
+    const playing = d.state === 'connected' && output &&
+                    output.sink && output.sink === d.name;
+    const state = playing ? 'playing' : d.state;
+    const [label, action] = STATE_TEXT[state] || [state, null];
+    li.className = 'bt ' + state;
+
+    const name = document.createElement('span');
+    name.className = 'btname';
+    name.textContent = d.name || d.address;
+    const said = document.createElement('span');
+    said.className = 'btstate';
+    said.textContent = label;
+    li.append(name, said);
+
+    if (action) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = action;
+      b.onclick = () => choose(d, VERB[state] || 'use');
+      li.appendChild(b);
+    }
+    if (state !== 'found') {
+      const f = document.createElement('button');
+      f.type = 'button';
+      f.className = 'btforget';
+      f.textContent = 'Forget';
+      f.onclick = () => act('forget', d.address);
+      li.appendChild(f);
+    }
+    return li;
+  }
+
+  async function act(verb, address) {
+    hint(verb === 'pair' ? 'Pairing — this takes about half a minute…'
+                         : 'Working…');
+    try {
+      const r = await fetch(`/audio/speakers/${verb}/${address}`, { method: 'POST' });
+      const body = await r.json().catch(() => null);
+      if (!r.ok) { hint(body || 'That did not work.'); return null; }
+      return body;
+    } catch (e) {
+      hint('Could not reach the player.');
+      return null;
+    }
+  }
+
+  // Confirm or revert `[PI3-UI-030]`. Switching speakers can destroy the very
+  // means of hearing whether the switch worked, so the change is provisional
+  // until someone says they can hear it, and an unanswered question puts the
+  // old one back rather than leaving a silent appliance.
+  async function choose(device, verb) {
+    const before = await sinkNow();
+    const body = await act(verb, device.address);
+    if (!body) { refresh(); return; }
+    if (body.audible === false) {
+      hint('Connected, but the sound is not reaching it yet.');
+      refresh();
+      return;
+    }
+    previous = before;
+    askConfirm(device);
+    refresh();
+  }
+
+  function askConfirm(device) {
+    $('bt-confirm').hidden = false;
+    let left = 30;
+    const tick = () => {
+      $('bt-countdown').textContent =
+        `Going back to what worked in ${left}s if you do not answer.`;
+      if (left-- <= 0) revert();
+    };
+    clearInterval(countdown);
+    tick();
+    countdown = setInterval(tick, 1000);
+    $('bt-yes').onclick = () => { settle(); hint(`Playing on ${device.name}.`); };
+    $('bt-no').onclick = () => revert();
+  }
+
+  function settle() {
+    clearInterval(countdown);
+    $('bt-confirm').hidden = true;
+    previous = null;
+  }
+
+  async function revert() {
+    const back = previous;
+    settle();
+    hint('Putting the old speaker back…');
+    // Nothing to go back TO is a real case: the previous sink may have been
+    // the dummy, which is to say silence. Reopening is still right -- it is
+    // how the player is told to look again.
+    if (back && back.address) await act('use', back.address);
+    else await fetch('/command/reopen-output', { method: 'POST' });
+    refresh();
+  }
+
+  async function sinkNow() {
+    try {
+      const r = await fetch('/audio/sink');
+      const s = await r.json();
+      const list = await (await fetch('/audio/speakers')).json();
+      const match = (list.devices || []).find(d => d.name === s.sink);
+      return match || null;
+    } catch (e) { return null; }
+  }
+
+  function hint(text) { $('bt-hint').textContent = text; }
+
+  async function refresh(scan) {
+    const list = $('bt-list');
+    if (scan) hint('Looking for speakers — about twenty seconds…');
+    try {
+      const r = await fetch(scan ? '/audio/speakers/scan' : '/audio/speakers',
+                            { method: scan ? 'POST' : 'GET' });
+      const body = await r.json();
+      list.textContent = '';
+      const devices = body.devices || [];
+      if (!devices.length) {
+        hint('No speakers known yet. Put yours in pairing mode, then look.');
+        return;
+      }
+      for (const d of devices) list.appendChild(speakerRow(d, body.output));
+      if (!scan) {
+        const out = body.output;
+        hint(out && out.dummy
+             ? 'Nothing can hear the music right now.'
+             : out && out.sink ? `Playing on ${out.sink}.` : 'Where the music is playing.');
+      } else {
+        hint('Pick yours from the list.');
+      }
+    } catch (e) {
+      hint('Could not reach the player.');
+    }
+  }
+
+  $('bt-scan').onclick = () => refresh(true);
+  // Populated when the panel is opened rather than at load: it costs a
+  // subprocess on the appliance, and most sessions never open the settings.
+  gear.addEventListener('click', () => {
+    if (!$('panel-settings').hidden) refresh();
+  });
+
 })();

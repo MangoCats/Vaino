@@ -62,6 +62,9 @@ timeout rather than a message.
 
 ## 2. The shape of it
 
+**Built, but not yet seen.** The panel is written and serves correctly; it has
+not been rendered in a browser by anyone. Treat the layout as unverified.
+
 **`[PI3-UI-010]` One list, showing what is true.** The settings panel shows
 every known and discoverable speaker in a single list, each with a state that
 is *observed* rather than assumed:

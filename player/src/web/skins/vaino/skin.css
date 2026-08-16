@@ -142,3 +142,30 @@ body.dev { --bg: #2a1418; --line: #4a2830; }
          color: var(--dim); margin: 0 0 .6rem; padding-left: .5rem; }
 #qpickname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #qpickctl { margin-left: auto; }
+
+/* ----------------------------------------------------------- speakers
+   The list carries a state per row `[PI3-UI-010]`. Colour is a second
+   channel rather than the only one: every row also says its state in
+   words, because "connected but silent" is exactly the distinction a
+   colour-blind listener would otherwise lose. */
+#bt-list { list-style: none; margin: .5rem 0 0; padding: 0; }
+#bt-list li {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .4rem .5rem; margin-bottom: .25rem;
+  border-left: 3px solid var(--dim, #555); border-radius: 3px;
+  background: rgba(255, 255, 255, .04);
+}
+#bt-list .btname  { flex: 1; font-weight: 600; }
+#bt-list .btstate { opacity: .75; font-size: .85em; }
+#bt-list li.playing   { border-left-color: #4caf50; }
+#bt-list li.connected { border-left-color: #e0a030; }
+#bt-list li.stale     { border-left-color: #c05050; }
+#bt-list li.found,
+#bt-list li.paired    { border-left-color: #6080b0; }
+#bt-list button { font-size: .85em; padding: .2rem .5rem; }
+#bt-list .btforget { opacity: .6; }
+#bt-list .btforget:hover { opacity: 1; }
+/* The confirm step is a question, not a status line: it gets the weight of
+   one so nobody misses that the appliance is waiting on them. */
+#bt-confirm { border: 1px solid #e0a030; border-radius: 4px; padding: .5rem; }
+#bt-countdown { opacity: .8; font-size: .9em; }
