@@ -22,10 +22,24 @@ it plays flawlessly, forever, into nothing, reporting itself healthy from every
 angle. Two days of this problem were spent looking at Bluetooth because the
 player insisted it was fine.
 
-**`[PI3-WHY-020]` The ALSA bridge binds a stream to whichever node was default
-when the stream opened.** Changing the default sink afterwards does not move an
-existing stream. So "select a speaker" cannot mean "change the default and hope"
--- the audio must be reopened, or the selection is cosmetic.
+**`[PI3-WHY-020]` A stream sometimes follows a change of default sink, and
+sometimes does not.** This is the awkward one, and the reason the fault took so
+long to place.
+
+Tested deliberately: with the speaker untrusted and disconnected, the player
+starts and binds to `Dummy Output`. Reconnecting the speaker then relinked the
+stream to MIDDLETON **by itself**, same node ids, no reopen. But the original
+failure was precisely a stream sitting on `Dummy Output` while the speaker was
+connected, staying there, and playing to nobody.
+
+Both were observed on the same machine. So the relink is real but not
+dependable -- plausibly a race between the dummy being removed and the sink
+appearing -- and a design that relies on it works most of the time, which is
+the worst frequency for a fault to have.
+
+**Therefore "select a speaker" must reopen the output rather than change the
+default and hope.** Not because the stream never follows, but because it
+cannot be trusted to, and a cosmetic selection is silent.
 
 **`[PI3-WHY-030]` A2DP dies when nothing feeds it.** A speaker with no audio
 hangs up after a few seconds, and the listener hears a disconnection tone. This
@@ -86,9 +100,13 @@ degraded one on a shared antenna.
 
 ## 3. What the player must provide
 
-**`[PI3-API-010]` Reopen the output on demand.** `Output::recover` already
-rebuilds a stream against the same ring; it needs a command route so the
-settings panel can invoke it after a sink change, not only after an error.
+**`[PI3-API-010]` Reopen the output on demand. Built and proven on hardware.**
+`POST /command/reopen-output` rebuilds the stream against the current default
+sink, keeping the same ring. Verified by the output node id changing and by
+`pw-top` showing the rebuilt node running at 1102 quantum, 44100, F32LE 2ch,
+with playback continuing across the reopen. A reopen that lands on a device not
+ready yet -- a speaker still completing its connection is the normal case --
+hands itself to the retry loop rather than failing once.
 
 **`[PI3-API-020]` Report the sink actually in use, not the one requested.**
 The player knows only `default` through ALSA `[PI3-WHY-020]`, so the true

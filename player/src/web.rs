@@ -642,6 +642,11 @@ async fn command(
         "play" => h.send(Command::Play),
         "pause" => h.send(Command::Pause),
         "skip" => h.send(Command::Skip),
+        // Named rather than folded into a settings write because it is an
+        // action with an audible consequence, not a stored preference: the
+        // speaker panel calls it after changing the default sink, without
+        // which the change is silent `[PI3-API-010]`.
+        "reopen-output" => h.send(Command::ReopenOutput),
         // Deliberately no "stop": there are two states [REQ-AUD-142].
         _ => return StatusCode::NOT_FOUND,
     }

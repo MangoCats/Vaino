@@ -133,6 +133,15 @@ pub enum Command {
     RemoveQueued(i64),
     /// Move a queued passage earlier (negative) or later (positive).
     ShiftQueued(i64, isize),
+    /// Rebuild the output stream against the current default sink
+    /// `[PI3-API-010]`.
+    ///
+    /// Needed because the ALSA bridge binds a stream to whichever node was
+    /// default when it opened: changing the default afterwards does not move an
+    /// existing stream, so choosing a speaker in the settings panel is
+    /// cosmetic -- it looks like it worked, and is silent -- unless the output
+    /// is reopened `[PI3-WHY-020]`.
+    ReopenOutput,
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
     Shutdown,
@@ -309,6 +318,33 @@ impl Engine {
     /// second and returns should not require anyone to do anything -- but every
     /// attempt is counted, so a link failing repeatedly is visible as a number
     /// rather than inferred from the sound.
+    /// Reopen the output because the sink changed under us, not because it
+    /// failed `[PI3-API-010]`.
+    ///
+    /// Shares the retry path with `recover_output` rather than duplicating it:
+    /// a reopen that lands on a device which is not ready yet -- a speaker
+    /// still completing its connection is the normal case -- should keep
+    /// trying exactly as a recovery does, instead of failing once and leaving
+    /// the listener with a selection that did nothing.
+    fn reopen_output(&mut self) {
+        let Some(out) = self.out.as_mut() else { return };
+        match out.recover() {
+            Ok(name) => {
+                eprintln!("output reopened on {name}");
+                self.out_retry_at = None;
+                out.set_playing(self.playing);
+            }
+            Err(e) => {
+                eprintln!("output reopen failed, retrying: {e}");
+                // Hand it to the retry loop by marking it failed, so a speaker
+                // that is a second away from ready is still picked up.
+                out.mark_failed();
+                self.out_retry_at = None;
+            }
+        }
+        self.out_recoveries += 1;
+    }
+
     fn recover_output(&mut self) {
         let Some(out) = self.out.as_mut() else { return };
         if !out.failed() {
@@ -360,6 +396,7 @@ impl Engine {
             match self.rx.try_recv() {
                 Ok(Command::Play) => self.set_playing(true),
                 Ok(Command::Pause) => self.set_playing(false),
+                Ok(Command::ReopenOutput) => self.reopen_output(),
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetSkipFade(ms)) => {
                     self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);

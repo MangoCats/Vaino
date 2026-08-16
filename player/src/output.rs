@@ -274,6 +274,14 @@ impl Output {
                   device_name, failed, requested })
     }
 
+    /// Mark the output as needing recovery.
+    ///
+    /// For a reopen that failed: the device is not usable, and the retry loop
+    /// is the right owner of trying again `[PI3-API-010]`.
+    pub fn mark_failed(&self) {
+        self.failed.store(true, Ordering::Relaxed);
+    }
+
     /// Has the stream reported an error it will not recover from itself?
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Relaxed)
