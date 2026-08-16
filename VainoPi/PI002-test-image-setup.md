@@ -175,23 +175,39 @@ bare-board with `throttled=0x0` -- no heatsink needed, and no undervoltage.
 SBC; Vaino logged `output: default @ 44100 Hz, 2 ch`. Source and sink match,
 so `rubato` never runs `[PI2-RATE-010]`.
 
-**`[PI2-RUN-030]` The player holds the device it opened at startup.** This is
-the open problem. The Bluetooth link drops a few seconds after connecting and
-stays down; a two-minute sample with ssh idle showed the link up for 2 of 40
-readings, with no bluetoothd error and no underrun. What the same sample shows
-is `stream=0` throughout: **nothing was holding the A2DP stream open**, so
-BlueZ suspended an idle link, correctly.
+**`[PI2-RUN-030]` The audio stream fails with EIO a few seconds in, and the
+player does not recover.** This is the open problem, and it is not what the
+first diagnosis said.
 
-The cause is ordering. `cpal` opens the default sink once, at startup. On an
-appliance the speaker connects *after* boot, so the default sink Vaino opened
-was the null one and it never followed the change. Restarting the player after
-the speaker connects is the workaround; following sink changes -- or waiting
-for a real sink before opening -- is the fix, and it is a change to the player
-rather than to the image.
+    output stream error: ALSA function 'snd_pcm_poll_descriptors_revents'
+    failed with error 'Unknown errno (-5)'
 
-Ruled out along the way: Wi-Fi/Bluetooth coexistence on the shared radio (the
-drop happens with ssh idle), thermal throttling, undervoltage, decode headroom
-(no underruns), and the pairing itself (paired, trusted, connected).
+-5 is EIO on the stream itself. What a listener hears is a couple of seconds
+of music, a second of silence, then the speaker announcing a disconnection --
+and that order is the evidence: **the stream dies first and the link drops
+because nothing is holding it**, not the other way round.
+
+The earlier reading -- that `cpal` opens the default sink once and never
+follows a later change -- was wrong, or at least not the whole story. It was
+tested directly: connect the speaker, set it default, *then* start the player.
+The stream attached to MIDDLETON on both channels, played, and still failed.
+Fifty samples with ssh idle afterwards: **0 connected, 0 attached.**
+
+So the fault is in sustaining the stream, not in selecting it. Two things
+follow for the player, and both are its work rather than the image's:
+
+- **An output error must be recovered from, not merely logged.** The engine
+  reports it once and continues silently for ever; on an appliance the only
+  correct response is to reopen the device and carry on.
+- The proximate cause is still unknown. EIO from the ALSA-to-PipeWire bridge
+  over Bluetooth is worth isolating with a plain `aplay` to the same sink: if
+  that also fails, it is the bridge and not Vaino.
+
+Ruled out by measurement: Wi-Fi/Bluetooth coexistence on the shared radio (it
+fails with ssh idle), thermal throttling and undervoltage (59-62 C,
+`throttled=0x0`), decode headroom (no underruns), the pairing (paired,
+trusted, connected), and sink selection (the stream demonstrably attached to
+MIDDLETON before failing).
 
 ## 7. What this image is not
 
