@@ -245,22 +245,29 @@ if [ -n "$SPEAKER" ]; then
     else
         # An AGENT must be registered or nothing answers the pairing
         # request: `pair` returns, the device never completes, and BlueZ is
-        # left holding a trust policy for a pairing that does not exist. This
-        # is why the earlier runs reported success and left `Paired: no`.
-        # NoInputNoOutput is right for a headless box with no keypad -- it
-        # accepts "just works" pairing, which is what a speaker offers.
-        bluetoothctl --timeout 30 <<'BT' >/dev/null 2>&1 || true
-power on
-agent NoInputNoOutput
-default-agent
-scan on
-BT
-        sleep 2
-        bluetoothctl <<BT >/dev/null 2>&1 || true
-agent NoInputNoOutput
-default-agent
-pair $SPEAKER
-BT
+        # left holding a trust policy for a pairing that does not exist.
+        #
+        # Fed as discrete commands with pauses, NOT as one heredoc. A heredoc
+        # delivers everything before bluetoothctl has finished connecting to
+        # bluetoothd, and the log then reads "Failed to register agent object"
+        # followed by "Agent registered" arriving after the pair attempt has
+        # already failed. NoInputNoOutput is right for a headless box: it
+        # accepts the "just works" pairing a speaker offers.
+        {
+            printf 'power on
+';           sleep 2
+            printf 'agent NoInputNoOutput
+'; sleep 1
+            printf 'default-agent
+';      sleep 1
+            printf 'scan on
+';            sleep 20
+            printf 'pair %s
+' "$SPEAKER"; sleep 12
+            printf 'scan off
+quit
+'
+        } | bluetoothctl >/dev/null 2>&1 || true
         # The RESULT is checked, not the exit code: `bluetoothctl pair` reports
         # success for a pairing that does not persist, which is how this script
         # once announced "paired CHANGED" for a device left unpaired.
