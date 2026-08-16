@@ -208,6 +208,43 @@ else
     ok "enabled"
 fi
 
+# --------------------------------------------------------------- bt helper
+# The privileged helper for speaker selection [PI-SET-030]. A narrow sudoers
+# rule rather than broader rights for the player: the web process gets exactly
+# these verbs, with the device address validated before it reaches BlueZ.
+echo "bluetooth helper"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+for f in vaino-btctl vaino-wait-sink; do
+    if [ -f "$HERE/$f" ]; then
+        if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
+            install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
+        else
+            ok "$f current"
+        fi
+    elif [ -x "/usr/local/bin/$f" ]; then
+        ok "$f present (none staged)"
+    else
+        note "$f" "ABSENT — stage it beside this script"
+    fi
+done
+
+SUDOERS=/etc/sudoers.d/vaino-btctl
+WANT="$RUN_USER ALL=(root) NOPASSWD: /usr/local/bin/vaino-btctl"
+if [ "$(cat "$SUDOERS" 2>/dev/null)" != "$WANT" ]; then
+    printf '%s
+' "$WANT" > "$SUDOERS"
+    chmod 0440 "$SUDOERS"
+    # A malformed sudoers file can lock the machine out of sudo altogether, so
+    # it is validated and REMOVED if wrong rather than left in place.
+    if visudo -cf "$SUDOERS" >/dev/null 2>&1; then
+        did "sudoers rule"
+    else
+        rm -f "$SUDOERS"; note "sudoers rule" "REJECTED — removed"
+    fi
+else
+    ok "sudoers rule"
+fi
+
 # -------------------------------------------------------------- boot tuning
 # Safe, reversible settings only. The riskier work -- initramfs trimming, unit
 # parallelisation -- waits for a boot-time baseline.

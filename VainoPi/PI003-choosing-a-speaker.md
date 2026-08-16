@@ -134,11 +134,34 @@ for one dropout and wrong for fifty.
 
 ## 4. Privilege
 
-The BlueZ operations need more than the web process should hold. This is the
-privileged helper already required by `[PI-SET-030]`, and speaker selection is
-its second caller rather than a new mechanism: a narrow, enumerated set of
-verbs -- scan, pair, trust, connect, forget -- with the device address as the
-only argument, and no shell interpolation anywhere in it.
+**Built: `vaino-btctl`.** A closed set of verbs -- `list`, `scan`, `pair`,
+`repair`, `use`, `forget`, `status` -- each taking at most a device address,
+checked against an anchored MAC pattern *before* it reaches BlueZ. Nothing is
+interpolated into a shell. It emits JSON so the caller parses a shape rather
+than prose, and it is reached through a sudoers rule naming that one binary
+rather than by granting the player broader rights.
+
+Three verbs encode failures rather than operations. `pair` registers an agent
+and paces its steps, because piping them as one block runs them faster than
+bluetoothd establishes the connection `[PI3-WHY-060]`. `repair` removes the
+device first, because a stale trusted-but-not-paired record makes every attempt
+fail with no explanation `[PI3-WHY-050]`. `use` trusts as well as connects,
+because trust is what survives a reboot `[PI3-WHY-040]`.
+
+The sudoers file is validated with `visudo -c` and **removed if malformed** --
+a bad one can lock the machine out of sudo entirely, and a setup script that
+bricks its own escape route is worse than one that does nothing.
+
+Verified on hardware. Injection and malformed addresses are refused
+(`{"ok":false,"error":"not a device address"}`), unknown verbs are refused, and
+the whole `[PI3-UI-020]` sequence runs from a silent start:
+
+    before   {"sink":"Dummy Output","dummy":true,"known":true}
+    use      {"ok":true,"state":"connected","sink_node":"46"}
+    reopen   HTTP 204
+    after    {"sink":"MIDDLETON","dummy":false,"known":true}
+
+with `pw-top` confirming the node running at 1102 quantum, 44100, F32LE 2ch.
 
 ---
 
