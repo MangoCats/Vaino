@@ -108,15 +108,22 @@ with playback continuing across the reopen. A reopen that lands on a device not
 ready yet -- a speaker still completing its connection is the normal case --
 hands itself to the retry loop rather than failing once.
 
-**`[PI3-API-020]` Report the sink actually in use, not the one requested.**
-The player knows only `default` through ALSA `[PI3-WHY-020]`, so the true
-answer lives in PipeWire and must be read from there. "Which node is my stream
-linked to" is the question, and `Dummy Output` is a first-class answer that the
-interface must be willing to show.
+**`[PI3-API-020]` Report the sink actually in use. Built.** `GET /audio/sink`
+answers from PipeWire, because ALSA only ever tells the player `default`.
+Queried on demand rather than polled: it costs a subprocess, and a player that
+shelled out every state tick would spend more effort describing its output than
+producing it. `known: false` distinguishes "the query could not run" from "it
+ran and found nothing", since the remedies differ. Verified on hardware, both
+ways round:
 
-**`[PI3-API-030]` Never start playing into a dummy.** The `vaino-wait-sink`
-guard covers boot. The same check belongs behind the reopen, so a mid-session
-selection cannot land the player back in the silent state.
+    speaker connected  {"sink":"MIDDLETON","dummy":false,"known":true}
+    speaker removed    {"sink":"Dummy Output","dummy":true,"known":true}
+
+**`[PI3-API-030]` Never settle for a dummy. Built.** `vaino-wait-sink` guards
+boot; the engine now guards every reopen and every recovery. Opening
+successfully says nothing about whether anyone can hear it -- the dummy accepts
+audio perfectly -- so a reopen that lands there is marked failed and the retry
+loop keeps looking. The player will not report itself recovered into silence.
 
 **`[PI3-API-040]` Surface the recovery count `[REQ-VIS-140]`.** A link that
 drops and recovers repeatedly is a range or battery problem, and a number

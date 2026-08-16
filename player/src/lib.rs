@@ -19,6 +19,7 @@ pub mod fade;
 pub mod mixer;
 pub mod output;
 pub mod queue;
+pub mod sink;
 pub mod session;
 pub mod tags;
 pub mod web;

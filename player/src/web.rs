@@ -216,6 +216,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/review/:passage_id/:decision", post(record_review))
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
+        .route("/audio/sink", get(audio_sink))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/skip/fade/:ms", post(set_skip_fade))
@@ -629,6 +630,14 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             return; // client gone
         }
     }
+}
+
+/// Where the audio is actually going `[PI3-API-020]`.
+///
+/// On demand rather than in the state snapshot: it costs a subprocess, and the
+/// settings panel is the only thing that needs it.
+async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
+    axum::Json(crate::sink::current())
 }
 
 /// Controls are named rather than numbered so the wire stays readable and an

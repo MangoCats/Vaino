@@ -330,9 +330,20 @@ impl Engine {
         let Some(out) = self.out.as_mut() else { return };
         match out.recover() {
             Ok(name) => {
-                eprintln!("output reopened on {name}");
+                // Opening succeeded, which says nothing about whether anyone
+                // can hear it: the dummy accepts audio perfectly. Treat it as
+                // a failure so the retry loop keeps looking for a real sink
+                // `[PI3-API-030]`.
+                let where_to = crate::sink::current();
+                if where_to.dummy {
+                    eprintln!("output reopened onto {} -- still silent, retrying",
+                              where_to.sink.as_deref().unwrap_or("a dummy"));
+                    out.mark_failed();
+                } else {
+                    eprintln!("output reopened on {name}");
+                    out.set_playing(self.playing);
+                }
                 self.out_retry_at = None;
-                out.set_playing(self.playing);
             }
             Err(e) => {
                 eprintln!("output reopen failed, retrying: {e}");
@@ -358,11 +369,19 @@ impl Engine {
         self.out_recoveries += 1;
         match out.recover() {
             Ok(name) => {
-                eprintln!("output recovered on {name}");
-                self.out_retry_at = None;
-                // The stream comes back stopped; only resume it if the listener
-                // had not paused in the meantime.
-                out.set_playing(self.playing);
+                // As in `reopen_output`: a successful open onto the dummy is
+                // not a recovery, it is the same silence with a fresh stream
+                // `[PI3-API-030]`.
+                if crate::sink::current().dummy {
+                    eprintln!("output recovered onto a dummy sink; still looking");
+                    out.mark_failed();
+                } else {
+                    eprintln!("output recovered on {name}");
+                    self.out_retry_at = None;
+                    // The stream comes back stopped; only resume it if the
+                    // listener had not paused in the meantime.
+                    out.set_playing(self.playing);
+                }
             }
             Err(e) => eprintln!("output recovery failed, retrying: {e}"),
         }
