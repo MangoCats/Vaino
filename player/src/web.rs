@@ -186,6 +186,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/core.js", get(|| async { js(CORE) }))
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
+        .route("/why/:passage_id", get(why_for))
         .route("/art/:passage_id", get(cover_art))
         .route("/art/:passage_id/back", get(cover_art_back))
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
@@ -426,6 +427,32 @@ async fn review_releases(
     match out {
         Ok(Some(v)) => axum::Json(v).into_response(),
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Why any one passage was chosen `[REQ-VIS-100]`.
+///
+/// The log is keyed by passage and already holds the queued ones; only the
+/// playing one was ever reachable. A skin that lets you ask about the track
+/// *after* next needs the rest of it.
+///
+/// Fetched on demand rather than pushed with every snapshot: an explanation is
+/// several hundred bytes of weights and runners-up, it never changes once the
+/// passage has been chosen, and pushing six of them twice a second to render
+/// one would be most of the traffic.
+///
+/// 404 when there is none -- a resumed passage, or one queued before the log
+/// existed. That is a real state and the page says so rather than blanking.
+async fn why_for(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    let Ok(log) = ui.why.lock() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    match log.get(passage_id).and_then(|w| serde_json::to_value(w).ok()) {
+        Some(v) => axum::Json(v).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
