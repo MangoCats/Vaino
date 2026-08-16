@@ -156,9 +156,89 @@ failing:
 - `backup::restore` — re-points history through `lib.passage_recordings`;
 - the Director's taste centroids — `listener_likes` against `lib.flavor`.
 
+**`[PI-DB-035]` The boundary is defaults on one side, the listener's answer on
+the other.** Several values exist in both files and mean different things:
+
+| | `library.db` (B) | `listener.db` (C) |
+| :--- | :--- | :--- |
+| Taste centroids | derived defaults | saved, user-editable |
+| Artist / track cooldowns | defaults from ingest | `listener_preferences`, edited |
+| Like / dislike | — | `listener_likes`, entirely the listener's |
+
+So a read is layered: take the default from `lib`, override it with the row in
+`main` if there is one. That is why the *writable* file is the one the player
+opens — the override always has somewhere to go, even with the library
+mounted read-only.
+
+It also means a reinitialised partition C is not a broken system but a
+**factory-reset** one: every default is still present in `library.db`, and
+what is lost is the listener's accumulated opinion. That is a real loss
+`[PI-C-020]` and precisely why C is backed up off-device, but it is a
+different kind of loss from a system that will not run.
+
+Like/dislike `[REQ-PD-150]` is unbuilt, and belongs on this side of the line
+when it is written — it is the listener's judgement, and nothing re-derives it.
+
 **`[PI-DB-040]` Sampo writes `library.db` on a desktop and never on the Pi.**
 Which is already true, and the split makes it enforceable rather than merely
 intended.
+
+---
+
+## 5a. Filesystem for partition C: ext4 vs f2fs
+
+**`[PI-FS-010]` `data=journal` is the wrong instinct here, and it is worth
+saying why.** It looks like the safest option — journal the data as well as
+the metadata, so a torn write cannot leave a half-updated file. But it doubles
+every write, and it is largely redundant with what SQLite is already doing.
+
+SQLite in WAL mode with `synchronous=FULL` `[PI-C-050]` already guarantees
+that a committed transaction survives power loss: it writes the WAL frame,
+fsyncs, and only then reports success. What the filesystem must supply is
+(a) metadata that is not corrupted by an interrupted write, and (b) an
+`fsync` that is honest. **Metadata journalling gives both**; `data=journal`
+adds a second copy of bytes SQLite has already made durable itself.
+
+On an SD card the cost is not theoretical. Flash erases in blocks far larger
+than a SQLite page, so the controller already amplifies small writes; doubling
+them at the filesystem layer compounds it, and the write pattern here is
+exactly the bad case — a resume-point update every second, forever.
+
+**`[PI-FS-020]` The real comparison is ext4 `data=ordered` against f2fs.**
+
+| | ext4 (`data=ordered`, the default) | f2fs |
+| :--- | :--- | :--- |
+| Design target | spinning disks and SSDs alike | flash with an FTL, specifically |
+| Write pattern | in-place update | log-structured, append |
+| Amplification on SD | moderate | lower — writes align to erase blocks |
+| Small frequent fsync | fine | better; this is what it was built for |
+| Append-heavy logs | fine | well suited |
+| Recovery | `e2fsck`, extremely mature | `fsck.f2fs`, far less exercised |
+| Pi OS support | default, universal | in-kernel, not the default |
+| If it goes wrong | a well-trodden path | fewer people have been there |
+
+**`[PI-FS-030]` The recommendation is f2fs, and the reason it is a safe
+recommendation is `[PI-C-040]`.** Partition C is the one the design already
+declares expendable: the player must start with it absent and recreate it. So
+the usual objection to f2fs — that its recovery tooling is less battle-tested
+— costs much less here than it would on a root filesystem. If f2fs loses
+partition C in a way `fsck.f2fs` cannot mend, the answer is the same answer we
+had already committed to: make a new one and carry on.
+
+Set against that, its advantages land exactly on Vaino's write pattern: many
+small transactions, continuous appends, and an SD card underneath.
+
+**`[PI-FS-040]` Partition B stays ext4.** It is written rarely and attended,
+mounted read-only the rest of the time, and holds a gigabyte that takes hours
+to rebuild. Maturity is worth more than wear levelling on a partition that
+barely wears.
+
+**`[PI-FS-050]` Unmeasured.** Every claim above is reasoning from how these
+filesystems are built, not from Vaino running on a Pi — which has not
+happened `[PI-IMG-030]`. The honest test is a power-pull rig: write
+continuously, cut power at random, count how often the database survives and
+how often `fsck` is needed. Until that is run, this is a recommendation and
+not a finding.
 
 ---
 
@@ -188,11 +268,15 @@ discarded everything written after the overlay went on.
 
 ## 7. What is not yet decided
 
-- **Filesystem for C.** `ext4` with `data=journal` is the conservative choice;
-  `f2fs` is designed for exactly this wear pattern. Unmeasured either way.
+- ~~**Filesystem for C.**~~ Answered in §5a: **f2fs**, because partition C is
+  already declared expendable `[PI-C-040]`, which is what makes its thinner
+  recovery tooling an acceptable trade. `data=journal` is rejected as
+  redundant with SQLite's own durability. Still unmeasured `[PI-FS-050]`.
 - **Whether B holds the audio at all.** A USB stick or network share would
   make B small and the image portable between libraries.
-- **No ARM64 build has been produced or run.** `build/Dockerfile.aarch64`
-  exists as a build target and has not been exercised this session. Every
-  measurement in this project so far is from x86 Windows, and nothing here is
-  validated on the target hardware.
+- **`[PI-IMG-030]` No ARM64 build has been produced or run.**
+  `build/Dockerfile.aarch64` exists as a build target and has not been
+  exercised. Every measurement in this project is from x86 Windows, and
+  nothing in this document is validated on the target hardware. The filesystem
+  recommendation in §5a and the RAM budget in §2 are the two places where that
+  matters most: both are reasoning, and both are testable.
