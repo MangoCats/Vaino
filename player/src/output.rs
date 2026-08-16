@@ -299,9 +299,6 @@ impl Output {
     /// exceptional -- the sink is often still absent -- so the caller is meant
     /// to retry rather than to treat this as fatal.
     pub fn recover(&mut self) -> Result<String, OutputError> {
-        if let Ok(mut s) = self.state.lock() {
-            s.ring.clear();
-        }
         // Release the dead device *before* opening it again. ALSA will refuse
         // the second open while the first handle is alive, so building the new
         // stream first and assigning over the old one -- the obvious ordering --
@@ -312,6 +309,14 @@ impl Output {
             Arc::clone(&self.state),
             self.volume.clone(),
         )?;
+        // Discard what the ring holds only now that a device has actually been
+        // opened. Clearing on every ATTEMPT was a bug: a retry loop against an
+        // absent sink emptied the buffer twice a second, the mixer refilled it
+        // each time, and the position raced ahead of a silent player
+        // `[PI3-API-030]`.
+        if let Ok(mut s) = self.state.lock() {
+            s.ring.clear();
+        }
         self.stream = fresh.stream;
         self.failed = fresh.failed;
         self.sample_rate = fresh.sample_rate;

@@ -185,6 +185,8 @@ pub struct Engine {
     /// reopening an absent ALSA device several thousand times a second costs a
     /// core for no benefit.
     out_retry_at: Option<std::time::Instant>,
+    /// Current spacing between attempts, doubling to `OUT_RETRY_MAX`.
+    out_backoff: std::time::Duration,
     out_rate: u32,
     out_channels: usize,
     scratch: Vec<f32>,
@@ -246,6 +248,7 @@ impl Engine {
             ready: None,
             out,
             out_retry_at: None,
+            out_backoff: Self::OUT_RETRY,
             out_recoveries: 0,
             out_rate,
             out_channels,
@@ -306,6 +309,12 @@ impl Engine {
     /// device applying back-pressure.
     /// Interval between attempts to revive a failed output `[IMPL-AUD-020]`.
     const OUT_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+    /// The retry interval stops growing here.
+    ///
+    /// An appliance with no speaker in the room is a normal state, not an
+    /// emergency: it should keep looking indefinitely, but at a cost closer to
+    /// nothing than to a subprocess every two seconds for ever.
+    const OUT_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(30);
 
     /// Reopen the output device after the stream reported an error.
     ///
@@ -341,6 +350,7 @@ impl Engine {
                     out.mark_failed();
                 } else {
                     eprintln!("output reopened on {name}");
+                    self.out_backoff = Self::OUT_RETRY;
                     out.set_playing(self.playing);
                 }
                 self.out_retry_at = None;
@@ -365,7 +375,11 @@ impl Engine {
         if self.out_retry_at.is_some_and(|t| now < t) {
             return;
         }
-        self.out_retry_at = Some(now + Self::OUT_RETRY);
+        // Back off, so a room with no speaker costs a query every half minute
+        // rather than one every two seconds for the life of the appliance.
+        self.out_backoff = (self.out_backoff * 2).min(Self::OUT_RETRY_MAX)
+                                                 .max(Self::OUT_RETRY);
+        self.out_retry_at = Some(now + self.out_backoff);
         self.out_recoveries += 1;
         match out.recover() {
             Ok(name) => {
@@ -378,6 +392,7 @@ impl Engine {
                 } else {
                     eprintln!("output recovered on {name}");
                     self.out_retry_at = None;
+                    self.out_backoff = Self::OUT_RETRY;
                     // The stream comes back stopped; only resume it if the
                     // listener had not paused in the meantime.
                     out.set_playing(self.playing);
@@ -402,7 +417,13 @@ impl Engine {
         self.top_up_decoders();
         // Submitting while paused would be audible -- the callback drains
         // continuously -- so only the consumer side is gated.
-        let submitted = if self.playing { self.mix_and_submit() } else { 0 };
+        // Nothing audible means nothing advances. Mixing on into a failed or
+        // dummy-bound output consumed the queue at whatever speed the decoders
+        // managed, so the clock raced while the room stayed silent -- a player
+        // that lies about what it is doing, which is the fault this whole
+        // effort exists to remove `[PI3-API-030]`.
+        let audible = self.out.as_ref().map_or(true, |o| !o.failed());
+        let submitted = if self.playing && audible { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.record_play();
         self.publish();
