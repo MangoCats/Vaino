@@ -187,6 +187,8 @@ pub struct Engine {
     out_retry_at: Option<std::time::Instant>,
     /// Current spacing between attempts, doubling to `OUT_RETRY_MAX`.
     out_backoff: std::time::Duration,
+    /// When to next confirm the audio is still reaching something real.
+    out_watch_at: Option<std::time::Instant>,
     out_rate: u32,
     out_channels: usize,
     scratch: Vec<f32>,
@@ -249,6 +251,7 @@ impl Engine {
             out,
             out_retry_at: None,
             out_backoff: Self::OUT_RETRY,
+            out_watch_at: None,
             out_recoveries: 0,
             out_rate,
             out_channels,
@@ -327,6 +330,41 @@ impl Engine {
     /// second and returns should not require anyone to do anything -- but every
     /// attempt is counted, so a link failing repeatedly is visible as a number
     /// rather than inferred from the sound.
+    /// How often to confirm the audio still reaches a real sink.
+    const OUT_WATCH: std::time::Duration = std::time::Duration::from_secs(20);
+
+    /// Notice a sink that became a dummy without anyone reporting an error
+    /// `[PI3-API-030]`.
+    ///
+    /// The failure path covers a stream that breaks. This covers the quieter
+    /// one: a speaker switched off during normal playback, whose stream
+    /// PipeWire moves to the `Dummy Output` with no error at all. Nothing in
+    /// the player is wrong at that moment -- the callback runs, the ring
+    /// drains, the clock advances -- and nobody can hear a thing. Without this
+    /// check the guard only ever fires on reopen, which is to say almost
+    /// never.
+    ///
+    /// Rate-limited because it costs a subprocess, and skipped while paused
+    /// because a paused player is meant to be silent.
+    fn watch_output(&mut self) {
+        if !self.playing {
+            return;
+        }
+        let Some(out) = self.out.as_ref() else { return };
+        if out.failed() {
+            return; // already known; the retry loop owns it
+        }
+        let now = std::time::Instant::now();
+        if self.out_watch_at.is_some_and(|t| now < t) {
+            return;
+        }
+        self.out_watch_at = Some(now + Self::OUT_WATCH);
+        if crate::sink::current().dummy {
+            eprintln!("audio is going nowhere audible; looking for a sink");
+            out.mark_failed();
+        }
+    }
+
     /// Reopen the output because the sink changed under us, not because it
     /// failed `[PI3-API-010]`.
     ///
@@ -407,6 +445,7 @@ impl Engine {
         if self.shutdown {
             return 0;
         }
+        self.watch_output();
         self.recover_output();
         self.admit_due();
         // Prepare AFTER admitting, so this readies the passage that is next

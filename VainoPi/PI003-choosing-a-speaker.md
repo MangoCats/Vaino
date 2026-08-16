@@ -122,7 +122,18 @@ ways round:
     speaker connected  {"sink":"MIDDLETON","dummy":false,"known":true}
     speaker removed    {"sink":"Dummy Output","dummy":true,"known":true}
 
-**`[PI3-API-030]` Never settle for a dummy. Built.** `vaino-wait-sink` guards
+**`[PI3-API-030]` Never settle for a dummy, and notice when one arrives.
+Built.** Two paths, because the first one shipped covering only half the
+problem. The loud failure -- a stream that breaks -- is caught by the error
+callback. The quiet one is a speaker switched off during normal playback:
+PipeWire moves the stream to the `Dummy Output` and **reports no error at
+all**. Nothing in the player is wrong at that moment. The callback runs, the
+ring drains, the clock advances, and nobody can hear a thing. A guard that
+fires only on reopen therefore almost never fires. So the engine also confirms,
+every twenty seconds while playing, that the audio still reaches something
+real.
+
+**`[PI3-API-030]` (original) Never settle for a dummy.** `vaino-wait-sink` guards
 boot; the engine now guards every reopen and every recovery. Opening
 successfully says nothing about whether anyone can hear it -- the dummy accepts
 audio perfectly -- so a reopen that lands there is marked failed and the retry
