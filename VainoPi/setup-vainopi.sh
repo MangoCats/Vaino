@@ -47,8 +47,16 @@ echo
 # ---------------------------------------------------------------- packages
 echo "packages"
 NEED=""
-for p in pipewire pipewire-pulse wireplumber libspa-0.2-bluetooth bluez \
-         libasound2 alsa-utils sqlite3; do
+# pipewire-alsa is the one left out and then impossible to explain. Vaino
+# reaches the sound card through cpal, which speaks ALSA; a Bluetooth speaker
+# is a PipeWire sink with no ALSA device of its own. This package installs the
+# plugin that routes ALSA's default PCM into PipeWire. Without it the player
+# says "no audio device" beside a speaker that is paired, trusted, connected
+# and visibly working for everything else -- ALSA error 524, which names
+# nothing. With it the error becomes an honest "Host is down" when the link
+# drops.
+for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
+         bluez libasound2 alsa-utils sqlite3; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then
