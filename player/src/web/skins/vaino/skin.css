@@ -8,8 +8,6 @@
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 16px/1.5 system-ui, sans-serif; }
   main { max-width: 34rem; margin: 0 auto; padding: 2rem 1.25rem; }
-  h1 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
-       color: var(--dim); font-weight: 600; margin: 0 0 1.5rem; }
   .np { display: flex; gap: 1rem; align-items: flex-start; }
   .np > div { flex: 1; min-width: 0; }
   #art { width: 84px; height: 84px; object-fit: cover; border-radius: 4px;
