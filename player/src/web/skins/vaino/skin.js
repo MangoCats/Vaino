@@ -25,23 +25,27 @@
       // One control set beside the picked row instead of a set on every row.
       controls: false,
       selected: () => picked,
-      onPick: id => { pick(id); },
+      onPick: (qid, item) => { pick(qid, item.passage_id); },
     });
 
-  function pick(id) {
-    picked = id;
+  // `qid` identifies the QUEUE ENTRY; `passageId` the recording it plays. The
+  // selection follows the entry -- two copies of one passage are separately
+  // pickable -- while the explanation is fetched for the passage, because an
+  // explanation is about the recording and is the same for both copies.
+  function pick(qid, passageId) {
+    picked = qid;
     pickedWhy = null;
-    if (id != null) {
+    if (qid != null && passageId != null) {
       // 404 is a real answer -- a resumed passage, or one queued before the
       // log began -- and renderWhy already says so for null.
-      fetch(`/why/${id}`)
+      fetch(`/why/${passageId}`)
         .then(r => (r.ok ? r.json() : null))
-        .then(w => { if (picked === id) { pickedWhy = w; draw(); } })
-        .catch(() => { if (picked === id) draw(); });
+        .then(w => { if (picked === qid) { pickedWhy = w; draw(); } })
+        .catch(() => { if (picked === qid) draw(); });
     }
     draw();
   }
-  $('nowrow').onclick = () => pick(null);
+  $('nowrow').onclick = () => pick(null, null);
 
   // The settings screen `[REQ-VIS-160]`. The skip shape and the programme are
   // set once and then left alone, so they no longer sit in the reading path
@@ -232,11 +236,11 @@
     // A pinned passage that has since started playing, or left the queue
     // entirely, falls back to following the current track rather than
     // explaining something no longer there.
-    const queued = (s.queue || []).some(q => q.passage_id === picked);
+    const queued = (s.queue || []).some(q => q.qid === picked);
     if (picked != null && !queued) picked = null;
 
     $('nowrow').classList.toggle('picked', picked == null);
-    const on = picked != null ? (s.queue || []).find(q => q.passage_id === picked) : null;
+    const on = picked != null ? (s.queue || []).find(q => q.qid === picked) : null;
     $('whotitle').textContent = on
       ? (on.artist ? `${on.title} — ${on.artist}` : on.title)
       : 'this track';
@@ -248,7 +252,7 @@
     box.hidden = !on;
     if (on) {
       box.textContent = '';
-      box.appendChild(Vaino.queueControls(on.passage_id, on.editable));
+      box.appendChild(Vaino.queueControls(on.qid, on.editable));
     }
   }
 

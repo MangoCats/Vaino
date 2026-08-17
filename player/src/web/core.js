@@ -139,7 +139,11 @@ const Vaino = (() => {
   // verbs on the same object, and three copies would drift. A skin styles
   // them through `.qedit` and decides where they go; it does not decide
   // what they do.
-  function queueControls(passageId, editable = true) {
+  // Takes the ENTRY's id, not the passage's `[REQ-VIS-186]`. A passage may be
+  // queued twice; those are two entries naming one recording, and addressing
+  // them by passage meant removing one removed both and moving one moved
+  // whichever happened to come first.
+  function queueControls(qid, editable = true) {
       const box = document.createElement('span');
       box.className = 'qedit';
       // Remove first and furthest left, then sooner, then later. Fixed
@@ -160,7 +164,7 @@ const Vaino = (() => {
           b.onclick = e => {
               // The row itself may do something else entirely.
               e.stopPropagation();
-              post(`/queue/${passageId}/${action}`);
+              post(`/queue/${qid}/${action}`);
           };
           box.appendChild(b);
       }
@@ -236,12 +240,13 @@ const Vaino = (() => {
   function queueRow(item, label, tag = 'li', opts = {}) {
     const row = document.createElement(tag);
     row.dataset.passage = item.passage_id;
+    row.dataset.qid = item.qid;
     if (item.editable === false) row.dataset.locked = '1';
     // A skin may put ONE set of controls beside a selected row instead of a
     // set on every row. Both are honest arrangements; which suits depends on
     // whether the skin has a notion of a selected track.
     if (opts.controls !== false) {
-      row.appendChild(queueControls(item.passage_id, item.editable));
+      row.appendChild(queueControls(item.qid, item.editable));
     }
     const title = document.createElement('span');
     title.className = 'qtitle';
@@ -276,8 +281,12 @@ const Vaino = (() => {
         const row = queueRow(q, label, tag, opts);
         // Selection is the skin's idea; the row only reports the click and
         // wears the mark the skin asks for.
-        if (opts.onPick) row.onclick = () => opts.onPick(q.passage_id);
-        if (sel != null && sel === q.passage_id) row.classList.add('picked');
+        // The entry, so a skin can tell two copies of one passage apart; the
+        // whole item too, because what a skin wants next is usually the
+        // passage behind it -- an explanation is about the recording, not
+        // about which copy of it is queued.
+        if (opts.onPick) row.onclick = () => opts.onPick(q.qid, q);
+        if (sel != null && sel === q.qid) row.classList.add('picked');
         container.appendChild(row);
       }
     };

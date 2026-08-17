@@ -68,6 +68,9 @@ pub struct SkipShape {
 
 #[derive(Serialize)]
 pub struct QueueItem {
+    /// The entry's own identity `[REQ-VIS-186]`. What the edit controls name,
+    /// because `passage_id` does not distinguish a passage queued twice.
+    pub qid: u64,
     pub passage_id: i64,
     pub title: String,
     pub artist: Option<String>,
@@ -167,6 +170,7 @@ impl From<&PlayerState> for Snapshot {
                 .iter()
                 .enumerate()
                 .map(|(i, e)| QueueItem {
+                    qid: e.qid,
                     passage_id: e.passage_id,
                     title: e.title(),
                     artist: e.artist(),
@@ -312,27 +316,40 @@ async fn queue_passage(
     // path `[REQ-VIS-195]`. They must arrive together: three passages sent as
     // three requests and inserted one at a time at the same place come out
     // backwards, which looks like a UI fault and is not.
-    let ids: Vec<i64> = passages.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    let Some(&passage_id) = ids.first() else {
-        return StatusCode::NOT_FOUND;
-    };
-    // Editing the queue is a rearrangement, not a lookup: the passage is
-    // already there, so this must not touch the database.
-    let place = match action.as_str() {
+    // Two identifier spaces meet on this route, and conflating them was a bug
+    // `[REQ-VIS-186]`. The verbs that ADD name passages in the library; the
+    // verbs that EDIT name entries already in the queue, which is not the same
+    // thing the moment a passage appears twice.
+    //
+    // Editing the queue is a rearrangement, not a lookup: what is named is
+    // already there, so none of these touch the database.
+    match action.as_str() {
         "remove" => {
-            for id in &ids {
-                ui.handle.send(Command::RemoveQueued(*id));
+            let qids: Vec<u64> =
+                passages.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+            if qids.is_empty() {
+                return StatusCode::NOT_FOUND;
+            }
+            for qid in qids {
+                ui.handle.send(Command::RemoveQueued(qid));
             }
             return StatusCode::NO_CONTENT;
         }
-        "sooner" => {
-            ui.handle.send(Command::ShiftQueued(passage_id, -1));
+        "sooner" | "later" => {
+            let Ok(qid) = passages.trim().parse::<u64>() else {
+                return StatusCode::NOT_FOUND;
+            };
+            let delta = if action == "sooner" { -1 } else { 1 };
+            ui.handle.send(Command::ShiftQueued(qid, delta));
             return StatusCode::NO_CONTENT;
         }
-        "later" => {
-            ui.handle.send(Command::ShiftQueued(passage_id, 1));
-            return StatusCode::NO_CONTENT;
-        }
+        _ => {}
+    }
+    let ids: Vec<i64> = passages.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    if ids.is_empty() {
+        return StatusCode::NOT_FOUND;
+    }
+    let place = match action.as_str() {
         "now" => Placement::Now,
         "next" => Placement::Next,
         "last" => Placement::Last,
@@ -845,6 +862,7 @@ mod tests {
 
     fn entry(id: i64, title: &str) -> QueueEntry {
         let mut e = QueueEntry {
+        qid: 0, // stamped by Queue on the way in
             passage_id: id,
             path: PathBuf::from(format!("/music/{title}.mp3")),
             start_ms: 0,

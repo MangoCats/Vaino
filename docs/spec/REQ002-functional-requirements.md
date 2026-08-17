@@ -421,6 +421,29 @@ Ordering is by disc, then track number, then title. **Unnumbered tracks sort aft
 > **The queue holds only what is still to come.** The sounding passage is in `live` and is not in the queue at all, so index 0 *is* the next thing heard. Next shipped inserting at index 1 — one place too late — on the belief that the head of the queue was the playing passage. A test asserted that belief in as many words ("playing passage must stay at the head"), which is how it survived; that test now asserts the opposite and says why.
 >
 > **Now means the front, not "after the current".** Skip reaches for the front of the queue, so anything less would play whatever was already next instead — the passage the listener did not ask for.
+
+**`[REQ-VIS-186]` A queue entry is not a passage** *(2026-08-17)*. The edit
+verbs name the **entry**, never the passage it plays.
+
+A passage may sit in the queue more than once, deliberately, as a repeat. Those
+are two entries that happen to name the same audio — and while the queue was
+addressed by `passage_id` they were indistinguishable: **removing one removed
+both**, and moving one moved whichever came first. Inherited from MuLibPlay,
+where it behaved the same way, and reproduced here by carrying the same
+identifier across.
+
+Each entry is now stamped with a `qid` on its way into the queue, monotonic and
+never reused. Never reused is the load-bearing part: an identifier a browser is
+holding can then only be **stale** — naming an entry that has since played or
+been removed, which is a quiet no-op — and never **ambiguous**, silently
+addressing whatever took its place.
+
+Two identifier spaces meet on `/queue/:ids/:action`, and conflating them was the
+bug. `now` / `next` / `last` name **passages** in the library, because they add
+something that is not there yet. `remove` / `sooner` / `later` name **entries**,
+because they act on something already queued. Selection follows the entry too,
+so two copies are separately pickable; the *explanation* is still fetched per
+passage, since why a recording was chosen is the same for both copies.
 >
 > **Shifting clamps rather than wraps.** Nudging the first passage "sooner" does nothing, which is what is expected; wrapping it to last would be a surprise indistinguishable from a bug.
 >

@@ -62,8 +62,8 @@ const RICH = {
   plays: 12, last_played: 1735689600,
   title_source: 'musicbrainz', artist_source: 'musicbrainz', album_source: 'tags',
   queue_len: 3,
-  queue: [{ passage_id: 1, title: 'Next One', artist: 'Another', duration_ms: 180000 },
-          { passage_id: 2, title: 'The One After', artist: null, duration_ms: 205000 }],
+  queue: [{ qid: 101, passage_id: 1, title: 'Next One', artist: 'Another', duration_ms: 180000 },
+          { qid: 102, passage_id: 2, title: 'The One After', artist: null, duration_ms: 205000 }],
   volume_db: -12.5,
   program: 'Mellow', program_manual: true,
   programs: [{ id: 1, name: 'Mellow', start: '20:00' }, { id: 2, name: 'Prog', start: '09:00' }],
@@ -320,8 +320,11 @@ async function run(skin) {
           'the heading must name the track being explained');
     // And they must act on the picked passage, not on whatever was first.
     qp.querySelectorAll('button')[0].onclick(new window.Event('click'));
-    check(posted.some(u => u === '/queue/1/remove'),
-          `the shared controls must act on the picked passage, posted ${JSON.stringify(posted)}`);
+    // The ENTRY's id, not the passage's `[REQ-VIS-186]`. The fixture gives them
+    // different values precisely so a control still addressing the passage
+    // fails here rather than passing by coincidence.
+    check(posted.some(u => u === '/queue/101/remove'),
+          `the shared controls must act on the picked entry, posted ${JSON.stringify(posted)}`);
 
     nowrow.onclick();
     await new Promise(r => setTimeout(r, 20));

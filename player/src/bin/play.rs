@@ -36,6 +36,7 @@ fn main() {
     {
         let mut add = |path: &str, start: u64, end: u64, lin: u64, lout: u64| {
             entries.push(QueueEntry {
+                qid: 0,
                 passage_id: entries.len() as i64,
                 path: PathBuf::from(path),
                 start_ms: start,

@@ -33,6 +33,15 @@ use std::path::PathBuf;
 /// fault to be "fixed" by inflating the leads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueueEntry {
+    /// This entry's own identity, distinct from the passage it plays.
+    ///
+    /// A passage may sit in the queue more than once -- deliberately, as a
+    /// repeat -- and the two copies are different queue entries that happen to
+    /// name the same audio. Addressing the queue by `passage_id` made them
+    /// indistinguishable, so removing one removed both and moving one moved
+    /// whichever came first. Stamped by [`Queue`] on the way in; `0` until
+    /// then, which is the value carried by an entry that has never been queued.
+    pub qid: u64,
     pub passage_id: i64,
     pub path: PathBuf,
     pub start_ms: u64,
@@ -204,11 +213,22 @@ pub struct Queue {
     entries: VecDeque<QueueEntry>,
     /// Below this depth the Program Director is asked for more `[REQ-PD-100]`.
     pub min_depth: usize,
+    /// Stamped onto each entry as it arrives. Monotonic and never reused, so
+    /// an identifier a browser is holding can only ever be stale -- naming an
+    /// entry that has since played or been removed -- and never ambiguous.
+    next_qid: u64,
 }
 
 impl Queue {
     pub fn new(min_depth: usize) -> Self {
-        Self { entries: VecDeque::new(), min_depth }
+        Self { entries: VecDeque::new(), min_depth, next_qid: 1 }
+    }
+
+    /// Give an entry its identity. Every path into the queue goes through here.
+    fn stamp(&mut self, mut e: QueueEntry) -> QueueEntry {
+        e.qid = self.next_qid;
+        self.next_qid += 1;
+        e
     }
 
     pub fn len(&self) -> usize {
@@ -226,6 +246,7 @@ impl Queue {
 
     /// Append, as the Program Director's selections arrive.
     pub fn push(&mut self, e: QueueEntry) {
+        let e = self.stamp(e);
         self.entries.push_back(e);
     }
 
@@ -236,6 +257,7 @@ impl Queue {
     /// in `live` and is not in here. So the front IS the next thing heard, and
     /// it is what Skip reaches for.
     pub fn push_front(&mut self, e: QueueEntry) {
+        let e = self.stamp(e);
         self.entries.push_front(e);
     }
 
@@ -248,6 +270,7 @@ impl Queue {
     pub fn insert_at(&mut self, at: usize, entries: Vec<QueueEntry>) {
         let mut at = at.min(self.entries.len());
         for e in entries {
+            let e = self.stamp(e);
             self.entries.insert(at, e);
             at += 1;
         }
@@ -256,8 +279,8 @@ impl Queue {
     /// Move a queued passage `delta` places, clamped to the ends. Returns
     /// whether anything moved -- false when it is already first or last, which
     /// a UI should treat as "nothing to do" rather than as a failure.
-    pub fn shift(&mut self, passage_id: i64, delta: isize) -> bool {
-        let Some(at) = self.entries.iter().position(|e| e.passage_id == passage_id) else {
+    pub fn shift(&mut self, qid: u64, delta: isize) -> bool {
+        let Some(at) = self.entries.iter().position(|e| e.qid == qid) else {
             return false;
         };
         let to = (at as isize + delta).clamp(0, self.entries.len() as isize - 1) as usize;
@@ -275,9 +298,11 @@ impl Queue {
         self.entries.pop_front()
     }
 
-    pub fn remove(&mut self, passage_id: i64) -> bool {
+    pub fn remove(&mut self, qid: u64) -> bool {
         let before = self.entries.len();
-        self.entries.retain(|e| e.passage_id != passage_id);
+        // By entry, not by passage: a repeat is two entries naming one passage,
+        // and dropping both is not what anyone asked for.
+        self.entries.retain(|e| e.qid != qid);
         self.entries.len() != before
     }
 
@@ -428,8 +453,58 @@ mod tests {
         assert_eq!(e.album().as_deref(), Some("Some Compilation"));
     }
 
+    /// A passage may be queued twice on purpose. The two are separate entries
+    /// that happen to name the same audio, and this is what MuLibPlay got
+    /// wrong: removing one removed both `[REQ-VIS-186]`.
+    #[test]
+    fn removing_one_copy_of_a_repeated_passage_leaves_the_other() {
+        let mut q = Queue::new(1);
+        q.push(entry(7, 1000, 0, 0));
+        q.push(entry(9, 1000, 0, 0));
+        q.push(entry(7, 1000, 0, 0)); // the same passage again, deliberately
+        let first = q.iter().next().unwrap().qid;
+        let second_seven = q.iter().nth(2).unwrap().qid;
+        assert_ne!(first, second_seven, "two entries must not share an identity");
+
+        assert!(q.remove(first));
+        let left: Vec<i64> = q.iter().map(|e| e.passage_id).collect();
+        assert_eq!(left, vec![9, 7], "only the named entry may go");
+        assert!(q.iter().any(|e| e.qid == second_seven), "the other copy survives");
+    }
+
+    /// And moving one must move THAT one, not whichever copy comes first.
+    #[test]
+    fn shifting_one_copy_moves_that_copy() {
+        let mut q = Queue::new(1);
+        q.push(entry(7, 1000, 0, 0));
+        q.push(entry(9, 1000, 0, 0));
+        q.push(entry(7, 1000, 0, 0));
+        let last_seven = q.iter().nth(2).unwrap().qid;
+
+        assert!(q.shift(last_seven, -1));
+        let order: Vec<u64> = q.iter().map(|e| e.qid).collect();
+        assert_eq!(order[1], last_seven, "the named entry moved up one");
+        assert_eq!(q.iter().map(|e| e.passage_id).collect::<Vec<_>>(), vec![7, 7, 9]);
+    }
+
+    /// An identifier a browser is holding may be stale -- the entry played, or
+    /// was removed -- and that must be a quiet no-op, not a wrong edit.
+    #[test]
+    fn a_stale_entry_id_touches_nothing() {
+        let mut q = Queue::new(1);
+        q.push(entry(7, 1000, 0, 0));
+        let gone = q.iter().next().unwrap().qid;
+        assert!(q.remove(gone));
+        assert!(!q.remove(gone), "removing it twice must report nothing done");
+        assert!(!q.shift(gone, 1));
+        q.push(entry(8, 1000, 0, 0));
+        assert!(!q.remove(gone), "a reused number would hit the new entry");
+        assert_eq!(q.len(), 1);
+    }
+
     fn entry(id: i64, dur_ms: u64, lead_in: u64, lead_out: u64) -> QueueEntry {
         QueueEntry {
+            qid: 0, // stamped by Queue on the way in
             passage_id: id,
             path: PathBuf::from("x.mp3"),
             start_ms: 0,

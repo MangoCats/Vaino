@@ -182,6 +182,7 @@ pub(crate) const FROM: &str = "FROM passages p JOIN files f USING (file_id)";
 
 pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
     Ok(QueueEntry {
+        qid: 0, // stamped by Queue on the way in
         passage_id: row.get(0)?,
         path: PathBuf::from(row.get::<_, String>(1)?),
         start_ms: row.get::<_, i64>(2)? as u64,

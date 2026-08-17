@@ -129,9 +129,9 @@ pub enum Command {
     /// Several passages at once, in the order given `[REQ-VIS-195]`.
     EnqueueMany(Vec<QueueEntry>, Placement),
     /// Drop a queued passage `[REQ-VIS-185]`.
-    RemoveQueued(i64),
+    RemoveQueued(u64),
     /// Move a queued passage earlier (negative) or later (positive).
-    ShiftQueued(i64, isize),
+    ShiftQueued(u64, isize),
     /// Rebuild the output stream against the current default sink
     /// `[PI3-API-010]`.
     ///
@@ -935,6 +935,7 @@ mod tests {
 
     fn entry(id: i64, path: &str) -> QueueEntry {
         QueueEntry {
+        qid: 0, // stamped by Queue on the way in
             passage_id: id,
             path: PathBuf::from(path),
             start_ms: 0,
