@@ -204,6 +204,37 @@ with `pw-top` confirming the node running at 1102 quantum, 44100, F32LE 2ch.
 
 ---
 
+## 4a. Open: a reopened stream dies, a fresh one does not
+
+**`[PI3-OPEN-010]`** Reproduced repeatedly on 2026-08-16. A stream created by
+`recover()` against an already-running player loses the speaker **about
+twenty-two seconds later**, every time. A stream created fresh at startup, with
+the speaker connected first, holds indefinitely -- two separate runs of ninety
+seconds and two minutes, connected on every sample, no dummy detections, no
+errors.
+
+Ruled out by measurement, not argument: CPU (4% during the failures), the
+`wpctl` call on the engine thread (moved off it, and the failures continue),
+battery (60-70%), pause (link held 8/8 across forty seconds paused), radio
+coexistence (the control arm is clean), and range (80 cm, and the adapter sees
+fourteen other devices).
+
+So something about *rebuilding* the stream leaves it fragile in a way opening
+it once does not -- the old handle not fully released, or the device reopened
+while PipeWire is still settling. This matters because reopening is the
+mechanism the whole speaker panel rests on `[PI3-WHY-020]`.
+
+**Until it is understood, the reliable sequence is: connect the speaker, then
+restart the player.** That is a poor thing to ask of a listener and is not the
+shipping answer, but it is honest about what currently works.
+
+**`[PI3-OPEN-020]` Feed silence while paused.** McRhythm did this, and the same
+reasoning applies: A2DP tears down when nothing feeds it `[PI3-WHY-030]`, so a
+paused Vaino loses its speaker after a few minutes and resuming needs a
+reconnect. Pausing should stop the *music*, not the stream. This also likely
+reduces how often the fragile reopen path is needed at all, which makes it
+worth doing before chasing `[PI3-OPEN-010]`.
+
 ## 5. Deliberately not now
 
 **`[PI3-NOT-010]` Interference is not being designed around.** The dark arm of
