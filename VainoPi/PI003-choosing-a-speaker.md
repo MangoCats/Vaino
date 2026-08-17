@@ -315,6 +315,41 @@ regardless of the interference question: an appliance whose only control
 surface is a web page is a poor appliance, and it is the thing that makes any
 Wi-Fi-off-while-playing scheme usable at all.
 
+**`[PI3-ROCKER-010]` The rocker's assignment.** Volume stays exactly as it is;
+BlueZ already carries it and nothing should sit between a listener and a volume
+control. The other three:
+
+| Gesture | Function |
+|---|---|
+| Centre press | Toggle play/pause, and switch the radios with it |
+| Right | Skip, identical to the existing control |
+| Left | Reserved for a "like", unassigned for now |
+
+Left is deliberately left dead rather than given a placeholder. A control that
+does something surprising is worse than one that does nothing, and reserving it
+in writing is what stops it being spent on something lesser later.
+
+**`[PI3-ROCKER-020]` Play and pause switch the radios, in this order.** Pausing
+raises Wi-Fi; playing lowers Wi-Fi **and only then** establishes the Bluetooth
+connection. The ordering is the point: a link negotiated while the shared
+antenna is still carrying Wi-Fi is being set up under the very interference
+that `[PI3-FOUND-010]` measured, and the association is the part worth
+protecting.
+
+Three things this must get right, none of them optional:
+
+- **A failed connection must raise Wi-Fi again.** If Bluetooth does not come up
+  within a bounded time after the radio goes down, the appliance is silent
+  *and* unreachable, which is the worst state it can occupy and is reached by
+  the ordinary path of a speaker being switched off. Wi-Fi returns, the panel
+  explains, and the listener has a way in `[PI3-UI-030]`.
+- **The HTTP response must be sent before the interface drops.** Pressing play
+  in the browser takes down the network that browser is using. Answering first
+  and lowering the radio a moment later is the difference between "playing, and
+  the page went quiet" and an error the listener reads as a crash.
+- **The panel must say what play will do.** A control that disconnects you is
+  fine when expected and alarming when not.
+
 **`[PI3-NOT-010]` (superseded) Interference was not being designed around.** The dark arm of
 `radio-silence-test.sh` exists to answer that question and has not been run,
 because with Wi-Fi up the link now measures 40/40 across two minutes with audio
