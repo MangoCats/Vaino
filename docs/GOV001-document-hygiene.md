@@ -65,6 +65,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `UI` — Web Server, REST API, WebSocket Protocol, Web UI
 - `HW` — Embedded Target, RPi Zero 2W, Storage Partitioning
 - `APS` — Audio Path Supervisor: output device, sink, speaker lifecycle
+- `RLK` — Library relink: binding a transported library to a target's paths
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -119,6 +120,8 @@ grep -rn "SPEC-PD" docs/
 | `[REQ-MB-010]` | Chromaprint Fingerprinting | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#22-metadata--musicbrainz-identifier-database) |
 | `[REQ-PD-010]` | Candidate Fitness Scoring Model | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#23-program-director--selection-algorithm) |
 | `[SPEC-APS-060]` | Audio path supervisor: one owner, one snapshot | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#3-the-design) |
+| `[SPEC-RLK-030]` | Relink: hash the target, match audio_md5, write the path | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#2-the-mechanism) |
+| `[SPEC-RLK-050]` | Relink outcomes: matched / moved / missing / unknown | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#3-what-it-reports) |
 | `[SPEC-APS-100]` | Supervisor migration order | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#4-migration-order) |
 | `[SPEC-AUD-010]`| Audio Engine Trait Contracts | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#1-interface-trait-contracts-rust--python-specs) |
 | `[SPEC-AUD-040]`| Mathematical Ramp Profiles | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#2-mathematical-ramp-profile-models) |
