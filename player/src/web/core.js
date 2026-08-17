@@ -290,14 +290,36 @@ const Vaino = (() => {
   const KEY = 'vaino.skin';
   let catalogue = [];
 
+  // MuLibPlay is what a browser that has never chosen gets `[REQ-VIS-124]`:
+  // the face six years of listening happened in front of. A browser that HAS
+  // chosen keeps its choice, which is the whole reason this is stored.
+  const DEFAULT_SKIN = 'mulibplay';
+
+  // localStorage rather than a cookie, deliberately. The server never needs to
+  // know which skin a browser wears -- the shell fetches it -- so a cookie
+  // would ride on every request, including the WebSocket upgrade and every art
+  // fetch, to tell the server something it does not use. This also survives
+  // where a session cookie would not.
+  //
+  // Wrapped because storage THROWS rather than returning null when a browser
+  // is in a private mode or has site data blocked. Unwrapped, that exception
+  // lands before any skin loads, and the page is blank rather than merely
+  // unable to remember.
+  function remember(name) {
+    try { localStorage.setItem(KEY, name); } catch { /* unremembered, not broken */ }
+  }
+  function remembered() {
+    try { return localStorage.getItem(KEY); } catch { return null; }
+  }
+
   function chosen() {
     const q = new URLSearchParams(location.search).get('skin');
-    if (q) localStorage.setItem(KEY, q);
-    return q || localStorage.getItem(KEY) || 'vaino';
+    if (q) remember(q);
+    return q || remembered() || DEFAULT_SKIN;
   }
 
   function setSkin(name) {
-    localStorage.setItem(KEY, name);
+    remember(name);
     location.href = location.pathname; // drop ?skin= so it is not sticky twice
   }
 

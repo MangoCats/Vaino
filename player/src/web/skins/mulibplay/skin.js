@@ -50,17 +50,22 @@
   }
 
 
-  // Hide the connecting word along with the value it introduces, and let the
-  // value carry where it came from `[REQ-VIS-120]`.
-  const pair = (wordId, valueId, text, source, what) => {
-    Vaino.named($(valueId), text, source, what);
+  // Names are shown bare in this skin `[REQ-VIS-122]`. The provenance marks
+  // -- MB, tag, file -- are a Vaino idea the original never had, and this skin
+  // is a reproduction of its face. The claim is not abandoned, only moved: the
+  // Vaino and WinAmp skins still carry it on every name.
+  const plain = (el, text) => { if (el) el.textContent = text ?? ''; };
+
+  // Hide the connecting word along with the value it introduces.
+  const pair = (wordId, valueId, text) => {
+    plain($(valueId), text);
     $(wordId).hidden = !text;
   };
 
   Vaino.subscribe(s => {
-    Vaino.named($('title'), s.title ?? '—', s.title_source, 'title');
-    pair('byword', 'artist', s.artist, s.artist_source, 'artist');
-    pair('fromword', 'album', s.album, s.album_source, 'album');
+    plain($('title'), s.title ?? '—');
+    pair('byword', 'artist', s.artist);
+    pair('fromword', 'album', s.album);
     $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
     Vaino.showArt($('art'), s.passage_id);
     // The original showed the back of the sleeve beside the front when it

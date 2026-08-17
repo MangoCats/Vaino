@@ -298,6 +298,40 @@ Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 >
 > The badge is a separate element, so anything reading the name still gets the bare name. The check asserts the badges render, that at least two distinct sources appear, and that the name remains a text node of its own — and it was confirmed to fail when the display is reverted, which is the only way to know an assertion is doing anything.
 
+**`[REQ-VIS-122]` MuLibPlay shows names bare** *(2026-08-17)*. The provenance
+marks are removed from title, artist and album in that skin only. It is a
+reproduction of the original's face, and `MB` / `tag` / `file` are a Vaino idea
+the original never had.
+
+This narrows `[REQ-VIS-120]`'s "in every skin", which was itself a deliberate
+widening on 2026-08-15, so the reversal is recorded rather than quietly made.
+The claim is not abandoned: Vaino and WinAmp still mark every name they show,
+and the verifier now asserts the exemption *positively* — MuLibPlay must render
+**no** badges, the others must still render theirs. A skin that is supposed to
+mark names and silently stops therefore still fails.
+
+**Known cost, accepted.** With `[REQ-VIS-124]` making MuLibPlay the default, a
+browser that has never chosen a skin sees no provenance at all — which is the
+state `[REQ-VIS-120]` was widened to escape. The name shown may be wrong, and
+in that skin the interface no longer says so. Anyone wanting the answer changes
+skin; the information is one selection away rather than absent.
+
+**`[REQ-VIS-124]` A browser keeps the skin it chose; a new one gets MuLibPlay**
+*(2026-08-17)*. The choice is per browser, not per player: two people on two
+phones may want different skins of the same radio, and neither should restyle
+the other.
+
+Stored in `localStorage`, not a cookie. The server never needs to know which
+skin a browser wears — the shell fetches it — so a cookie would ride on every
+request, including the WebSocket upgrade and every art fetch, to carry
+something the server does not read. Reads and writes are wrapped because
+storage *throws* rather than returning null when a browser is in a private mode
+or has site data blocked; unwrapped, that exception lands before any skin loads
+and the page is blank rather than merely forgetful.
+
+`?skin=` still overrides, and is remembered when used, so a link can hand
+someone a skin and it sticks.
+
 **`[REQ-VIS-130]`** Automatically computed boundaries, lead-in/lead-out points and gain are **reviewable and overridable** through a waveform view `[SPEC-SA-080]`. Manual edits outrank computed values permanently and are never silently recomputed.
 
 **`[REQ-VIS-150]` The listening surface shows what is coming and what is in force.** The queue in play order, the active programme with a manual override `[SPEC-DIR-185]`, and master volume.

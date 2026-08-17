@@ -223,14 +223,26 @@ async function run(skin) {
   // leave every other assertion here passing. The fixture names a MusicBrainz
   // title against a tag-sourced album, so a skin that hard-codes one marker
   // for the whole snapshot fails: at least two different sources must show.
+  //
+  // MuLibPlay is exempt by decision `[REQ-VIS-122]`: it reproduces the face of
+  // the original, which had no such marks. The requirement is met by the other
+  // skins, and the exemption is named here rather than implied by a skin that
+  // quietly renders none -- so that a skin which is SUPPOSED to mark names and
+  // stops doing so still fails.
+  const marksProvenance = skin !== 'mulibplay';
   const badges = [...window.document.querySelectorAll('.src')];
-  check(badges.length > 0, 'no provenance badge rendered anywhere');
+  if (marksProvenance) {
+    check(badges.length > 0, 'no provenance badge rendered anywhere');
+    check(badges.some(b => b.dataset.src === 'musicbrainz'),
+          'the MusicBrainz-sourced name is not marked as one');
+  } else {
+    check(badges.length === 0,
+          `${skin} is exempt from provenance marks but rendered ${badges.length}`);
+  }
   check(badges.every(b => b.textContent.trim()),
         'a provenance badge rendered empty');
   check(badges.every(b => b.title && /from /.test(b.title)),
         'a provenance badge carries no explanation on hover');
-  check(badges.some(b => b.dataset.src === 'musicbrainz'),
-        'the MusicBrainz-sourced name is not marked as one');
   // The badge must not be mistakeable for part of the name: it is a separate
   // element, so anything wanting the bare name can still get it.
   if (title) {
