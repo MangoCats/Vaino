@@ -189,6 +189,8 @@ pub struct Engine {
     out_backoff: std::time::Duration,
     /// When to next confirm the audio is still reaching something real.
     out_watch_at: Option<std::time::Instant>,
+    /// Polled off-thread; see `SinkWatch`.
+    sink_watch: crate::sink::SinkWatch,
     out_rate: u32,
     out_channels: usize,
     scratch: Vec<f32>,
@@ -252,6 +254,7 @@ impl Engine {
             out_retry_at: None,
             out_backoff: Self::OUT_RETRY,
             out_watch_at: None,
+            sink_watch: crate::sink::SinkWatch::start(std::time::Duration::from_secs(3)),
             out_recoveries: 0,
             out_rate,
             out_channels,
@@ -359,7 +362,7 @@ impl Engine {
             return;
         }
         self.out_watch_at = Some(now + Self::OUT_WATCH);
-        if crate::sink::current().dummy {
+        if self.sink_watch.dummy() {
             eprintln!("audio is going nowhere audible; looking for a sink");
             out.mark_failed();
         }
@@ -381,10 +384,8 @@ impl Engine {
                 // can hear it: the dummy accepts audio perfectly. Treat it as
                 // a failure so the retry loop keeps looking for a real sink
                 // `[PI3-API-030]`.
-                let where_to = crate::sink::current();
-                if where_to.dummy {
-                    eprintln!("output reopened onto {} -- still silent, retrying",
-                              where_to.sink.as_deref().unwrap_or("a dummy"));
+                if self.sink_watch.dummy() {
+                    eprintln!("output reopened onto a dummy -- still silent, retrying");
                     out.mark_failed();
                 } else {
                     eprintln!("output reopened on {name}");
@@ -424,7 +425,7 @@ impl Engine {
                 // As in `reopen_output`: a successful open onto the dummy is
                 // not a recovery, it is the same silence with a fresh stream
                 // `[PI3-API-030]`.
-                if crate::sink::current().dummy {
+                if self.sink_watch.dummy() {
                     eprintln!("output recovered onto a dummy sink; still looking");
                     out.mark_failed();
                 } else {
