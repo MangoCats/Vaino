@@ -102,6 +102,29 @@ sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$RUN_UID" \
     systemctl --user enable pipewire pipewire-pulse wireplumber >/dev/null 2>&1 || true
 ok "user services enabled"
 
+# `linger` above keeps the audio graph alive across logouts, but it does NOT
+# stop WirePlumber reacting to them. WirePlumber gates the entire BlueZ monitor
+# on logind seat state, to arbitrate which of several logged-in users owns
+# Bluetooth audio -- sensible on a desktop with GDM, ruinous here. Every ssh
+# login and logout unregisters all nineteen A2DP endpoints, and A2DP does not
+# survive that: the speaker drops the moment anyone connects to or leaves the
+# box `[PI3-FOUND-040]`. There is only ever one user on an appliance.
+WP_OVERRIDE=/etc/wireplumber/bluetooth.lua.d/51-vaino-no-logind.lua
+if [ ! -f "$WP_OVERRIDE" ]; then
+    mkdir -p "$(dirname "$WP_OVERRIDE")"
+    cat > "$WP_OVERRIDE" <<'LUA'
+-- Vaino: do not tie the BlueZ monitor to seat state [PI3-FOUND-040].
+-- Every ssh login and logout otherwise withdraws all A2DP endpoints and
+-- drops the speaker. One user, one seat, no arbitration needed.
+bluez_monitor.properties["with-logind"] = false
+LUA
+    did "wireplumber: bluez monitor detached from seat state"
+    sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$RUN_UID" \
+        systemctl --user restart wireplumber >/dev/null 2>&1 || true
+else
+    ok "bluez monitor detached from seat state"
+fi
+
 # ------------------------------------------------------------- sample rate
 # PipeWire's graph defaults to 48 kHz. The library is 44.1 and the speaker
 # accepts 44.1, so a default install resamples for nothing and the sink may

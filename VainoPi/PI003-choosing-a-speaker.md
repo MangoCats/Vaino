@@ -301,13 +301,16 @@ against a remembered impression of shorter runs is the exact mistake this
 document has already recorded twice. Until `KEEP_WIFI=1 SECONDS_DOWN=600` fails
 as expected, this is a strong result rather than a settled one.
 
-**Contested by `[PI3-FOUND-030]`.** A software mechanism was later found
-destroying the same link on a similar period. The dark-arm numbers above are
-not withdrawn -- they were measured -- but they no longer support the
-conclusion drawn from them on their own, because the comparison they beat was
-running with that fault present and unknown. What share of the drops is radio
-and what share is software is currently **unknown**, and no hardware should be
-bought on the strength of this entry until the two are separated.
+**Withdrawn. `[PI3-FOUND-040]` explains this result without interference.**
+The dark arm scored 200/200 because Wi-Fi was down, which meant **nobody could
+ssh in** -- and an ssh login or logout is what tore the link down. The
+experiment removed the cause along with the radio, and credited the radio.
+
+Every drop "with ssh idle" was idle only in the sense that no bytes were
+moving; sessions were opening and closing throughout to take the very samples
+that recorded the drops. The measurement was the fault. Nothing here supports
+buying a dongle, and the numbers above measure the method rather than the
+hardware.
 
 Remedies, best first. **A USB Wi-Fi dongle on 5 GHz**, since the Pi Zero 2 W is
 2.4 GHz only: it removes the conflict and keeps the interface reachable. **A
@@ -339,6 +342,41 @@ audio stack out on exactly that evidence. The fault is visible only in
 `bluetoothd`'s log, from a process that never died. And the drops it causes are
 indistinguishable by ear from interference, which is how an entire evening was
 spent measuring a radio.
+
+**`[PI3-FOUND-040]` Every ssh login and logout dropped the speaker.** Found
+2026-08-16, and the cause of the drops.
+
+WirePlumber gates the whole BlueZ monitor on logind seat state:
+
+    -- /usr/share/wireplumber/scripts/monitors/bluez.lua:285
+    logind_plugin = Plugin.find("logind")
+    logind_plugin:connect("state-changed", function(p, s) startStopMonitor(s) end)
+
+with `["with-logind"] = true` in `50-bluez-config.lua`, whose own comment
+explains the purpose: arbitrating which of several logged-in users owns
+Bluetooth audio, "particularly useful if you are using GDM". On an appliance
+with one user and no display manager it arbitrates nothing and costs
+everything -- stopping the monitor unregisters all nineteen A2DP endpoints,
+and A2DP does not survive that.
+
+Measured, with the trigger under our own control rather than waited for:
+
+    before:  20 of 22 endpoint sweeps within 2s of "Removed session"
+             (the other 4 all predate the upower fix [PI3-FOUND-030])
+    after:   13 session teardowns, 0 unregistrations, link held
+
+`linger` does not help. It keeps the graph alive across logouts; it does not
+stop WirePlumber reacting to them. The remedy is one property, in
+`/etc/wireplumber/bluetooth.lua.d/51-vaino-no-logind.lua`, applied by
+`setup-vainopi.sh`.
+
+**What this cost, and why.** Two evenings went to measuring a radio because
+checking the link is what broke it: every `ssh pi@vainopi 'bluetoothctl info'`
+opened a session, and closing it killed the speaker seconds later. The drops
+therefore tracked *our sampling cadence*, which is why they looked periodic,
+and why they always seemed to arrive just after a clean window closed. It is
+the third instance in two days of a diagnostic causing the fault it measures
+`[GDE-FBD-110]`, and by far the most expensive.
 
 **`[PI3-FOUND-020]` Speaker-side transport controls.** The Middleton's rocker
 offers five gestures, which under AVRCP arrive as ordinary key events from a
