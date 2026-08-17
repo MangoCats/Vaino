@@ -293,6 +293,25 @@ impl Output {
         self.failed.load(Ordering::Relaxed)
     }
 
+    /// Release the device without opening another.
+    ///
+    /// Half of a two-step reopen `[PI3-OPEN-010]`. A stream rebuilt in the same
+    /// breath as the old one is dropped loses a Bluetooth speaker about
+    /// twenty-two seconds later, every time, where one opened fresh holds
+    /// indefinitely; PipeWire needs a moment to finish tearing the old one
+    /// down. The waiting is the CALLER's to do, on its own schedule -- sleeping
+    /// here would mean sleeping on the mixer thread, which starves the ring and
+    /// trades a dropout for a stutter.
+    pub fn release(&mut self) {
+        self.stream = None;
+        self.failed.store(true, Ordering::Relaxed);
+    }
+
+    /// Is the device currently released, waiting to be reopened?
+    pub fn released(&self) -> bool {
+        self.stream.is_none()
+    }
+
     /// Rebuild the stream after a failure, keeping the ring and the volume.
     ///
     /// The ring is deliberately drained first. Its contents are audio that was
@@ -309,14 +328,6 @@ impl Output {
         // the second open while the first handle is alive, so building the new
         // stream first and assigning over the old one -- the obvious ordering --
         // fails every time on exactly the sink this exists for.
-        self.stream = None;
-        // Let the device settle before opening it again `[PI3-OPEN-010]`.
-        // A stream rebuilt immediately loses a Bluetooth speaker about
-        // twenty-two seconds later, every time, where one opened fresh at
-        // startup holds indefinitely -- the difference being that startup
-        // never reopens anything in flight. Giving PipeWire a moment to finish
-        // tearing the old one down is the cheapest available test of that.
-        std::thread::sleep(std::time::Duration::from_millis(700));
         let fresh = Self::attach(
             self.requested.clone(),
             Arc::clone(&self.state),

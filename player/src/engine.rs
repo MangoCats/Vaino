@@ -315,6 +315,8 @@ impl Engine {
     /// device applying back-pressure.
     /// Interval between attempts to revive a failed output `[IMPL-AUD-020]`.
     const OUT_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+    /// How long the device is left closed between releasing and reopening.
+    const OUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(700);
     /// The retry interval stops growing here.
     ///
     /// An appliance with no speaker in the room is a normal state, not an
@@ -378,6 +380,13 @@ impl Engine {
     /// the listener with a selection that did nothing.
     fn reopen_output(&mut self) {
         let Some(out) = self.out.as_mut() else { return };
+        // Release now and let the retry loop attach after the settle, rather
+        // than doing both here: same reason as `recover_output`.
+        if !out.released() {
+            out.release();
+            self.out_retry_at = Some(std::time::Instant::now() + Self::OUT_SETTLE);
+            return;
+        }
         match out.recover() {
             Ok(name) => {
                 // Opening succeeded, which says nothing about whether anyone
@@ -420,6 +429,14 @@ impl Engine {
                                                  .max(Self::OUT_RETRY);
         self.out_retry_at = Some(now + self.out_backoff);
         self.out_recoveries += 1;
+        // Two steps, a tick apart, so the settling happens between ticks
+        // instead of inside one `[PI3-OPEN-010]`. Sleeping here would starve
+        // the ring and turn a dropout into a stutter.
+        if !out.released() {
+            out.release();
+            self.out_retry_at = Some(now + Self::OUT_SETTLE);
+            return;
+        }
         match out.recover() {
             Ok(name) => {
                 // As in `reopen_output`: a successful open onto the dummy is
