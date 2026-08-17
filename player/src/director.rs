@@ -10,8 +10,10 @@
 //!   D. roulette .... weighted random over the shaped pool
 //! ```
 //!
-//! Only Stage A exists so far. Stages B and C need flavor distance
-//! `[SPEC-FD-040]`, and D needs a settled pool size `[SPEC-DIR-200]`.
+//! All four stages are implemented and wired: `decide` weighs the pool
+//! (A), shapes it against seeds and Taste (B), orders the survivors by flow
+//! distance from the queue tail (C), then applies rank decay and spins the
+//! roulette (D) `[SPEC-DIR-165]`.
 
 pub mod flavor;
 pub mod frequency;

@@ -108,17 +108,50 @@ silently retaining a path that resolves to nothing, which is the failure
 own value. No decode: the encoded packets are hashed as they are read, so the
 work is I/O, not DSP.
 
-For this library on the appliance — 5,705 files, 42.5 GiB, SD card read — a
-full relink is **roughly 30–45 minutes**, bounded by storage throughput. Against
-the 11 hours the same library takes to arrive over the Pi Zero 2 W's Wi-Fi, the
-relink is not a cost worth optimising.
+Measured end to end on the development machine: **5,742 files hashed in 423 s**
+— 74 ms each, matching the schema's figure almost exactly. On the appliance,
+where the constraint is SD card read rather than CPU, a full relink should be
+**under an hour**. Against the 11 hours the same library takes to arrive over
+the Pi Zero 2 W's Wi-Fi, the relink is not a cost worth optimising.
 
-**`[SPEC-RLK-080]` Hash with Symphonia, not ffmpeg.** ffmpeg is **absent from
-the appliance** and is a large dependency to install for one hash. The player
-already carries a decoder that reads the same packets; hashing them costs
-nothing extra and keeps the appliance's dependency list where
-`[GDE-FBD-050]` wants it. The ffmpeg command stays in the schema comment as the
-independent check that the two agree.
+The first end-to-end run against the real library, with the database carrying
+target paths and the audio at its source location — the deployment case
+exactly:
+
+    5,705 rows, 5,743 audio files under the root
+    moved     5,705      every row bound
+    missing       0
+    corrupt       0
+    unknown      28      never indexed, including a scratch directory
+    duplicate     9      literal copies, `X.mp3` beside `X_2.mp3`
+
+**`[SPEC-RLK-080]` Hash with ffmpeg. Symphonia was tried and rejected.**
+*(Revised 2026-08-17, on measurement.)*
+
+The original recommendation here was Symphonia: the player already carries it,
+it reads the same packets, and it keeps a large dependency off an appliance
+that has no other use for one — `[GDE-FBD-050]` in spirit. A spike agreed with
+the stored values on **6 of 6** sampled files, and that looked like proof.
+
+Run across the whole library it disagreed on **60 of 5,705** — a little over
+1%. ffmpeg reproduced the stored value on **every one of those 60**, and on 8
+of 8 sampled independently: 68 of 68 overall. A decoder-free shortcut was also
+tried, hashing file bytes with the ID3v2 prefix and ID3v1 trailer removed, and
+managed 7 of 15.
+
+**One per cent is disqualifying here**, and it is worth being precise about
+why. Sixty false reports of corruption across a good library does not make the
+check 99% useful; it teaches whoever reads it that the corruption line means
+nothing, which is exactly the state in which a real corruption goes unread. A
+checker that cries wolf sixty times is worse than no checker at all.
+
+So the dependency is paid for, and `[GDE-FBD-050]` is satisfied in its own
+terms rather than bypassed — the measured constraint requiring it is the
+paragraph above. `ffmpeg` joins the appliance's package list.
+
+The lesson is the more general one this project keeps re-learning: the six-file
+spike was not a small version of the real test, it was a different test. It
+sampled the common case and the failure lived in the tail.
 
 ---
 

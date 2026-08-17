@@ -1,8 +1,8 @@
 //! Play passages from `vaino.db` on the terminal — the headless sibling of
 //! `vaino`, useful where a browser is not.
 //!
-//! Selection is the Program Director `[SPEC009]`, Stage A -- frequency alone,
-//! until flavor distance lands and stages B and C can shape the pool.
+//! Selection is the Program Director `[SPEC009]`, all four stages: frequency,
+//! shaping, flow, and the weighted roulette over the shaped pool.
 //!
 //! Usage:  station <vaino.db> [count] [--list]
 

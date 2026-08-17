@@ -62,7 +62,7 @@ NEED=""
 # does not survive its endpoints being withdrawn, so the speaker drops, and it
 # sounds exactly like interference `[PI3-FOUND-030]`.
 for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
-         bluez libasound2 alsa-utils sqlite3 upower evtest; do
+         bluez libasound2 alsa-utils sqlite3 upower evtest ffmpeg; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then

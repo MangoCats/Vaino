@@ -20,6 +20,7 @@ pub mod mixer;
 pub mod output;
 pub mod path;
 pub mod queue;
+pub mod relink;
 pub mod bluetooth;
 pub mod sink;
 pub mod session;
