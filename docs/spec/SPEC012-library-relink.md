@@ -125,33 +125,57 @@ exactly:
     unknown      28      never indexed, including a scratch directory
     duplicate     9      literal copies, `X.mp3` beside `X_2.mp3`
 
-**`[SPEC-RLK-080]` Hash with ffmpeg. Symphonia was tried and rejected.**
-*(Revised 2026-08-17, on measurement.)*
+**`[SPEC-RLK-080]` Hash with ffmpeg — because ffmpeg wrote the values we
+hold, not because it is more correct.** *(Revised 2026-08-17, then corrected
+the same day.)*
 
-The original recommendation here was Symphonia: the player already carries it,
-it reads the same packets, and it keeps a large dependency off an appliance
-that has no other use for one — `[GDE-FBD-050]` in spirit. A spike agreed with
-the stored values on **6 of 6** sampled files, and that looked like proof.
+The first version of this entry recommended Symphonia; the second rejected it
+on a 1% disagreement and read as though Symphonia had lost on merit. That
+framing was wrong, and the correction matters more than the conclusion.
 
-Run across the whole library it disagreed on **60 of 5,705** — a little over
-1%. ffmpeg reproduced the stored value on **every one of those 60**, and on 8
-of 8 sampled independently: 68 of 68 overall. A decoder-free shortcut was also
-tried, hashing file bytes with the ID3v2 prefix and ID3v1 trailer removed, and
-managed 7 of 15.
+`audio_md5` is **Essentia's `md5_encoded`**, and Essentia's audio I/O is built
+on FFmpeg/libav. The 5,705 stored values are therefore an ffmpeg-family
+artefact. Measuring ffmpeg against them — 68 of 68 — is close to measuring a
+tool against its own output. **It is evidence of shared lineage, not of
+correctness.** Had Symphonia generated the references, Symphonia would score
+100% and ffmpeg would fail on the same ~60 files.
 
-**One per cent is disqualifying here**, and it is worth being precise about
-why. Sixty false reports of corruption across a good library does not make the
-check 99% useful; it teaches whoever reads it that the corruption line means
-nothing, which is exactly the state in which a real corruption goes unread. A
-checker that cries wolf sixty times is worse than no checker at all.
+**`[SPEC-RLK-085]` The two disagree about where the stream ends.** Measured:
+both begin identically, immediately after the ID3v2 tag. The disputed files
+end in stray `0xFF` bytes — the start of an MPEG sync word with no frame behind
+it. Symphonia stops at the last complete decodable frame; ffmpeg includes the
+remainder. ID3v1 handling is not uniform within ffmpeg either: one file's valid
+`TAG` trailer was included in the hash, another's was stripped.
 
-So the dependency is paid for, and `[GDE-FBD-050]` is satisfied in its own
-terms rather than bypassed — the measured constraint requiring it is the
-paragraph above. `ffmpeg` joins the appliance's package list.
+An attempt to write the rule down — *everything after ID3v2, to EOF, less an
+ID3v1 trailer if present* — reproduced **36%** of the stored hashes. That
+failure is the finding: there is no simple specification of what ffmpeg does,
+only accumulated heuristics.
 
-The lesson is the more general one this project keeps re-learning: the six-file
-spike was not a small version of the real test, it was a different test. It
-sampled the common case and the failure lived in the tail.
+Neither reading is more valid; they answer different questions. Symphonia's is
+the cleaner **identity** — only decodable audio, so two copies differing solely
+in trailing junk are correctly the same recording. ffmpeg's is the stricter
+**integrity** check, noticing trailing damage Symphonia ignores by design. Since
+`[SPEC-RLK-140]` made relink an integrity check, ffmpeg suits — but that is a
+reason found after the fact, not the reason it was chosen.
+
+**`[SPEC-RLK-086]` The identity key is implementation-defined, and that is a
+latent risk.** Both hashers are deterministic (three runs each, identical) and
+neither involves floats or endianness, so both are stable across x86_64 and
+aarch64. Platform is not the hazard.
+
+**Version is.** Neither implements a standard. Ours is ffmpeg 8.0; Essentia's
+bundled libav is considerably older. That they agree today is fortunate rather
+than guaranteed, and `[SPEC-DF-030]` treats `audio_md5` as a stable identity
+key when it is really "whatever the extractor's demuxer did". An ffmpeg upgrade
+could in principle orphan rows, and nothing would report it as anything but
+missing music.
+
+Two consequences follow. The hasher is **not** a free choice: it must be the
+one that produced the incumbent values, so switching means regenerating all
+5,705 hashes atomically — a mixed database is silently broken. And the
+generator's identity is worth recording alongside the values, so a future
+disagreement can be diagnosed instead of discovered.
 
 ---
 

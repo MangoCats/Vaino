@@ -161,21 +161,20 @@ pub fn walk(root: &Path) -> Vec<PathBuf> {
 
 /// The MD5 of a file's encoded audio stream, container and tags excluded.
 ///
-/// **Via ffmpeg, having tried and rejected the alternative `[SPEC-RLK-080]`.**
-/// Symphonia was the obvious choice — the player already carries it, and it
-/// keeps the appliance free of a large dependency for one hash. It reproduced
-/// the stored value on 6 of 6 sampled files, which looked like proof and was
-/// not: run across the whole library it disagreed on **60 of 5,705**, a little
-/// over 1%. ffmpeg reproduced the stored value on every one of those 60, and
-/// on 8 of 8 sampled independently.
+/// **Via ffmpeg, because ffmpeg wrote the values we hold `[SPEC-RLK-080]`.**
+/// Not because it is more correct: `audio_md5` is Essentia's `md5_encoded`,
+/// and Essentia's audio I/O is FFmpeg/libav, so the stored corpus is an
+/// ffmpeg artefact and agreeing with it is close to a tautology.
 ///
-/// A 1% disagreement is disqualifying for this use. Relink's second job is to
-/// say whether 42.5 GiB arrived intact `[SPEC-RLK-140]`, and a checker that
-/// cries corruption over sixty good files is worse than no checker: it teaches
-/// its reader to disbelieve it, which is exactly when it stops working.
+/// Symphonia is equally deterministic and equally self-consistent; it simply
+/// stops at the last complete decodable frame where ffmpeg carries on to the
+/// end of the file `[SPEC-RLK-085]`. On ~60 of 5,705 files here that trailing
+/// remnant exists and the two part company. Had Symphonia written the
+/// references, ffmpeg would be the one failing.
 ///
-/// So the dependency is paid for, and `[GDE-FBD-050]` is satisfied in its own
-/// terms — the measured constraint requiring it is right here.
+/// So this is not a free choice. It must stay the tool that produced the
+/// incumbent values, and changing it means regenerating every hash at once
+/// `[SPEC-RLK-086]`.
 pub fn hash_encoded(path: &Path) -> Result<String, String> {
     let out = std::process::Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
