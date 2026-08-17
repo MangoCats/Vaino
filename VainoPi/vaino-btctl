@@ -68,6 +68,20 @@ state_of() {
     fi
 }
 
+# `ok` reports the OUTCOME, never that the helper managed to run. That
+# distinction is not pedantry: `repair` once returned ok:true beside
+# state:"found", having destroyed a working pairing and failed to make a new
+# one, and the true half of that answer was ignored because the other half
+# said success.
+#
+#   report STATE "ACCEPTED STATES" [EXTRA_JSON]
+report() {
+    local st="$1" accepted="$2" extra="${3:-}" ok=false
+    case " $accepted " in *" $st "*) ok=true ;; esac
+    printf '{"ok":%s,"state":"%s"%s}\n' "$ok" "$st" "$extra"
+    [ "$ok" = true ] || exit 1
+}
+
 json_devices() {
     local first=1 mac name
     printf '{"ok":true,"devices":['
@@ -96,16 +110,31 @@ case "$VERB" in
     pair)
         need_addr
         pair_sequence
-        printf '{"ok":true,"state":"%s"}\n' "$(state_of "$ADDR")"
+        report "$(state_of "$ADDR")" "connected paired"
         ;;
     repair)
         # A trusted-but-not-paired record makes every pair attempt fail with
-        # no explanation. Clearing it first is the fix nobody would guess.
+        # no explanation, and clearing it is the fix nobody would guess. But
+        # the clearing came FIRST here, which meant a repair that could not
+        # re-pair left the speaker worse than it found it -- no record at all,
+        # and no way back without someone physically holding the button.
+        #
+        # So: try plainly first, and remove only once a plain attempt has
+        # actually failed. Nothing working is destroyed on the strength of a
+        # guess about why.
         need_addr
-        bluetoothctl remove "$ADDR" >/dev/null 2>&1
-        sleep 2
         pair_sequence
-        printf '{"ok":true,"state":"%s"}\n' "$(state_of "$ADDR")"
+        st="$(state_of "$ADDR")"
+        case "$st" in
+            connected|paired) ;;
+            *)
+                bluetoothctl remove "$ADDR" >/dev/null 2>&1
+                sleep 2
+                pair_sequence
+                st="$(state_of "$ADDR")"
+                ;;
+        esac
+        report "$st" "connected paired"
         ;;
     use)
         need_addr
@@ -120,16 +149,20 @@ case "$VERB" in
                 | grep -iv 'Dummy Output' | grep -oE '[0-9]+\.' | head -1 | tr -d '.')"
         [ -n "$node" ] && sudo -u "${SUDO_USER:-$USER}" \
             XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" wpctl set-default "$node" 2>/dev/null
-        printf '{"ok":true,"state":"%s","sink_node":"%s"}\n' \
-               "$(state_of "$ADDR")" "${node:-none}"
+        report "$(state_of "$ADDR")" "connected" \
+               ",\"sink_node\":\"${node:-none}\""
         ;;
     forget)
         need_addr
         bluetoothctl disconnect "$ADDR" >/dev/null 2>&1
         bluetoothctl remove "$ADDR"     >/dev/null 2>&1
-        printf '{"ok":true,"state":"forgotten"}\n'
+        # 'found' is what state_of says when no record remains, which for this
+        # verb is the success it was asked for.
+        report "$(state_of "$ADDR")" "found"
         ;;
     status)
+        # A query's ok means only that it could answer, which is the whole of
+        # what it promised. The state field carries everything else.
         need_addr
         printf '{"ok":true,"state":"%s"}\n' "$(state_of "$ADDR")"
         ;;

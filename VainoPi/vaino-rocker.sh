@@ -15,14 +15,39 @@ PORT="${VAINO_PORT:-5720}"
 SPEAKER="${SPEAKER:-20:64:DE:CF:F3:AD}"
 IFACE="${IFACE:-wlan0}"
 DEADMAN="${DEADMAN:-900}"          # wifi returns after this no matter what
+WAIT_FOR="${WAIT_FOR:-180}"        # how long to wait for the AVRCP device
+MAP_ONLY="${MAP_ONLY:-0}"          # 1 = log keys, take no action
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 say() { logger -t vaino-rocker "$*"; echo "$(date +%T) $*"; }
 post() { curl -s -o /dev/null -m 4 -X POST "http://localhost:$PORT/command/$1"; }
 
+# BlueZ creates the AVRCP uinput keyboard when the speaker connects and takes
+# it away when it goes, so the device's absence is a normal moment in its life
+# rather than an error. Read the whole record at once (blank-line separated) so
+# the Name and its Handlers line cannot be matched across a device boundary.
 find_dev() {
-    grep -B4 'Handlers=.*event' /proc/bus/input/devices \
-      | grep -A4 'AVRCP' | grep -oE 'event[0-9]+' | head -1
+    awk -v RS='' '/AVRCP/ && match($0, /event[0-9]+/) \
+                  { print substr($0, RSTART, RLENGTH); exit }' \
+        /proc/bus/input/devices
+}
+
+# Wait for it, rather than giving up the instant it is missing.
+#
+# This script is started around a link that comes and goes, and exiting on the
+# first look cost three characterisation runs in one evening: each time the
+# speaker connected seconds later, to nothing listening. A deadline keeps it
+# from waiting forever on a speaker that is switched off.
+await_dev() {
+    local deadline=$(( SECONDS + WAIT_FOR ))
+    local dev announced=0
+    while :; do
+        dev="$(find_dev)"
+        [ -n "$dev" ] && { echo "$dev"; return 0; }
+        [ "$announced" = 0 ] && { say "waiting up to ${WAIT_FOR}s for the speaker"; announced=1; }
+        [ "$SECONDS" -ge "$deadline" ] && return 1
+        sleep 2
+    done
 }
 
 arm_deadman() {
@@ -60,17 +85,9 @@ wifi_up() {
     say "wifi up"
 }
 
-PLAYING=1        # the server is started playing for this test
-DEV="$(find_dev)"
-[ -z "$DEV" ] && { say "no AVRCP device; is the speaker connected?"; exit 1; }
-say "reading /dev/input/$DEV"
-
-sudo stdbuf -oL evtest "/dev/input/$DEV" 2>/dev/null | while read -r line; do
-    case "$line" in *"(EV_KEY)"*", value 1"*) ;; *) continue ;; esac
-    CODE=$(echo "$line" | sed -n 's/.*code \([0-9]*\) (\([A-Z_0-9]*\)).*/\1 \2/p')
-    NAME=${CODE#* }
-    say "KEY $CODE"
-    case "$NAME" in
+act_on() {
+    local name="$1"
+    case "$name" in
         KEY_PLAYPAUSE|KEY_PLAYCD|KEY_PAUSECD|KEY_PLAY|KEY_PAUSE)
             if [ "$PLAYING" = 1 ]; then
                 post pause; PLAYING=0; wifi_up
@@ -79,6 +96,26 @@ sudo stdbuf -oL evtest "/dev/input/$DEV" 2>/dev/null | while read -r line; do
             fi ;;
         KEY_NEXTSONG|KEY_FORWARD)  post skip ;;
         KEY_PREVIOUSSONG|KEY_BACK) say "left: reserved, ignored" ;;
-        *) say "unmapped: $NAME" ;;
+        *) say "unmapped: $name" ;;
     esac
+}
+
+PLAYING=1        # the server is started playing for this test
+[ "$MAP_ONLY" = 1 ] && say "MAP_ONLY: logging keys, acting on none"
+
+# Outer loop: evtest ends when the device vanishes, which happens on every
+# disconnect. That is a reason to wait again, not a reason to stop.
+while :; do
+    DEV="$(await_dev)" || { say "no AVRCP device after ${WAIT_FOR}s; giving up"; exit 1; }
+    say "reading /dev/input/$DEV"
+    sudo stdbuf -oL evtest "/dev/input/$DEV" 2>/dev/null | while read -r line; do
+        case "$line" in *"(EV_KEY)"*", value 1"*) ;; *) continue ;; esac
+        CODE=$(echo "$line" | sed -n 's/.*code \([0-9]*\) (\([A-Z_0-9]*\)).*/\1 \2/p')
+        NAME=${CODE#* }
+        # Logged before anything is decided, so a press is recorded even when
+        # the action it triggers takes the machine off the network.
+        say "KEY $CODE"
+        [ "$MAP_ONLY" = 1 ] || act_on "$NAME"
+    done
+    say "input device went away"
 done
