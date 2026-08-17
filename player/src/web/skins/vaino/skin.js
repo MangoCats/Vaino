@@ -247,10 +247,8 @@
     const box = $('qpick');
     box.hidden = !on;
     if (on) {
-      $('qpickname').textContent = on.title;
-      const ctl = $('qpickctl');
-      ctl.textContent = '';
-      ctl.appendChild(Vaino.queueControls(on.passage_id, on.editable));
+      box.textContent = '';
+      box.appendChild(Vaino.queueControls(on.passage_id, on.editable));
     }
   }
 

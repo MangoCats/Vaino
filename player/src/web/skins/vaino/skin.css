@@ -135,11 +135,15 @@ body.dev { --bg: #2a1418; --line: #4a2830; }
 #nowrow:hover, #queue li:not(.empty):hover {
     background: color-mix(in srgb, currentColor 4%, transparent); }
 
-/* One control set, beside the row it acts on. */
-.qpick { display: flex; align-items: center; gap: .6rem; font-size: .8125rem;
-         color: var(--dim); margin: 0 0 .6rem; padding-left: .5rem; }
-#qpickname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#qpickctl { margin-left: auto; }
+/* One control set, on the heading row, at the right. The heading keeps its
+   own bottom margin so the queue does not shift when the controls appear and
+   disappear -- a list that jumps as you pick rows is its own small fault. */
+.qhead { display: flex; align-items: baseline; gap: .6rem; }
+.qhead h2 { margin-right: auto; }
+.qpick { font-size: .8125rem; color: var(--dim); }
+/* `hidden` must win over the flex display the buttons inside would otherwise
+   impose through their own layout. */
+.qpick[hidden] { display: none; }
 
 /* ----------------------------------------------------------- speakers
    The list carries a state per row `[PI3-UI-010]`. Colour is a second

@@ -304,6 +304,15 @@ async function run(skin) {
     const qp = window.document.getElementById('qpick');
     check(!qp.hidden, 'picking a queued row must reveal the controls');
     check(qp.querySelector('.qedit'), 'the shared set must hold the edit controls');
+    // They ride the heading rather than taking a line of their own, so the
+    // queue does not shift as rows are picked.
+    const head = qp.closest('.qhead');
+    check(head && head.querySelector('h2'),
+          'the shared controls must sit on the section heading row');
+    // The picked row is the one highlighted, so the controls must not name it
+    // again: that repetition was removed and should not come back.
+    check(!/Next One/.test(qp.textContent),
+          `the controls must not repeat the picked title, got ${JSON.stringify(qp.textContent)}`);
     // The panel must now describe the PICKED track, not the playing one.
     check(/Queued Reasons/.test(window.document.getElementById('why').textContent),
           'the explanation must follow the pick');
@@ -317,6 +326,11 @@ async function run(skin) {
     nowrow.onclick();
     await new Promise(r => setTimeout(r, 20));
     check(nowrow.classList.contains('picked'), 'the playing track must be pickable again');
+    // And the controls go away with the selection. Only the appearing half was
+    // asserted before, so a skin that revealed them and never hid them again
+    // would have passed.
+    check(window.document.getElementById('qpick').hidden,
+          'unpicking the queued row must hide the controls again');
   }
 
   // Development mode must be visible, not remembered `[PI-SET-016]`: a
