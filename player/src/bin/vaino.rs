@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use vaino_player::engine::Engine;
-use vaino_player::output::Output;
 use vaino_player::session::{Explanations, Session, SharedControls};
 use vaino_player::web;
 use vaino_player::BUFFER_FRAMES;
@@ -146,18 +145,12 @@ fn engine_thread(
 
     // A missing device must not stop the process: the UI still needs to come
     // up and say so, which is more use than exiting silently.
-    let out = match Output::open_device(device.as_deref(), BUFFER_FRAMES * 2) {
-        Ok(o) => {
-            println!("output: {} @ {} Hz, {} ch", o.device_name, o.sample_rate, o.channels);
-            Some(o)
-        }
-        Err(e) => {
-            eprintln!("no audio device ({e}); running without output");
-            None
-        }
-    };
+    // The supervisor opens the device on its own thread and owns it from
+    // there `[SPEC-APS-060]`; this reports only what happened.
+    let (path, why) = vaino_player::path::start(device, BUFFER_FRAMES * 2);
+    println!("{why}");
 
-    let (mut engine, handle) = Engine::new(out, session.depth());
+    let (mut engine, handle) = Engine::new(path, session.depth());
     session.prime(&mut engine);
     if tx.send((handle, session.explanations(), session.controls())).is_err() {
         return; // nobody left to control it

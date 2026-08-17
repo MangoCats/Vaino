@@ -8,9 +8,13 @@
 //! audio perfectly forever while nobody hears a thing `[PI3-WHY-010]`.
 //!
 //! It costs a subprocess, so **it is never called from the audio path**. The
-//! settings panel calls `current()` on demand; the engine reads `SinkWatch`,
-//! which polls on a thread of its own. Getting that wrong caused the very
-//! dropout this module was written to detect -- see `SinkWatch`.
+//! settings panel calls `current()` on demand, and the path supervisor calls it
+//! from its own thread `[SPEC-APS-060]`.
+//!
+//! It once had a `SinkWatch` companion that polled on a background thread and
+//! published an atomic, because the engine needed the answer and could not
+//! afford to ask. That is gone: the engine no longer asks at all, so the
+//! poller it needed is one fewer thread and one fewer copy of the question.
 
 use std::process::Command;
 
@@ -78,47 +82,6 @@ pub fn current() -> SinkStatus {
     match parse(&text) {
         Some(sink) => SinkStatus { dummy: sink == DUMMY, sink: Some(sink), known: true },
         None => SinkStatus { sink: None, dummy: false, known: true },
-    }
-}
-
-/// A background poller, so nobody queries PipeWire from the audio path.
-///
-/// This exists because the obvious thing was badly wrong. Calling `current()`
-/// from the engine tick meant a fork/exec on the mixer thread: on a Pi Zero
-/// that stalls it long enough to drain the ring, and the symptom is underruns
-/// climbing, audio dying after twenty-odd seconds, and then the Bluetooth link
-/// dropping because nothing is feeding it `[PI3-WHY-030]`. A diagnostic that
-/// causes the fault it looks for is worse than no diagnostic.
-///
-/// The engine reads an atomic instead, which costs nothing.
-pub struct SinkWatch {
-    dummy: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl SinkWatch {
-    /// Start polling every `period`.
-    pub fn start(period: std::time::Duration) -> Self {
-        let dummy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = std::sync::Arc::clone(&dummy);
-        std::thread::Builder::new()
-            .name("vaino-sink-watch".into())
-            .spawn(move || loop {
-                let s = current();
-                // Only a positive answer counts. If the query cannot run we
-                // must not conclude the audio is going nowhere, or a host
-                // without wpctl would silence itself.
-                if s.known {
-                    flag.store(s.dummy, std::sync::atomic::Ordering::Relaxed);
-                }
-                std::thread::sleep(period);
-            })
-            .ok();
-        Self { dummy }
-    }
-
-    /// Is the audio currently going nowhere audible? Free to call.
-    pub fn dummy(&self) -> bool {
-        self.dummy.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

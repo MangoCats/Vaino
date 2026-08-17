@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use vaino_player::engine::{Command, Engine};
-use vaino_player::output::Output;
 use vaino_player::queue::QueueEntry;
 use vaino_player::BUFFER_FRAMES;
 
@@ -58,25 +57,18 @@ fn main() {
         }
     }
 
-    let out = if std::env::var("VAINO_NULL_OUTPUT").is_ok() {
+    let path = if std::env::var("VAINO_NULL_OUTPUT").is_ok() {
         println!("output: null sink");
-        None
+        vaino_player::path::PathHandle::silent()
     } else {
-        match Output::open(BUFFER_FRAMES * 2) {
-            Ok(o) => {
-                println!("output: {} @ {} Hz, {} ch", o.device_name, o.sample_rate, o.channels);
-                Some(o)
-            }
-            Err(e) => {
-                eprintln!("no audio device ({e}); using null sink");
-                None
-            }
-        }
+        let (p, why) = vaino_player::path::start(None, BUFFER_FRAMES * 2);
+        println!("{why}");
+        p
     };
-    let rate = out.as_ref().map(|o| o.sample_rate).unwrap_or(44_100);
-    let channels = out.as_ref().map(|o| o.channels).unwrap_or(2);
+    let rate = path.sample_rate();
+    let channels = path.channels();
 
-    let (mut engine, handle) = Engine::new(out, entries.len());
+    let (mut engine, handle) = Engine::new(path, entries.len());
     for e in &entries {
         println!("passage: {} [{}..{}] lead {}/{} ms",
                  e.path.file_name().unwrap_or_default().to_string_lossy(),

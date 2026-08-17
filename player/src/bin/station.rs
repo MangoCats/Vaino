@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use vaino_player::engine::{Command, Engine};
-use vaino_player::output::Output;
 use vaino_player::queue::overlap_ms;
 use vaino_player::session::Session;
 use vaino_player::BUFFER_FRAMES;
@@ -36,22 +35,15 @@ fn main() {
 
     // Real device unless asked otherwise. A null sink cannot detect a
     // sample-rate fault [REQ-HW-147], so it must be opt-in, never the default.
-    let out = if list_only || std::env::var("VAINO_NULL_OUTPUT").is_ok() {
+    let path = if list_only || std::env::var("VAINO_NULL_OUTPUT").is_ok() {
         if !list_only {
             println!("output: null sink");
         }
-        None
+        vaino_player::path::PathHandle::silent()
     } else {
-        match Output::open(BUFFER_FRAMES * 2) {
-            Ok(o) => {
-                println!("output: {} @ {} Hz, {} ch", o.device_name, o.sample_rate, o.channels);
-                Some(o)
-            }
-            Err(e) => {
-                eprintln!("no audio device ({e}); using null sink");
-                None
-            }
-        }
+        let (p, why) = vaino_player::path::start(None, BUFFER_FRAMES * 2);
+        println!("{why}");
+        p
     };
 
     // Why the pool is the size it is [SPEC-DIR-190] -- where a station that has
@@ -67,7 +59,7 @@ fn main() {
         println!("pool: program director unavailable; random selection");
     }
 
-    let (mut engine, handle) = Engine::new(out, count);
+    let (mut engine, handle) = Engine::new(path, count);
     session.prime(&mut engine);
 
     // List what the engine will actually play, not a second draw from the

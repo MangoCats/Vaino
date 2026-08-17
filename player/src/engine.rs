@@ -17,7 +17,6 @@ use crate::db::PlayerStore;
 use crate::decoder::PassageDecoder;
 use crate::fade::{Curve, Fade};
 use crate::mixer::{mix, Stream};
-use crate::output::Output;
 use crate::queue::{should_admit, Queue, QueueEntry};
 use crate::resample::Resampler;
 use crate::BUFFER_FRAMES;
@@ -177,20 +176,14 @@ pub struct Engine {
     /// there is sounding. This one is merely ready, and `top_up_decoders` keeps
     /// it fed so promoting it costs nothing but the move.
     ready: Option<Live>,
-    out: Option<Output>,
-    /// When to next try reviving a failed output `[IMPL-AUD-020]`.
+    /// The audio path, held at arm's length `[SPEC-APS-070]`.
     ///
-    /// Retries are spaced rather than continuous because the usual reason a
-    /// sink is gone is that someone carried the speaker out of range, and
-    /// reopening an absent ALSA device several thousand times a second costs a
-    /// core for no benefit.
-    out_retry_at: Option<std::time::Instant>,
-    /// Current spacing between attempts, doubling to `OUT_RETRY_MAX`.
-    out_backoff: std::time::Duration,
-    /// When to next confirm the audio is still reaching something real.
-    out_watch_at: Option<std::time::Instant>,
-    /// Polled off-thread; see `SinkWatch`.
-    sink_watch: crate::sink::SinkWatch,
+    /// A ring to write into and a channel to ask things of -- and deliberately
+    /// nothing that can open a device, wait for one, or ask the system about
+    /// one. The device's whole lifecycle belongs to the supervisor, on its own
+    /// thread, because every time this loop was allowed to do that work it
+    /// eventually did some of it blocking `[GDE-FBD-090]`.
+    path: crate::path::PathHandle,
     out_rate: u32,
     out_channels: usize,
     scratch: Vec<f32>,
@@ -231,31 +224,22 @@ pub struct Engine {
     /// expose [REQ-AUD-142].
     underruns_playing: u64,
     last_raw_underruns: u64,
-    /// Times the output has been reopened after a failure. Surfaced as a
-    /// diagnostic because a link that keeps dropping is a hardware or range
-    /// problem, and silent recovery would hide exactly that `[REQ-VIS-140]`.
-    out_recoveries: u64,
 }
 
 impl Engine {
     /// `out` of `None` runs the full pipeline into a discard sink — useful for
     /// tests and headless hosts, but note it reports no device rate and so
     /// cannot catch a resampling fault `[REQ-HW-147]`.
-    pub fn new(out: Option<Output>, min_depth: usize) -> (Self, EngineHandle) {
+    pub fn new(path: crate::path::PathHandle, min_depth: usize) -> (Self, EngineHandle) {
         let (tx, rx) = channel();
         let state = Arc::new(Mutex::new(PlayerState::default()));
-        let out_rate = out.as_ref().map(|o| o.sample_rate).unwrap_or(44_100);
-        let out_channels = out.as_ref().map(|o| o.channels).unwrap_or(2);
+        let out_rate = path.sample_rate();
+        let out_channels = path.channels();
         let engine = Self {
             queue: Queue::new(min_depth),
             live: Vec::new(),
             ready: None,
-            out,
-            out_retry_at: None,
-            out_backoff: Self::OUT_RETRY,
-            out_watch_at: None,
-            sink_watch: crate::sink::SinkWatch::start(std::time::Duration::from_secs(3)),
-            out_recoveries: 0,
+            path,
             out_rate,
             out_channels,
             scratch: vec![0.0; 2048 * out_channels],
@@ -311,160 +295,15 @@ impl Engine {
 
     /// One pump iteration: commands, admission, decode, mix, submit, publish.
     ///
-    /// Returns samples submitted, so a caller can pace itself when there is no
-    /// device applying back-pressure.
-    /// Interval between attempts to revive a failed output `[IMPL-AUD-020]`.
-    const OUT_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
-    /// How long the device is left closed between releasing and reopening.
-    const OUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(700);
-    /// The retry interval stops growing here.
-    ///
-    /// An appliance with no speaker in the room is a normal state, not an
-    /// emergency: it should keep looking indefinitely, but at a cost closer to
-    /// nothing than to a subprocess every two seconds for ever.
-    const OUT_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(30);
-
-    /// Reopen the output device after the stream reported an error.
-    ///
-    /// A Bluetooth sink reports EIO once and then stops calling back: without
-    /// this the player goes on decoding, mixing and reporting itself healthy
-    /// into a stream nobody is draining, which is what a listener experiences
-    /// as "it just stopped" with nothing in the interface to say so.
-    ///
-    /// Recovery is silent on success by design -- a speaker that drops for a
-    /// second and returns should not require anyone to do anything -- but every
-    /// attempt is counted, so a link failing repeatedly is visible as a number
-    /// rather than inferred from the sound.
-    /// How often to confirm the audio still reaches a real sink.
-    const OUT_WATCH: std::time::Duration = std::time::Duration::from_secs(20);
-
-    /// Notice a sink that became a dummy without anyone reporting an error
-    /// `[PI3-API-030]`.
-    ///
-    /// The failure path covers a stream that breaks. This covers the quieter
-    /// one: a speaker switched off during normal playback, whose stream
-    /// PipeWire moves to the `Dummy Output` with no error at all. Nothing in
-    /// the player is wrong at that moment -- the callback runs, the ring
-    /// drains, the clock advances -- and nobody can hear a thing. Without this
-    /// check the guard only ever fires on reopen, which is to say almost
-    /// never.
-    ///
-    /// Rate-limited because it costs a subprocess, and skipped while paused
-    /// because a paused player is meant to be silent.
-    fn watch_output(&mut self) {
-        if !self.playing {
-            return;
-        }
-        let Some(out) = self.out.as_ref() else { return };
-        if out.failed() {
-            return; // already known; the retry loop owns it
-        }
-        let now = std::time::Instant::now();
-        if self.out_watch_at.is_some_and(|t| now < t) {
-            return;
-        }
-        self.out_watch_at = Some(now + Self::OUT_WATCH);
-        if self.sink_watch.dummy() {
-            eprintln!("audio is going nowhere audible; looking for a sink");
-            out.mark_failed();
-        }
-    }
-
-    /// Reopen the output because the sink changed under us, not because it
-    /// failed `[PI3-API-010]`.
-    ///
-    /// Shares the retry path with `recover_output` rather than duplicating it:
-    /// a reopen that lands on a device which is not ready yet -- a speaker
-    /// still completing its connection is the normal case -- should keep
-    /// trying exactly as a recovery does, instead of failing once and leaving
-    /// the listener with a selection that did nothing.
-    fn reopen_output(&mut self) {
-        let Some(out) = self.out.as_mut() else { return };
-        // Release now and let the retry loop attach after the settle, rather
-        // than doing both here: same reason as `recover_output`.
-        if !out.released() {
-            out.release();
-            self.out_retry_at = Some(std::time::Instant::now() + Self::OUT_SETTLE);
-            return;
-        }
-        match out.recover() {
-            Ok(name) => {
-                // Opening succeeded, which says nothing about whether anyone
-                // can hear it: the dummy accepts audio perfectly. Treat it as
-                // a failure so the retry loop keeps looking for a real sink
-                // `[PI3-API-030]`.
-                if self.sink_watch.dummy() {
-                    eprintln!("output reopened onto a dummy -- still silent, retrying");
-                    out.mark_failed();
-                } else {
-                    eprintln!("output reopened on {name}");
-                    self.out_backoff = Self::OUT_RETRY;
-                    out.set_playing(self.playing);
-                }
-                self.out_retry_at = None;
-            }
-            Err(e) => {
-                eprintln!("output reopen failed, retrying: {e}");
-                // Hand it to the retry loop by marking it failed, so a speaker
-                // that is a second away from ready is still picked up.
-                out.mark_failed();
-                self.out_retry_at = None;
-            }
-        }
-        self.out_recoveries += 1;
-    }
-
-    fn recover_output(&mut self) {
-        let Some(out) = self.out.as_mut() else { return };
-        if !out.failed() {
-            return;
-        }
-        let now = std::time::Instant::now();
-        if self.out_retry_at.is_some_and(|t| now < t) {
-            return;
-        }
-        // Back off, so a room with no speaker costs a query every half minute
-        // rather than one every two seconds for the life of the appliance.
-        self.out_backoff = (self.out_backoff * 2).min(Self::OUT_RETRY_MAX)
-                                                 .max(Self::OUT_RETRY);
-        self.out_retry_at = Some(now + self.out_backoff);
-        self.out_recoveries += 1;
-        // Two steps, a tick apart, so the settling happens between ticks
-        // instead of inside one `[PI3-OPEN-010]`. Sleeping here would starve
-        // the ring and turn a dropout into a stutter.
-        if !out.released() {
-            out.release();
-            self.out_retry_at = Some(now + Self::OUT_SETTLE);
-            return;
-        }
-        match out.recover() {
-            Ok(name) => {
-                // As in `reopen_output`: a successful open onto the dummy is
-                // not a recovery, it is the same silence with a fresh stream
-                // `[PI3-API-030]`.
-                if self.sink_watch.dummy() {
-                    eprintln!("output recovered onto a dummy sink; still looking");
-                    out.mark_failed();
-                } else {
-                    eprintln!("output recovered on {name}");
-                    self.out_retry_at = None;
-                    self.out_backoff = Self::OUT_RETRY;
-                    // The stream comes back stopped; only resume it if the
-                    // listener had not paused in the meantime.
-                    out.set_playing(self.playing);
-                }
-            }
-            Err(e) => eprintln!("output recovery failed, retrying: {e}"),
-        }
-    }
-
+    /// Everything here is a load, a lock the callback only ever *tries* for, or
+    /// a channel send. Nothing opens a device, sleeps, or asks the system a
+    /// question -- those belong to the supervisor `[SPEC-APS-070]`, and the
+    /// engine no longer holds anything that could do them `[GDE-FBD-090]`.
     pub fn tick(&mut self) -> usize {
         self.drain_commands();
         if self.shutdown {
             return 0;
         }
-        self.watch_output();
-        self.recover_output();
         self.admit_due();
         // Prepare AFTER admitting, so this readies the passage that is next
         // once the admission has moved the queue on.
@@ -479,7 +318,7 @@ impl Engine {
         // managed, so the clock raced while the room stayed silent -- a player
         // that lies about what it is doing, which is the fault this whole
         // effort exists to remove `[PI3-API-030]`.
-        let audible = self.out.as_ref().map_or(true, |o| !o.failed());
+        let audible = self.path.audible();
         let submitted = if self.playing && audible { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.record_play();
@@ -493,7 +332,7 @@ impl Engine {
             match self.rx.try_recv() {
                 Ok(Command::Play) => self.set_playing(true),
                 Ok(Command::Pause) => self.set_playing(false),
-                Ok(Command::ReopenOutput) => self.reopen_output(),
+                Ok(Command::ReopenOutput) => self.path.reopen(),
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetSkipFade(ms)) => {
                     self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
@@ -513,8 +352,8 @@ impl Engine {
                     self.volume = v.clamp(0.0, 1.0);
                     // Straight to the device: the callback applies it, so the
                     // change is heard now rather than a ring-depth later.
-                    if let Some(o) = &self.out {
-                        o.volume.set(self.volume);
+                    if let Some(r) = &self.path.ring {
+                        r.volume.set(self.volume);
                     }
                     self.remember_settings();
                 }
@@ -569,9 +408,7 @@ impl Engine {
     /// Producers are untouched, so the buffers stay primed [REQ-AUD-142].
     fn set_playing(&mut self, on: bool) {
         self.playing = on;
-        if let Some(o) = &self.out {
-            o.set_playing(on);
-        }
+        self.path.set_playing(on);
     }
 
     /// Fade the sounding passage out and cross into the next `[REQ-AUD-162]`.
@@ -611,7 +448,7 @@ impl Engine {
         // How much of the outgoing survives the cut sets how much of the
         // incoming overlaps it. Asked before the cut, since afterwards the
         // answer is by definition the fade length.
-        let have = self.out.as_ref().map_or(0, |o| o.buffered()).min(fade_samples);
+        let have = self.path.ring.as_ref().map_or(0, |r| r.buffered()).min(fade_samples);
         let mut overlay = vec![0.0f32; have.saturating_sub(lead_samples)];
         if let Some(l) = self.live.first_mut() {
             // Through `mix`, not by reading the ring directly: the fade-in has
@@ -624,7 +461,7 @@ impl Engine {
             overlay.truncate(filled);
         }
 
-        if let Some(o) = &self.out {
+        if let Some(o) = &self.path.ring {
             o.begin_skip_transition(
                 self.skip_fade_ms,
                 self.skip_lead_ms,
@@ -694,8 +531,8 @@ impl Engine {
         self.resume_save_ms =
             resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
         self.volume = volume.clamp(0.0, 1.0);
-        if let Some(o) = &self.out {
-            o.volume.set(self.volume);
+        if let Some(r) = &self.path.ring {
+            r.volume.set(self.volume);
         }
         self.skip_fade_ms = skip_fade_ms.min(crate::SKIP_FADE_MAX_MS);
         self.skip_lead_ms =
@@ -826,7 +663,7 @@ impl Engine {
     /// Limiting here is also what propagates back-pressure: the stream rings
     /// stay full, so the decoders stop, and the device paces the whole chain.
     fn mix_and_submit(&mut self) -> usize {
-        let room = match &self.out {
+        let room = match &self.path.ring {
             Some(o) => o.free(),
             None => self.scratch.len(),
         };
@@ -848,7 +685,7 @@ impl Engine {
         if filled == 0 {
             return 0;
         }
-        match &self.out {
+        match &self.path.ring {
             Some(o) => {
                 let taken = o.submit(&self.scratch[..filled]);
                 debug_assert_eq!(taken, filled, "output accepted less than it reported free");
@@ -878,7 +715,7 @@ impl Engine {
     }
 
     fn out_buffered_frames(&self) -> usize {
-        self.out.as_ref().map(|o| o.buffered() / self.out_channels.max(1)).unwrap_or(0)
+        self.path.ring.as_ref().map(|r| r.buffered() / self.out_channels.max(1)).unwrap_or(0)
     }
 
     /// Write the resume point. Throttled, because a tick is sub-millisecond and
@@ -936,7 +773,7 @@ impl Engine {
     fn publish(&mut self) {
         // Attribute the increment before publishing: silence during a pause is
         // expected, silence during playback is the bug worth reporting.
-        let raw = self.out.as_ref().map(|o| o.diagnostics().0).unwrap_or(0);
+        let raw = self.path.ring.as_ref().map(|r| r.diagnostics().0).unwrap_or(0);
         let delta = raw.saturating_sub(self.last_raw_underruns);
         self.last_raw_underruns = raw;
         if self.playing {
@@ -993,13 +830,10 @@ impl Engine {
             s.resume_save_ms = self.resume_save_ms;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
-            s.lock_failures = self.out.as_ref().map_or(0, |o| o.diagnostics().1);
-            s.out_recoveries = self.out_recoveries;
-            s.output_buffered = self
-                .out
-                .as_ref()
-                .map(|o| o.buffered())
-                .unwrap_or(0);
+            s.lock_failures = self.path.ring.as_ref().map_or(0, |r| r.diagnostics().1);
+            s.out_recoveries = self.path.recoveries();
+            s.output_buffered =
+                self.path.ring.as_ref().map(|r| r.buffered()).unwrap_or(0);
         }
     }
 }
@@ -1036,7 +870,7 @@ mod tests {
 
     #[test]
     fn pause_stops_submission_without_losing_the_queue() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         e.enqueue(entry(1, "missing.mp3"));
         h.send(Command::Pause);
         e.tick();
@@ -1046,7 +880,7 @@ mod tests {
 
     #[test]
     fn shutdown_ends_the_loop() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         h.send(Command::Shutdown);
         e.tick();
         assert!(e.is_shutdown());
@@ -1055,7 +889,7 @@ mod tests {
     /// The two-state model: pausing must not drain or halt the producers.
     #[test]
     fn pausing_keeps_the_producers_running() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         h.send(Command::Pause);
         for _ in 0..3 {
             e.tick();
@@ -1066,7 +900,7 @@ mod tests {
 
     #[test]
     fn a_dropped_sender_stops_the_engine() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         drop(h);
         e.tick();
         assert!(e.is_shutdown(), "a vanished controller must not leave it running");
@@ -1074,7 +908,7 @@ mod tests {
 
     #[test]
     fn the_next_passage_is_opened_before_it_is_needed() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         h.send(Command::Play);
         e.enqueue(entry(1, "does-not-exist.mp3"));
         e.tick();
@@ -1090,21 +924,20 @@ mod tests {
     /// whatever is already going.
     #[test]
     fn a_prepared_passage_is_not_yet_sounding() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         h.send(Command::Play);
         e.enqueue(entry(1, "does-not-exist.mp3"));
         e.tick();
         assert_eq!(h.snapshot().active_streams, 0, "prepared is not live");
     }
 
-    #[test]
     /// A browsed passage goes to the TOP of the queue, which is the next thing
     /// heard `[REQ-VIS-180]`. It went in second for a while, on the mistaken
     /// idea that the sounding passage occupied slot zero -- it does not; it is
     /// in `live` and out of the queue entirely.
     #[test]
     fn enqueue_next_puts_a_passage_first_in_the_queue() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         e.enqueue(entry(1, "a.mp3"));
         e.enqueue(entry(2, "b.mp3"));
         h.send(Command::EnqueueNext(entry(99, "browsed.mp3")));
@@ -1116,7 +949,7 @@ mod tests {
     /// The same for a batch, in the order it was given.
     #[test]
     fn a_batch_queued_next_goes_to_the_top_in_order() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         e.enqueue(entry(1, "a.mp3"));
         h.send(Command::EnqueueMany(
             vec![entry(10, "x.mp3"), entry(11, "y.mp3")],
@@ -1129,7 +962,7 @@ mod tests {
 
     #[test]
     fn an_unopenable_passage_is_skipped_not_fatal() {
-        let (mut e, h) = Engine::new(None, 3);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         h.send(Command::Play);
         e.enqueue(entry(1, "does-not-exist.mp3"));
         e.tick();
@@ -1140,7 +973,7 @@ mod tests {
 
     #[test]
     fn shortfall_reports_the_replenishment_need() {
-        let (mut e, _h) = Engine::new(None, 3);
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
         assert_eq!(e.shortfall(), 3);
         e.enqueue(entry(1, "a.mp3"));
         assert_eq!(e.shortfall(), 2);
@@ -1170,7 +1003,7 @@ mod tests {
     /// Without a store the engine must behave identically, not panic or stall.
     #[test]
     fn persistence_is_optional() {
-        let (mut e, h) = Engine::new(None, 1);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         h.send(Command::Play);
         e.tick();
         assert!(h.snapshot().playing);
@@ -1179,7 +1012,7 @@ mod tests {
     #[test]
     fn play_state_reaches_the_database_on_change() {
         let (st, path) = store();
-        let (mut e, h) = Engine::new(None, 1);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         e.attach_store(PlayerStore::open(&path).unwrap());
 
         h.send(Command::Play);
@@ -1202,7 +1035,7 @@ mod tests {
     #[test]
     fn resume_reports_position_within_the_passage() {
         let f = crate::decoder::tests::tmp("resume");
-        let (mut e, h) = Engine::new(None, 1);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         let mut ent = entry(1, f.to_str().unwrap());
         ent.end_ms = 5_000;
         e.resume_at(2_000);
@@ -1222,7 +1055,7 @@ mod tests {
     #[test]
     fn the_resume_offset_applies_only_once() {
         let f = crate::decoder::tests::tmp("once");
-        let (mut e, h) = Engine::new(None, 1);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         let mut a = entry(1, f.to_str().unwrap());
         a.end_ms = 1_000;
         let mut b = entry(2, f.to_str().unwrap());
@@ -1248,7 +1081,7 @@ mod tests {
     #[test]
     fn an_out_of_range_resume_point_does_not_strand_the_passage() {
         let f = crate::decoder::tests::tmp("clamp");
-        let (mut e, h) = Engine::new(None, 1);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         let mut ent = entry(1, f.to_str().unwrap());
         ent.end_ms = 3_000;
         e.resume_at(99_000);
@@ -1265,7 +1098,7 @@ mod tests {
     fn the_final_position_is_saved_on_drop() {
         let (st, path) = store();
         {
-            let (mut e, h) = Engine::new(None, 1);
+            let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
             e.attach_store(PlayerStore::open(&path).unwrap());
             h.send(Command::Play);
             e.tick();
@@ -1278,7 +1111,7 @@ mod tests {
     /// metric would be dominated by idle time and could never flag a real one.
     #[test]
     fn underruns_while_paused_are_not_counted() {
-        let (mut e, h) = Engine::new(None, 1);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         h.send(Command::Pause);
         for _ in 0..5 {
             e.tick();
@@ -1288,7 +1121,7 @@ mod tests {
 
     #[test]
     fn state_is_published_every_tick() {
-        let (mut e, h) = Engine::new(None, 2);
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 2);
         e.enqueue(entry(7, "x.mp3"));
         e.tick();
         let s = h.snapshot();

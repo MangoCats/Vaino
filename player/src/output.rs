@@ -92,25 +92,160 @@ impl Volume {
     }
 }
 
+/// Everything about the output that can cross a thread boundary
+/// `[SPEC-APS-070]`.
+///
+/// `cpal::Stream` is `!Send`, so the device itself must stay on whichever
+/// thread opened it. Everything the mixer actually needs -- the ring, the
+/// volume, the flags -- is shareable, and lives here.
+///
+/// The split is what lets the supervisor own the device's lifecycle on its own
+/// thread while the engine keeps writing audio, and it is what removes the
+/// engine's ability to open, close or wait for a device at all. Three separate
+/// times, blocking work reached the mixer through that capability
+/// `[GDE-FBD-090]`.
+///
+/// `failed` and `silent` are deliberately **stable across reattachment**. An
+/// earlier version replaced the `failed` Arc on every `recover`, which is
+/// harmless while one object owns it and silently wrong the moment anyone else
+/// holds a clone: they would watch a flag nothing sets any more.
+#[derive(Clone)]
+pub struct OutputRing {
+    pub state: Arc<Mutex<OutputState>>,
+    /// Applied in the callback `[REQ-AUD-152]`, so a change is heard at the
+    /// device rather than after the ring drains.
+    pub volume: Volume,
+    /// Set by the stream's error callback, cleared by a successful attach.
+    failed: Arc<AtomicBool>,
+    /// Feed zeros rather than stop, so the link survives a pause.
+    silent: Arc<AtomicBool>,
+    /// The device's own rate and channel count, which a reattach may change --
+    /// so they are read rather than remembered.
+    rate: Arc<std::sync::atomic::AtomicU32>,
+    chans: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl OutputRing {
+    fn new(capacity: usize, volume: Volume) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(OutputState::new(capacity))),
+            volume,
+            failed: Arc::new(AtomicBool::new(false)),
+            silent: Arc::new(AtomicBool::new(false)),
+            rate: Arc::new(std::sync::atomic::AtomicU32::new(44_100)),
+            chans: Arc::new(std::sync::atomic::AtomicU32::new(2)),
+        }
+    }
+
+    /// The device's rate and channel count as they are *now*. Read rather than
+    /// cached: a reattach onto a different sink can change both.
+    pub fn sample_rate(&self) -> u32 { self.rate.load(Ordering::Relaxed) }
+    pub fn channels(&self) -> usize { self.chans.load(Ordering::Relaxed) as usize }
+
+    /// Mark the output as needing recovery.
+    pub fn mark_failed(&self) { self.failed.store(true, Ordering::Relaxed); }
+
+    /// Has the stream reported an error it will not recover from itself?
+    pub fn failed(&self) -> bool { self.failed.load(Ordering::Relaxed) }
+
+    /// Silence without stopping the device `[PI3-OPEN-020]`.
+    pub fn set_silent(&self, on: bool) { self.silent.store(on, Ordering::Relaxed); }
+
+    /// Space available in the output ring, in samples.
+    pub fn free(&self) -> usize {
+        self.state.lock().map(|s| s.ring.free()).unwrap_or(0)
+    }
+
+    /// Hand mixed audio to the output. Returns samples accepted.
+    pub fn submit(&self, samples: &[f32]) -> usize {
+        self.state.lock().map(|mut s| s.ring.write(samples)).unwrap_or(0)
+    }
+
+    /// Samples submitted but not yet consumed by the device.
+    /// Cut the backlog short, fade it out, and lay the next passage over its
+    /// tail `[REQ-AUD-162]`.
+    ///
+    /// Skip could not be prompt for exactly the reason pause could not be
+    /// `[REQ-AUD-142]`: the ring holds ~14 s of mixed audio and the callback
+    /// drains it whatever the mixer does. Dropping the passage upstream stops
+    /// only the *adding* to a backlog the listener must still sit through --
+    /// measured at 14.0 s from button to new music.
+    ///
+    /// So the ring is cut to the length of the fade, the fade is applied to
+    /// what remains, and `overlay` -- the incoming passage, already decoded and
+    /// with its own fade-in already applied -- is summed in starting `lead_ms`
+    /// along. The two therefore overlap for `fade_ms - lead_ms`.
+    ///
+    /// **The fade is applied here, not in the callback**, precisely because the
+    /// incoming audio lands in these same samples: a fade-out running in the
+    /// callback would drag the newcomer down with the passage it is replacing.
+    ///
+    /// All of it happens under one lock, so no callback can observe a ring that
+    /// is cut but not yet faded. Returns `(faded, overlaid)` in samples.
+    pub fn begin_skip_transition(
+        &self,
+        fade_ms: u64,
+        lead_ms: u64,
+        curve: Curve,
+        overlay: &[f32],
+    ) -> (usize, usize) {
+        let ch = self.channels().max(1);
+        let rate = self.sample_rate() as u64;
+        let fade_samples = (fade_ms * rate / 1000) as usize * ch;
+        let lead_samples = (lead_ms * rate / 1000) as usize * ch;
+        // A blocking lock is safe here: this runs on the mixer thread, and the
+        // callback only ever tries.
+        let Ok(mut s) = self.state.lock() else { return (0, 0) };
+
+        let kept = s.ring.truncate(fade_samples);
+        // Span the fade over what is actually there. Holding it to the
+        // requested length when the ring is shallower -- at startup, say --
+        // would cut off part-way down the curve, at an audible step.
+        let frames = (kept / ch) as u64;
+        // The envelope is looked up, not computed, because this runs with the
+        // output lock held and the callback only ever TRIES for that lock. A
+        // 10 s fade is ~441k frames; two `powf` each would be tens of
+        // milliseconds under the lock, and every callback that fails to take it
+        // emits silence -- a click at the exact moment of a skip. A table of
+        // `FADE_TABLE` entries is built once, off the lock, and indexed here.
+        let table = fade_table(curve);
+        {
+            let (front, back) = s.ring.as_mut_slices();
+            let mut frame = 0u64;
+            for run in [front, back] {
+                for f in run.chunks_mut(ch) {
+                    let g = table[gain_index(frame, frames)];
+                    f.iter_mut().for_each(|x| *x *= g);
+                    frame += 1;
+                }
+            }
+        }
+        let placed = s.ring.mix_at(lead_samples, overlay);
+        (kept, placed)
+    }
+
+    pub fn buffered(&self) -> usize {
+        self.state.lock().map(|s| s.ring.len()).unwrap_or(0)
+    }
+
+    pub fn diagnostics(&self) -> (u64, u64) {
+        self.state
+            .lock()
+            .map(|s| (s.underrun_samples, s.lock_failures))
+            .unwrap_or((0, 0))
+    }
+}
+
 pub struct Output {
     // Also the pause control: the callback drains whether or not we are
     // submitting, so stopping the CONSUMER means stopping this stream.
     //
     // Optional only so that recovery can drop it and leave the device closed
-    // for the moment between attempts; it is Some at every point a caller can
-    // observe.
+    // for the moment between attempts.
     stream: Option<cpal::Stream>,
-    pub state: Arc<Mutex<OutputState>>,
-    /// Applied in the callback `[REQ-AUD-152]`, so a change is heard at the
-    /// device rather than after the ring drains.
-    pub volume: Volume,
-    pub sample_rate: u32,
-    pub channels: usize,
+    /// The shareable half. Cloned to whoever mixes; never replaced.
+    pub ring: OutputRing,
     pub device_name: String,
-    /// Set by the stream's error callback, cleared by a successful `recover`.
-    failed: Arc<AtomicBool>,
-    /// Feed zeros rather than stop, so the link survives a pause.
-    silent: Arc<AtomicBool>,
     /// The device *selector* rather than the device: recovery has to re-resolve
     /// the name, because the sink it names may be a different ALSA object by
     /// the time it comes back.
@@ -173,8 +308,15 @@ impl Output {
     pub fn open_device(name: Option<&str>, ring_capacity_samples: usize)
         -> Result<Self, OutputError>
     {
-        let state = Arc::new(Mutex::new(OutputState::new(ring_capacity_samples)));
-        Self::attach(name.map(str::to_string), state, Volume::new(1.0))
+        let ring = OutputRing::new(ring_capacity_samples, Volume::new(1.0));
+        let requested = name.map(str::to_string);
+        let (stream, device_name) = Self::attach(requested.as_deref(), &ring)?;
+        Ok(Self { stream: Some(stream), ring, device_name, requested })
+    }
+
+    /// The shareable half, for whoever mixes into it `[SPEC-APS-070]`.
+    pub fn ring(&self) -> OutputRing {
+        self.ring.clone()
     }
 
     /// Open the device and start a stream against an *existing* ring and
@@ -184,10 +326,11 @@ impl Output {
     /// without replacing the buffer the mixer writes into. Swapping the state
     /// too would leave the mixer filling a ring that nothing reads, which is a
     /// worse failure than the one being recovered from `[IMPL-AUD-020]`.
-    fn attach(requested: Option<String>, state: Arc<Mutex<OutputState>>, volume: Volume)
-        -> Result<Self, OutputError>
+    fn attach(name: Option<&str>, ring: &OutputRing)
+        -> Result<(cpal::Stream, String), OutputError>
     {
-        let name = requested.as_deref();
+        let state = Arc::clone(&ring.state);
+        let volume = ring.volume.clone();
         let host = cpal::default_host();
         let device = match name {
             Some(want) => {
@@ -219,8 +362,10 @@ impl Output {
         // reports EIO here exactly once and then simply stops calling back, so
         // a handler that only logs leaves a player which is silent, holds no
         // link, and still looks healthy from every side `[IMPL-AUD-020]`.
-        let failed = Arc::new(AtomicBool::new(false));
-        let silent = Arc::new(AtomicBool::new(false));
+        // The flags belong to the RING, not to this stream, so a clone held by
+        // the mixer keeps working across every reattachment.
+        let failed = Arc::clone(&ring.failed);
+        let silent = Arc::clone(&ring.silent);
         let cb_failed = Arc::clone(&failed);
         let err_fn = move |e| {
             eprintln!("output stream error: {e}");
@@ -276,8 +421,12 @@ impl Output {
         .map_err(|e| OutputError::Build(e.to_string()))?;
 
         stream.play().map_err(|e| OutputError::Build(e.to_string()))?;
-        Ok(Self { stream: Some(stream), state, volume, sample_rate, channels,
-                  device_name, failed, silent, requested })
+        // Publish what this device actually is, and clear the failure only now
+        // that one has genuinely opened `[GDE-FBD-100]`.
+        ring.rate.store(sample_rate, Ordering::Relaxed);
+        ring.chans.store(channels as u32, Ordering::Relaxed);
+        ring.failed.store(false, Ordering::Relaxed);
+        Ok((stream, device_name))
     }
 
     /// Mark the output as needing recovery.
@@ -285,12 +434,12 @@ impl Output {
     /// For a reopen that failed: the device is not usable, and the retry loop
     /// is the right owner of trying again `[PI3-API-010]`.
     pub fn mark_failed(&self) {
-        self.failed.store(true, Ordering::Relaxed);
+        self.ring.mark_failed();
     }
 
     /// Has the stream reported an error it will not recover from itself?
     pub fn failed(&self) -> bool {
-        self.failed.load(Ordering::Relaxed)
+        self.ring.failed()
     }
 
     /// Release the device without opening another.
@@ -304,7 +453,7 @@ impl Output {
     /// trades a dropout for a stutter.
     pub fn release(&mut self) {
         self.stream = None;
-        self.failed.store(true, Ordering::Relaxed);
+        self.ring.mark_failed();
     }
 
     /// Is the device currently released, waiting to be reopened?
@@ -328,25 +477,18 @@ impl Output {
         // the second open while the first handle is alive, so building the new
         // stream first and assigning over the old one -- the obvious ordering --
         // fails every time on exactly the sink this exists for.
-        let fresh = Self::attach(
-            self.requested.clone(),
-            Arc::clone(&self.state),
-            self.volume.clone(),
-        )?;
+        let (stream, device_name) = Self::attach(self.requested.as_deref(), &self.ring)?;
         // Discard what the ring holds only now that a device has actually been
         // opened. Clearing on every ATTEMPT was a bug: a retry loop against an
         // absent sink emptied the buffer twice a second, the mixer refilled it
         // each time, and the position raced ahead of a silent player
         // `[PI3-API-030]`.
-        if let Ok(mut s) = self.state.lock() {
+        if let Ok(mut s) = self.ring.state.lock() {
             s.ring.clear();
         }
-        self.stream = fresh.stream;
-        self.failed = fresh.failed;
-        self.sample_rate = fresh.sample_rate;
-        self.channels = fresh.channels;
-        self.device_name = fresh.device_name.clone();
-        Ok(fresh.device_name)
+        self.stream = Some(stream);
+        self.device_name = device_name.clone();
+        Ok(device_name)
     }
 
     /// Start or stop the device callback.
@@ -366,7 +508,7 @@ impl Output {
         // Silence rather than a stopped device `[PI3-OPEN-020]`. The stream is
         // still started on resume in case a backend stopped it for its own
         // reasons, but pausing no longer stops it.
-        self.silent.store(!on, Ordering::Relaxed);
+        self.ring.set_silent(!on);
         let r = if on {
             stream.play().map_err(|e| e.to_string())
         } else {
@@ -378,83 +520,6 @@ impl Output {
         r.is_ok()
     }
 
-    /// Space available in the output ring, in samples.
-    pub fn free(&self) -> usize {
-        self.state.lock().map(|s| s.ring.free()).unwrap_or(0)
-    }
-
-    /// Hand mixed audio to the output. Returns samples accepted.
-    pub fn submit(&self, samples: &[f32]) -> usize {
-        self.state.lock().map(|mut s| s.ring.write(samples)).unwrap_or(0)
-    }
-
-    /// Samples submitted but not yet consumed by the device.
-    /// Cut the backlog short, fade it out, and lay the next passage over its
-    /// tail `[REQ-AUD-162]`.
-    ///
-    /// Skip could not be prompt for exactly the reason pause could not be
-    /// `[REQ-AUD-142]`: the ring holds ~14 s of mixed audio and the callback
-    /// drains it whatever the mixer does. Dropping the passage upstream stops
-    /// only the *adding* to a backlog the listener must still sit through --
-    /// measured at 14.0 s from button to new music.
-    ///
-    /// So the ring is cut to the length of the fade, the fade is applied to
-    /// what remains, and `overlay` -- the incoming passage, already decoded and
-    /// with its own fade-in already applied -- is summed in starting `lead_ms`
-    /// along. The two therefore overlap for `fade_ms - lead_ms`.
-    ///
-    /// **The fade is applied here, not in the callback**, precisely because the
-    /// incoming audio lands in these same samples: a fade-out running in the
-    /// callback would drag the newcomer down with the passage it is replacing.
-    ///
-    /// All of it happens under one lock, so no callback can observe a ring that
-    /// is cut but not yet faded. Returns `(faded, overlaid)` in samples.
-    pub fn begin_skip_transition(
-        &self,
-        fade_ms: u64,
-        lead_ms: u64,
-        curve: Curve,
-        overlay: &[f32],
-    ) -> (usize, usize) {
-        let ch = self.channels.max(1);
-        let rate = self.sample_rate as u64;
-        let fade_samples = (fade_ms * rate / 1000) as usize * ch;
-        let lead_samples = (lead_ms * rate / 1000) as usize * ch;
-        // A blocking lock is safe here: this runs on the mixer thread, and the
-        // callback only ever tries.
-        let Ok(mut s) = self.state.lock() else { return (0, 0) };
-
-        let kept = s.ring.truncate(fade_samples);
-        // Span the fade over what is actually there. Holding it to the
-        // requested length when the ring is shallower -- at startup, say --
-        // would cut off part-way down the curve, at an audible step.
-        let frames = (kept / ch) as u64;
-        // The envelope is looked up, not computed, because this runs with the
-        // output lock held and the callback only ever TRIES for that lock. A
-        // 10 s fade is ~441k frames; two `powf` each would be tens of
-        // milliseconds under the lock, and every callback that fails to take it
-        // emits silence -- a click at the exact moment of a skip. A table of
-        // `FADE_TABLE` entries is built once, off the lock, and indexed here.
-        let table = fade_table(curve);
-        {
-            let (front, back) = s.ring.as_mut_slices();
-            let mut frame = 0u64;
-            for run in [front, back] {
-                for f in run.chunks_mut(ch) {
-                    let g = table[gain_index(frame, frames)];
-                    f.iter_mut().for_each(|x| *x *= g);
-                    frame += 1;
-                }
-            }
-        }
-        let placed = s.ring.mix_at(lead_samples, overlay);
-        (kept, placed)
-    }
-
-    pub fn buffered(&self) -> usize {
-        self.state.lock().map(|s| s.ring.len()).unwrap_or(0)
-    }
-
     /// Names of available output devices, for diagnosing a failed match.
     pub fn list_devices() -> Vec<String> {
         cpal::default_host()
@@ -463,12 +528,6 @@ impl Output {
             .unwrap_or_default()
     }
 
-    pub fn diagnostics(&self) -> (u64, u64) {
-        self.state
-            .lock()
-            .map(|s| (s.underrun_samples, s.lock_failures))
-            .unwrap_or((0, 0))
-    }
 }
 
 /// The whole of the real-time path.

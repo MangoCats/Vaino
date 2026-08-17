@@ -140,7 +140,9 @@ risky one lands last with a test harness already under it:
 
 1. **Extract the supervisor** with today's subprocess backend behind it. No
    behaviour change; the win is that one component owns the concern and
-   `Engine` loses its blocking capability.
+   `Engine` loses its blocking capability. **Done 2026-08-16**, in
+   `player/src/path.rs`: `engine.rs` 1,297 -> 1,140 lines, `SinkWatch` and its
+   thread deleted rather than moved, 215 tests passing.
 2. **Add the trait and the fake.** Write the failure cases that were only ever
    found in the room.
 3. **Port the backend to D-Bus.** Replaces working-if-ugly code, so it goes
@@ -156,11 +158,18 @@ has produced a defect. Size alone is not a reason `[GDE-FBD-050]`.
 
 ## 5. Risks and open questions
 
-**`[SPEC-APS-120]` The stability question must settle first.** This design was
-written while a long-window measurement was still running. If drops persist
-after `[PI3-FOUND-030]`, the supervisor is still right — but its recovery
-policy would then be load-bearing rather than a backstop, and that changes how
-hard step 2 has to push.
+**`[SPEC-APS-120]` The stability question settled while this was written, and
+strengthened the case.** The twelve-minute window scored 139/139 connected; the
+drop six seconds after it closed was the measurement's own ssh session ending
+`[PI3-FOUND-040]`. The cause was never the radio and never the recovery policy,
+so that policy stays a backstop rather than becoming load-bearing.
+
+What it does sharpen is `[SPEC-APS-050]`. Both faults — the UPower cycle and the
+seat-state gating — announced themselves in `bluetoothd`'s event stream for two
+evenings while the design polled `wpctl` and parsed prose. A supervisor
+subscribing to endpoint and transport events would have reported "my endpoints
+were just withdrawn" the first time it happened, instead of leaving a listener
+to describe a noise.
 
 **`[SPEC-APS-130]` D-Bus is a real dependency, not a free win.** It trades
 subprocess fragility for a library and an async surface inside a component that

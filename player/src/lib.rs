@@ -18,6 +18,7 @@ pub mod engine;
 pub mod fade;
 pub mod mixer;
 pub mod output;
+pub mod path;
 pub mod queue;
 pub mod bluetooth;
 pub mod sink;
