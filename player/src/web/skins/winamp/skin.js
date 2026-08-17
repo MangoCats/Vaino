@@ -4,16 +4,12 @@
 // having rather than merely tidy.
 (() => {
   const $ = id => document.getElementById(id);
-  const { clock, overlap } = Vaino.fmt;
+  const { clock } = Vaino.fmt;
 
   const showVolume = Vaino.bindVolume($('volume'), $('volnum'));
   const showProgram = Vaino.bindProgram($('prog'), 'auto (by clock)');
   const showQueue = Vaino.bindQueue(
     $('queue'), q => (q.artist ? `${q.artist} - ${q.title}` : q.title));
-  const skipFade = $('skipfade'), skipLead = $('skiplead');
-  skipFade.onchange = () => Vaino.skipFade(skipFade.value * 1000);
-  skipLead.onchange = () => Vaino.skipLead(skipLead.value * 1000);
-
   // Scroll only when it will not fit. A title that fits and scrolls anyway is
   // the habit that made these players tiring to watch.
   let shown = null;
@@ -63,19 +59,6 @@
     showVolume(s);
     showProgram(s);
     showQueue(s);
-    if (s.skip) {
-      if (document.activeElement !== skipFade) {
-        skipFade.min = 0;
-        skipFade.max = s.skip.fade_max_ms / 1000;
-        skipFade.value = (s.skip.fade_ms / 1000).toFixed(1);
-      }
-      if (document.activeElement !== skipLead) {
-        skipLead.min = s.skip.lead_min_ms / 1000;
-        skipLead.max = s.skip.lead_max_ms / 1000;
-        skipLead.value = (s.skip.lead_ms / 1000).toFixed(1);
-      }
-      $('skipoverlap').textContent = overlap(s.skip);
-    }
     $('why').textContent = s.why
       ? `${s.why.program ? s.why.program + ': ' : ''}` +
         `${s.why.share_pct.toFixed(2)}% of ${s.why.pool_size.toLocaleString()} ` +
