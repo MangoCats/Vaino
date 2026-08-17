@@ -284,7 +284,38 @@ be its own small lie.
 
 ## 5. Deliberately not now
 
-**`[PI3-NOT-010]` Interference is not being designed around.** The dark arm of
+**`[PI3-FOUND-010]` Interference is the cause.** Measured 2026-08-16 with the
+dark arm at ten minutes, four times the observed failure interval:
+
+    connected while dark: 200/200
+    flow while dark:      2 rows
+    errors while dark:    (none)
+
+With Wi-Fi down the link is perfect. With Wi-Fi up it had been dropping every
+two and a half minutes all evening. One antenna serves both radios on a Pi Zero
+2 W, and every drop today with ssh idle says it is **association and beaconing**
+that does it, not traffic -- which rules out the cheapest possible fix.
+
+Still owed: **the control arm at the same ten minutes.** A dark run compared
+against a remembered impression of shorter runs is the exact mistake this
+document has already recorded twice. Until `KEEP_WIFI=1 SECONDS_DOWN=600` fails
+as expected, this is a strong result rather than a settled one.
+
+Remedies, best first. **A USB Wi-Fi dongle on 5 GHz**, since the Pi Zero 2 W is
+2.4 GHz only: it removes the conflict and keeps the interface reachable. **A
+USB Bluetooth dongle**, giving the radios separate antennas. **Toggling Wi-Fi
+off during playback** `[PI3-FOUND-020]` costs no hardware but costs
+reachability, and an appliance unreachable while playing cannot be debugged in
+the state that matters.
+
+**`[PI3-FOUND-020]` Speaker-side transport controls.** The Middleton's rocker
+offers five gestures, which under AVRCP arrive as ordinary key events from a
+uinput device BlueZ creates -- play/pause, previous/next, volume. Worth building
+regardless of the interference question: an appliance whose only control
+surface is a web page is a poor appliance, and it is the thing that makes any
+Wi-Fi-off-while-playing scheme usable at all.
+
+**`[PI3-NOT-010]` (superseded) Interference was not being designed around.** The dark arm of
 `radio-silence-test.sh` exists to answer that question and has not been run,
 because with Wi-Fi up the link now measures 40/40 across two minutes with audio
 flowing. Should unexplained connection problems appear, that test is the tool
