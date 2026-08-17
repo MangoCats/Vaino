@@ -55,8 +55,14 @@ NEED=""
 # and visibly working for everything else -- ALSA error 524, which names
 # nothing. With it the error becomes an honest "Host is down" when the link
 # drops.
+# upower is not optional here, whatever it looks like on a mains-powered box
+# with no battery. WirePlumber asks it for a Bluetooth device's charge level,
+# and when the D-Bus name has no owner it tears down and rebuilds every A2DP
+# endpoint -- roughly every two and a half minutes, with the radio idle. A2DP
+# does not survive its endpoints being withdrawn, so the speaker drops, and it
+# sounds exactly like interference `[PI3-FOUND-030]`.
 for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
-         bluez libasound2 alsa-utils sqlite3; do
+         bluez libasound2 alsa-utils sqlite3 upower evtest; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then
@@ -66,6 +72,17 @@ if [ -n "$NEED" ]; then
     did "install:$NEED"
 else
     ok "all present"
+fi
+
+# Installing the package is not enough: upower.service ships disabled and
+# static, so D-Bus activation still finds no owner and the endpoint churn
+# continues with the package sitting there installed. It has to be enabled.
+if [ "$(systemctl is-enabled upower 2>/dev/null)" != "enabled" ] \
+   || ! systemctl is-active --quiet upower; then
+    systemctl enable --now upower >/dev/null 2>&1
+    did "enable upower"
+else
+    ok "upower running"
 fi
 
 # ------------------------------------------------------------ audio session

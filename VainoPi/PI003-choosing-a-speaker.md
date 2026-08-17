@@ -301,12 +301,44 @@ against a remembered impression of shorter runs is the exact mistake this
 document has already recorded twice. Until `KEEP_WIFI=1 SECONDS_DOWN=600` fails
 as expected, this is a strong result rather than a settled one.
 
+**Contested by `[PI3-FOUND-030]`.** A software mechanism was later found
+destroying the same link on a similar period. The dark-arm numbers above are
+not withdrawn -- they were measured -- but they no longer support the
+conclusion drawn from them on their own, because the comparison they beat was
+running with that fault present and unknown. What share of the drops is radio
+and what share is software is currently **unknown**, and no hardware should be
+bought on the strength of this entry until the two are separated.
+
 Remedies, best first. **A USB Wi-Fi dongle on 5 GHz**, since the Pi Zero 2 W is
 2.4 GHz only: it removes the conflict and keeps the interface reachable. **A
 USB Bluetooth dongle**, giving the radios separate antennas. **Toggling Wi-Fi
 off during playback** `[PI3-FOUND-020]` costs no hardware but costs
 reachability, and an appliance unreachable while playing cannot be debugged in
 the state that matters.
+
+**`[PI3-FOUND-030]` WirePlumber was demolishing the link, on its own schedule.**
+Found 2026-08-16. `bluetoothd` shows the A2DP endpoints being unregistered and
+re-registered in sweeps of nineteen, and the media transport rebuilt each time
+-- `sep1/fd7`, `fd8`, `fd9`, `fd10` in the space of a minute. A2DP cannot
+survive its endpoints being withdrawn, so every sweep is a dropped speaker, and
+at rest the sweeps came about every two and a half minutes: **the same period
+as the drops, arriving with the radio idle.**
+
+Each sweep pairs, to the second, with
+
+    Failed to get percentage from UPower: org.freedesktop.DBus.Error.NameHasNoOwner
+
+`upower` was not installed. The package alone is not the fix: its unit ships
+disabled and static, so D-Bus activation still finds no owner and the error
+continues unchanged. It must be `enable --now`.
+
+Two things this cost, worth naming. The single WirePlumber process reports
+`NRestarts=0` throughout, so anything watching systemd for restarts sees a
+healthy service -- an earlier session recorded "0 restarts" and ruled the
+audio stack out on exactly that evidence. The fault is visible only in
+`bluetoothd`'s log, from a process that never died. And the drops it causes are
+indistinguishable by ear from interference, which is how an entire evening was
+spent measuring a radio.
 
 **`[PI3-FOUND-020]` Speaker-side transport controls.** The Middleton's rocker
 offers five gestures, which under AVRCP arrive as ordinary key events from a
@@ -315,40 +347,50 @@ regardless of the interference question: an appliance whose only control
 surface is a web page is a poor appliance, and it is the thing that makes any
 Wi-Fi-off-while-playing scheme usable at all.
 
-**`[PI3-ROCKER-010]` The rocker's assignment.** Volume stays exactly as it is;
-BlueZ already carries it and nothing should sit between a listener and a volume
-control. The other three:
+**`[PI3-ROCKER-010]` The rocker's assignment. Measured 2026-08-16.** Five
+gestures were pressed in order; three arrived as key events and two produced
+nothing at all:
 
-| Gesture | Function |
-|---|---|
-| Centre press | Toggle play/pause, and switch the radios with it |
-| Right | Skip, identical to the existing control |
-| Left | Reserved for a "like", unassigned for now |
+| Gesture | Code | Key | Function |
+|---|---|---|---|
+| Centre press | 200 | `KEY_PLAYCD` | Toggle play/pause |
+| Right | 163 | `KEY_NEXTSONG` | Skip, identical to the existing control |
+| Left | 165 | `KEY_PREVIOUSSONG` | Reserved for a "like", unassigned for now |
+| Volume up | -- | none | Absolute volume, over the media transport |
+| Volume down | -- | none | Absolute volume, over the media transport |
+
+The volume silence is the useful half of that result. Volume is not a key event
+here: AVRCP carries it as absolute volume on the media transport, so it reaches
+the sink without passing through this device at all. The intention to leave
+volume alone therefore costs nothing and cannot be got wrong -- there is no
+event to swallow by accident, and exactly three signals exist to spend.
 
 Left is deliberately left dead rather than given a placeholder. A control that
 does something surprising is worse than one that does nothing, and reserving it
 in writing is what stops it being spent on something lesser later.
 
-**`[PI3-ROCKER-020]` Play and pause switch the radios, in this order.** Pausing
-raises Wi-Fi; playing lowers Wi-Fi **and only then** establishes the Bluetooth
-connection. The ordering is the point: a link negotiated while the shared
-antenna is still carrying Wi-Fi is being set up under the very interference
-that `[PI3-FOUND-010]` measured, and the association is the part worth
-protecting.
+The uinput device appears only once audio is flowing, not when the speaker
+connects. Anything reading it must wait for it, and must wait again when it
+goes: it is removed on every disconnect `[PI3-ROCKER-030]`.
 
-Three things this must get right, none of them optional:
+**`[PI3-ROCKER-020]` Play and pause switch the radios. Withdrawn 2026-08-16.**
+Centre press is a plain play/pause toggle and touches no radio.
 
-- **A failed connection must raise Wi-Fi again.** If Bluetooth does not come up
-  within a bounded time after the radio goes down, the appliance is silent
-  *and* unreachable, which is the worst state it can occupy and is reached by
-  the ordinary path of a speaker being switched off. Wi-Fi returns, the panel
-  explains, and the listener has a way in `[PI3-UI-030]`.
-- **The HTTP response must be sent before the interface drops.** Pressing play
-  in the browser takes down the network that browser is using. Answering first
-  and lowering the radio a moment later is the difference between "playing, and
-  the page went quiet" and an error the listener reads as a crash.
-- **The panel must say what play will do.** A control that disconnects you is
-  fine when expected and alarming when not.
+The scheme was designed against `[PI3-FOUND-010]`, on the belief that the
+periodic drops were interference and that the only cure available without new
+hardware was to stop transmitting. `[PI3-FOUND-030]` then found a software
+mechanism destroying the same link on a similar period, which means the share
+of the drops attributable to the radio is not currently known. Paying for a
+cure with an appliance that cannot be reached while it plays is a poor trade
+against an unmeasured disease.
+
+It is recorded rather than deleted because the three safeties it named are the
+right ones if it is ever revived: a failed connection must raise Wi-Fi again,
+or the appliance is silent *and* unreachable -- the worst state it can occupy,
+reached by the ordinary path of someone switching the speaker off; the HTTP
+response must be sent before the interface drops, or pressing play in a browser
+reads as a crash; and the panel must say what play will do, because a control
+that disconnects you is fine when expected and alarming when not.
 
 **`[PI3-LED-010]` The ACT LED tracks the Wi-Fi radio. Built.** The Pi Zero 2 W
 exposes one controllable LED, and the kernel does the entire job: `rfkill1` is
@@ -358,10 +400,13 @@ stays correct when something other than Vaino switches the radio.
 
     echo rfkill1 > /sys/class/leds/ACT/trigger
 
-That property is worth more than the convenience. `[PI3-ROCKER-020]` has
-playback take Wi-Fi down deliberately, and an unreachable appliance otherwise
-just looks broken; a status flag we set ourselves could be wrong in exactly the
-situation where being wrong costs most. This one is read from the hardware.
+That property is worth more than the convenience. It was built when
+`[PI3-ROCKER-020]` meant to take Wi-Fi down during playback, where an
+unreachable appliance otherwise just looks broken; that scheme is withdrawn,
+and the LED is kept anyway. It costs nothing, it tells the truth about the
+radio without anything having to remember to update it, and a status flag we
+set ourselves could be wrong in exactly the situation where being wrong costs
+most. This one is read from the hardware.
 
 `/sys` does not survive a reboot, so it is a unit rather than a one-off write,
 and it hands the LED back on stop. Verified across a real reboot: the trigger
