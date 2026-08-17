@@ -109,6 +109,8 @@ pub struct Output {
     pub device_name: String,
     /// Set by the stream's error callback, cleared by a successful `recover`.
     failed: Arc<AtomicBool>,
+    /// Feed zeros rather than stop, so the link survives a pause.
+    silent: Arc<AtomicBool>,
     /// The device *selector* rather than the device: recovery has to re-resolve
     /// the name, because the sink it names may be a different ALSA object by
     /// the time it comes back.
@@ -218,6 +220,7 @@ impl Output {
         // a handler that only logs leaves a player which is silent, holds no
         // link, and still looks healthy from every side `[IMPL-AUD-020]`.
         let failed = Arc::new(AtomicBool::new(false));
+        let silent = Arc::new(AtomicBool::new(false));
         let cb_failed = Arc::clone(&failed);
         let err_fn = move |e| {
             eprintln!("output stream error: {e}");
@@ -226,20 +229,22 @@ impl Output {
         let stream = match sample_format {
             SampleFormat::F32 => {
                 let cb_vol = volume.clone();
+                let cb_silent = Arc::clone(&silent);
                 device.build_output_stream(
                 &config,
-                move |out: &mut [f32], _| fill(&cb_state, &cb_vol, out),
+                move |out: &mut [f32], _| fill(&cb_state, &cb_vol, out, &cb_silent),
                 err_fn,
                 None,
             )}
             SampleFormat::I16 => {
                 let mut scratch: Vec<f32> = Vec::new();
                 let cb_vol = volume.clone();
+                let cb_silent = Arc::clone(&silent);
                 device.build_output_stream(
                     &config,
                     move |out: &mut [i16], _| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &cb_vol, &mut scratch);
+                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             *o = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -251,11 +256,12 @@ impl Output {
             SampleFormat::U16 => {
                 let mut scratch: Vec<f32> = Vec::new();
                 let cb_vol = volume.clone();
+                let cb_silent = Arc::clone(&silent);
                 device.build_output_stream(
                     &config,
                     move |out: &mut [u16], _| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &cb_vol, &mut scratch);
+                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             let v = (s.clamp(-1.0, 1.0) + 1.0) * 0.5;
                             *o = (v * u16::MAX as f32) as u16;
@@ -271,7 +277,7 @@ impl Output {
 
         stream.play().map_err(|e| OutputError::Build(e.to_string()))?;
         Ok(Self { stream: Some(stream), state, volume, sample_rate, channels,
-                  device_name, failed, requested })
+                  device_name, failed, silent, requested })
     }
 
     /// Mark the output as needing recovery.
@@ -304,6 +310,13 @@ impl Output {
         // stream first and assigning over the old one -- the obvious ordering --
         // fails every time on exactly the sink this exists for.
         self.stream = None;
+        // Let the device settle before opening it again `[PI3-OPEN-010]`.
+        // A stream rebuilt immediately loses a Bluetooth speaker about
+        // twenty-two seconds later, every time, where one opened fresh at
+        // startup holds indefinitely -- the difference being that startup
+        // never reopens anything in flight. Giving PipeWire a moment to finish
+        // tearing the old one down is the cheapest available test of that.
+        std::thread::sleep(std::time::Duration::from_millis(700));
         let fresh = Self::attach(
             self.requested.clone(),
             Arc::clone(&self.state),
@@ -339,10 +352,14 @@ impl Output {
         // play() and pause() return different error types, so normalise early
         // rather than let that detail leak into the caller.
         let Some(stream) = self.stream.as_ref() else { return false };
+        // Silence rather than a stopped device `[PI3-OPEN-020]`. The stream is
+        // still started on resume in case a backend stopped it for its own
+        // reasons, but pausing no longer stops it.
+        self.silent.store(!on, Ordering::Relaxed);
         let r = if on {
             stream.play().map_err(|e| e.to_string())
         } else {
-            stream.pause().map_err(|e| e.to_string())
+            Ok(())
         };
         if let Err(e) = &r {
             eprintln!("output {}: {e}", if on { "play" } else { "pause" });
@@ -448,7 +465,19 @@ impl Output {
 /// `try_lock` rather than `lock`: blocking here would stall the audio device.
 /// On contention we emit silence and count it, because a glitch that is
 /// recorded can be fixed and a glitch that is hidden cannot.
-fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32]) {
+fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
+        silent: &Arc<AtomicBool>) {
+    // Paused means silence, NOT a stopped stream `[PI3-OPEN-020]`. A2DP tears
+    // down when nothing feeds it, so stopping the device on pause loses the
+    // speaker after a few minutes and makes resuming wait on a reconnect.
+    // McRhythm fed silence for the same reason. The ring is left untouched, so
+    // resuming is still instant `[REQ-AUD-142]`, and the shortfall is not
+    // counted: this silence is intended, and inflating the underrun figure
+    // would spoil the one diagnostic that matters most.
+    if silent.load(Ordering::Relaxed) {
+        out.iter_mut().for_each(|v| *v = 0.0);
+        return;
+    }
     match state.try_lock() {
         Ok(mut s) => {
             let got = s.ring.read(out);
@@ -478,16 +507,33 @@ fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32]) {
 
 #[cfg(test)]
 mod tests {
+    /// Not silenced -- the ordinary case for every fill test here.
+    fn audible() -> Arc<AtomicBool> { Arc::new(AtomicBool::new(false)) }
+
     use super::*;
 
     // The real-time path is testable without a device: `fill` is a plain
     // function over shared state, which is why it was written that way.
     #[test]
+    fn silence_leaves_the_ring_alone_and_counts_no_underrun() {
+        let st = Arc::new(Mutex::new(OutputState::new(16)));
+        st.lock().unwrap().ring.write(&[0.5; 8]);
+        let mut out = [9.9f32; 8];
+        fill(&st, &Volume::new(1.0), &mut out, &Arc::new(AtomicBool::new(true)));
+        assert_eq!(out, [0.0; 8], "a paused stream feeds zeros");
+        let s = st.lock().unwrap();
+        // Both matter: the ring is what makes resuming instant, and counting
+        // this as an underrun would spoil the diagnostic `[PI3-OPEN-020]`.
+        assert_eq!(s.ring.len(), 8, "buffered audio is kept for the resume");
+        assert_eq!(s.underrun_samples, 0, "intended silence is not a shortfall");
+    }
+
+    #[test]
     fn fill_pads_with_silence_and_counts_the_shortfall() {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[0.5; 4]);
         let mut out = [9.9f32; 8];
-        fill(&st, &Volume::new(1.0), &mut out);
+        fill(&st, &Volume::new(1.0), &mut out, &audible());
         assert_eq!(&out[..4], &[0.5; 4]);
         assert!(out[4..].iter().all(|v| *v == 0.0), "shortfall must be silence");
         assert_eq!(st.lock().unwrap().underrun_samples, 4);
@@ -501,7 +547,7 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[1.0; 4]);
         let mut out = [0.0f32; 4];
-        fill(&st, &Volume::new(0.25), &mut out);
+        fill(&st, &Volume::new(0.25), &mut out, &audible());
         assert!(out.iter().all(|v| (*v - 0.25).abs() < 1e-6), "got {out:?}");
     }
 
@@ -513,11 +559,11 @@ mod tests {
         st.lock().unwrap().ring.write(&[1.0; 8]);
         let vol = Volume::new(1.0);
         let mut a = [0.0f32; 4];
-        fill(&st, &vol, &mut a);
+        fill(&st, &vol, &mut a, &audible());
         assert!((a[0] - 1.0).abs() < 1e-6);
         vol.set(0.5); // turned down while the rest is still queued
         let mut b = [0.0f32; 4];
-        fill(&st, &vol, &mut b);
+        fill(&st, &vol, &mut b, &audible());
         assert!((b[0] - 0.5).abs() < 1e-6, "the change must reach buffered audio");
     }
 
@@ -599,7 +645,7 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[0.25; 8]);
         let mut out = [0.0f32; 8];
-        fill(&st, &Volume::new(1.0), &mut out);
+        fill(&st, &Volume::new(1.0), &mut out, &audible());
         assert_eq!(st.lock().unwrap().underrun_samples, 0);
     }
 
@@ -608,7 +654,7 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         let _held = st.lock().unwrap();
         let mut out = [9.9f32; 4];
-        fill(&st, &Volume::new(1.0), &mut out); // must return, not deadlock
+        fill(&st, &Volume::new(1.0), &mut out, &audible()); // must return, not deadlock
         assert!(out.iter().all(|v| *v == 0.0));
     }
 }
