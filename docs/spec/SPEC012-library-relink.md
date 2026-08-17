@@ -68,15 +68,29 @@ stop.**
 
 ## 3. What it reports
 
-**`[SPEC-RLK-050]` Four outcomes, all of them stated.** A relink that prints
+**`[SPEC-RLK-050]` Five outcomes, all of them stated.** A relink that prints
 "done" has told the operator nothing about a library that may be half bound.
 
 | Outcome | Meaning | Action |
 |---|---|---|
-| **matched** | path already correct | none |
-| **moved** | found elsewhere; path updated | none |
-| **missing** | a row whose audio is not on this machine | mark absent, keep the row |
+| **matched** | hashed, and the hash agrees with the path already held | none |
+| **moved** | hashed, found elsewhere; path updated | none |
+| **missing** | a row whose audio is nowhere on this machine | mark absent, keep the row |
+| **corrupt** | bytes present where the row expects them, hash disagrees | report loudly; never bind |
 | **unknown** | audio here that no row claims | list; ingest is a separate job |
+
+**`[SPEC-RLK-055]` `corrupt` and `unknown` must not be confused.** A truncated
+copy of a known file hashes to nothing the database recognises, so the naive
+reading is "unknown music" — and a failed transfer would be reported as a
+library discovery. They are separable: a row is **corrupt** rather than
+**missing** when a file exists at the location it names and does not hash to
+it, and a file is **unknown** rather than **corrupt** when nothing claims its
+location. `size_bytes` sharpens the same call, a truncation being visible
+without hashing at all.
+
+This is the distinction that earns relink its second job, and getting it wrong
+would make the check worse than none: a corrupted library reported as an
+enlarged one.
 
 **`[SPEC-RLK-060]` Missing is a state, not an error.** A Pi holding a subset of
 a 44 GB library is a normal deployment, not a broken one. Those passages are
@@ -134,16 +148,38 @@ one of them; it does not silently prefer whichever it walked into first.
 
 ---
 
-## 6. Open
+## 6. Settled
 
-**`[SPEC-RLK-130]` Should the shipped database carry paths at all?** Blanking
-them before transport would make `[SPEC-DF-030]`'s "never transported"
-enforceable rather than advisory — an unrelinked library would be visibly
-unbound instead of plausibly wrong. The cost is that a database is then
-unusable until relinked, including on the machine that produced it.
+**`[SPEC-RLK-130]` The shipped database keeps its paths when it is a plain
+copy, and loses them when it is not.** *(Decided 2026-08-17.)*
 
-**`[SPEC-RLK-140]` Should relink verify as well as bind?** A hash that matches
-proves the copy arrived intact, which the transfer itself does not check beyond
-rsync's framing. The check is already paid for by the walk; only the reporting
-is missing. This may make relink the natural place to answer "did 42.5 GiB
-arrive correctly", a question currently answered by assumption.
+Blanking paths makes `[SPEC-DF-030]`'s "never transported" enforceable rather
+than advisory, which is the stronger position — but not at the price of
+inventing a transformation step to achieve it. Where the database ships as a
+straight file copy, the stale paths are harmless: relink overwrites every one
+of them, and a wrong path that is about to be rewritten costs nothing to carry.
+
+Where a database is **already** being customised for other reasons — pruning
+caches, subsetting a library, stripping anything not wanted on an appliance —
+the paths come out during that pass. The work is already being done; leaving
+machine-scope data in a database that is being deliberately shaped for another
+machine would be an omission rather than an efficiency.
+
+The practical consequence is that the source-side path rewrite used on
+2026-08-17 `[SPEC-RLK-020]` is **not** needed once relink exists. It was the
+whole justification for touching the database at all, and it can go.
+
+**`[SPEC-RLK-140]` Relink is also the integrity check.** *(Decided
+2026-08-17.)* A hash that matches proves the bytes arrived intact. The walk pays
+for that hash already; only the reporting was missing, and a transfer otherwise
+has nothing checking it beyond rsync's own framing.
+
+**This forbids the obvious optimisation.** A relink that skipped files whose
+path already looked right would be faster and would verify nothing — `matched`
+would mean "the path resolves", which is an assumption wearing the costume of a
+result. Every file is hashed, every run.
+
+A `--quick` mode that skips bound files may still be wanted for a large library
+being relinked repeatedly. If it exists it must say, in its own output, that it
+verified nothing: the failure this whole document exists to prevent is a check
+that reports success without observing the thing it claims to check.
