@@ -350,6 +350,31 @@ Three things this must get right, none of them optional:
 - **The panel must say what play will do.** A control that disconnects you is
   fine when expected and alarming when not.
 
+**`[PI3-LED-010]` The ACT LED tracks the Wi-Fi radio. Built.** The Pi Zero 2 W
+exposes one controllable LED, and the kernel does the entire job: `rfkill1` is
+`phy0`, so binding that trigger makes the light follow **the radio itself
+rather than our intention about it**. Nothing polls, nothing can drift, and it
+stays correct when something other than Vaino switches the radio.
+
+    echo rfkill1 > /sys/class/leds/ACT/trigger
+
+That property is worth more than the convenience. `[PI3-ROCKER-020]` has
+playback take Wi-Fi down deliberately, and an unreachable appliance otherwise
+just looks broken; a status flag we set ourselves could be wrong in exactly the
+situation where being wrong costs most. This one is read from the hardware.
+
+`/sys` does not survive a reboot, so it is a unit rather than a one-off write,
+and it hands the LED back on stop. Verified across a real reboot: the trigger
+reads `[rfkill1]` and the unit is active.
+
+The cost is the card-activity indication, which shares the one LED. On an
+appliance that is a fair trade -- radio state is something a listener can act
+on, card access is not -- but it is a real loss when diagnosing a card.
+
+**Polarity still wants one observation.** The trigger should light when the
+radio is unblocked, so LED on means Wi-Fi up. Confirming it needs only the next
+dark-arm run: watch the LED at the moment the radio drops.
+
 **`[PI3-NOT-010]` (superseded) Interference was not being designed around.** The dark arm of
 `radio-silence-test.sh` exists to answer that question and has not been run,
 because with Wi-Fi up the link now measures 40/40 across two minutes with audio

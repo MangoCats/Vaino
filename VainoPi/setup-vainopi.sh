@@ -245,6 +245,58 @@ else
     ok "sudoers rule"
 fi
 
+# ---------------------------------------------------------------- act led
+# The green ACT LED tracks the Wi-Fi radio [PI3-LED-010].
+#
+# The kernel does the whole job: rfkill1 is phy0, so binding the trigger makes
+# the LED follow the radio itself rather than our intention about it. Nothing
+# polls, nothing can drift, and it stays right when something other than Vaino
+# switches the radio -- which matters, since [PI3-ROCKER-020] has playback take
+# Wi-Fi down deliberately and an unreachable appliance otherwise just looks
+# broken.
+#
+# The cost is the card-activity indication, which shares this one LED. On an
+# appliance that is a fair trade: radio state is something a listener can act
+# on, card access is not.
+#
+# /sys does not survive a reboot, hence a unit rather than a one-off write.
+echo "act led"
+LED_WANT=rfkill1
+if [ ! -d /sys/class/leds/ACT ]; then
+    note "ACT led" "absent on this board"
+elif ! grep -q "$LED_WANT" /sys/class/leds/ACT/trigger 2>/dev/null; then
+    note "ACT led" "kernel has no $LED_WANT trigger"
+else
+    cat > /etc/systemd/system/vaino-led.service <<UNIT
+[Unit]
+Description=Point the ACT LED at the Wi-Fi radio
+After=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo $LED_WANT > /sys/class/leds/ACT/trigger'
+# Hand the LED back on the way out, so a machine that stops using Vaino does
+# not keep a light that means nothing to whatever runs next.
+ExecStop=/bin/sh -c 'echo actpwr > /sys/class/leds/ACT/trigger 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    if [ "$(systemctl is-enabled vaino-led 2>/dev/null)" != "enabled" ]; then
+        systemctl enable vaino-led >/dev/null 2>&1 && did "led unit enabled"
+    else
+        ok "led unit enabled"
+    fi
+    CURRENT="$(grep -o "\[$LED_WANT\]" /sys/class/leds/ACT/trigger 2>/dev/null || true)"
+    if [ -z "$CURRENT" ]; then
+        systemctl start vaino-led >/dev/null 2>&1 && did "ACT led -> wifi"
+    else
+        ok "ACT led -> wifi"
+    fi
+fi
+
 # -------------------------------------------------------------- boot tuning
 # Safe, reversible settings only. The riskier work -- initramfs trimming, unit
 # parallelisation -- waits for a boot-time baseline.
