@@ -114,23 +114,121 @@ const Vaino = (() => {
   // The back of the sleeve, for skins that show it. Separate route, same
   // dance: a passage with no back cover is the normal case, not an error, so
   // the element hides on 404 exactly as the front does.
-  function showBackArt(img, passageId) {
-    return showArt(img, passageId, true);
+  // The kantele `[REQ-VIS-128]`, shown where a passage has no cover.
+  //
+  // Väinö is Väinämöinen, and the kantele is his instrument; the project
+  // already borrows from the same source in Sampo. Drawn from the instrument
+  // rather than from a stock illustration of one, which is why the strings
+  // terminate ON the varras -- the bar at the NARROW end that they are knotted
+  // around -- and run to tuning pins at the wide end. A traditional five-string
+  // kantele has no sound hole; the body is hollowed from beneath.
+  //
+  // Inline markup rather than a data URI, because a data URI is an isolated
+  // document and cannot see `currentColor`. Inlined, one mark takes each skin's
+  // own text colour: gold in MuLibPlay, LCD green in WinAmp, dim grey in Vaino.
+  const KANTELE =
+    '<svg viewBox="0 0 96 96" fill="none" stroke="currentColor" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M16 54 C31 48 48 40 79 32 L79 50 C53 54 33 58 16 54 Z" stroke-width="1.3" opacity=".34"/>' +
+    '<path d="M22.1 51.3 C40 46.0 58 39.8 75 35.5" stroke-width=".95" opacity=".6"/>' +
+    '<path d="M22.2 52.3 C40 47.5 58 41.8 75 38.5" stroke-width=".95" opacity=".55"/>' +
+    '<path d="M22.3 53.3 C40 49.0 58 44.3 75 41.5" stroke-width=".95" opacity=".5"/>' +
+    '<path d="M22.4 54.3 C40 50.6 58 46.8 75 44.5" stroke-width=".95" opacity=".45"/>' +
+    '<path d="M22.5 55.3 C40 52.2 58 49.3 75 47.5" stroke-width=".95" opacity=".4"/>' +
+    '<path d="M21.9 50.1 L22.6 56.5" stroke-width="1.6" opacity=".55"/>' +
+    '<g fill="currentColor" stroke="none" opacity=".5">' +
+    '<circle cx="76.4" cy="35.5" r="1.15"/><circle cx="76.4" cy="38.5" r="1.15"/>' +
+    '<circle cx="76.4" cy="41.5" r="1.15"/><circle cx="76.4" cy="44.5" r="1.15"/>' +
+    '<circle cx="76.4" cy="47.5" r="1.15"/></g></svg>';
+
+  // Structure, not decoration, so it belongs to core rather than to each skin:
+  // two stacked layers is the only way to fade BETWEEN two covers, since
+  // swapping one element's `src` is instantaneous. Skins keep the sizing and
+  // the object-fit; they do not have to know how the crossfade is built.
+  const ART_CSS =
+    '.artbox { position: relative; overflow: hidden; }' +
+    '.artbox > img, .artbox > .ph { position: absolute; inset: 0;' +
+    '  width: 100%; height: 100%; }' +
+    '.artbox > img { opacity: 0; transition: opacity 1s ease; }' +
+    '.artbox > img.on { opacity: 1; }' +
+    '.artbox > .ph { display: grid; place-items: center;' +
+    '  transition: opacity 1s ease; }' +
+    '.artbox.has-art > .ph { opacity: 0; }' +
+    '.artbox > .ph svg { width: 78%; height: 78%; }' +
+    '@media (prefers-reduced-motion: reduce) {' +
+    '  .artbox > img, .artbox > .ph { transition: none; } }';
+
+  function artStyle() {
+    if (document.getElementById('vaino-art-css')) return;
+    const st = document.createElement('style');
+    st.id = 'vaino-art-css';
+    st.textContent = ART_CSS;
+    document.head.appendChild(st);
   }
 
-  function showArt(img, passageId, back) {
-    if (!img) return;
-    if (passageId == null) {
-      img.hidden = true;
-      img.removeAttribute('data-for');
+  // Build the two layers and the mark beneath them, once per box.
+  function artBox(box) {
+    if (box.dataset.art) return;
+    artStyle();
+    box.dataset.art = '1';
+    box.classList.add('artbox');
+    box.textContent = '';
+    const ph = document.createElement('span');
+    ph.className = 'ph';
+    ph.innerHTML = KANTELE;
+    const a = document.createElement('img');
+    const b = document.createElement('img');
+    a.alt = b.alt = '';
+    box.append(ph, a, b);
+  }
+
+  function showBackArt(box, passageId) {
+    return showArt(box, passageId, true);
+  }
+
+  // Fade from whatever is showing to the cover for `passageId`.
+  //
+  // The box never empties: the mark sits under both layers, so the element
+  // keeps its size whatever happens. That is what stopped the controls beneath
+  // it jumping up and down as tracks changed -- the old version toggled
+  // `hidden`, which is `display: none`, so the art left the layout entirely
+  // while the next one loaded and the page reflowed twice per track
+  // `[REQ-VIS-127]`.
+  function showArt(box, passageId, back) {
+    if (!box) return;
+    artBox(box);
+    const want = passageId == null ? ''
+               : back ? `/art/${passageId}/back` : `/art/${passageId}`;
+    if (box.dataset.for === want) return;   // already showing it
+    box.dataset.for = want;
+
+    const imgs = box.querySelectorAll('img');
+    const clear = () => imgs.forEach(i => i.classList.remove('on'));
+    if (!want) {                            // nothing playing: back to the mark
+      clear();
+      box.classList.remove('has-art');
       return;
     }
-    if (img.dataset.for === String(passageId)) return; // already showing it
-    img.dataset.for = String(passageId);
-    img.hidden = true;                 // stay hidden until it is known to exist
-    img.onload = () => { img.hidden = false; };
-    img.onerror = () => { img.hidden = true; };
-    img.src = back ? `/art/${passageId}/back` : `/art/${passageId}`;
+    const live = box.querySelector('img.on');
+    const idle = live === imgs[0] ? imgs[1] : imgs[0];
+    // Swap only once the incoming cover has decoded. Fading toward an image
+    // that has not arrived shows an empty box for the length of the fade,
+    // which is the artefact this exists to remove.
+    idle.onload = () => {
+      if (box.dataset.for !== want) return; // superseded while loading
+      clear();
+      idle.classList.add('on');
+      box.classList.add('has-art');
+    };
+    // A 404 is the ordinary answer for a passage with no embedded picture --
+    // roughly a third of this library -- so it fades to the mark rather than
+    // being reported.
+    idle.onerror = () => {
+      if (box.dataset.for !== want) return;
+      clear();
+      box.classList.remove('has-art');
+    };
+    idle.src = want;
   }
 
   // The edit controls for one queued passage, wired and ready to append.

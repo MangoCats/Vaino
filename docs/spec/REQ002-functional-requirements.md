@@ -342,6 +342,44 @@ someone a skin and it sticks.
 >
 > **The Director is not `Sync`,** so the browser cannot reach it. Programme choice is written to a small shared cell that the engine reads on its next refill — an override therefore changes what is selected *next* rather than interrupting what is playing, which is the wanted behaviour. An unknown programme id is a 404 rather than a silent no-op.
 
+**`[REQ-VIS-127]` The cover slot keeps its space, always** *(2026-08-17)*. The
+element that holds cover art is a fixed box that is never empty, and never
+leaves the layout.
+
+It used to toggle `hidden` — `display: none` — around the load, so at every
+track change the art left the flow, the page reflowed shorter, and reflowed
+back when the next cover decoded. On MuLibPlay's 200&nbsp;px sleeves that threw
+the controls beneath up and down the screen twice per track, and twice again
+when the back cover followed. A passage with no picture simply stayed short, so
+the resting height differed between tracks as well.
+
+The cost is deliberate: a fixed box means a non-square cover letterboxes inside
+it rather than the layout adapting to the image. Reserving space and adapting to
+content are incompatible, and the jumping is the fault worth removing.
+
+**`[REQ-VIS-128]` Covers cross-fade, and a missing one shows the kantele**
+*(2026-08-17)*. Changing track fades between the outgoing and incoming sleeve
+over one second. Two stacked layers, because swapping one element's `src` is
+instantaneous and cannot be faded; the swap happens only once the incoming
+image has **decoded**, since fading toward an image that has not arrived shows
+an empty box for the length of the fade — the artefact being removed.
+
+Where a passage has no embedded picture — roughly a third of this library, so
+the ordinary case rather than an error — the box shows a **kantele**: Väinö is
+Väinämöinen, and the instrument is his, alongside `Sampo` from the same source.
+It is drawn from the instrument rather than from an illustration of one: the
+strings terminate **on** the varras, the bar at the *narrow* end they are
+knotted around, and run to tuning pins at the wide end. Traditional five-string
+kanteles have no sound hole, the body being hollowed from beneath, so none is
+drawn.
+
+The mark is **inlined into the page, not set as an image source**, because a
+data URI is an isolated document and cannot see `currentColor`. Inlined, one
+mark takes each skin's own text colour — gold in MuLibPlay, LCD green in
+WinAmp, dim grey in Vaino — and is correct in light mode without a second
+asset. It also sits *under* both layers permanently, which is what satisfies
+`[REQ-VIS-127]`: the box has something in it even before the first cover loads.
+
 **`[REQ-VIS-170]` A passage is named by MusicBrainz where MusicBrainz has an answer.** Three fields, three fallbacks, and every one of them says which source it came from `[REQ-VIS-120]`:
 
 | shown | first choice | fallback | last resort |

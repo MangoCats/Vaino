@@ -167,42 +167,70 @@ async function run(skin) {
   // faked. Without this the check would pass on a skin that can never show a
   // cover -- which is exactly the failure being guarded against.
   const art = window.document.getElementById('art');
+  const layers = box => [...box.querySelectorAll('img')];
+  const requested = box => layers(box).find(i => i.getAttribute('src'));
   let artOk = 'no #art element';
   if (art) {
-    if (!art.getAttribute('src')) {
+    if (!art.classList.contains('artbox')) {
+      artOk = 'not built as a crossfade box';
+    } else if (layers(art).length < 2) {
+      // One layer cannot fade to another: swapping a src is instantaneous.
+      artOk = 'only one layer, so nothing can cross-fade';
+    } else if (!art.querySelector('.ph svg')) {
+      // The mark is what keeps the box occupied. Without it the element
+      // collapses between covers and everything below jumps `[REQ-VIS-127]`.
+      artOk = 'no placeholder mark beneath the layers';
+    } else if (!requested(art)) {
       artOk = 'src never set';
-    } else if (!art.hidden) {
-      artOk = 'visible before it loaded';
+    } else if (art.querySelector('img.on')) {
+      artOk = 'shown before it loaded';
     } else {
-      art.dispatchEvent(new window.Event('load'));
-      artOk = art.hidden ? 'still hidden after load' : null;
+      const first = requested(art);
+      first.dispatchEvent(new window.Event('load'));
+      artOk = art.querySelector('img.on') === first ? null : 'not shown after load';
       if (!artOk) {
-        // ...and moving to a passage whose file has no picture must hide it
-        // again. Driven by pushing a snapshot, not by calling core directly,
-        // so what is under test is the path the skin actually takes.
+        check(art.classList.contains('has-art'),
+              'the mark must retire once a cover is actually up');
+        // A passage whose file has no picture is the ordinary case here --
+        // about a third of the library -- and must fall back to the mark
+        // rather than to an empty box. Driven by pushing a snapshot, so what
+        // is under test is the path the skin really takes.
         sock.onmessage({ data: JSON.stringify({ ...RICH, passage_id: 999 }) });
-        art.dispatchEvent(new window.Event('error'));
-        artOk = art.hidden ? null : 'still visible after a 404';
+        const second = layers(art).find(i => i !== first);
+        check(second && second.getAttribute('src'),
+              'the incoming cover must load on the OTHER layer, or there is no fade');
+        if (second) second.dispatchEvent(new window.Event('error'));
+        artOk = art.classList.contains('has-art')
+              ? 'a 404 must fall back to the mark' : null;
       }
     }
+    // Whatever happens above, the box itself must never be taken out of the
+    // layout -- that is the entire point of the change.
+    check(!art.hidden, 'the art box must never be hidden; it reserves the space');
+    const svg = art.querySelector('.ph svg');
+    check(svg && svg.getAttribute('stroke') === 'currentColor',
+          'the mark must be drawn in currentColor so each skin colours it');
   }
   if (artOk) errors.push('cover art: ' + artOk);
 
   // A skin that shows the back of the sleeve must ask the back route for it.
   // MuLibPlay put front and back side by side and 559 of its 675 albums had a
-  // back; pointing both <img> at the same URL would show the front twice and
+  // back; pointing both boxes at the same URL would show the front twice and
   // look deliberate.
   const back = window.document.getElementById('artback');
   if (back) {
-    const front = art && art.getAttribute('src');
-    const bsrc = back.getAttribute('src');
+    const front = art && requested(art) && requested(art).getAttribute('src');
+    const bimg = requested(back);
+    const bsrc = bimg && bimg.getAttribute('src');
     check(/\/art\/\d+\/back$/.test(bsrc || ''),
           `back cover should come from the back route, got ${bsrc}`);
     check(bsrc !== front, 'front and back must not be the same image');
-    // Absent is the common case, so it must hide on 404 rather than show a
-    // broken image beside a good cover.
-    back.dispatchEvent(new window.Event('error'));
-    check(back.hidden, 'a missing back cover must hide, not render broken');
+    // Absent is the common case, so it must fall back to the mark rather than
+    // render broken beside a good cover.
+    if (bimg) bimg.dispatchEvent(new window.Event('error'));
+    check(!back.classList.contains('has-art'),
+          'a missing back cover must fall back to the mark, not render broken');
+    check(!back.hidden, 'the back box must also keep its space');
   }
 
   // The transport must be wired, and the picker populated from the catalogue.
