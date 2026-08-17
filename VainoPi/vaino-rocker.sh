@@ -19,7 +19,10 @@ WAIT_FOR="${WAIT_FOR:-180}"        # how long to wait for the AVRCP device
 MAP_ONLY="${MAP_ONLY:-0}"          # 1 = log keys, take no action
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
-say() { logger -t vaino-rocker "$*"; echo "$(date +%T) $*"; }
+# Log lines go to stderr, never stdout. await_dev returns the device name by
+# echoing it, so anything else written to stdout is captured into that name --
+# which produced a first run reading '/dev/input/22:25:46 waiting...event2'.
+say() { logger -t vaino-rocker "$*"; echo "$(date +%T) $*" >&2; }
 post() { curl -s -o /dev/null -m 4 -X POST "http://localhost:$PORT/command/$1"; }
 
 # BlueZ creates the AVRCP uinput keyboard when the speaker connects and takes
