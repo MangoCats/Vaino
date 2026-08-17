@@ -41,8 +41,16 @@ export XDG_RUNTIME_DIR="/run/user/$RUN_UID"
 pair_sequence() {
     {
         printf 'power on\n';              sleep 2
+        printf 'pairable on\n';           sleep 1
         printf 'agent NoInputNoOutput\n'; sleep 1
         printf 'default-agent\n';         sleep 1
+        # A speaker is a classic BR/EDR device, and the default discovery
+        # filter returns LE only. Without this the Middleton is invisible to
+        # every scan -- eight other devices found, and never the one being
+        # looked for. It reads like the speaker is switched off.
+        printf 'menu scan\n';             sleep 1
+        printf 'transport bredr\n';       sleep 1
+        printf 'back\n';                  sleep 1
         printf 'scan on\n';               sleep 20
         printf 'pair %s\n' "$ADDR";       sleep 12
         printf 'trust %s\n' "$ADDR";      sleep 2
@@ -55,15 +63,27 @@ pair_sequence() {
 # lesson of [PI3-WHY-010], and the only honest source for it is what the
 # system says right now.
 state_of() {
-    local info paired trusted connected
+    local info paired trusted connected bonded has_bonded
     info="$(bluetoothctl info "$1" 2>/dev/null)" || true
     [ -z "$info" ] && { echo "found"; return; }
     paired=$(grep -c 'Paired: yes' <<<"$info")
     trusted=$(grep -c 'Trusted: yes' <<<"$info")
     connected=$(grep -c 'Connected: yes' <<<"$info")
-    if   [ "$connected" -gt 0 ]; then echo "connected"
-    elif [ "$paired" -gt 0 ];    then echo "paired"
-    elif [ "$trusted" -gt 0 ];   then echo "stale"   # [PI3-WHY-050]
+    bonded=$(grep -c 'Bonded: yes' <<<"$info")
+    has_bonded=$(grep -c 'Bonded:' <<<"$info")
+
+    # 'Paired: yes' is not proof of a pairing. A leftover record makes BlueZ
+    # answer AlreadyExists and skip the bonding exchange entirely, leaving
+    # Paired: yes beside Bonded: no -- no link key was ever stored, and the
+    # link dies at the first disconnect looking exactly like interference.
+    # The link key is the thing that has to exist, so where BlueZ will tell
+    # us about it, that is what is believed. Older builds omit the field, and
+    # there Paired is the best available answer.
+    [ "$has_bonded" -gt 0 ] && paired="$bonded"
+
+    if   [ "$connected" -gt 0 ] && [ "$paired" -gt 0 ]; then echo "connected"
+    elif [ "$paired" -gt 0 ];                          then echo "paired"
+    elif [ "$trusted" -gt 0 ] || [ "$connected" -gt 0 ]; then echo "stale"  # [PI3-WHY-050]
     else echo "found"
     fi
 }
