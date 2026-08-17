@@ -182,6 +182,8 @@ pub struct Engine {
     publish_at: Option<std::time::Instant>,
     /// The audible passage as last published, so a change can bypass the clock.
     published: Option<i64>,
+    /// Misses already reported, so each is logged once.
+    last_lock_failures: u64,
     /// The audio path, held at arm's length `[SPEC-APS-070]`.
     ///
     /// A ring to write into and a channel to ask things of -- and deliberately
@@ -265,6 +267,7 @@ impl Engine {
             out_room: 0,
             publish_at: None,
             published: None,
+            last_lock_failures: 0,
             out_rate,
             out_channels,
             scratch: vec![0.0; 2048 * out_channels],
@@ -835,11 +838,20 @@ impl Engine {
     fn advance_shown(&mut self) {
         // Attribute the increment before publishing: silence during a pause is
         // expected, silence during playback is the bug worth reporting.
-        let raw = self.path.ring.as_ref().map(|r| r.diagnostics().0).unwrap_or(0);
+        let (raw, misses) = self.path.ring.as_ref().map(|r| r.diagnostics()).unwrap_or((0, 0));
         let delta = raw.saturating_sub(self.last_raw_underruns);
         self.last_raw_underruns = raw;
         if self.playing {
             self.underruns_playing += delta;
+        }
+        // Log each one as it happens, so a glitch someone HEARS can be matched
+        // against a glitch the player recorded. These were assumed inaudible
+        // on the strength of a percentage; they are not, and the way to stop
+        // guessing about the remainder is to timestamp them.
+        if misses > self.last_lock_failures {
+            eprintln!("output: {} missed ring lock(s), {} total",
+                      misses - self.last_lock_failures, misses);
+            self.last_lock_failures = misses;
         }
         // A passage becomes "playing" when its first sample leaves the ring for
         // the device, not when the mixer starts on it -- those are ~14 s apart

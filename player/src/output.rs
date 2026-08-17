@@ -59,11 +59,18 @@ pub struct Counts {
     /// genuine underrun because the fix is different: contention argues for a
     /// lock-free ring, starvation argues for more buffering.
     lock_failures: Arc<std::sync::atomic::AtomicU64>,
+    /// The last sample emitted, as bits, so a miss can ramp down from the
+    /// waveform rather than stepping off it.
+    last: Arc<std::sync::atomic::AtomicU32>,
+    /// Set by a miss, cleared by the fill that follows it, which ramps back in.
+    resuming: Arc<AtomicBool>,
 }
 
 impl Counts {
     pub fn underruns(&self) -> u64 { self.underruns.load(Ordering::Relaxed) }
     pub fn lock_failures(&self) -> u64 { self.lock_failures.load(Ordering::Relaxed) }
+    /// The last sample emitted, for tests and for reasoning about a miss.
+    pub fn last_sample(&self) -> f32 { f32::from_bits(self.last.load(Ordering::Relaxed)) }
 }
 
 /// Master volume, as `f32` bits in an atomic.
@@ -314,6 +321,15 @@ impl std::fmt::Display for OutputError {
 /// ~10 ms, and the curve moves by well under the ~1 dB anyone can hear across
 /// a step. The point is to keep `powf` off the output lock entirely.
 const FADE_TABLE: usize = 1024;
+
+/// How long the audio callback will wait for the ring before giving way.
+///
+/// A fraction of a percent of the callback's own budget, against producer holds
+/// measured in microseconds.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_micros(300);
+
+/// Samples over which a miss is faded in or out. ~1.5 ms at 44.1 kHz stereo.
+const DECLICK_SAMPLES: usize = 128;
 
 fn fade_table(curve: Curve) -> Vec<f32> {
     let fade = Fade { curve, frames: FADE_TABLE as u64, fade_in: false };
@@ -575,8 +591,10 @@ impl Output {
 /// The whole of the real-time path.
 ///
 /// `try_lock` rather than `lock`: blocking here would stall the audio device.
-/// On contention we emit silence and count it, because a glitch that is
-/// recorded can be fixed and a glitch that is hidden cannot.
+/// On contention we wait briefly, and only then give way -- see [`LOCK_WAIT`].
+///
+/// The miss is counted either way, because a glitch that is recorded can be
+/// fixed and a glitch that is hidden cannot.
 fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
         silent: &Arc<AtomicBool>, counts: &Counts) {
     // Paused means silence, NOT a stopped stream `[PI3-OPEN-020]`. A2DP tears
@@ -590,8 +608,8 @@ fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
         out.iter_mut().for_each(|v| *v = 0.0);
         return;
     }
-    match state.try_lock() {
-        Ok(mut s) => {
+    match acquire(state) {
+        Some(mut s) => {
             let got = s.ring.read(out);
             // Volume is applied HERE, at the device, not before submission.
             // The ring holds ~14 s, so scaling on the way in means a change is
@@ -607,14 +625,77 @@ fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
                 out[got..].iter_mut().for_each(|v| *v = 0.0);
                 counts.underruns.fetch_add((out.len() - got) as u64, Ordering::Relaxed);
             }
+            // Remember where the waveform got to, so a miss on the next buffer
+            // can leave from there rather than from a step.
+            counts.last.store(out.last().copied().unwrap_or(0.0).to_bits(),
+                              Ordering::Relaxed);
+            // Ease back in after a miss. The ring was not consumed during the
+            // gap, so the signal resumes exactly where it left off -- but it
+            // resumes from SILENCE, and that edge clicks just as the leaving
+            // one does.
+            if counts.resuming.swap(false, Ordering::Relaxed) {
+                declick(out, true, 0.0);
+            }
         }
-        Err(_) => {
+        None => {
+            // Ramp down from the last sample rather than dropping to zero.
+            //
+            // A hard-edged hole has a discontinuity at BOTH ends, which is a
+            // click rather than a gap -- and clicks carry. These were reported
+            // as clearly audible across a room at roughly five an hour, after
+            // this code assumed 0.008% of callbacks meant nobody would notice.
+            // The percentage was the wrong measure; the right one is how often
+            // a listener hears something wrong.
+            let from = f32::from_bits(counts.last.load(Ordering::Relaxed));
             out.iter_mut().for_each(|v| *v = 0.0);
-            // Recorded unconditionally. This used to need a second `try_lock`,
-            // which could fail for the same reason the first did -- so the
-            // very events worth counting were the ones most likely to go
-            // uncounted.
+            declick(out, false, from);
+            counts.last.store(0f32.to_bits(), Ordering::Relaxed);
+            counts.resuming.store(true, Ordering::Relaxed);
             counts.lock_failures.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Wait a bounded moment for the ring, then give way.
+///
+/// The producer's holds are microseconds -- a memcpy of at most a few thousand
+/// samples -- so almost every miss is a collision with a hold that is already
+/// nearly over. Giving up on the first refusal turned those into audible
+/// glitches for want of a wait far shorter than the callback's own budget.
+///
+/// Bounded, and that is the whole safety argument: this runs on the audio
+/// thread, so the wait is a small fraction of the ~23 ms available. Even if the
+/// producer stalls completely, the callback still returns in time -- it simply
+/// returns the fallback, exactly as before.
+fn acquire(state: &Arc<Mutex<OutputState>>) -> Option<std::sync::MutexGuard<'_, OutputState>> {
+    let deadline = std::time::Instant::now() + LOCK_WAIT;
+    loop {
+        if let Ok(g) = state.try_lock() {
+            return Some(g);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::hint::spin_loop();
+    }
+}
+
+/// Ramp the first `DECLICK_FRAMES` samples in or out, to kill the edge.
+///
+/// Short enough that the attenuation is inaudible as a level change and long
+/// enough that the step becomes a slope: at 44.1 kHz this is ~1.5 ms.
+fn declick(out: &mut [f32], fade_in: bool, from: f32) {
+    let n = DECLICK_SAMPLES.min(out.len());
+    if n == 0 {
+        return;
+    }
+    for (i, v) in out[..n].iter_mut().enumerate() {
+        let t = i as f32 / n as f32;
+        if fade_in {
+            *v *= t;
+        } else {
+            // Leaving: slide from where the waveform was to silence.
+            *v = from * (1.0 - t);
         }
     }
 }
@@ -764,6 +845,74 @@ mod tests {
         let c = Counts::default();
         fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
         assert_eq!(c.underruns(), 0);
+    }
+
+    /// The fix for an audible fault: a hold that is nearly over must not cost
+    /// a glitch. The producer's holds are microseconds, so the callback waits
+    /// a bounded moment rather than giving up on the first refusal.
+    #[test]
+    fn a_brief_hold_costs_no_glitch() {
+        let st = Arc::new(Mutex::new(OutputState::new(64)));
+        st.lock().unwrap().ring.write(&[0.5; 16]);
+        let c = Counts::default();
+        // The contention has to be certain, or the test proves nothing: the
+        // holder announces that it HAS the lock, and this thread does not move
+        // until it has. Held for well under LOCK_WAIT, so the wait must win.
+        let held = Arc::clone(&st);
+        let taken = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&taken);
+        let t = std::thread::spawn(move || {
+            let g = held.lock().unwrap();
+            flag.store(true, Ordering::SeqCst);
+            // Busy-wait rather than sleep: thread::sleep rounds up to the
+            // scheduler's tick -- milliseconds on Windows -- which would hold
+            // the lock far past LOCK_WAIT and test the opposite of the point.
+            let until = std::time::Instant::now() + std::time::Duration::from_micros(100);
+            while std::time::Instant::now() < until {
+                std::hint::spin_loop();
+            }
+            drop(g);
+        });
+        while !taken.load(Ordering::SeqCst) {
+            std::hint::spin_loop();
+        }
+        let mut out = [9.9f32; 16];
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        t.join().unwrap();
+        assert_eq!(c.lock_failures(), 0, "a 100us hold must be waited out, not counted");
+        assert!(out.iter().any(|v| *v != 0.0), "the audio must actually arrive");
+    }
+
+    /// A miss must not step off the waveform. The hole clicked at both edges,
+    /// which is what made roughly five an hour audible across a room.
+    #[test]
+    fn a_miss_ramps_down_from_the_waveform_and_back_in() {
+        let st = Arc::new(Mutex::new(OutputState::new(1024)));
+        st.lock().unwrap().ring.write(&[1.0; 512]);
+        let c = Counts::default();
+        // A first, successful fill leaves the waveform at 1.0.
+        let mut out = [0.0f32; 128];
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        assert_eq!(c.last_sample(), 1.0, "the last sample must be remembered");
+
+        // Now miss, with the lock genuinely held throughout.
+        let held = st.lock().unwrap();
+        let mut gap = [9.9f32; 256];
+        fill(&st, &Volume::new(1.0), &mut gap, &audible(), &c);
+        drop(held);
+        assert_eq!(c.lock_failures(), 1);
+        assert!(gap[0] > 0.9, "the gap must leave from the waveform, not from zero");
+        assert!(gap[DECLICK_SAMPLES - 1].abs() < 0.05, "and reach silence");
+        assert!(gap[DECLICK_SAMPLES..].iter().all(|v| *v == 0.0), "then stay silent");
+        // Sanity: monotonically decreasing, i.e. a slope rather than a step.
+        assert!(gap[..DECLICK_SAMPLES].windows(2).all(|w| w[0] >= w[1]));
+
+        // The fill after a miss eases back in rather than stepping up.
+        let mut back = [0.0f32; 256];
+        fill(&st, &Volume::new(1.0), &mut back, &audible(), &c);
+        assert!(back[0].abs() < 0.05, "the return must start from silence");
+        assert!(back[DECLICK_SAMPLES - 1] > 0.9, "and reach the signal");
+        assert!(back[..DECLICK_SAMPLES].windows(2).all(|w| w[0] <= w[1]));
     }
 
     #[test]
