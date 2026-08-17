@@ -60,6 +60,27 @@ timeout rather than a message.
 
 ---
 
+## 1a. What the listener should experience
+
+**`[PI3-AIM-010]` Choose a speaker once. It is remembered. Pressing play
+plays.** That is the whole requirement, and everything else in this document is
+machinery in service of it. Written down because the parts can each work while
+the experience still does not.
+
+What that costs, beyond what is already built:
+
+- **The choice must be stored by Vaino**, not merely inferred from BlueZ trust
+  and PipeWire's current default. Those two happen to agree today; they are not
+  a record of what the listener asked for `[PI3-AIM-020]`.
+- **Play must be willing to go and get the speaker.** Today the player waits
+  for a sink to appear and nothing asks BlueZ to connect the remembered one. If
+  the speaker was off when the appliance booted, pressing play finds a dummy
+  and correctly reports silence -- correct, and not what was asked for
+  `[PI3-AIM-030]`.
+- **Failure has to stay legible.** A speaker that is off, flat, or in pairing
+  mode cannot be reached by any amount of retrying, and the panel should say
+  which of those it looks like rather than spinning `[PI3-UI-010]`.
+
 ## 2. The shape of it
 
 **Built, but not yet seen.** The panel is written and serves correctly; it has
