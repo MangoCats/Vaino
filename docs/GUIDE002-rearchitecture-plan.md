@@ -206,6 +206,9 @@ Violations are build failures or review rejections, not style opinions. Each is 
 | **`[GDE-FBD-060]`** No schema field without a consumer at merge time. | `[GDE-BMK-040]` — six years of NULLs |
 | **`[GDE-FBD-070]`** No re-deriving data that already exists and is correct. | `[GDE-LES-060]` |
 | **`[GDE-FBD-080]`** No dependency on a live external service without a local mirror. | `[GDE-MCR-045]` — API died in seven months |
+| **`[GDE-FBD-090]`** Nothing that can block runs on the engine tick — no subprocess, no sleep, no I/O, no lock held across work. Structure it so the tick *cannot*, per `[SPEC-APS-070]`. | Three separate breaches in two days, each presenting as hardware failure |
+| **`[GDE-FBD-100]`** No status field derived from an action having been attempted. Report the observed effect, or `unknown`. | `[SPEC-APS-030]` — five places, including a "success" that destroyed a pairing |
+| **`[GDE-FBD-110]`** No diagnostic that can cause, mask, or outlive the fault it measures; no measurement window shorter than the known failure interval. | A sink probe that caused dropouts; a 2-minute test for a 2.5-minute fault |
 
 ---
 

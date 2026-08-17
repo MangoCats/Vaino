@@ -1,0 +1,174 @@
+# SPEC011: The Audio Path Supervisor
+
+**Design Specification — audio device, sink and speaker lifecycle**
+
+Companion: [VainoPi/PI003-choosing-a-speaker.md](../../VainoPi/PI003-choosing-a-speaker.md)
+records the measurements this design is drawn from. This document is the
+architectural answer to them.
+
+---
+
+## 1. Why this exists
+
+**`[SPEC-APS-010]` One concern currently has six owners.** "Maintain an audible
+path to the chosen speaker" is implemented across:
+
+| Where | Part of the job it holds |
+|---|---|
+| `player/src/output.rs` | device lifecycle, the `failed` / `silent` flags |
+| `player/src/sink.rs` | polls `wpctl` to learn where audio actually goes |
+| `player/src/bluetooth.rs` → `vaino-btctl` | BlueZ policy, in shell, behind sudo |
+| `VainoPi/vaino-speaker.sh` + timer | reconnect policy, in systemd |
+| `VainoPi/vaino-wait-sink` | startup ordering, in shell |
+| `player/src/engine.rs` | the retry/backoff state machine, inside the mix loop |
+
+No component owns the concern, so no component can be tested for it, and the
+recovery state machine lives inside the one loop that must never stall. This is
+why `engine.rs` reached 1,297 lines: it holds mixing and device policy, two
+concerns whose timing requirements have nothing in common.
+
+**`[SPEC-APS-020]` The periphery accreted patches; the core did not.** Every
+defect of 2026-08-15/16 was in this seam, and none were in the decoders, the
+mixer, the fades, the queue, or the buffer model. That is the evidence for
+restructuring one seam rather than rewriting: the audio core was derived from
+measured constraints `[GDE-ARC-050]` and has survived every failure since.
+
+---
+
+## 2. The lessons that force the design
+
+**`[SPEC-APS-030]` Status must be observed, never inferred from execution.**
+The recurring defect, in five separate places:
+
+- `vaino-btctl` returned `ok:true` because the helper *ran*, while `state` said
+  `found` — it had destroyed a pairing and failed to rebuild it
+- the player reported a running position while bound to `Dummy Output`
+- `Paired: yes` was believed over `Bonded: no`, where only the second means a
+  link key exists `[PI3-FOUND-030]`
+- `NRestarts=0` declared the audio stack healthy while its BlueZ connection
+  cycled 21 times in 20 minutes — the process never died
+- a two-minute test reported 8/8 when the failure interval was 2.5 minutes
+
+Each was an answer about an *attempt* standing in for an answer about an
+*effect*. Every field this design publishes is derived from an observation, and
+where no observation is available the field is `unknown` rather than a
+reassuring default.
+
+**`[SPEC-APS-040]` Discipline failed three times; only structure will hold.**
+Blocking work reached the engine tick three times — a `wpctl` fork/exec, then a
+700 ms sleep, then nearly again. Each presented as underruns and dropouts
+indistinguishable from hardware failure, and each was found only because a human
+watched a counter climb.
+
+The cause is not carelessness. It is that `Engine` can call anything: nothing in
+the type system distinguishes the loop feeding a ring from ordinary code. The
+supervisor exists as much to *remove that capability* as to hold the policy.
+
+**`[SPEC-APS-050]` The events were being emitted the whole time.** `bluetoothd`
+logged every endpoint unregistration and every media-transport rebuild while two
+evenings were spent measuring a radio. Nothing subscribed, because the design
+polls subprocesses and parses prose. An event subscription would have shown
+`[PI3-FOUND-030]` on the first evening.
+
+---
+
+## 3. The design
+
+**`[SPEC-APS-060]` One supervisor, one thread, one snapshot.** A single
+component owns: the chosen speaker (persisted), link state, sink identity,
+output device lifecycle, and the recovery state machine. It publishes an
+immutable snapshot; nothing else decides anything about devices.
+
+```rust
+/// What is true about the audio path right now, as observed.
+pub struct PathState {
+    /// The speaker the listener chose. Persisted; survives restart.
+    pub chosen: Option<SpeakerId>,
+    /// Bonded, connected -- from the stack, not from our last attempt.
+    pub link: LinkState,
+    /// Where the stream is actually linked. `Dummy` is reported, never hidden.
+    pub sink: SinkState,
+    /// Whether anything could hear us. `Unknown` when it cannot be determined.
+    pub audible: Tristate,
+    /// Recoveries since start, for the panel and for tests.
+    pub recoveries: u64,
+}
+```
+
+**`[SPEC-APS-070]` The engine holds no capability to block.** `Engine` receives
+`&PathState` (or an `Arc` snapshot) and a sender. It has no device handle, no
+`Command::new`, no sleep, no filesystem. The bug class of `[SPEC-APS-040]`
+becomes unwritable rather than forbidden — which is worth more than the
+tidiness, because the discipline demonstrably did not hold.
+
+Reading the state is a load. Requesting a change is a send. Neither can stall.
+
+**`[SPEC-APS-080]` The backend is a trait, and a fake implements it.** The audio
+path is currently untestable without a Pi and a speaker, which is why its
+failures were only ever found in the room:
+
+```rust
+pub trait PathBackend: Send {
+    fn subscribe(&mut self) -> Receiver<PathEvent>;
+    fn connect(&mut self, id: &SpeakerId) -> Result<(), PathError>;
+    fn open_output(&mut self, sink: &SinkId) -> Result<Stream, PathError>;
+    fn observe(&self) -> PathState;
+}
+```
+
+With a fake, "speaker drops mid-playback, recovers, drops again, endpoints
+withdrawn underneath" is a unit test instead of an evening. The recovery
+state machine — backoff, settle, two-phase release/attach — is then testable at
+its boundaries, which it has never been.
+
+**`[SPEC-APS-090]` Speak D-Bus; stop shelling out.** BlueZ and PipeWire both
+expose D-Bus with change notification. Subscribing (`zbus`) removes, in one
+move: the 3-second `wpctl` poll, the 30-second reconnect timer, sudo, the
+privileged helper, the JSON-through-shell contract, and the address validation
+duplicated between `bluetooth.rs` and `vaino-btctl`.
+
+It also replaces "ask every few seconds and hope the sample lands on the fault"
+with the events named in `[SPEC-APS-050]`. Transport teardown becomes a fact the
+supervisor is told, at the moment it happens.
+
+---
+
+## 4. Migration order
+
+**`[SPEC-APS-100]`** Sequenced so each step is separately verifiable, and so the
+risky one lands last with a test harness already under it:
+
+1. **Extract the supervisor** with today's subprocess backend behind it. No
+   behaviour change; the win is that one component owns the concern and
+   `Engine` loses its blocking capability.
+2. **Add the trait and the fake.** Write the failure cases that were only ever
+   found in the room.
+3. **Port the backend to D-Bus.** Replaces working-if-ugly code, so it goes
+   last, with `[SPEC-APS-080]` already covering it.
+4. **Retire the shell layer** — `vaino-speaker.sh`, its timer, `vaino-wait-sink`,
+   and the `vaino-btctl` verbs the supervisor subsumes.
+
+**`[SPEC-APS-110]` Explicitly not in scope.** Splitting `db.rs` (1,853 lines)
+and `web.rs` (1,018). Both are large, both have a single concern, and neither
+has produced a defect. Size alone is not a reason `[GDE-FBD-050]`.
+
+---
+
+## 5. Risks and open questions
+
+**`[SPEC-APS-120]` The stability question must settle first.** This design was
+written while a long-window measurement was still running. If drops persist
+after `[PI3-FOUND-030]`, the supervisor is still right — but its recovery
+policy would then be load-bearing rather than a backstop, and that changes how
+hard step 2 has to push.
+
+**`[SPEC-APS-130]` D-Bus is a real dependency, not a free win.** It trades
+subprocess fragility for a library and an async surface inside a component that
+must stay predictable. The trait boundary is what makes the trade reversible,
+which is why it precedes the port.
+
+**`[SPEC-APS-140]` Build identity must be visible at runtime.** A route returned
+404 during this work because the deployed binary predated it, and the 404 was
+read as a routing defect. The supervisor's snapshot is the natural place to
+carry a build stamp, so "the Pi is running something older than you think" is
+answerable without guessing.

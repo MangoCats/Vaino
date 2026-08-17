@@ -64,6 +64,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `PD` — Program Director, Auto-Playlist Selection Math
 - `UI` — Web Server, REST API, WebSocket Protocol, Web UI
 - `HW` — Embedded Target, RPi Zero 2W, Storage Partitioning
+- `APS` — Audio Path Supervisor: output device, sink, speaker lifecycle
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -117,6 +118,8 @@ grep -rn "SPEC-PD" docs/
 | `[REQ-DB-020]` | Fast Incremental File Check | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#1-requirement-enumeration--mapping) |
 | `[REQ-MB-010]` | Chromaprint Fingerprinting | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#22-metadata--musicbrainz-identifier-database) |
 | `[REQ-PD-010]` | Candidate Fitness Scoring Model | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#23-program-director--selection-algorithm) |
+| `[SPEC-APS-060]` | Audio path supervisor: one owner, one snapshot | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#3-the-design) |
+| `[SPEC-APS-100]` | Supervisor migration order | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#4-migration-order) |
 | `[SPEC-AUD-010]`| Audio Engine Trait Contracts | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#1-interface-trait-contracts-rust--python-specs) |
 | `[SPEC-AUD-040]`| Mathematical Ramp Profiles | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#2-mathematical-ramp-profile-models) |
 | ~~`[SPEC-DB-010]`~~ | Relational DDL & Indexes | ⚠️ **Dead entry.** `SPEC002-data-schema-and-ipc.md` contains no `[SPEC-*]` tags; this row was aspirational. The document is a v1 artifact on the disposal path `[GDE-DIS-010]`. |
