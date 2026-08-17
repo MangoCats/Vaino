@@ -72,6 +72,10 @@ What that costs, beyond what is already built:
 - **The choice must be stored by Vaino**, not merely inferred from BlueZ trust
   and PipeWire's current default. Those two happen to agree today; they are not
   a record of what the listener asked for `[PI3-AIM-020]`.
+- **Partly built: `vaino-speaker`,** a timer that connects the speaker if it is
+  absent and then tells the player to reopen. It closes the gap below for a
+  single hard-coded speaker; storing the listener's actual choice is still to
+  do `[PI3-AIM-020]`.
 - **Play must be willing to go and get the speaker.** Today the player waits
   for a sink to appear and nothing asks BlueZ to connect the remembered one. If
   the speaker was off when the appliance booted, pressing play finds a dummy
@@ -245,7 +249,18 @@ it once does not -- the old handle not fully released, or the device reopened
 while PipeWire is still settling. This matters because reopening is the
 mechanism the whole speaker panel rests on `[PI3-WHY-020]`.
 
-**Fixed, and the cause was the obvious one nobody had tested.** `recover()`
+**STILL OPEN. Improved, not fixed** -- and the way I got that wrong is worth
+recording. The settle moved the failure from about twenty-two seconds to about
+two and a half minutes. A two-minute test reported eight samples out of eight
+and I called it verified; the drop came twenty seconds after the window closed.
+Every clean result of the day shares the flaw: **no test ran longer than the
+failure it was measuring.** Future runs go ten minutes at least, with the
+underrun counter watched throughout, since that is what gave the real signal
+both times it mattered.
+
+What follows is what the settle did achieve.
+
+**The immediate cause was the obvious one nobody had tested.** `recover()`
 released the device and reopened it in the same breath. Giving PipeWire 700 ms
 to finish tearing the old stream down before opening the new one makes a
 reopened stream hold as well as a fresh one: **two minutes, connected on every
