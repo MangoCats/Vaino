@@ -240,3 +240,51 @@ A `--quick` mode that skips bound files may still be wanted for a large library
 being relinked repeatedly. If it exists it must say, in its own output, that it
 verified nothing: the failure this whole document exists to prevent is a check
 that reports success without observing the thing it claims to check.
+
+---
+
+## 7. Decided, and deferred
+
+**`[SPEC-RLK-150]` At the next re-extraction, Symphonia becomes the hash
+authority and the ffmpeg dependency is retired.** *(Decided 2026-08-17. Not to
+be done tonight, or on its own.)*
+
+Not because ffmpeg is wrong — `[SPEC-RLK-080]` and `[SPEC-RLK-085]` establish
+that it is not, and that the two readers merely disagree about trailing bytes
+no listener will ever hear. The reason is **ownership of the implementation**.
+
+`audio_md5` is an identity key that other tables are keyed on, and today its
+meaning is defined by an external package that a routine `apt upgrade` may
+change underneath the appliance `[SPEC-RLK-086]`. Symphonia is compiled into
+the player: the definition would then ship with the binary, versioned with it,
+and could not drift without a deliberate build. That is the difference between
+an identity key the project *has* and one it *borrows*, and it is worth more
+than either reading's claim to be the more correct description of an MP3.
+
+Retiring ffmpeg also removes the appliance's only dependency on it — installed
+solely for this hash, on a machine with no other use for a media framework.
+
+**Why it waits for a re-extraction.** `audio_md5` is a key in four tables:
+`files`, `lowlevel_cache`, `identification_cache` and `ingest_decisions` —
+about 45,000 rows on the present library. Changing the hash means rewriting all
+of them together, keyed by the value that is changing, and a half-applied
+migration silently orphans every cache while looking merely cold. A
+re-extraction regenerates those values anyway, so the migration cost collapses
+to zero at exactly that moment and at no other.
+
+**Three preconditions, none optional.**
+
+1. **Close or accept Symphonia's coverage gap.** It failed to read 1 file of
+   5,743 that ffmpeg read — a `.mp3` it probes as an unsupported wave format.
+   0.017%, but under Symphonia's authority that file would have no identity at
+   all, and it currently plays. Fix upstream, re-encode it, or record the
+   exclusion deliberately.
+2. **One implementation, not two `[GDE-FBD-040]`.** The hash is currently free:
+   Essentia emits `md5_encoded` as a by-product of extraction `[SPEC-SA-035]`,
+   and ingest is Python. Moving the authority to a Rust crate means deciding
+   where ingest gets its hash — not leaving Python and the player each computing
+   an identity key their own way.
+3. **Record the generator alongside the values.** Whatever tool holds the
+   authority, the database should say which, and which version. A future
+   disagreement is then diagnosable rather than discovered as a library that has
+   mysteriously gone missing.
