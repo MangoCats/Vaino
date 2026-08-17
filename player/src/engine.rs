@@ -176,6 +176,12 @@ pub struct Engine {
     /// there is sounding. This one is merely ready, and `top_up_decoders` keeps
     /// it fed so promoting it costs nothing but the move.
     ready: Option<Live>,
+    /// Room in the output ring as of the last submit. See `mix_and_submit`.
+    out_room: usize,
+    /// When the shared snapshot may next be written. See `publish`.
+    publish_at: Option<std::time::Instant>,
+    /// The audible passage as last published, so a change can bypass the clock.
+    published: Option<i64>,
     /// The audio path, held at arm's length `[SPEC-APS-070]`.
     ///
     /// A ring to write into and a channel to ask things of -- and deliberately
@@ -227,6 +233,22 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Least worth mixing in one pass, in samples `[GDE-FBD-090]`.
+    ///
+    /// ~46 ms at 44.1 kHz stereo, against a ring holding ~14 s. Sized to be
+    /// large enough that the pass earns its lock acquisition and small enough
+    /// that it is a rounding error against the buffer it feeds.
+    const MIN_SUBMIT: usize = 4096;
+
+    /// How often the shared snapshot is rewritten.
+    ///
+    /// Browsers are pushed to every 500 ms (`web::PUSH_EVERY`), so publishing
+    /// on every tick rewrote the state some two hundred times for each read of
+    /// it -- and took the output lock to do so. A tenth of a second is well
+    /// inside what any consumer can perceive and two orders of magnitude less
+    /// work.
+    const PUBLISH_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
     /// `out` of `None` runs the full pipeline into a discard sink — useful for
     /// tests and headless hosts, but note it reports no device rate and so
     /// cannot catch a resampling fault `[REQ-HW-147]`.
@@ -240,6 +262,9 @@ impl Engine {
             live: Vec::new(),
             ready: None,
             path,
+            out_room: 0,
+            publish_at: None,
+            published: None,
             out_rate,
             out_channels,
             scratch: vec![0.0; 2048 * out_channels],
@@ -322,7 +347,17 @@ impl Engine {
         let submitted = if self.playing && audible { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.record_play();
-        self.publish();
+        self.advance_shown();
+        // Throttled by time, but never at the cost of a late answer to the
+        // question anyone actually asks: a change of audible passage is
+        // published the moment it happens, and the clock only governs the
+        // position ticking along in between.
+        let now = std::time::Instant::now();
+        let changed = self.shown.as_ref().map(|(e, _)| e.passage_id) != self.published;
+        if changed || self.publish_at.is_none_or(|t| now >= t) {
+            self.publish_at = Some(now + Self::PUBLISH_EVERY);
+            self.publish();
+        }
         self.persist(false);
         submitted
     }
@@ -663,13 +698,33 @@ impl Engine {
     /// Limiting here is also what propagates back-pressure: the stream rings
     /// stay full, so the decoders stop, and the device paces the whole chain.
     fn mix_and_submit(&mut self) -> usize {
+        // Room is remembered from the last submit rather than asked for again.
+        // Between then and now the callback only ever DRAINS, so the remembered
+        // figure is a lower bound on what is free and writing it always fits --
+        // which is what keeps the assertion below honest. Asking cost a second
+        // lock acquisition on every pass, against a callback that must never
+        // wait for one.
         let room = match &self.path.ring {
-            Some(o) => o.free(),
+            Some(o) => {
+                // Refreshed whenever the remembered figure is too small to act
+                // on. It only ever GROWS between submits, so a stale value that
+                // is already large enough needs no confirmation -- but one
+                // below the threshold must be re-read, or a ring that filled up
+                // once would never be topped up again.
+                if self.out_room < Self::MIN_SUBMIT { self.out_room = o.free(); }
+                self.out_room
+            }
             None => self.scratch.len(),
         };
         // Whole frames only; a partial frame would offset every later sample.
         let want = room.min(self.scratch.len()) / self.out_channels * self.out_channels;
-        if want == 0 {
+        // Don't wake the whole chain to move a handful of samples. The ring
+        // holds ~14 s, so there is nothing to gain by topping it up the instant
+        // a few samples drain, and a great deal to lose: mixing whatever had
+        // appeared since the last pass meant hundreds of passes a second, each
+        // taking the output lock, on a machine with four slow cores. The
+        // decoders already pace themselves this way `[DECODE_TOPUP_FRAMES]`.
+        if want == 0 || (want < Self::MIN_SUBMIT && self.path.ring.is_some()) {
             return 0;
         }
 
@@ -687,8 +742,9 @@ impl Engine {
         }
         match &self.path.ring {
             Some(o) => {
-                let taken = o.submit(&self.scratch[..filled]);
+                let (taken, free_after) = o.submit(&self.scratch[..filled]);
                 debug_assert_eq!(taken, filled, "output accepted less than it reported free");
+                self.out_room = free_after;
                 taken
             }
             None => filled, // discard sink: report accepted so callers advance
@@ -770,7 +826,13 @@ impl Engine {
         }
     }
 
-    fn publish(&mut self) {
+    /// Bookkeeping that must keep up with the mixer, separate from writing the
+    /// snapshot that anyone reads.
+    ///
+    /// Split because the two have completely different natural rates: this
+    /// tracks what is *audible*, which changes with the ring, while the
+    /// snapshot serves browsers polled twice a second.
+    fn advance_shown(&mut self) {
         // Attribute the increment before publishing: silence during a pause is
         // expected, silence during playback is the bug worth reporting.
         let raw = self.path.ring.as_ref().map(|r| r.diagnostics().0).unwrap_or(0);
@@ -800,6 +862,11 @@ impl Engine {
                 self.shown = Some((entry, p));
             }
         }
+    }
+
+    /// Write the snapshot everything else reads.
+    fn publish(&mut self) {
+        self.published = self.shown.as_ref().map(|(e, _)| e.passage_id);
         if let Ok(mut s) = self.state.lock() {
             s.playing = self.playing;
             s.current = self.shown.as_ref().map(|(e, _)| e.clone());

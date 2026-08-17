@@ -163,8 +163,14 @@ fn engine_thread(
         let submitted = engine.tick();
         // Continuous radio: the queue never runs dry, so playback never ends.
         session.refill(&mut engine);
+        // Nothing submitted means the ring is comfortably full -- the engine
+        // declines to mix less than a threshold's worth -- so there is time to
+        // spare. Sleeping through it is the difference between a loop that
+        // wakes hundreds of times a second to move a handful of samples and one
+        // that wakes when there is work. The ring holds ~14 s, so this pause is
+        // three orders of magnitude inside the margin.
         if submitted == 0 {
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }

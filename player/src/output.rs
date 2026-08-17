@@ -23,22 +23,47 @@ use crate::fade::{Curve, Fade};
 use crate::mixer::RingBuffer;
 
 /// Shared between the mixer thread and the audio callback.
+///
+/// Only the ring. The counters used to live here and moved out deliberately --
+/// see [`Counts`].
 pub struct OutputState {
     pub ring: RingBuffer,
-    /// Samples the callback wanted but could not get. Non-zero means the
-    /// producer is not keeping up -- the diagnostic that matters most here,
-    /// and the one a silent fallback would otherwise hide `[REQ-VIS-140]`.
-    pub underrun_samples: u64,
-    /// Times the callback could not take the lock at all. Distinguished from a
-    /// genuine underrun because the fix is different: contention argues for a
-    /// lock-free ring, starvation argues for more buffering.
-    pub lock_failures: u64,
 }
 
 impl OutputState {
     fn new(capacity: usize) -> Self {
-        Self { ring: RingBuffer::new(capacity), underrun_samples: 0, lock_failures: 0 }
+        Self { ring: RingBuffer::new(capacity) }
     }
+}
+
+/// What the callback observed, counted OUTSIDE the ring's mutex.
+///
+/// These were fields of [`OutputState`], which put them behind the very lock
+/// whose contention one of them exists to measure. `lock_failures` was
+/// therefore incremented under a *second* `try_lock` that could fail for the
+/// same reason the first did: the figure was a lower bound, and biased low
+/// exactly when contention was worst -- the case anyone reading it most wants
+/// to see. A counter that under-reports the harder the fault gets is worse
+/// than no counter, because it reads as reassurance `[GDE-FBD-100]`.
+///
+/// Atomics also take two lock acquisitions per tick off the mixer, which is
+/// the larger practical win: the engine read both of these every tick to
+/// publish them.
+#[derive(Clone, Default)]
+pub struct Counts {
+    /// Samples the callback wanted but could not get. Non-zero means the
+    /// producer is not keeping up -- the diagnostic that matters most here,
+    /// and the one a silent fallback would otherwise hide `[REQ-VIS-140]`.
+    underruns: Arc<std::sync::atomic::AtomicU64>,
+    /// Times the callback could not take the lock at all. Distinguished from a
+    /// genuine underrun because the fix is different: contention argues for a
+    /// lock-free ring, starvation argues for more buffering.
+    lock_failures: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Counts {
+    pub fn underruns(&self) -> u64 { self.underruns.load(Ordering::Relaxed) }
+    pub fn lock_failures(&self) -> u64 { self.lock_failures.load(Ordering::Relaxed) }
 }
 
 /// Master volume, as `f32` bits in an atomic.
@@ -123,6 +148,9 @@ pub struct OutputRing {
     /// so they are read rather than remembered.
     rate: Arc<std::sync::atomic::AtomicU32>,
     chans: Arc<std::sync::atomic::AtomicU32>,
+    /// Counted without the lock, so the callback can record the tick on which
+    /// it could not take it.
+    pub counts: Counts,
 }
 
 impl OutputRing {
@@ -134,6 +162,7 @@ impl OutputRing {
             silent: Arc::new(AtomicBool::new(false)),
             rate: Arc::new(std::sync::atomic::AtomicU32::new(44_100)),
             chans: Arc::new(std::sync::atomic::AtomicU32::new(2)),
+            counts: Counts::default(),
         }
     }
 
@@ -156,9 +185,20 @@ impl OutputRing {
         self.state.lock().map(|s| s.ring.free()).unwrap_or(0)
     }
 
-    /// Hand mixed audio to the output. Returns samples accepted.
-    pub fn submit(&self, samples: &[f32]) -> usize {
-        self.state.lock().map(|mut s| s.ring.write(samples)).unwrap_or(0)
+    /// Hand mixed audio to the output.
+    ///
+    /// Returns `(accepted, free_after)`. The second value exists so a caller
+    /// does not need a separate `free()` on the next pass: between now and
+    /// then the callback only ever *drains*, so this is a lower bound on the
+    /// room that will be available, and writing that much always fits.
+    pub fn submit(&self, samples: &[f32]) -> (usize, usize) {
+        self.state
+            .lock()
+            .map(|mut s| {
+                let took = s.ring.write(samples);
+                (took, s.ring.free())
+            })
+            .unwrap_or((0, 0))
     }
 
     /// Samples submitted but not yet consumed by the device.
@@ -228,11 +268,10 @@ impl OutputRing {
         self.state.lock().map(|s| s.ring.len()).unwrap_or(0)
     }
 
+    /// `(underrun_samples, lock_failures)`. Two atomic loads -- no lock, so
+    /// reading the diagnostics cannot itself cause the contention it reports.
     pub fn diagnostics(&self) -> (u64, u64) {
-        self.state
-            .lock()
-            .map(|s| (s.underrun_samples, s.lock_failures))
-            .unwrap_or((0, 0))
+        (self.counts.underruns(), self.counts.lock_failures())
     }
 }
 
@@ -375,9 +414,10 @@ impl Output {
             SampleFormat::F32 => {
                 let cb_vol = volume.clone();
                 let cb_silent = Arc::clone(&silent);
+                let cb_counts = ring.counts.clone();
                 device.build_output_stream(
                 &config,
-                move |out: &mut [f32], _| fill(&cb_state, &cb_vol, out, &cb_silent),
+                move |out: &mut [f32], _| fill(&cb_state, &cb_vol, out, &cb_silent, &cb_counts),
                 err_fn,
                 None,
             )}
@@ -385,11 +425,12 @@ impl Output {
                 let mut scratch: Vec<f32> = Vec::new();
                 let cb_vol = volume.clone();
                 let cb_silent = Arc::clone(&silent);
+                let cb_counts = ring.counts.clone();
                 device.build_output_stream(
                     &config,
                     move |out: &mut [i16], _| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent);
+                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             *o = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -402,11 +443,12 @@ impl Output {
                 let mut scratch: Vec<f32> = Vec::new();
                 let cb_vol = volume.clone();
                 let cb_silent = Arc::clone(&silent);
+                let cb_counts = ring.counts.clone();
                 device.build_output_stream(
                     &config,
                     move |out: &mut [u16], _| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent);
+                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             let v = (s.clamp(-1.0, 1.0) + 1.0) * 0.5;
                             *o = (v * u16::MAX as f32) as u16;
@@ -536,7 +578,7 @@ impl Output {
 /// On contention we emit silence and count it, because a glitch that is
 /// recorded can be fixed and a glitch that is hidden cannot.
 fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
-        silent: &Arc<AtomicBool>) {
+        silent: &Arc<AtomicBool>, counts: &Counts) {
     // Paused means silence, NOT a stopped stream `[PI3-OPEN-020]`. A2DP tears
     // down when nothing feeds it, so stopping the device on pause loses the
     // speaker after a few minutes and makes resuming wait on a reconnect.
@@ -563,14 +605,16 @@ fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
             }
             if got < out.len() {
                 out[got..].iter_mut().for_each(|v| *v = 0.0);
-                s.underrun_samples += (out.len() - got) as u64;
+                counts.underruns.fetch_add((out.len() - got) as u64, Ordering::Relaxed);
             }
         }
         Err(_) => {
             out.iter_mut().for_each(|v| *v = 0.0);
-            if let Ok(mut s) = state.try_lock() {
-                s.lock_failures += 1;
-            }
+            // Recorded unconditionally. This used to need a second `try_lock`,
+            // which could fail for the same reason the first did -- so the
+            // very events worth counting were the ones most likely to go
+            // uncounted.
+            counts.lock_failures.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -589,13 +633,14 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[0.5; 8]);
         let mut out = [9.9f32; 8];
-        fill(&st, &Volume::new(1.0), &mut out, &Arc::new(AtomicBool::new(true)));
+        let c = Counts::default();
+        fill(&st, &Volume::new(1.0), &mut out, &Arc::new(AtomicBool::new(true)), &c);
         assert_eq!(out, [0.0; 8], "a paused stream feeds zeros");
         let s = st.lock().unwrap();
         // Both matter: the ring is what makes resuming instant, and counting
         // this as an underrun would spoil the diagnostic `[PI3-OPEN-020]`.
         assert_eq!(s.ring.len(), 8, "buffered audio is kept for the resume");
-        assert_eq!(s.underrun_samples, 0, "intended silence is not a shortfall");
+        assert_eq!(c.underruns(), 0, "intended silence is not a shortfall");
     }
 
     #[test]
@@ -603,10 +648,11 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[0.5; 4]);
         let mut out = [9.9f32; 8];
-        fill(&st, &Volume::new(1.0), &mut out, &audible());
+        let c = Counts::default();
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
         assert_eq!(&out[..4], &[0.5; 4]);
         assert!(out[4..].iter().all(|v| *v == 0.0), "shortfall must be silence");
-        assert_eq!(st.lock().unwrap().underrun_samples, 4);
+        assert_eq!(c.underruns(), 4);
     }
 
     /// Volume is applied at the DEVICE, not before submission. The ring holds
@@ -617,7 +663,7 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[1.0; 4]);
         let mut out = [0.0f32; 4];
-        fill(&st, &Volume::new(0.25), &mut out, &audible());
+        fill(&st, &Volume::new(0.25), &mut out, &audible(), &Counts::default());
         assert!(out.iter().all(|v| (*v - 0.25).abs() < 1e-6), "got {out:?}");
     }
 
@@ -629,11 +675,11 @@ mod tests {
         st.lock().unwrap().ring.write(&[1.0; 8]);
         let vol = Volume::new(1.0);
         let mut a = [0.0f32; 4];
-        fill(&st, &vol, &mut a, &audible());
+        fill(&st, &vol, &mut a, &audible(), &Counts::default());
         assert!((a[0] - 1.0).abs() < 1e-6);
         vol.set(0.5); // turned down while the rest is still queued
         let mut b = [0.0f32; 4];
-        fill(&st, &vol, &mut b, &audible());
+        fill(&st, &vol, &mut b, &audible(), &Counts::default());
         assert!((b[0] - 0.5).abs() < 1e-6, "the change must reach buffered audio");
     }
 
@@ -715,8 +761,9 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[0.25; 8]);
         let mut out = [0.0f32; 8];
-        fill(&st, &Volume::new(1.0), &mut out, &audible());
-        assert_eq!(st.lock().unwrap().underrun_samples, 0);
+        let c = Counts::default();
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        assert_eq!(c.underruns(), 0);
     }
 
     #[test]
@@ -724,7 +771,13 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         let _held = st.lock().unwrap();
         let mut out = [9.9f32; 4];
-        fill(&st, &Volume::new(1.0), &mut out, &audible()); // must return, not deadlock
+        let c = Counts::default();
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c); // must return, not deadlock
         assert!(out.iter().all(|v| *v == 0.0));
+        // The event is recorded even though the lock is STILL held -- which is
+        // the whole reason the counters left the mutex. The previous version
+        // counted under a second `try_lock` and so could not have passed this:
+        // the only moments worth counting were the ones it could not count.
+        assert_eq!(c.lock_failures(), 1, "a missed lock must be recorded, not lost");
     }
 }
