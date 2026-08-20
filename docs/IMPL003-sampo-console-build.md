@@ -167,10 +167,27 @@ Order: exporter → importer → scoped relink `[SPEC-SUI-105]` → the real tra
 >
 > Audio and payload are **on the appliance**: 7,226 → **7,230** files, closing the mirror gap this work started from. The import has not been run there.
 
-**`[IMPL-SUI-065]` Two gates stand between here and the appliance import**, and neither is a design problem:
+**`[IMPL-SUI-065]` Run on the appliance 2026-08-20, and the claim holds to the row.**
 
-1. **No aarch64 binary.** The importer must run on the Pi, which is `aarch64` with 464 MB and no `cargo`. Cross-compiling needs the container in [build/README.md](../build/README.md) and the Docker daemon is not running.
-2. **`ffmpeg` is not installed on the appliance.** Both relink and import need it to hash arriving audio. `[SPEC-RLK-080]` concluded *"ffmpeg joins the appliance's package list"* — that was a decision, and it was never executed. `relink` has been printing the `apt install` line to nobody.
+| | before → after |
+| :--- | ---: |
+| files · passages · recordings | 27 → **31** · 56 → **60** · 31 → **35** |
+| flavor | 2,201 → **2,485** *(+284 = 4 × 71)* |
+| **`listener_play_history`** | **37,481 → 37,481** |
+| **`listener_preferences`** | **3,261 → 3,261** |
+
+304 rows written, 0 corrupt, the payload retained at 67,732 bytes, and the appliance's player — after a restart — browses *Gerardo Frisina, 4 passages*. **The music the first question in this work asked about is now on the appliance and playable.**
+
+Two gates were cleared to get there: `ffmpeg` installed on the Pi, which `[SPEC-RLK-080]` decided and nobody had executed, so `relink` had been printing its `apt install` line to nobody; and an `aarch64` build via the container in [build/README.md](../build/README.md).
+
+**`[IMPL-SUI-066]` The same music holds `passage_id` 16407 here and 16168 there.** Bound by `audio_md5`, never by number — `[SPEC-DF-035]` demonstrated rather than argued. A link carrying one machine's id to the other would have opened a real passage that was the wrong song.
+
+**`[IMPL-SUI-068]` Two measurements the appliance made possible, both recorded in [SPEC012](spec/SPEC012-library-relink.md).**
+
+1. **Windows substitutes a private-use codepoint for characters it cannot store**, and **276 of 5,709 paths (4.8%) carry one** — 264 `:` and 17 `?`. A 250-file sample matched 238 by path; all 12 that failed were present under the translated name with byte-identical audio. Path binding loses one file in twenty, invisibly, because both shells render both forms the same `[SPEC-RLK-025]`.
+2. **The `[SPEC-RLK-086]` version risk was tested for the first time and did not fire**: ffmpeg 5.1.9/aarch64 against 8.0/x86_64, **238 files, 0 disagreements** `[SPEC-RLK-088]`. It lowers the risk without retiring it — the Symphonia spike agreed on six files and then disagreed on sixty of 5,705.
+
+> **A gap worth naming:** the running player did **not** see the imported tracks until it was restarted. It reads its library at startup, and an import into a live database has no way to tell it otherwise.
 
 **`[IMPL-SUI-067]` What the appliance's own database proves.** It holds **27 files and 37,481 plays** — *more* listener history than the desktop's 37,238, because it has been the thing actually playing music. Shipping `vaino.db` would overwrite 37,481 irreplaceable rows with 37,238 different ones. `[SPEC-SUI-100]`'s argument stops being a principle here and becomes an arithmetic fact about two files on two machines.
 

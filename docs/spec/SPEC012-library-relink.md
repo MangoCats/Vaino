@@ -24,12 +24,21 @@ reasons that are properties of that library rather than of the method:
 | The target's tree matches the source's, exactly | anything is reorganised, renamed or re-foldered |
 | Path case is preserved end to end | Windows (case-insensitive) feeds Linux (case-sensitive) |
 | Unicode normalisation matches | macOS writes NFD, Linux stores NFC — **628 of this library's paths carry non-ASCII characters** |
+| The same name is the same bytes | **Windows cannot store `:` or `?` in a filename and substitutes a private-use codepoint** — measured 2026-08-20 |
 | The target holds the whole library | it holds a subset, and every absent row is indistinguishable from a broken one |
 
 Its pre-flight check made the second row of that table in miniature:
 `os.path.exists` on Windows is case-insensitive, so it would have passed paths
 that 404 on the appliance. A byte-exact recheck found none — because the library
 is well kept, not because the method noticed.
+
+**`[SPEC-RLK-025]` The fourth row is measured, and it is the worst kind.**
+Windows forbids `: ? * " < > |` and stores each as `U+F000 + the character`;
+Linux stores the real one. **4.8% of this library's paths carry one**, and both
+shells render both forms identically, so the difference is invisible exactly
+where it would be looked for. Against the appliance, path matching lost one
+file in twenty and the hash recovered every one — measured 2026-08-20,
+[IMPL003](../IMPL003-sampo-console-build.md).
 
 ---
 
@@ -150,6 +159,14 @@ than guaranteed, and `[SPEC-DF-030]` treats `audio_md5` as a stable identity
 key when it is really "whatever the extractor's demuxer did". An ffmpeg upgrade
 could in principle orphan rows, and nothing would report it as anything but
 missing music.
+
+**`[SPEC-RLK-088]` Tested 2026-08-20, and it did not fire.** ffmpeg 5.1.9 on
+aarch64 against values written by 8.0 on x86_64 — three major versions and a
+change of architecture — agreed on **238 of 238** sampled files
+([IMPL003](../IMPL003-sampo-console-build.md)). That lowers the risk without
+retiring it: the disagreement above lives in a tail a sample this size may not
+contain, and the Symphonia spike agreed on six files before disagreeing on
+sixty of 5,705. The durable fix is still the one deferred below.
 
 The hasher is therefore **not** a free choice: it must remain the one that
 produced the incumbent values. `[SPEC-RLK-150]` takes that up.
