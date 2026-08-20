@@ -105,6 +105,8 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
 | `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
+| `[PI3-*]` | Speaker link: design and the player's contract | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md) |
+| `[PI3-FOUND-*]`, `[PI3-ROCKER-*]`, `[PI3-LED-*]` | What operating the speaker taught | [PI004-speaker-operation.md](../VainoPi/PI004-speaker-operation.md) |
 | `[LOG-I*-*]` | Extraction iteration history & measured results | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |

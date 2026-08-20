@@ -27,7 +27,12 @@ import os
 import re
 import sys
 
-TAG = re.compile(r"\[([A-Z]{2,6}-[A-Z0-9]{2,10}-[0-9]{2,4})\]")
+# The domain may carry a digit after the first letter. It could not until
+# 2026-08-20, and the cost was silent: `PI2-*` and `PI3-*` -- 44 tags across the
+# two appliance documents -- matched nothing, so governance never saw them. Two
+# duplicate definitions were added to PI003 in front of a passing check, which
+# is worse than no check at all, because a green run was read as agreement.
+TAG = re.compile(r"\[([A-Z][A-Z0-9]{1,5}-[A-Z0-9]{2,10}-[0-9]{2,4})\]")
 
 # Peel leading markdown one token at a time. '*' counts as a bullet only when
 # followed by whitespace, so '**' (bold) survives to mark a definition.
@@ -90,15 +95,38 @@ def strip_lead(line):
     return line
 
 
-def is_definition(line, tag):
-    """A definition OPENS a line; a citation sits mid-sentence.
+# A definition opens a BLOCK, not merely a line. Added 2026-08-20: a citation
+# that happens to wrap onto a new line at the tag looked identical to a
+# definition, which produced twelve false "defined 2x" warnings -- including
+# SPEC011 citing PI3-FOUND-030 mid-sentence and being reported as redefining it.
+# A false duplicate is worse than none: it invites renumbering a tag that was
+# fine.
+#
+# Requiring **bold** instead was measured and rejected: it would lose 62 real
+# definitions, GUIDE002 alone defining GDE-ARC-* and GDE-PHS-* in headings.
+BLOCK_START = re.compile(r"^\s*(?:\#|\||>|[-+*]\s|\d+[.)])")
+
+
+def is_definition(line, tag, prev=None):
+    """A definition OPENS a block; a citation sits inside a sentence.
 
     Deliberately conservative. An earlier heuristic accepted any bolded line
     containing the tag and reported 94 duplicate definitions, nearly all false.
     Index rows cannot be excluded by shape -- real definitions also live in
     multi-column tables -- so REFERENCE_SECTIONS names them instead.
     """
-    return bool(re.match(r"(?:\*\*)?`?\[" + re.escape(tag) + r"\]`?", strip_lead(line)))
+    if not re.match(r"(?:\*\*)?`?\[" + re.escape(tag) + r"\]`?", strip_lead(line)):
+        return False
+    # `prev is None` means the caller has not said, so keep the old behaviour.
+    if prev is None:
+        return True
+    # A line carrying its own marker -- bullet, heading, table row, numbered
+    # item -- opens a block whatever precedes it. Needed because a list item
+    # whose previous SIBLING wrapped has a continuation line above it, which is
+    # neither blank nor a marker: that alone hid `[PI-IMG-030]`'s definition.
+    if BLOCK_START.match(line):
+        return True
+    return not prev.strip() or bool(BLOCK_START.match(prev))
 
 
 # Sections that INDEX tags defined elsewhere. Structure alone cannot distinguish
@@ -185,10 +213,12 @@ def main():
                 parts = text.split("\n---\n", 1)
                 if len(parts) == 2:
                     text = parts[1]
+            prev = ""
             for line in text.splitlines():
                 for t in set(TAG.findall(line)):
-                    if is_definition(line, t):
+                    if is_definition(line, t, prev):
                         out.setdefault(t, []).append(path)
+                prev = line
         return out
 
     vdef = definitions(vaino_docs())
@@ -215,7 +245,7 @@ def main():
         inherited_tags |= tags_in(p, skip_banner=True)
     defs, uses = {}, {}
     for p in vaino_docs():
-        heading, fenced = "", False
+        heading, fenced, prev = "", False, ""
         for n, line in enumerate(open(p, encoding="utf-8"), 1):
             if line.lstrip().startswith("```"):
                 fenced = not fenced
@@ -225,8 +255,9 @@ def main():
                 heading = line.strip("#").strip()
             ref = in_reference_section(heading)
             for t in set(TAG.findall(line)):
-                d = is_definition(line, t) and not ref
+                d = is_definition(line, t, prev) and not ref
                 (defs if d else uses).setdefault(t, []).append(f"{p}:{n}")
+            prev = line
     for t, locs in sorted(uses.items()):
         if t in defs or t in inherited_tags or t in EXAMPLE_TAGS:
             continue
