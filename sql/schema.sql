@@ -32,6 +32,24 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE INDEX IF NOT EXISTS files_path ON files(path);
 
+-- The file's own tags, as read from the container. Encoding scope, and part of
+-- the library rather than a cache: the player resolves a display name
+-- MusicBrainz -> tag -> filename, so for audio with no MusicBrainz entry this
+-- is the ONLY place an artist name exists [SPEC-PL-050]. It is why tags travel
+-- in a payload, and why a library built from this file could not receive one
+-- until the table was named here -- added 2026-08-20, when a bundle import into
+-- a fresh schema failed on "no such table: file_tags".
+CREATE TABLE IF NOT EXISTS file_tags (
+    file_id     INTEGER PRIMARY KEY REFERENCES files(file_id) ON DELETE CASCADE,
+    title       TEXT,
+    artist      TEXT,
+    album       TEXT,
+    track_no    INTEGER,
+    disc_no     INTEGER,
+    has_art     INTEGER NOT NULL DEFAULT 0,
+    scanned_at  INTEGER NOT NULL
+);
+
 -- Recording scope: this music, any encoding. Portable across installations.
 -- mbid is a MusicBrainz recording MBID, or 'local:<n>' where identification
 -- has not happened -- unidentified audio must still be playable [ENT-MP-035].

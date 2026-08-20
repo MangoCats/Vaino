@@ -151,7 +151,34 @@ This refines `[SPEC-SUI-085]`, which asked only that job state not live in the b
 
 Order: exporter → importer → scoped relink `[SPEC-SUI-105]` → the real transfer.
 
-> **Claims, measured on the appliance:** the Frisina bundle carries 40 MB of audio and single-digit KB of payload, against ~1.02 GB to ship the database. **The appliance's `listener_play_history` row count is identical before and after the import** — the class-D proof, and the only one that matters `[SPEC-SUI-100]`. Scoped relink reports *"verified 6 of 7,238; the remainder were not examined"* and never the word `matched` alone `[SPEC-RLK-140]`. An incompatible fixture leaves the target byte-identical `[SPEC-SUI-165]`.
+> **BOTH HALVES BUILT AND VERIFIED 2026-08-20; the appliance import is BLOCKED.** [`tools/export_bundle.py`](../tools/export_bundle.py), [`player/src/bundle.rs`](../player/src/bundle.rs), [`player/src/bin/import_bundle.rs`](../player/src/bin/import_bundle.rs).
+>
+> **The result stage 1 existed to produce: the two implementations agree.** Run over the fixture corpus, Python's `compatible()` and Rust's `unacceptable()` return the same verdict on all five — accept, accept, reject, reject, accept. Nothing but the fixtures was keeping them honest, and they are.
+>
+> | | measured |
+> | :--- | ---: |
+> | bundle | 4 encodings, **38.9 MB** audio, **66.1 KB** payload (**4.9 KB** gzipped) |
+> | against shipping the database | **1,072 MB** |
+> | import into a fresh schema | 4 files, 4 tags, 4 passages, 4 recordings, **284 flavor**, 304 rows |
+> | re-import of the same bundle | **0 imported, 4 already** `[SPEC-SUI-180]` |
+> | audio missing for one encoding | 3 imported, **1 awaiting**, others land |
+> | audio present, hashing wrong | 3 imported, **1 corrupt**, exit 1, others land |
+> | incompatible payload | **0 files, 40 schema objects unchanged** |
+>
+> Audio and payload are **on the appliance**: 7,226 → **7,230** files, closing the mirror gap this work started from. The import has not been run there.
+
+**`[IMPL-SUI-065]` Two gates stand between here and the appliance import**, and neither is a design problem:
+
+1. **No aarch64 binary.** The importer must run on the Pi, which is `aarch64` with 464 MB and no `cargo`. Cross-compiling needs the container in [build/README.md](../build/README.md) and the Docker daemon is not running.
+2. **`ffmpeg` is not installed on the appliance.** Both relink and import need it to hash arriving audio. `[SPEC-RLK-080]` concluded *"ffmpeg joins the appliance's package list"* — that was a decision, and it was never executed. `relink` has been printing the `apt install` line to nobody.
+
+**`[IMPL-SUI-067]` What the appliance's own database proves.** It holds **27 files and 37,481 plays** — *more* listener history than the desktop's 37,238, because it has been the thing actually playing music. Shipping `vaino.db` would overwrite 37,481 irreplaceable rows with 37,238 different ones. `[SPEC-SUI-100]`'s argument stops being a principle here and becomes an arithmetic fact about two files on two machines.
+
+**`[IMPL-SUI-069]` Three faults found, two of them mine.**
+
+1. **`sql/schema.sql` could not receive a bundle.** The import failed on *"no such table: `file_tags`"* — the executable form of SPEC008 was missing it, along with `cover_art`, `id_checks`, `id_reviews` and `musicbrainz_cache`. `file_tags` is library data, not a cache: for audio with no MusicBrainz entry it is the only place an artist name exists `[SPEC-PL-050]`. Added; the other four are tool-owned and left to their tools, which is a judgement worth revisiting.
+2. **The dry run created a table.** `imported_payloads`'s DDL ran before the `apply` check, so a run reporting *"nothing was written"* had written something. Report-by-default meaning "almost nothing" is the kind of quiet exception that makes a dry run untrustworthy.
+3. **A report that printed "verified 4 of 3".** Two denominators — encodings in the bundle, files in the library — divided against each other. Fixed to state both.
 
 ---
 
