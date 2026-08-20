@@ -372,7 +372,29 @@ fi
 if [ -n "$SPEAKER" ]; then
     echo "bluetooth $SPEAKER"
     systemctl is-active --quiet bluetooth || systemctl start bluetooth
-    rfkill unblock bluetooth 2>/dev/null || true
+
+    # Unblock the radio through sysfs, not through `rfkill`.
+    #
+    # This line was `rfkill unblock bluetooth 2>/dev/null || true`, and on this
+    # image `rfkill` is not installed -- so it reported nothing, changed
+    # nothing, and was written so that it could never say so. Measured
+    # 2026-08-20: hci0 sat soft-blocked, `bluetoothctl power on` answered
+    # `org.bluez.Error.Failed`, and the settings screen's Connect button did
+    # nothing at all, because there was no radio to connect through.
+    #
+    # sysfs is always present, needs no package, and the state persists across
+    # reboots via systemd-rfkill -- so clearing it here fixes the next boot too.
+    for r in /sys/class/rfkill/rfkill*; do
+        [ -e "$r/type" ] || continue
+        [ "$(cat "$r/type")" = bluetooth ] || continue
+        if [ "$(cat "$r/soft" 2>/dev/null)" = 1 ]; then
+            if echo 0 > "$r/soft" 2>/dev/null; then
+                did "unblocked bluetooth radio ($(cat "$r/name" 2>/dev/null))"
+            else
+                note "could NOT unblock $(cat "$r/name" 2>/dev/null)" "FAILED"
+            fi
+        fi
+    done
 
     bt_is() { bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q "$1: yes"; }
 

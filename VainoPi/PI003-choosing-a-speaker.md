@@ -467,3 +467,40 @@ designing against a guess.
 
 **`[PI3-NOT-020]` Multiple simultaneous sinks.** One speaker, chosen. Whole-house
 audio is a different product.
+
+---
+
+## 6. A blocked radio looks exactly like a broken button
+
+**`[PI3-FOUND-020]` `Connect` did nothing because there was no radio.**
+*(Diagnosed 2026-08-20.)* The speaker was in pairing mode, its light flashing,
+and clicking **Connect** in the settings screen had no visible effect. Nothing
+about the pairing was wrong: MIDDLETON was `Paired`, `Bonded`, `Trusted`,
+unblocked, advertising A2DP Audio Sink, and the BCM43436 firmware had loaded
+cleanly at boot.
+
+The controller was **soft-blocked at the rfkill layer** — `rfkill0: hci0
+type=bluetooth soft=1 hard=0` — so `bluetoothctl power on` answered
+`org.bluez.Error.Failed` and every connection attempt returned
+`br-connection-adapter-not-powered`. Clearing `/sys/class/rfkill/rfkill0/soft`
+made the whole chain work first time: powered → connected → PipeWire routed the
+player's stream to MIDDLETON → the supervisor logged **`output recovered on
+default`** by itself, which is `[SPEC-APS-060]` doing exactly its job.
+
+**`[PI3-FOUND-025]` The setup script could not have fixed it, and was written
+not to say so.** The line was `rfkill unblock bluetooth 2>/dev/null || true`,
+and **`rfkill` is not installed on this image** — so it found no command,
+discarded the error, returned true, and reported success. A step that cannot
+fail cannot report failure either. It now writes sysfs, which is always present,
+and reports `CHANGED` or `FAILED`.
+
+**`[PI3-FOUND-030]` The state persists, in both directions.** `systemd-rfkill`
+saves the block under `/var/lib/systemd/rfkill/` and restores it at boot, which
+is how one block outlived every reboot since. It cuts the other way now that the
+file reads `0`: the fix survives a reboot, and — because the file is already
+written rather than written at shutdown — an unclean power loss too, which is
+the failure mode an appliance actually has `[SPEC-DF-094]`.
+
+> **What to check first, next time.** `Powered: no` in `bluetoothctl show` means
+> look at rfkill before looking at pairing. The pairing was never the problem
+> and would have absorbed an evening.
