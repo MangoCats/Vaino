@@ -198,6 +198,24 @@ The real division is in the code, and only one half needs a restart:
 
 `Director::load` runs once inside `Session::open` and builds the candidate rows, flavor index, artist map, play recency, relations, occasions and Taste centroids. **Nothing reloads it** — there is no refresh path in the tree. So imported music is browsable and queueable by hand at once, and cannot be *selected* until the player restarts.
 
+**`[IMPL-SUI-075]` A live rebuild is affordable, and the queue is the right buffer.** Measured by [`dircheck`](../player/src/bin/dircheck.rs), which exists so this is a number rather than an argument — the same shape as `memcheck` for `[REQ-AUD-110]`:
+
+| 8,330 radio passages | desktop x86_64 | appliance Pi Zero 2W |
+| :--- | ---: | ---: |
+| `Director::load` | **0.89 s** | **9.86 s** |
+| first load, peak RSS | 139 MB | 118 MB |
+| **each further Director** | **10.7 MB** | **12.5 MB** |
+
+**The first-load figure is not the Director.** It is the Director plus SQLite's page cache plus query scratch, all one-time; holding two, three and four in turn adds 10.5–12.6 MB each, consistently. An earlier recommendation here argued *against* a live reload on the strength of that 118 MB, and it was **wrong** — a build-then-swap transiently costs about **12 MB** against a 150 MB budget `[GDE-ARC-050]`.
+
+Three things make it work:
+
+1. **The Director is off the audio path.** It chooses what plays *next*; decode, mix and output never consult it. A rebuild therefore cannot glitch a note — the worst case is a late refill of a queue that is still playing.
+2. **`Director` is `Send`**, asserted at compile time in `dircheck` so that gaining a `Connection` or an `Rc` breaks the build rather than the reload. The replacement builds on its own thread with its own connection and is handed over when ready, so the running one keeps answering selections throughout and there is never a window with none.
+3. **A 180 s queue covers a 9.86 s rebuild 18× on the appliance**, 200× on the desktop. The threshold's real value is not CPU but **I/O**: the load is heavy SQLite reading from an SD card, and starting it only when three minutes of audio is already buffered keeps decode far enough ahead not to contend with it.
+
+Degradation is already defined: `session.rs` falls back to uniform random selection when the Director is absent `[SPEC-DIR-*]`, so even a drop-then-load — unnecessary at 12 MB — would have stated behaviour rather than a stall.
+
 **`[IMPL-SUI-067]` What the appliance's own database proves.** It holds **27 files and 37,481 plays** — *more* listener history than the desktop's 37,238, because it has been the thing actually playing music. Shipping `vaino.db` would overwrite 37,481 irreplaceable rows with 37,238 different ones. `[SPEC-SUI-100]`'s argument stops being a principle here and becomes an arithmetic fact about two files on two machines.
 
 **`[IMPL-SUI-069]` Three faults found, two of them mine.**
@@ -210,7 +228,7 @@ The real division is in the code, and only one half needs a restart:
 
 ## Stage 5 — Handoff and launch
 
-**`[IMPL-SUI-070]` Small, and last because it is small.** `[SPEC-SUI-155]`'s embed-or-link, `[SPEC-SUI-170]`'s launch sequence.
+**`[IMPL-SUI-090]` Small, and last because it is small.** `[SPEC-SUI-155]`'s embed-or-link, `[SPEC-SUI-170]`'s launch sequence.
 
 > **Claims:** with no player running, taking a handoff starts one **on the console's own database path** and the passage plays. With a player already running, no second process appears. With the binary renamed so it cannot start, the operator is told which capability is unavailable and why — not shown a dead link `[SPEC-DF-095]`.
 
@@ -224,4 +242,4 @@ The real division is in the code, and only one half needs a restart:
 
 ---
 
-**Traceability:** `[IMPL-SUI-010..085]` · implements `[SPEC-SUI-010..180]` · sits under `[GDE-PHS-040]`
+**Traceability:** `[IMPL-SUI-010..090]` · implements `[SPEC-SUI-010..180]` · sits under `[GDE-PHS-040]`
