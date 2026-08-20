@@ -100,10 +100,19 @@ def main() -> int:
     ap.add_argument("folder")
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--kind", default="radio", choices=("radio", "album"))
+    # Structured output, for a caller that is not a terminal `[SPEC-SUI-085]`.
+    # The prose form renders a smart-quoted title as `?Duala?` under a Windows
+    # console encoding -- harmless there and wrong in a browser, so a consumer
+    # gets the record rather than the rendering.
+    ap.add_argument("--json", action="store_true", help="emit the plan/result as JSON")
     args = ap.parse_args()
+    record = []
 
     if not os.path.isdir(args.folder):
-        say(f"not a folder: {args.folder}")
+        if args.json:
+            print(json.dumps({"error": f"not a folder: {args.folder}"}))
+        else:
+            say(f"not a folder: {args.folder}")
         return 1
 
     # Normalised to the platform's own separators. The first run of this stored
@@ -117,9 +126,13 @@ def main() -> int:
         for dp, _, ns in os.walk(args.folder)
         for n in ns if n.lower().endswith(AUDIO))
     if not files:
-        say(f"no audio under {args.folder}")
+        if args.json:
+            print(json.dumps({"folder": args.folder, "files": 0, "items": []}))
+        else:
+            say(f"no audio under {args.folder}")
         return 1
-    say(f"{len(files)} audio file(s) under {args.folder}\n")
+    if not args.json:
+        say(f"{len(files)} audio file(s) under {args.folder}\n")
 
     conn = sqlite3.connect(args.db, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
@@ -135,7 +148,9 @@ def main() -> int:
         info = probe(path)
         name = os.path.basename(path)
         if md5 is None or info is None:
-            say(f"  SKIP  {name}  (would not decode)")
+            record.append({"path": path, "name": name, "outcome": "unreadable"})
+            if not args.json:
+                say(f"  SKIP  {name}  (would not decode)")
             failed += 1
             continue
         # `files.audio_md5` is UNIQUE, and it is the identity: the same audio
@@ -143,13 +158,21 @@ def main() -> int:
         # re-running this safe.
         seen = conn.execute("SELECT file_id FROM files WHERE audio_md5 = ?1", (md5,)).fetchone()
         if seen:
-            say(f"  have  {name}")
+            record.append({"path": path, "name": name, "outcome": "have",
+                           "audio_md5": md5, "file_id": seen[0]})
+            if not args.json:
+                say(f"  have  {name}")
             skipped += 1
             continue
 
-        say(f"  ADD   {name}  {info['duration_ms']/1000:.0f}s"
-            + (f"  \u201c{info['title']}\u201d" if info["title"] else "")
-            + ("  [embedded art]" if info["has_art"] else ""))
+        record.append({"path": path, "name": name, "outcome": "add",
+                       "audio_md5": md5, "duration_ms": info["duration_ms"],
+                       "title": info["title"], "artist": info["artist"],
+                       "album": info["album"], "has_art": info["has_art"]})
+        if not args.json:
+            say(f"  ADD   {name}  {info['duration_ms']/1000:.0f}s"
+                + (f"  \u201c{info['title']}\u201d" if info["title"] else "")
+                + ("  [embedded art]" if info["has_art"] else ""))
         added += 1
         if not args.commit:
             continue
@@ -183,8 +206,33 @@ def main() -> int:
             "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
             "VALUES (?1,?2,1.0,?3)", (pid, mbid, LOCAL_SOURCE))
 
+        # What this stage decided, and on what `[SPEC-SA-085]`, `[SPEC-SC-100]`.
+        # Added 2026-08-20: the table held 15,050 rows and every one was
+        # `release_match`. One stage of seven was recording anything, which is
+        # not what "every decision is recorded, not just logged" describes, and
+        # it stayed invisible until the console read the table `[IMPL-SUI-045]`.
+        conn.execute(
+            "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+            "VALUES (?1,'ingest','added',NULL,?2,?3)",
+            (md5, json.dumps({
+                "passage_id": pid, "file_id": fid, "mbid": mbid, "kind": args.kind,
+                "boundary": "whole-file",
+                # Why no MusicBrainz id was sought here: this stage does not
+                # identify, and recording that is the point of the table.
+                "identity": "derived from audio; this stage does not identify",
+                "duration_ms": info["duration_ms"], "has_art": info["has_art"],
+            }), now))
+
     if args.commit:
         conn.commit()
+    if args.json:
+        print(json.dumps({
+            "folder": args.folder, "committed": bool(args.commit),
+            "files": len(files), "added": added, "have": skipped, "unreadable": failed,
+            "items": record,
+        }, ensure_ascii=False))
+        return 0
+    if args.commit:
         say(f"\nadded {added}, already present {skipped}, unreadable {failed}")
         say("They are `kind=radio` passages, so the Director can pick them now.")
         say(f"Identity is {LOCAL_PREFIX}<md5> -- deliberately not an MBID, because")

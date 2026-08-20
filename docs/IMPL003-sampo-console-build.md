@@ -126,7 +126,22 @@ Leave out, deliberately: every POST. No jobs, no induct, no export.
 
 Then `[SPEC-SUI-070]`'s propose-then-commit, `[SPEC-SUI-085]`'s database-held job state, and SSE progress rendered from stage-0's real output.
 
-> **Claims, and this one is unusually clean:** re-running stage 0's Frisina induction *through the console* changes **nothing** — `files.audio_md5` is `UNIQUE`, so a second ingest is a no-op, and the console and the CLI must agree to the row. A job killed mid-pass loses at most the in-flight item `[SPEC-SA-028]`, and the player's writes are never blocked for longer than one stage's lock.
+> **DONE 2026-08-20.** [`tools/jobs.py`](../tools/jobs.py), job routes and SSE in [`tools/console.py`](../tools/console.py), [`jobs.html`](../tools/console_web/jobs.html).
+>
+> **The claim holds exactly.** Stage 0's induction, re-run through the console — propose (4 files, **0 to add**, 4 already present) then confirm — left the library byte-for-byte in row counts: files 5,709, passages 16,409, flavor 578,452, id_checks 8,330, plays 37,238, decisions 15,050, **all unchanged**. `files.audio_md5` is `UNIQUE`, so console and CLI agree to the row.
+>
+> Job state survives a console restart: both jobs are still listed, with their events, after the process is killed and started again. Stopping a finished job returns `false` rather than an error, and confirming a job that is not a completed proposal is refused with the reason.
+
+**`[IMPL-SUI-055]` The console still does not write the library, and that was worth preserving.** Stage 3 adds `do_POST`, but nothing in it opens the library for writing: jobs run the same CLIs a person runs `[SPEC-SUI-015]` as subprocesses, and *those* write, as they always have. Bookkeeping goes to a sidecar — `<library>.console.db`, named as the id-check sidecar is.
+
+This refines `[SPEC-SUI-085]`, which asked only that job state not live in the browser. A sidecar satisfies that and avoids two costs: tables in `vaino.db` that Vaino never reads `[SPEC-SC-015]`, and taking the library's write lock for bookkeeping — contending with the player `[SPEC-SUI-082]` in order to record that nothing had happened.
+
+**`[IMPL-SUI-057]` Two findings from stage 2 are fixed at their source, not worked around.**
+
+1. **`ingest_folder.py` now writes `ingest_decisions`.** Verified on a copy of the library with a generated test tone: the table gains an `ingest` stage beside `release_match`, carrying passage, file, mbid, boundary kind and *why no identification was attempted*. The other stages remain unrecorded and are still owed.
+2. **`--json` gives a caller the record instead of the rendering.** `say()`'s console-encoding fallback is a property of a terminal, and a job is not one. Jobs also run children under `PYTHONIOENCODING=utf-8`, so even the prose log arrives intact.
+
+> **Not verified, and stated rather than implied:** the interrupt path. Every job in this exercise finished in under ten seconds, so `stop` was only ever exercised against a job that had already ended. *"A job killed mid-pass loses at most the in-flight item"* `[SPEC-SA-028]` remains a claim, not a measurement — it wants a long extraction to test against.
 
 ---
 

@@ -35,6 +35,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ingest_folder import AUDIO  # noqa: E402  -- one list of what counts as audio
+import jobs as jobmod  # noqa: E402
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 
@@ -48,7 +49,7 @@ DEFAULT_PORT = 5730
 # the completeness tick compares against.
 FULL_FLAVOR = 71
 
-STATE = {"db": None, "roots": [], "scan": None, "scanned_at": 0}
+STATE = {"db": None, "path": None, "roots": [], "scan": None, "scanned_at": 0, "jobs": None}
 
 
 # ---------------------------------------------------------------- database ---
@@ -330,6 +331,15 @@ class Handler(BaseHTTPRequestHandler):
                 pid = int(p.rsplit("/", 1)[-1])
                 d = profile(conn, pid)
                 return self.send_json(d) if d else self.send_error(404)
+            if p == "/jobs":
+                return self.send_file("jobs.html", "text/html; charset=utf-8")
+            if p == "/api/jobs":
+                return self.send_json(STATE["jobs"].recent())
+            if p.startswith("/api/jobs/") and p.endswith("/stream"):
+                return self.stream(int(p.split("/")[3]))
+            if p.startswith("/api/jobs/"):
+                d = STATE["jobs"].job(int(p.rsplit("/", 1)[-1]))
+                return self.send_json(d) if d else self.send_error(404)
             if p == "/api/folder/scan":
                 # Read-only and idempotent, so GET rather than the POST the
                 # route sketch showed: a refresh must be harmless, and the
@@ -342,6 +352,56 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
         except Exception as e:  # a failed query must report, never render empty
+            self.send_json({"error": f"{type(e).__name__}: {e}"}, code=500)
+
+    # Server-sent events, not a WebSocket. A job emits progress in one
+    # direction and takes its commands as POSTs, so a duplex socket would be
+    # machinery for a direction nothing uses `[SPEC-SUI-030]`.
+    def stream(self, job_id: int):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        after, idle = 0, 0
+        try:
+            while idle < 900:            # ~15 min of nothing, then let go
+                evs = STATE["jobs"].events_since(job_id, after)
+                for e in evs:
+                    after = e["event_id"]
+                    self.wfile.write(f"data: {json.dumps(e, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                    if e["kind"] == "done":
+                        return
+                idle = 0 if evs else idle + 1
+                time.sleep(1)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass          # the page went away; the job does not care
+
+    # Stage 3's writes. Note what is NOT here: nothing in this file opens the
+    # library for writing. These start jobs, and the jobs run the same CLIs a
+    # person runs `[SPEC-SUI-015]`.
+    def do_POST(self):
+        u = urlparse(self.path)
+        p = u.path
+        try:
+            if p == "/api/induct/propose":
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                folder = (json.loads(body or b"{}") or {}).get("folder", "")
+                if not folder or not os.path.isdir(folder):
+                    return self.send_json({"error": f"not a folder: {folder}"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("propose", folder)})
+            if p.startswith("/api/induct/") and p.endswith("/commit"):
+                job_id = int(p.split("/")[3])
+                prev = STATE["jobs"].job(job_id)
+                # Confirm the plan that was read, not the folder as it is now
+                # `[SPEC-SUI-070]`.
+                if not prev or prev["kind"] != "propose" or prev["state"] != "done":
+                    return self.send_json({"error": "no completed proposal to confirm"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("induct", prev["target"])})
+            if p.startswith("/api/jobs/") and p.endswith("/stop"):
+                return self.send_json({"stopped": STATE["jobs"].stop(int(p.split("/")[3]))})
+            self.send_error(404)
+        except Exception as e:
             self.send_json({"error": f"{type(e).__name__}: {e}"}, code=500)
 
 
@@ -362,7 +422,11 @@ def main() -> int:
         print(f"no such database: {args.db}", file=sys.stderr)
         return 1
     STATE["db"] = ro(args.db)
+    STATE["path"] = os.path.abspath(args.db)
     STATE["roots"] = [os.path.normpath(r) for r in args.root]
+    # Beside the library, named after it, exactly as the id-check sidecar is.
+    sidecar = os.path.splitext(STATE["path"])[0] + ".console.db"
+    STATE["jobs"] = jobmod.Runner(STATE["path"], sidecar)
 
     t = totals(STATE["db"])
     print(f"library: {t['files']:,} files, {t['radio']:,} radio passages")
@@ -372,7 +436,8 @@ def main() -> int:
         print("roots:   none given; the folder view will have nothing to walk")
     # Loopback only. It holds no write lock today, but it reads a private
     # library and stage 3 gives it one `[SPEC-SUI-010]`.
-    print(f"console: http://127.0.0.1:{args.port}/   (read-only)")
+    print(f"jobs:    {sidecar}")
+    print(f"console: http://127.0.0.1:{args.port}/   (library opened read-only)")
     with Server(("127.0.0.1", args.port), Handler) as httpd:
         try:
             httpd.serve_forever()
