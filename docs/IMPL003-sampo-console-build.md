@@ -29,7 +29,9 @@ Critical path to *"the new music plays on the appliance"* is **0 → 1 → 3 →
 
 ## Stage 0 — Induct the pending music by hand
 
-**`[IMPL-SUI-020]` Do not hold six tracks hostage to a UI project.** `Frisina, Gerardo` — two albums, 6 files, 40 MB — is inductable today with the CLIs exactly as they stand, and the console is months of work away. Run the pipeline by hand, on the real folder, and **keep every stage's output**.
+**`[IMPL-SUI-020]` Do not hold the pending tracks hostage to a UI project.** `Frisina, Gerardo` — two albums, **4 audio files** and 2 `cover.jpg`, 40 MB in total — is inductable today with the CLIs exactly as they stand, and the console is months of work away. Run the pipeline by hand, on the real folder, and **keep every stage's output**.
+
+> **Six files, four tracks.** The transfer unit and the induct unit are not the same number and this document originally used one for both. rsync moves 6 files; `ingest_folder.py` inducts the 4 that are audio. Anywhere a count appears, it now says which.
 
 ```
 python tools/ingest_folder.py data/vaino_new.db "C:/Users/Mango Cat/Music/Frisina, Gerardo"
@@ -42,7 +44,24 @@ Cover art needs nothing: both albums already carry `cover.jpg` beside the tracks
 
 > **This is not just backlog.** The transcript *is* the specification for what `[SPEC-SUI-085]`'s progress display must render — real stage names, real timings, real failure text on a real folder. Designing that view against imagined output is how it ends up showing a spinner and a percentage that means nothing.
 
-> **Claims:** 6 files inducted; `audio_md5` present for all 6; flavor covers all 6 at 71 characteristics; the local player names and plays them. Export to the appliance **is not attempted** — it waits for stage 4, and saying so now is better than a half-transfer later.
+> **DONE 2026-08-20.** All four inducted into the live `data/vaino_new.db`, every claim met.
+>
+> | | |
+> | :--- | ---: |
+> | files / passages / recordings | **5,705 → 5,709**, +4 each |
+> | flavor, per track | **71 / 71** characteristics |
+> | extraction | 4 of 4, **0 failed**, 42 s at 19 jobs |
+> | `listener_play_history` | 37,238 → **37,238**, unchanged |
+>
+> A listener-state backup was taken first — 2.4 MB, on `backup_now`'s own stated grounds, *"before letting a tool loose on the library"*. The player then took another at startup by itself, which is `[REQ-LIB-160]` working unprompted.
+>
+> Browse resolves them: **Gerardo Frisina, 4 passages**, with titles, albums and track numbers from the file tags, and `POST /queue/…/last` returns 204 — the player reads and enqueues them. Export to the appliance **was not attempted**; it waits for stage 4.
+
+**`[IMPL-SUI-025]` What stage 0 found, which is the reason it goes first.**
+
+1. **All four came back `unmatched` from AcoustID**, so they keep their `local:audio:` ids. Predicted exactly by `[SPEC-SUI-075]`, and `unmatched` is not a finding `[REQ-LIB-165]` — but it means the four will surface in the review queue under `no-mbid`, and the console must present that as *"no MusicBrainz entry exists"* rather than as a defect awaiting repair.
+2. **The fingerprint pass had 140 passages outstanding, not 4.** 8,190 of 8,330 were checked; the backlog was invisible because nothing reports it. That is `[SPEC-SUI-040]`'s job — a library-wide view of which stages have run over what — and it is now a demonstrated need rather than an inferred one. (Results: 133 confirmed, 7 unmatched, **0 contradicted**.)
+3. **Stage output is not display-ready.** `ingest_folder.py` renders titles as `�Duala�` on a Windows console — its `say()` fallback mangling the smart quotes. Harmless in a terminal, wrong in a browser, and proof that `[SPEC-SUI-085]` must render from **structured** stage results rather than by piping stdout into a page.
 
 ---
 
@@ -70,7 +89,7 @@ Build: the server shell `[SPEC-SUI-010]`, `/library` with the profile page `[SPE
 
 Leave out, deliberately: every POST. No jobs, no induct, no export.
 
-> **Claims, against ground truth measured 2026-08-20:** the folder view on the real Music root reports **7,232** audio and asset files against **5,705** library rows, and — if stage 0 has not yet run — exactly **6** `unknown`, being the two Frisina albums. A file passed on size and mtime is labelled *assumed*; one that was hashed is labelled *verified*; the two are never the same word.
+> **Claims, against ground truth measured 2026-08-20.** The folder view on the real Music root reports **7,232** audio and asset files against **5,709** library rows *(5,705 before stage 0)*. Frisina is no longer `unknown`; what remains is the never-indexed tail relink already counted — **28** files, including a scratch directory, less the 4 stage 0 took — and re-measuring it exactly is part of this stage rather than an input to it `[SPEC-RLK-070]`. A file passed on size and mtime is labelled *assumed*; one that was hashed is labelled *verified*; the two are never the same word.
 
 ---
 
