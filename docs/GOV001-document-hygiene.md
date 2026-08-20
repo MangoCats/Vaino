@@ -67,6 +67,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `APS` — Audio Path Supervisor: output device, sink, speaker lifecycle
 - `RLK` — Library relink: binding a transported library to a target's paths
 - `SUI` — Sampo Console: the library-builder's own web interface (distinct from `UI`, which is the player's)
+- `PL` — Derived-data payload: the one format carried by all three transports
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -130,6 +131,9 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-SUI-055]` | Folder view: identity and completeness are two axes | [SPEC013-sampo-console.md](spec/SPEC013-sampo-console.md#32-folder--what-is-here-and-what-is-known-about-it) |
 | `[SPEC-SUI-095]` | Export ships a class A/B/C bundle, not a database | [SPEC013-sampo-console.md](spec/SPEC013-sampo-console.md#5-export--new-music-to-a-remote-vaino) |
 | `[SPEC-SUI-150]` | Handoff to the player is same-database-only; export is not | [SPEC013-sampo-console.md](spec/SPEC013-sampo-console.md#34-handoff--the-players-own-pages-inside-sampos-workflow) |
+| `[SPEC-PL-020]` | Payload shape: two arrays, two binding scopes | [SPEC014-payload-schema.md](spec/SPEC014-payload-schema.md#2-shape--two-arrays-because-there-are-two-scopes) |
+| `[SPEC-PL-060]` | Acceptance: required set plus unresolvable conflict | [SPEC014-payload-schema.md](spec/SPEC014-payload-schema.md#4-acceptance) |
+| `[SPEC-PL-090]` | Measured payload size, and the SPEC-DF-093 correction | [SPEC014-payload-schema.md](spec/SPEC014-payload-schema.md#5-size-and-a-correction) |
 | `[SPEC-APS-100]` | Supervisor migration order | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#4-migration-order) |
 | `[SPEC-AUD-010]`| Audio Engine Trait Contracts | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#1-interface-trait-contracts-rust--python-specs) |
 | `[SPEC-AUD-040]`| Mathematical Ramp Profiles | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#2-mathematical-ramp-profile-models) |

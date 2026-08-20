@@ -203,6 +203,8 @@ Shipping the database also forces the question the transfer script defers: the f
 
 This is **not** the optimisation `[SPEC-RLK-140]` forbids. `--quick` narrows the *rigour*, taking the database's word on files it does not hash; a manifest narrows the *set*, hashing every file it considers, completely. The distinction only holds if the output states it: *"verified 6 of 7,232 files; the remainder were not examined"* is a different sentence from *"matched"*, and the report must be the first one.
 
+> **Refined by `[SPEC-PL-085]`:** for a *bundle*, this is not a separate pass at all. Relink cannot bind an arriving row because it never creates one `[SPEC-RLK-090]`, so the importer must hash, verify and write the path itself — which is the same walk. The scoped relink described here is what the **importer does**, not a step after it. Relink proper remains for the whole-library case.
+
 **`[SPEC-SUI-110]` The target is an ssh host and a directory — never a Vaino endpoint** `[SPEC-SUI-025]`. rsync moves the bundle; binding it is the target's own work, offered over ssh as a convenience and never required for the export to be complete and correct. Requiring an API would put Sampo-facing code in every Vaino, including the ones that will never meet one.
 
 **`[SPEC-SUI-120]` T3 survives for what it is good at**: first installation, and moving a whole library between a user's own machines `[SPEC-DF-080]`. The bundle is the incremental case, which `[REQ-LIB-130]` states is the common one.
@@ -213,7 +215,7 @@ This is **not** the optimisation `[SPEC-RLK-140]` forbids. `--quick` narrows the
 
 **`[SPEC-SUI-165]` A compatible payload is kept whole and used in part; an incompatible one is rejected whole.** *(Decided 2026-08-20.)* A Sampo ahead of the appliance's Vaino is the **normal** state, not an edge case — the desktop is where the work happens.
 
-*Compatible* — **keep everything, use what is understood.** The receiver stores the payload as it arrived and fills the columns it knows. What it cannot yet interpret is **not discarded**: the bundle crossed a link measured in hours `[SPEC-RLK-070]`, and a later Vaino that understands the field must not have to ask for it again. At 1–2 KB per track `[SPEC-DF-093]` a whole library's retained payload is ~16 MB against a 553 MB database — the cheaper side of the trade by two orders of magnitude.
+*Compatible* — **keep everything, use what is understood.** The receiver stores the payload as it arrived and fills the columns it knows. What it cannot yet interpret is **not discarded**: the bundle crossed a link measured in hours `[SPEC-RLK-070]`, and a later Vaino that understands the field must not have to ask for it again. Measured `[SPEC-PL-090]`, retaining the payload for the **whole** library costs **10.4 MB compressed** — 91 MB if stored readable — against a 1,072 MB database. The cheaper side of the trade by two orders of magnitude.
 
 > This is not the empty column `[SPEC-SC-015]` forbids. That rule bans *inventing* fields nobody fills; this *retains* data that actually arrived, whose consumer is a later version of the same program and whose alternative is a re-transfer.
 

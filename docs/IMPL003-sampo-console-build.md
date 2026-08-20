@@ -77,7 +77,14 @@ Deliverables, in order:
 
 **`[IMPL-SUI-035]` Keep `[SPEC-SUI-175]` deferred but not foreclosed.** The re-read trigger is genuinely open; storing the payload **with its declared version** costs nothing now and is the whole prerequisite. Decide the trigger later; do not make it impossible today.
 
-> **Claims:** every fixture has a stated expected outcome before either implementation exists. No new player dependency is needed — `serde` and `serde_json` are already in [player/Cargo.toml](../player/Cargo.toml).
+> **DONE 2026-08-20.** [SPEC014](spec/SPEC014-payload-schema.md) written; [`tools/payload.py`](../tools/payload.py) is the one serializer; eight fixtures registered with expected outcomes in [`fixtures/payload/`](../fixtures/payload/README.md). `compatible()` mechanises **both** halves of `[SPEC-SUI-165]` — a checker with only the required-set half passes fixture 04. Fixture 01 is generated from the **real library**, not hand-written, so the format met data before anything was built on it. `serde`/`serde_json` are already in [player/Cargo.toml](../player/Cargo.toml), so the importer needs no new dependency.
+
+**`[IMPL-SUI-037]` What stage 1 found.**
+
+1. **The size estimate in `[SPEC-DF-093]` is out by ~9×.** Readable JSON is 11.0 KB per track, not the "~1–2 KB" it argues from; 1.27 KB is the *gzipped* figure `[SPEC-PL-090]`. **The decision it was defending survives** — compression reaches the stated size while keeping inspectability — but the arithmetic under it did not, and `[SPEC-SUI-165]`'s "~16 MB" was my own invention, now measured at 10.4 MB.
+2. **73% of the 1,072 MB library is cache no receiver can use** — `musicbrainz_cache` 547 MB, `lowlevel_cache` 202 MB, `identification_cache` 37 MB `[SPEC-PL-040]`. A far stronger form of `[SPEC-SUI-095]`'s argument than the size ratio that motivated it.
+3. **The scoped relink of `[SPEC-SUI-105]` is not a separate pass.** Relink never creates a row `[SPEC-RLK-090]`, so it cannot bind an arriving one; the importer must hash and bind what it creates, which is the same walk `[SPEC-PL-085]`. Stage 4 is smaller than planned.
+4. **The reference tracks have no `recording_artists` rows at all.** Their names live only in `file_tags`, so tags had to join the payload or the music would land artist-less `[SPEC-PL-050]`. Found by generating from real data; a hand-written fixture would have had artists in it.
 
 ---
 
