@@ -238,6 +238,13 @@ Two details that are easy to get wrong and are not:
 
 The console offers it on the jobs page, and **the browser posts it, not the console's server** — the same allowance the handoff embed relies on `[SPEC-SUI-025]`. No Sampo process speaks to a Vaino process; a page in a tab asks a service on the same machine.
 
+**`[IMPL-SUI-079]` Deployed to the appliance 2026-08-20.** Cross-compiled and shipped by [`deploy-player.sh`](../VainoPi/deploy-player.sh), which proved the running process answers as the new build before keeping it. `POST /library/reload` returns **202** there and a snapshot caught the rebuild in flight — `reload_status: rebuilding`, then `rebuilt` — with the queue unmoved at 6 and the service active.
+
+Two observations from the appliance that are **not** about this change, and are worth separating from it:
+
+- **Its Director has nothing to choose.** The live database is still the 31-file test library, and against 37,481 plays of those few recordings the census reads **0 eligible of 35**. The full library sits staged beside it as `vaino-new.db`, unswapped. The 9.86 s rebuild figure above is `dircheck` against *that* file; the live one rebuilds in a moment because it is tiny.
+- **The audio path is opening onto a dummy sink.** `aplay -l` offers only `vc4hdmi`, and the supervisor reports *"output opened onto a dummy — still silent, retrying"* rather than pretending `[SPEC-APS-060]`. **Checked before attributing it:** the journal shows the identical sequence under the previous binary (pid 1187, 17:46) and the new one (pid 2004, 17:49) — each opens `default @ 44100 Hz` and reports the dummy ~26 s later. It predates the deploy and is a speaker being absent, not a regression.
+
 **`[IMPL-SUI-067]` What the appliance's own database proves.** It holds **27 files and 37,481 plays** — *more* listener history than the desktop's 37,238, because it has been the thing actually playing music. Shipping `vaino.db` would overwrite 37,481 irreplaceable rows with 37,238 different ones. `[SPEC-SUI-100]`'s argument stops being a principle here and becomes an arithmetic fact about two files on two machines.
 
 **`[IMPL-SUI-069]` Three faults found, two of them mine.**
