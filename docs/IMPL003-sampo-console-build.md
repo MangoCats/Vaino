@@ -96,7 +96,27 @@ Build: the server shell `[SPEC-SUI-010]`, `/library` with the profile page `[SPE
 
 Leave out, deliberately: every POST. No jobs, no induct, no export.
 
-> **Claims, against ground truth measured 2026-08-20.** The folder view on the real Music root reports **7,232** audio and asset files against **5,709** library rows *(5,705 before stage 0)*. Frisina is no longer `unknown`; what remains is the never-indexed tail relink already counted — **28** files, including a scratch directory, less the 4 stage 0 took — and re-measuring it exactly is part of this stage rather than an input to it `[SPEC-RLK-070]`. A file passed on size and mtime is labelled *assumed*; one that was hashed is labelled *verified*; the two are never the same word.
+> **DONE 2026-08-20.** [`tools/console.py`](../tools/console.py) and [`tools/console_web/`](../tools/console_web/). Three views, no `do_POST`, database opened `mode=ro` — the safety claim is structural, not promised.
+>
+> | | measured |
+> | :--- | ---: |
+> | audio on disk / library rows | **5,745 / 5,709** |
+> | assumed here *(size + mtime)* | 5,709 |
+> | changed · missing · **verified** | 0 · 0 · **0** |
+> | unclaimed by path | **36** |
+> | walk | **105 ms** |
+>
+> **The claim above was wrong in framing and is corrected here.** 7,232 is *every* file under the root; the audio subset — the only part that can be inducted — is 5,745. The two numbers were never comparable.
+>
+> The 36 unclaimed are the tail relink found by hashing: the `X_2.mp3` literal copies and a `.wkmp_temp` scratch file. **The cheap pass reaches the same candidates without hashing and then refuses to classify them**, which is the design working: only a hash separates `unknown` from `moved`. `verified` is 0 and the page says so in words.
+
+**`[IMPL-SUI-045]` What stage 2 found.**
+
+1. **A quadratic query, of a shape this repo has already recorded.** `flavor` is keyed `(subject_kind, subject_id, …)` and its index repeats that prefix `[SPEC-SC-060]`, so a lookup on `subject_id` alone matches neither and SQLite scans all 578,452 rows **once per passage**. The first console would not start: **>180 s against 0.044 s**, `SCAN` becoming `SEARCH`. This is the same fault `[REQ-LIB-165]` recorded against `release_recordings(mbid)` — fixed there with a new index, fixed here by naming the prefix column, which was already known. **Written fresh, into new code, having read the account of it.** A documented bug is not an inoculation.
+2. **`ingest_decisions` holds one stage of seven.** 15,050 rows, every one `release_match` from [`choose_release.py`](../tools/choose_release.py); `ingest_folder`, `extract_library` and `fingerprint_ids` write none, and 333 files have no decision record at all. `[SPEC-SA-085]` requires every stage's decision recorded *"not just logged"*, and `[SPEC-SC-100]` describes the table as holding what each stage decided. It holds what one stage decided. Invisible until something read it — which is the argument for `[SPEC-SUI-045]`, now demonstrated. **Backfilling the other stages is stage 3 work**, since that is when the console drives them.
+3. **The scan is 105 ms, not the minutes I budgeted for.** `[SPEC-SUI-060]` justified the cheap pass against a nine-minute hash; the stat walk over 5,745 files is fast enough that the folder view needs no progress reporting at all.
+
+> **Verified by request, not by eye.** Every endpoint and page was fetched and checked, and all scripts pass `node --check`. Nobody has looked at the rendered pages; that is the honest state of it.
 
 ---
 

@@ -1,0 +1,114 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Sampo — profile</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Sampo</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a></nav>
+  <span class="ro">read-only</span>
+</header>
+<main id="main"><p class="empty">loading…</p></main>
+<script src="/console.js"></script>
+<script>
+// A profile is the whole derivation, not the metadata [SPEC-SUI-040]. Every
+// value carries the source that produced it, per characteristic, because that
+// is how it is stored [SPEC-SC-060] -- an aggregate "flavor: yes" would hide a
+// mixture that measurably costs retrieval accuracy.
+const pid = Number(location.pathname.split('/').pop());
+
+function kv(pairs) {
+  const dl = S.el('dl', { class: 'kv' });
+  for (const [k, v] of pairs) {
+    if (v === undefined) continue;
+    dl.append(S.el('dt', { text: k }), S.el('dd', {}, v ?? S.el('span', { class: 'pill', text: 'null' })));
+  }
+  return dl;
+}
+
+(async () => {
+  const m = document.getElementById('main');
+  try {
+    const d = await S.get(`/api/profile/${pid}`);
+    const p = d.passage, t = d.tags || {};
+    document.title = `Sampo — ${t.title || 'passage ' + pid}`;
+    m.replaceChildren();
+
+    m.append(S.el('h2', {}, `${t.title || '(untitled)'} `,
+      S.el('small', { text: `— passage ${pid}, ${t.artist || 'no artist'}` })));
+
+    m.append(kv([
+      ['audio_md5', p.audio_md5],
+      ['path', p.path],
+      ['format / duration', `${p.format}, ${S.clock(p.duration_ms)} (${S.n(p.duration_ms)} ms)`],
+      ['span', `${S.n(p.start_ms)} → ${S.n(p.end_ms)} ms, kind=${p.kind}`],
+      // NULL means not analysed, which is not zero [SPEC-PL-030].
+      ['lead in / out', p.lead_in_ms === null && p.lead_out_ms === null
+        ? S.el('span', { class: 'pill warn', title: 'amplitude analysis has not run',
+                         text: 'not analysed' })
+        : `${p.lead_in_ms} / ${p.lead_out_ms} ms`],
+      ['gain', p.gain_db === null
+        ? S.el('span', { class: 'pill warn', text: 'not analysed' }) : `${p.gain_db} dB`],
+      ['boundary_src', S.el('span', { class: 'pill', text: p.boundary_src })],
+      ['lowlevel cache', d.cached
+        ? S.el('span', { class: 'pill ok', text: 'cached for this exact span' })
+        : S.el('span', { class: 'pill warn', text: 'absent' })],
+      ['id check', d.check && d.check.verdict
+        ? S.el('span', { class: 'pill ' + (d.check.verdict === 'confirmed' ? 'ok'
+              : d.check.verdict === 'contradicted' ? 'bad' : ''), text: d.check.verdict })
+        : S.el('span', { class: 'pill warn', text: 'never checked' })],
+    ]));
+
+    for (const r of d.recordings) {
+      const mb = S.isMbid(r.credit.mbid);
+      m.append(S.el('h2', {}, 'Recording ',
+        S.el('small', { text: `— weight ${r.credit.weight}, via ${r.credit.source}` })));
+      m.append(kv([
+        ['mbid', mb ? r.credit.mbid
+          : S.el('span', {}, S.el('span', { class: 'pill', text: r.credit.mbid }),
+              ' — no MusicBrainz entry exists for this audio, so no id was invented')],
+        ['title', r.recording ? r.recording.title : null],
+        ['artists', r.artists.length
+          ? r.artists.map(a => a.name || a.artist_mbid).join(', ')
+          : S.el('span', { class: 'pill warn',
+              title: 'the name comes from the file tag, which is why tags travel [SPEC-PL-050]',
+              text: 'none — name is from the file tag' })],
+        ['flavor', `${r.flavor.length} values`
+          + (r.flavor.length === 71 ? ' (complete)' : '')],
+        ['flavor sources', r.flavor_sources.length
+          ? r.flavor_sources.map(s => S.el('span', { class: 'pill', text: s }))
+          : S.el('span', { class: 'pill warn', text: 'none' })],
+      ]));
+      if (r.flavor.length) {
+        const box = S.el('div', { class: 'flavor' });
+        for (const v of r.flavor) {
+          box.append(S.el('div', { class: 'row' },
+            S.el('span', { text: `${v.characteristic} · ${v.class}` }),
+            S.el('span', { title: `source ${v.source}, accuracy ${v.accuracy ?? 'null'}`,
+                           text: v.value.toFixed(4) })));
+        }
+        m.append(box);
+      }
+    }
+
+    // The rejected candidates, beside the chosen one. Written by every stage
+    // since the migration and read by nothing until now [SPEC-SUI-045].
+    m.append(S.el('h2', {}, 'Ingest decisions ',
+      S.el('small', { text: `— ${d.decisions.length}` })));
+    if (!d.decisions.length) {
+      m.append(S.el('p', { class: 'empty',
+        text: 'No stage recorded a decision for this audio.' }));
+    } else {
+      m.append(S.el('table', {},
+        S.el('thead', {}, S.el('tr', {}, ...['stage', 'outcome', 'confidence', 'detail', 'when']
+          .map(h => S.el('th', { text: h })))),
+        S.el('tbody', {}, ...d.decisions.map(x => S.el('tr', {},
+          S.el('td', {}, S.el('span', { class: 'pill', text: x.stage })),
+          S.el('td', { text: x.outcome }),
+          S.el('td', { class: 'num', text: x.confidence ?? '—' }),
+          S.el('td', { style: 'font:12px var(--mono);word-break:break-all', text: x.detail || '' }),
+          S.el('td', { class: 'num', text: x.decided_at || '' }))))));
+    }
+  } catch (e) { S.fail('#main', e); }
+})();
+</script>

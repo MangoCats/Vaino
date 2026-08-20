@@ -68,7 +68,8 @@ A **link** is not a channel, and §3.4 leans on the difference: a hyperlink or a
 GET  /library                     browse: artist / album / unidentified
 GET  /library/profile/<passage>   one passage, everything known and how
 GET  /folder                      configured roots, and their state
-POST /folder/scan                 cheap pass; optional --hash subset
+GET  /folder/scan                 cheap pass — read-only, so a refresh is safe
+POST /folder/hash                 hash a named subset; a job, because it is slow
 POST /induct                      propose -> a plan, nothing written
 POST /induct/<plan>/commit        run the plan as a job
 GET  /jobs                        running and recent
