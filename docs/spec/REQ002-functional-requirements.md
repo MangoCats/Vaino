@@ -553,6 +553,8 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-LIB-150]`** Relocate a moved or renamed library by content, not path `[SPEC-SC-035]`.
 
+**`[REQ-LIB-170]` Sampo has an interface, and it shows what is known, what is not, and what it decided.** The pipeline is seven stages `[SPEC-SA-020]` whose order is recorded nowhere, `ingest_decisions` is written and read by nothing, and a folder of new music is discovered only when a person thinks to point a tool at it — a four-track EP went four months unnoticed. That is `[GDE-BMK-050]`'s undocumented ritual with better parts, and `[REQ-LIB-100]` is not met by a pipeline that works only when someone remembers it exists. Designed in [SPEC013](SPEC013-sampo-console.md).
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Vaino installation with **no Sampo** can receive derived data and use every advanced feature `[SPEC-DF-080]`.

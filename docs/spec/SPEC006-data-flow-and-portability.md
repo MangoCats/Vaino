@@ -35,6 +35,14 @@ Container tags live outside the audio stream. So Vaino plays byte-identical audi
 | **`recording_mbid`** | *this recording, any encoding* | MusicBrainz via AcoustID | re-encoding, different rip, different bitrate |
 | **`file_path`** | *this machine only* | filesystem | nothing — never transported |
 
+**`[SPEC-DF-035]` A local sequence number is a fourth key, and it may not cross an installation.** `passage_id` is an `INTEGER PRIMARY KEY` — efficient, and correct as a foreign-key target inside one database `[SPEC-SC-040]`. It is not an *identity*: a re-derivation renumbers passages `[REQ-LIB-160]`, so the same integer means a different passage on the same machine after a rebuild, and an unrelated one on any other machine.
+
+The rule: **a local sequence number may be used only where the potential for confusion is structurally absent** — within a single database file, in one process's queries, as a foreign key. Anything that crosses an installation, a transport, or a rebuild keys by scope instead.
+
+For a passage the portable key is **`(audio_md5, kind, start_ms, end_ms)`** — encoding scope, because a passage is a span of one exact encoding and its boundaries are class C `[SPEC-DF-050]`. This names a shape the schema already has rather than adding one: `passages_span` is exactly that uniqueness constraint, and `lowlevel_cache` is already keyed this way `[SPEC-SC-080]`.
+
+What the rule prevents is silent by construction. A stale or foreign `passage_id` does not fail — it resolves to a real passage, which plays a real song under a real name, and nothing downstream can tell `[REQ-LIB-165]`.
+
 **`[SPEC-DF-040]` Match by the narrowest key that fits the data.**
 
 - **Recording-scope data** — flavor vector, MBIDs, artist/album/title, work relations. A property of *the music*, so it binds by `recording_mbid` and is valid for anyone holding that recording in any encoding.

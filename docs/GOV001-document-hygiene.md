@@ -66,6 +66,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `HW` — Embedded Target, RPi Zero 2W, Storage Partitioning
 - `APS` — Audio Path Supervisor: output device, sink, speaker lifecycle
 - `RLK` — Library relink: binding a transported library to a target's paths
+- `SUI` — Sampo Console: the library-builder's own web interface (distinct from `UI`, which is the player's)
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -112,6 +113,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-SA-020]` | Sampo pipeline stages S1-S7 | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#2-pipeline) |
 | `[SPEC-SA-090]` | OPEN: per-passage extraction, untested | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
+| `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |
 | `[REQ-AUD-010]` | Gapless Audio File Decoding | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
 | `[REQ-AUD-020]` | Passage Timestamp Trimming | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
@@ -123,6 +125,10 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-RLK-030]` | Relink: hash the target, match audio_md5, write the path | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#2-the-mechanism) |
 | `[SPEC-RLK-050]` | Relink outcomes: matched / moved / missing / unknown | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#3-what-it-reports) |
 | `[SPEC-RLK-150]` | Deferred: Symphonia takes the hash at the next re-extraction | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#7-decided-and-deferred) |
+| `[SPEC-SUI-020]` | Sampo's console against the player's browse page | [SPEC013-sampo-console.md](spec/SPEC013-sampo-console.md#2-identity-and-boundaries) |
+| `[SPEC-SUI-055]` | Folder view: identity and completeness are two axes | [SPEC013-sampo-console.md](spec/SPEC013-sampo-console.md#32-folder--what-is-here-and-what-is-known-about-it) |
+| `[SPEC-SUI-095]` | Export ships a class A/B/C bundle, not a database | [SPEC013-sampo-console.md](spec/SPEC013-sampo-console.md#5-export--new-music-to-a-remote-vaino) |
+| `[SPEC-SUI-150]` | Handoff to the player is same-database-only; export is not | [SPEC013-sampo-console.md](spec/SPEC013-sampo-console.md#34-handoff--the-players-own-pages-inside-sampos-workflow) |
 | `[SPEC-APS-100]` | Supervisor migration order | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#4-migration-order) |
 | `[SPEC-AUD-010]`| Audio Engine Trait Contracts | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#1-interface-trait-contracts-rust--python-specs) |
 | `[SPEC-AUD-040]`| Mathematical Ramp Profiles | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#2-mathematical-ramp-profile-models) |
