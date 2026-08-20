@@ -13,7 +13,7 @@ Checks:
   2. No Vaino document defines a tag whose prefix is reserved to inherited material.
   3. No exact tag collision between Vaino documents and inherited documents.
   4. Every relative markdown link resolves (code spans excluded).
-  5. Vaino documents obey the 100-250 line target [GOV-DOC-010]; warn only.
+  5. Vaino documents: 100-250 line target, 300-line hard limit [GOV-DOC-010]; warn only.
   6. Every cited tag is defined somewhere; no tag is defined twice.
 
 Usage:
@@ -45,6 +45,11 @@ CODESPAN = re.compile(r"`[^`\n]*`")
 RESERVED_PREFIXES = {"DBD", "MFL", "MTA", "LD", "AM", "AFS", "XFD", "SSP", "PERF", "ARCH"}
 
 INHERITED_DIR = os.path.join("docs", "inherited")
+
+# [GOV-DOC-010]. Under the target is where a document should live; over the
+# limit it must be split. Between them is a note and not a defect.
+DOC_TARGET = 250
+DOC_LIMIT = 300
 
 # Known, accepted tag collisions. Each entry is debt with a stated retirement
 # condition -- NOT a way to silence the check. A collision absent from this list
@@ -242,11 +247,20 @@ def main():
             hint = " -- summary table and detail? check they still agree" if same_doc else ""
             warnings.append(f"tag {t} defined {len(locs)}x: {', '.join(locs)}{hint}")
 
-    # 5 -- line-count governance, advisory
+    # 5 -- line-count governance, advisory, two tiers [GOV-DOC-010]
+    #
+    # Revised 2026-08-20 with the rule itself. A single threshold at 250 made
+    # every line over it look like a breach, so a document that had earned new
+    # measured content could only keep it by cutting older reasoning. The band
+    # says which is which: over TARGET is a note, over LIMIT is the split.
     for p in vaino_docs():
         n = sum(1 for _ in open(p, encoding="utf-8"))
-        if n > 250:
-            warnings.append(f"[GOV-DOC-010] {p} is {n} lines (target 100-250)")
+        if n > DOC_LIMIT:
+            warnings.append(f"[GOV-DOC-010] {p} is {n} lines, over the {DOC_LIMIT}-line "
+                            f"limit; split it")
+        elif n > DOC_TARGET:
+            warnings.append(f"[GOV-DOC-010] {p} is {n} lines, over the {DOC_TARGET}-line "
+                            f"target, under the {DOC_LIMIT}-line limit; no split required")
 
     for w in warnings:
         print(f"WARN  {w}")

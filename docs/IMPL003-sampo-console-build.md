@@ -187,7 +187,16 @@ Two gates were cleared to get there: `ffmpeg` installed on the Pi, which `[SPEC-
 1. **Windows substitutes a private-use codepoint for characters it cannot store**, and **276 of 5,709 paths (4.8%) carry one** — 264 `:` and 17 `?`. A 250-file sample matched 238 by path; all 12 that failed were present under the translated name with byte-identical audio. Path binding loses one file in twenty, invisibly, because both shells render both forms the same `[SPEC-RLK-025]`.
 2. **The `[SPEC-RLK-086]` version risk was tested for the first time and did not fire**: ffmpeg 5.1.9/aarch64 against 8.0/x86_64, **238 files, 0 disagreements** `[SPEC-RLK-088]`. It lowers the risk without retiring it — the Symphonia spike agreed on six files and then disagreed on sixty of 5,705.
 
-> **A gap worth naming:** the running player did **not** see the imported tracks until it was restarted. It reads its library at startup, and an import into a live database has no way to tell it otherwise.
+**`[IMPL-SUI-070]` What a running player does and does not notice, corrected.** This was first recorded as *"the player did not see them until restarted"*, and that was **wrong** — the query was `/browse/tracks?q=Frisina`, and tracks match on **title**. No track is titled "Frisina". The same mistake had already been made and caught once on the desktop, and it was then misread as staleness. Retested against a restarted player holding the tracks: `?q=Frisina` still returns `[]`, and `?q=Duala` returns the track. The empty result was never about caching.
+
+The real division is in the code, and only one half needs a restart:
+
+| | reads | sees an import |
+| :--- | :--- | :--- |
+| **Browse** `/browse/*` | a fresh connection per request, live SQL | **immediately** — no restart |
+| **Program Director** | one in-memory snapshot from `Director::load` | **not until restarted** |
+
+`Director::load` runs once inside `Session::open` and builds the candidate rows, flavor index, artist map, play recency, relations, occasions and Taste centroids. **Nothing reloads it** — there is no refresh path in the tree. So imported music is browsable and queueable by hand at once, and cannot be *selected* until the player restarts.
 
 **`[IMPL-SUI-067]` What the appliance's own database proves.** It holds **27 files and 37,481 plays** — *more* listener history than the desktop's 37,238, because it has been the thing actually playing music. Shipping `vaino.db` would overwrite 37,481 irreplaceable rows with 37,238 different ones. `[SPEC-SUI-100]`'s argument stops being a principle here and becomes an arithmetic fact about two files on two machines.
 

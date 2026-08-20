@@ -12,7 +12,9 @@ To ensure that both human contributors and AI coding assistants can quickly insp
 
 1. **`[GOV-DOC-010]` Focused Single-Purpose Documents**:
    - Every document MUST focus on a single domain or component.
-   - Target file length is **100 to 250 lines** per document. Large documents MUST be split into sub-documents within appropriate folders (e.g., `docs/spec/`).
+   - Target file length is **100 to 250 lines** per document, and staying under 250 is **strongly encouraged**: it is the length at which a reader, or an agent loading the file into context, can hold the whole of it at once.
+   - **The hard limit is 300 lines.** Above 300 a document MUST be split into sub-documents within appropriate folders (e.g., `docs/spec/`). Between 250 and 300 it is over the target and not in breach — a note, not a defect.
+   - *Revised 2026-08-20, from a flat 250.* The 250-line target was doing two jobs and one of them badly: it named a good length **and** implied that exceeding it obliged a split. That put a spec's later, measured additions in competition with its earlier reasoning, and made "trim to fit" a reason to cut argument that had been written deliberately. A band separates the encouragement from the obligation, so the choice to keep something is no longer a choice to cut something else.
 
 2. **`[GOV-DOC-030]` Inherited documents are segregated and prefixed**:
    - Material copied from predecessor projects lives only under `docs/inherited/`, carries an `MCR-` (or equivalent) filename prefix, and opens with a banner stating its class.
