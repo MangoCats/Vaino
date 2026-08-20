@@ -43,9 +43,39 @@ pub struct Controls {
     pub programs: Vec<(i64, String, String)>,
     /// The programme actually in force, as the engine last resolved it.
     pub active: Option<String>,
+    /// Asks for a live Director rebuild, so music imported into the library
+    /// becomes selectable without restarting the player `[IMPL-SUI-075]`.
+    ///
+    /// The same intent-cell pattern as `manual_program`, and for the same
+    /// reason: the Director is not `Sync`, so the browser cannot reach it.
+    pub reload_requested: bool,
+    /// What the rebuild is doing, for the browser to show. Set by the engine.
+    pub reload_status: Option<String>,
+    /// The Director's pool as `(eligible, total)`, refreshed on adoption.
+    ///
+    /// Here so a rebuild's effect is **observable** rather than asserted:
+    /// importing music and reloading moves `total`, and without a number to
+    /// look at "it reloaded" would be a claim with nothing behind it
+    /// `[GDE-CHT-030]`.
+    pub pool: Option<(usize, usize)>,
 }
 
 pub type SharedControls = Arc<Mutex<Controls>>;
+
+/// How much queued audio must be in hand before a live Director rebuild starts
+/// `[IMPL-SUI-075]`.
+///
+/// Measured by `dircheck`: a rebuild over 8,330 radio passages takes **9.86 s
+/// on the appliance** and 0.89 s on a desktop, so three minutes covers the slow
+/// case eighteen times over. The margin is not really about time — the rebuild
+/// is off the audio path and cannot glitch a note. It is about **I/O**: those
+/// ten seconds are heavy SQLite reading from an SD card, and starting them only
+/// when decode is well ahead keeps the two from contending for the same card.
+///
+/// The default depth of five passages holds far more than this, so in ordinary
+/// running the rebuild starts at once; the threshold bites only when the queue
+/// is short, which is exactly when the Director is needed for something else.
+pub const RELOAD_MIN_QUEUE_MS: u64 = 180_000;
 
 /// Bounded on purpose. Only the queue and what is playing can be asked about,
 /// so a handful is plenty and an unbounded map would grow for the life of the
@@ -97,6 +127,15 @@ pub struct Session {
     /// the rest are pruned to what is still queued -- a passage that has been
     /// admitted can no longer fail to open, so its note is dead weight.
     notes: HashMap<i64, crate::director::library::QueuedNote>,
+    /// The library file, so a rebuild can open its own connection
+    /// `[IMPL-SUI-075]`. A path rather than a shared handle, for the reason
+    /// `Ui` keeps one: `rusqlite`'s `Connection` is not `Sync`.
+    db: std::path::PathBuf,
+    /// A rebuild in flight. `Director` is `Send`, asserted at compile time in
+    /// `dircheck`, so it is built on its own thread and handed back here —
+    /// the running one keeps answering selections throughout, and there is
+    /// never a window with none.
+    rebuild: Option<std::sync::mpsc::Receiver<Result<Box<Director>, String>>>,
 }
 
 impl Session {
@@ -134,7 +173,131 @@ impl Session {
             explanations: Explanations::default(),
             controls: SharedControls::default(),
             notes: HashMap::new(),
+            db: db.to_path_buf(),
+            rebuild: None,
         })
+    }
+
+    /// Start a rebuild when asked, and adopt one that has finished
+    /// `[IMPL-SUI-075]`.
+    ///
+    /// Called before the shortfall check, because a rebuild is exactly what
+    /// must **not** happen while the queue is short: the Director is needed to
+    /// refill it, and the SD card is needed to decode from it.
+    fn tend_rebuild(&mut self, engine: &Engine) {
+        if let Some(rx) = &self.rebuild {
+            match rx.try_recv() {
+                Err(std::sync::mpsc::TryRecvError::Empty) => return, // still building
+                Ok(Ok(fresh)) => {
+                    self.adopt(*fresh, engine);
+                    self.say_reload("rebuilt");
+                }
+                Ok(Err(e)) => self.say_reload(&format!("rebuild failed: {e}")),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // The thread died without answering. The old Director is
+                    // untouched and still selecting, so this costs nothing but
+                    // the attempt -- which is the whole point of building a
+                    // replacement rather than dropping the incumbent first.
+                    self.say_reload("rebuild thread stopped without answering");
+                }
+            }
+            self.rebuild = None;
+            return;
+        }
+
+        let asked = match self.controls.lock() {
+            Ok(mut c) => {
+                // First time through, publish the pool so there is a number to
+                // compare a rebuild against.
+                if c.pool.is_none() {
+                    drop(c);
+                    self.publish_pool();
+                    match self.controls.lock() {
+                        Ok(mut c) => std::mem::take(&mut c.reload_requested),
+                        Err(_) => false,
+                    }
+                } else {
+                    std::mem::take(&mut c.reload_requested)
+                }
+            }
+            Err(_) => false,
+        };
+        if !asked {
+            return;
+        }
+        // Enough audio in hand, or a queue already as full as it will get --
+        // waiting past that point would be waiting for something that is not
+        // coming.
+        let queued_ms: u64 = engine.queued().map(|e| e.end_ms.saturating_sub(e.start_ms)).sum();
+        if queued_ms < RELOAD_MIN_QUEUE_MS && engine.shortfall() > 0 {
+            self.say_reload(&format!(
+                "waiting for {} s of queue before rebuilding ({} s in hand)",
+                RELOAD_MIN_QUEUE_MS / 1000,
+                queued_ms / 1000
+            ));
+            // Put the request back: it has not been served, only deferred.
+            if let Ok(mut c) = self.controls.lock() {
+                c.reload_requested = true;
+            }
+            return;
+        }
+
+        let path = self.db.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        match std::thread::Builder::new()
+            .name("director-rebuild".into())
+            .spawn(move || {
+                let built = Library::open(&path)
+                    .and_then(|l| l.director())
+                    .map(Box::new)
+                    .map_err(|e| format!("{e:?}"));
+                let _ = tx.send(built);
+            }) {
+            Ok(_) => {
+                self.rebuild = Some(rx);
+                self.say_reload("rebuilding");
+            }
+            Err(e) => self.say_reload(&format!("could not start rebuild: {e}")),
+        }
+    }
+
+    /// Swap a freshly built Director in, carrying the queue's bookkeeping over.
+    ///
+    /// The replacement's `last_played` comes from `listener_play_history`,
+    /// which does not know about passages that are queued but have not played.
+    /// Without re-noting them it would consider their recordings and artists
+    /// un-suppressed and could pick a sibling that rotation had ruled out
+    /// `[REQ-PD-112]`. The notes are rebuilt rather than moved because each one
+    /// holds the *previous* value from the Director that issued it.
+    fn adopt(&mut self, fresh: Director, engine: &Engine) {
+        self.director = Some(fresh);
+        self.notes.clear();
+        let now = unix_now();
+        let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
+        if let Some(d) = self.director.as_mut() {
+            for id in queued {
+                if let Some(note) = d.note_queued(id, now) {
+                    self.notes.insert(id, note);
+                }
+            }
+        }
+        self.publish_pool();
+    }
+
+    /// Put the pool size where the browser can see it.
+    fn publish_pool(&self) {
+        let Some(c) = self.census() else { return };
+        let total = c.eligible + c.artist_blocked + c.track_blocked + c.related_blocked
+            + c.below_min_weight + c.filtered;
+        if let Ok(mut ctl) = self.controls.lock() {
+            ctl.pool = Some((c.eligible, total));
+        }
+    }
+
+    fn say_reload(&self, what: &str) {
+        if let Ok(mut c) = self.controls.lock() {
+            c.reload_status = Some(what.to_string());
+        }
     }
 
     /// Name a passage before it is shown `[REQ-VIS-170]`.
@@ -198,6 +361,10 @@ impl Session {
     /// for five at once would weigh all five against the same stale history and
     /// could queue five tracks by one artist `[SPEC-DIR-115]`.
     pub fn refill(&mut self, engine: &mut Engine) {
+        // Before anything else, and deliberately before the shortfall check:
+        // a rebuild must not start while the queue is short `[IMPL-SUI-075]`.
+        self.tend_rebuild(engine);
+
         // Apply the browser's programme choice before selecting, and report
         // back what is actually in force -- "auto" resolves to a name only the
         // Director can supply.

@@ -23,6 +23,19 @@
   <h2>Jobs</h2>
   <div id="list"></div>
   <div id="live"></div>
+
+  <h2>After an induct <small>— make it selectable</small></h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    The player browses the library live and sees new music at once, but its
+    Program Director is built at startup and will not <em>choose</em> it until
+    rebuilt. This asks the local player to rebuild; it starts when the queue can
+    afford it and never interrupts playback.
+  </p>
+  <div class="controls">
+    <input type="search" id="player" value="http://127.0.0.1:5720" style="min-width:18rem">
+    <button class="chip" id="reload">ask the player to reload</button>
+    <span id="reloadsaid" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+  </div>
 </main>
 <script src="/console.js"></script>
 <script>
@@ -161,6 +174,25 @@ function showPlan(j) {
         S.el('td', { text: s.stage }),
         S.el('td', { style: 'color:var(--dim)', text: s.why }))))));
 }
+
+// The BROWSER posts this, not the console's server -- the same allowance the
+// handoff embed relies on [SPEC-SUI-025]. No Sampo process speaks to a Vaino
+// process; a page in a tab asks a service on the same machine, exactly as a
+// person clicking a bookmark would.
+//
+// no-cors because the answer is not needed: the request is an intent, the
+// player decides when to act on it, and its own UI reports what happened.
+document.getElementById('reload').onclick = async () => {
+  const base = document.getElementById('player').value.replace(/\/+$/, '');
+  const said = document.getElementById('reloadsaid');
+  said.textContent = 'asking…';
+  try {
+    await fetch(`${base}/library/reload`, { method: 'POST', mode: 'no-cors' });
+    said.textContent = 'asked. The player rebuilds when its queue can afford it.';
+  } catch (e) {
+    said.textContent = `could not reach ${base} — is the player running?`;
+  }
+};
 
 list();
 </script>

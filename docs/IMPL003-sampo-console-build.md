@@ -216,6 +216,28 @@ Three things make it work:
 
 Degradation is already defined: `session.rs` falls back to uniform random selection when the Director is absent `[SPEC-DIR-*]`, so even a drop-then-load — unnecessary at 12 MB — would have stated behaviour rather than a stall.
 
+**`[IMPL-SUI-078]` Built and proved 2026-08-20.** `POST /library/reload` sets an intent in `Controls` — the cell `manual_program` already uses, and for the same reason: the Director is not `Sync`, so the browser cannot reach it. `Session::refill` picks the intent up **before** its shortfall check, since a rebuild is precisely what must not start while the queue is short.
+
+Measured against a running player, a copy of the live library, and one track imported underneath it:
+
+| | pool (eligible / total) | `reload_status` |
+| :--- | ---: | :--- |
+| at startup | 8,069 / **8,330** | — |
+| after import, before reload | 8,069 / **8,330** | — |
+| after `POST /library/reload` | 7,772 / **8,331** | `rebuilt` |
+| a second reload, nothing imported | 7,772 / **8,331** | `rebuilt` |
+
+**Total moves by exactly the one passage imported**, and browse had it the whole time — the split of `[IMPL-SUI-070]` demonstrated from both sides at once. The queue stayed at 6 and playback was never interrupted.
+
+**The `eligible` drop is the queue, not drift.** The pool is first published on the opening refill, before the queue has been filled, so nothing is rotation-suppressed yet; after adoption the six queued passages are re-noted and their recordings and artists suppressed. A second reload reproduces 7,772 / 8,331 exactly, which is what makes it stability rather than a leak.
+
+Two details that are easy to get wrong and are not:
+
+- **Queued passages are re-noted on adoption.** A replacement's `last_played` comes from `listener_play_history`, which knows nothing of passages queued but not yet played, so without re-noting it would treat their artists as un-suppressed and could pick a sibling rotation had ruled out `[REQ-PD-112]`. The notes are rebuilt rather than moved, because each one holds the *previous* value from the Director that issued it.
+- **A failed rebuild costs nothing.** The incumbent is never dropped, so a thread that dies without answering leaves selection exactly as it was and only the status line changes.
+
+The console offers it on the jobs page, and **the browser posts it, not the console's server** — the same allowance the handoff embed relies on `[SPEC-SUI-025]`. No Sampo process speaks to a Vaino process; a page in a tab asks a service on the same machine.
+
 **`[IMPL-SUI-067]` What the appliance's own database proves.** It holds **27 files and 37,481 plays** — *more* listener history than the desktop's 37,238, because it has been the thing actually playing music. Shipping `vaino.db` would overwrite 37,481 irreplaceable rows with 37,238 different ones. `[SPEC-SUI-100]`'s argument stops being a principle here and becomes an arithmetic fact about two files on two machines.
 
 **`[IMPL-SUI-069]` Three faults found, two of them mine.**

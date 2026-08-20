@@ -132,6 +132,13 @@ pub struct Snapshot {
     /// The programme in force, and whether it was chosen by hand.
     pub program: Option<String>,
     pub program_manual: bool,
+    /// What a live Director rebuild is doing, if one has been asked for
+    /// `[IMPL-SUI-075]`. `None` until something requests one.
+    pub reload_status: Option<String>,
+    /// The Director's pool as `(eligible, total)`, so a rebuild's effect is
+    /// visible rather than asserted: importing music and reloading moves
+    /// `total`. Absent when there is no Director.
+    pub pool: Option<(usize, usize)>,
     pub programs: Vec<ProgramItem>,
     /// Development mode is on `[PI-SET-016]`: sshd and diagnostics are
     /// running. Always false off the appliance -- the setting belongs to the
@@ -192,6 +199,8 @@ impl From<&PlayerState> for Snapshot {
                 resume_save_max_ms: crate::RESUME_SAVE_MAX_MS,
             },
             program: None,
+            reload_status: None,
+            pool: None,
             program_manual: false,
             programs: Vec::new(),
             dev_mode: s.dev_mode,
@@ -232,6 +241,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/skip/lead/:ms", post(set_skip_lead))
         .route("/resume/save/:ms", post(set_resume_save))
         .route("/program/:id", post(set_program))
+        .route("/library/reload", post(reload_library))
         .with_state(ui)
 }
 
@@ -600,6 +610,21 @@ async fn set_skip_lead(
 /// Choose a programme by hand, or `auto` to revert to time of day
 /// `[SPEC-DIR-185]`. Applied by the engine on its next refill, so an override
 /// changes what is selected NEXT rather than interrupting what is playing.
+/// Make imported music selectable without restarting the player
+/// `[IMPL-SUI-075]`.
+///
+/// Browse reads the library live and sees an import at once; the Program
+/// Director does not, because it is loaded once at startup and nothing reloaded
+/// it. This asks for a rebuild — it does not perform one. The engine picks the
+/// intent up on its next refill and starts only when the queue can afford it,
+/// which is why the reply is *accepted* rather than *done*.
+async fn reload_library(State(ui): State<Ui>) -> StatusCode {
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    c.reload_requested = true;
+    c.reload_status = Some("requested".into());
+    StatusCode::ACCEPTED
+}
+
 async fn set_program(
     State(ui): State<Ui>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -637,6 +662,8 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
         if let Ok(c) = ui.controls.lock() {
             snap.program = c.active.clone();
             snap.program_manual = c.manual_program.is_some();
+            snap.reload_status = c.reload_status.clone();
+            snap.pool = c.pool;
             snap.programs = c
                 .programs
                 .iter()
