@@ -413,11 +413,65 @@
     }
   }
 
+  // ---------------------------------------------------------------- radios
+  // A blocked radio looks exactly like a broken button `[PI3-FOUND-050]`: the
+  // speaker was paired, bonded, trusted and flashing, and Connect did nothing
+  // because hci0 was soft-blocked. Say so here, where the hand already is.
+  const RADIO_NAME = { bluetooth: 'Bluetooth', wlan: 'Wi-Fi', wwan: 'Mobile' };
+
+  async function radios() {
+    const box = $('radio-controls');
+    try {
+      const body = await (await fetch('/audio/radios')).json();
+      const list = body.radios || [];
+      box.textContent = '';
+      let blocked = 0;
+      for (const r of list) {
+        const label = RADIO_NAME[r.kind] || r.kind;
+        const off = r.soft === 1 || r.hard === 1;
+        if (off) blocked++;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = `${label}: ${off ? 'off' : 'on'}`;
+        // Two reasons a switch is refused, and they are not the same thing.
+        // A hardware switch cannot be overridden from here at all. A radio
+        // carrying the default route could be switched and must not be: it is
+        // the way this page is reached, and on the appliance there is no other
+        // `[PI3-RF-030]`. The player would answer with the same refusal; this
+        // just does not offer the trap.
+        if (r.hard === 1) {
+          b.disabled = true;
+          b.title = 'Held off by a hardware switch.';
+        } else if (r.carries_route) {
+          b.disabled = true;
+          b.title = `${label} carries this connection. Switching it off here `
+                  + 'would cut the link to this page, and nothing short of '
+                  + 'physical access would bring it back.';
+        } else {
+          b.onclick = async () => {
+            b.disabled = true;
+            await fetch(`/audio/radio/${r.kind}/${off ? 'on' : 'off'}`,
+                        { method: 'POST' });
+            // The speaker cannot come back before its radio does.
+            setTimeout(() => { radios(); refresh(); }, 1200);
+          };
+        }
+        box.appendChild(b);
+      }
+      $('radio-hint').textContent = blocked
+        ? 'A radio is switched off. Nothing on it can connect until it is on.'
+        : 'Aerials are on.';
+    } catch (e) {
+      box.textContent = '';
+      $('radio-hint').textContent = 'Could not ask about the radios.';
+    }
+  }
+
   $('bt-scan').onclick = () => refresh(true);
   // Populated when the panel is opened rather than at load: it costs a
   // subprocess on the appliance, and most sessions never open the settings.
   gear.addEventListener('click', () => {
-    if (!$('panel-settings').hidden) refresh();
+    if (!$('panel-settings').hidden) { radios(); refresh(); }
   });
 
 })();

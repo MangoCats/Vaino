@@ -229,3 +229,51 @@ the failure mode an appliance actually has `[SPEC-DF-094]`.
 > **What to check first, next time.** `Powered: no` in `bluetoothctl show` means
 > look at rfkill before looking at pairing. The pairing was never the problem
 > and would have absorbed an evening.
+
+---
+
+## 3. What was built so it cannot look like that again
+
+**`[PI3-RF-010]` The settings panel shows every radio and whether it is on.**
+`GET /audio/radios` fronts a new `radios` verb on `vaino-btctl`, which reads
+`/sys/class/rfkill/*` and reports name, kind, soft block, hard block, and one
+computed fact — whether blocking it would cut the route the answer is
+travelling over. Measured on the appliance:
+
+    {"radios":[{"name":"hci0","kind":"bluetooth","soft":0,"hard":0,"carries_route":false},
+               {"name":"phy0","kind":"wlan",     "soft":0,"hard":0,"carries_route":true}]}
+
+The panel reads *"A radio is switched off. Nothing on it can connect until it
+is on."* when any is blocked. That one line is the whole of what `[PI3-FOUND-050]`
+cost an evening for.
+
+**`[PI3-RF-020]` Bluetooth can be switched from the panel; the route's radio
+cannot.** `POST /audio/radio/<kind>/<on|off>`. Kind and state are checked
+against closed lists in the player *and* again in the helper, which is the side
+that holds privilege.
+
+**`[PI3-RF-030]` The refusal is a property of the route, not a ban on Wi-Fi.**
+The helper refuses to soft-block whichever radio carries the default route. On
+this appliance that is always `wlan0` — it is the only interface, there is no
+ethernet, and switching it off from a web page would sever the connection to
+the page holding the switch with no way back but physical access. **On a machine
+with wired ethernet the same code permits it**, because there the cost is
+nothing. Encoding the condition rather than the platform is what makes it true
+in both places.
+
+rfkill is joined to the route through sysfs rather than by assuming `phy0` is
+`wlan0`: `/sys/class/net/<if>/phy80211` points back at the wireless phy, and a
+Bluetooth radio carries no route at all.
+
+The rule lives in the helper alone. The player does not repeat it, so a second
+caller — a person at a terminal — cannot be told something different.
+
+> **Verified on hardware 2026-08-20.** `radios` lists both correctly;
+> `radio wlan off` is refused with *"that radio carries the default route"*,
+> through the player as well as directly; `radio ethernet off` and
+> `radio bluetooth maybe` are refused as a bad kind and a bad state; a
+> hardware-blocked radio is refused separately, because it cannot be overridden
+> from software at all. The Bluetooth toggle was exercised at the helper —
+> off, on, and the speaker reconnected — rather than a second time through the
+> route, which would have interrupted music being listened to for a branch
+> already proven.

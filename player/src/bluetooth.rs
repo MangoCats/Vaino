@@ -25,6 +25,8 @@ pub enum Verb {
     Use,
     Forget,
     Status,
+    /// Every radio and whether it is blocked `[PI3-RF-010]`.
+    Radios,
 }
 
 impl Verb {
@@ -37,6 +39,7 @@ impl Verb {
             "use" => Verb::Use,
             "forget" => Verb::Forget,
             "status" => Verb::Status,
+            "radios" => Verb::Radios,
             _ => return None,
         })
     }
@@ -50,12 +53,13 @@ impl Verb {
             Verb::Use => "use",
             Verb::Forget => "forget",
             Verb::Status => "status",
+            Verb::Radios => "radios",
         }
     }
 
     /// Does this verb name a device?
     pub fn needs_address(self) -> bool {
-        !matches!(self, Verb::List | Verb::Scan)
+        !matches!(self, Verb::List | Verb::Scan | Verb::Radios)
     }
 }
 
@@ -106,6 +110,37 @@ pub fn run(verb: Verb, address: Option<&str>) -> Result<serde_json::Value, Strin
             format!("helper gave no usable answer: {}", err.trim())
         }
     })
+}
+
+/// Switch one radio `[PI3-RF-020]`.
+///
+/// Separate from [`run`] because its two arguments are a kind and a state
+/// rather than a device address, and widening `run` to carry arbitrary strings
+/// would give up the property that makes it safe: every argument it passes is
+/// checked against a closed shape first. Both of these are checked here too,
+/// and again in the helper, which is the side that actually holds privilege.
+///
+/// **The helper, not this, decides what may be switched off.** It refuses to
+/// block the radio carrying the default route -- on a Pi Zero 2 W that is Wi-Fi
+/// and there is no way back, while on a machine with wired ethernet it may cost
+/// nothing `[PI3-RF-030]`. Putting the rule there keeps it true for every
+/// caller, including a person at a terminal.
+pub fn set_radio(kind: &str, on: bool) -> Result<serde_json::Value, String> {
+    if !matches!(kind, "bluetooth" | "wlan" | "wwan") {
+        return Err("not a radio kind".into());
+    }
+    let out = Command::new("sudo")
+        .arg("-n")
+        .arg(HELPER)
+        .arg("radio")
+        .arg(kind)
+        .arg(if on { "on" } else { "off" })
+        .output()
+        .map_err(|e| format!("helper not available: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim())
+        .map_err(|_| format!("helper gave no usable answer: {}",
+                             String::from_utf8_lossy(&out.stderr).trim()))
 }
 
 #[cfg(test)]

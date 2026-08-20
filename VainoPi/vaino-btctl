@@ -25,6 +25,22 @@ die() { printf '{"ok":false,"error":"%s"}\n' "$1"; exit 1; }
 # Every verb but list and scan needs an address, and it is the only untrusted
 # input this program takes. Anchored, fixed length, uppercase hex only: an
 # argument that is not exactly a MAC never reaches bluetoothctl.
+# Does blocking this radio cut the route the caller is talking over?
+#
+# rfkill names the radio (`hci0`, `phy0`); the route names an interface
+# (`wlan0`). They are joined through sysfs rather than by guessing that phy0 is
+# wlan0 -- /sys/class/net/<if>/phy80211 points back at the wireless phy, and a
+# bluetooth radio carries no route at all.
+carries_route() {
+    local r="$1" kind iface phy
+    kind="$(cat "$r/type" 2>/dev/null)"
+    [ "$kind" = wlan ] || return 1
+    iface="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
+    [ -n "$iface" ] || return 1
+    phy="$(basename "$(readlink -f "/sys/class/net/$iface/phy80211" 2>/dev/null)" 2>/dev/null)"
+    [ "$phy" = "$(cat "$r/name" 2>/dev/null)" ]
+}
+
 need_addr() {
     [[ "$ADDR" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]] \
         || die "not a device address"
@@ -185,6 +201,51 @@ case "$VERB" in
         # what it promised. The state field carries everything else.
         need_addr
         printf '{"ok":true,"state":"%s"}\n' "$(state_of "$ADDR")"
+        ;;
+    radios)
+        # Every radio, whether it is blocked, and whether blocking it would cut
+        # the route this answer is travelling over `[PI3-RF-020]`.
+        printf '{"ok":true,"radios":['
+        sep=''
+        for r in /sys/class/rfkill/rfkill*; do
+            [ -e "$r/type" ] || continue
+            printf '%s{"name":"%s","kind":"%s","soft":%s,"hard":%s,"carries_route":%s}' \
+                "$sep" "$(cat "$r/name")" "$(cat "$r/type")" \
+                "$(cat "$r/soft")" "$(cat "$r/hard")" \
+                "$(carries_route "$r" && echo true || echo false)"
+            sep=','
+        done
+        printf ']}\n'
+        ;;
+    radio)
+        # `radio <kind> on|off`. KIND and STATE reuse the argument slots, so
+        # they are validated the way an address is: against a closed list,
+        # before anything acts on them.
+        kind="${2:-}"; want="${3:-}"
+        [[ "$kind" =~ ^(bluetooth|wlan|wwan)$ ]] || die "not a radio kind"
+        [[ "$want" =~ ^(on|off)$ ]]              || die "not on or off"
+        found=false
+        for r in /sys/class/rfkill/rfkill*; do
+            [ -e "$r/type" ] || continue
+            [ "$(cat "$r/type")" = "$kind" ] || continue
+            found=true
+            # THE refusal. Not "wlan is forbidden" -- that would be wrong on a
+            # machine with wired ethernet, where taking Wi-Fi down costs
+            # nothing. What is forbidden is blocking the radio carrying the
+            # default route, because the switch would sever the connection to
+            # the page holding it, and nothing short of physical access brings
+            # it back. On a Pi Zero 2 W that is always wlan0; elsewhere it may
+            # be nothing at all `[PI3-RF-030]`.
+            if [ "$want" = off ] && carries_route "$r"; then
+                die "that radio carries the default route"
+            fi
+            if [ "$(cat "$r/hard")" = 1 ]; then
+                die "blocked by a hardware switch"
+            fi
+            [ "$want" = on ] && echo 0 > "$r/soft" || echo 1 > "$r/soft"
+        done
+        $found || die "no such radio"
+        printf '{"ok":true,"kind":"%s","state":"%s"}\n' "$kind" "$want"
         ;;
     *)
         die "unknown verb"

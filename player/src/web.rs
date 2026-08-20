@@ -242,6 +242,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/resume/save/:ms", post(set_resume_save))
         .route("/program/:id", post(set_program))
         .route("/library/reload", post(reload_library))
+        .route("/audio/radios", get(radios))
+        .route("/audio/radio/:kind/:state", post(set_radio))
         .with_state(ui)
 }
 
@@ -687,6 +689,33 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
 /// settings panel is the only thing that needs it.
 async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
     axum::Json(crate::sink::current())
+}
+
+/// Every radio and whether it is blocked `[PI3-RF-010]`.
+///
+/// Built because a blocked radio is indistinguishable, from the settings page,
+/// from a broken button: the Middleton was paired, bonded, trusted and
+/// advertising, and Connect did nothing at all because `hci0` was soft-blocked
+/// `[PI3-FOUND-050]`. One line saying so would have ended that evening.
+async fn radios() -> Response {
+    bt_reply(bluetooth::run(bluetooth::Verb::Radios, None), false)
+}
+
+/// Switch one radio on or off `[PI3-RF-020]`.
+///
+/// The helper refuses to block whichever radio carries the default route, and
+/// this deliberately does **not** repeat that rule -- one copy, on the side
+/// that holds the privilege, so a second caller cannot be told something
+/// different `[PI3-RF-030]`.
+async fn set_radio(
+    axum::extract::Path((kind, state)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let on = match state.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return (StatusCode::NOT_FOUND, "state is on or off").into_response(),
+    };
+    bt_reply(bluetooth::set_radio(&kind, on), false)
 }
 
 async fn speakers() -> Response {
