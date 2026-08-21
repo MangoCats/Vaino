@@ -103,6 +103,14 @@ pub fn unacceptable(doc: &Value) -> Vec<String> {
                 out.push(format!("{md5}: missing encoding.{k}"));
             }
         }
+        // Present is not the same as usable. `req` only asks whether the key
+        // exists, so a string or a float passed acceptance and then landed as
+        // **zero** — and a zero duration is not a small error, it is a length
+        // against which every play/skip judgement is meaningless
+        // `[SPEC-MPD-092]`. Reject it here rather than default it later.
+        if req(e, "duration_ms") && !num(e, "duration_ms").is_some_and(|d| d > 0) {
+            out.push(format!("{md5}: encoding.duration_ms is not a positive integer"));
+        }
         // A payload disagreeing with ITSELF. `[SPEC-DF-070]` ranks a payload
         // against the receiver, by provenance then recency; nothing ranks it
         // against itself, so two entries for one key have equal claim and
@@ -278,7 +286,11 @@ pub fn import(
             "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen)\
              VALUES (?1,?2,?3,?4,?5,?6,?7,?7)",
             params![md5, path.to_string_lossy(), meta.len() as i64, mtime,
-                    str_of(e, "format"), num(e, "duration_ms").unwrap_or(0), now],
+                    str_of(e, "format"),
+                    num(e, "duration_ms")
+                        .filter(|d| *d > 0)
+                        .ok_or_else(|| format!("{md5}: encoding.duration_ms is not a positive integer"))?,
+                    now],
         )
         .map_err(|e| e.to_string())?;
         let file_id = tx.last_insert_rowid();
@@ -449,6 +461,26 @@ mod tests {
                           "recordings":[{"mbid":"m","weight":1.0,"source":"s"}]}]}],
             "recordings":[{"mbid":"m","title":"t","source":"s"}]}"#);
         assert!(unacceptable(&d).iter().any(|s| s.contains("boundary_src")));
+    }
+
+    #[test]
+    fn rejects_a_duration_that_is_present_but_unusable() {
+        // Presence passed the required-field check, then `unwrap_or(0)` wrote a
+        // zero length into the column the play/skip judgement reads
+        // `[SPEC-MPD-092]`. Each of these must be refused, not defaulted.
+        for bad in [r#""284250""#, "12.5", "0", "-1"] {
+            let d = doc(&format!(
+                r#"{{"payload_version":1,"encodings":[
+                {{"audio_md5":"a","bundle_path":"a.mp3","format":"mp3","duration_ms":{bad},
+                 "passages":[{{"kind":"radio","start_ms":0,"end_ms":10,"boundary_src":"x",
+                              "recordings":[{{"mbid":"m","weight":1.0,"source":"s"}}]}}]}}],
+                "recordings":[{{"mbid":"m","title":"t","source":"s"}}]}}"#
+            ));
+            assert!(
+                unacceptable(&d).iter().any(|s| s.contains("duration_ms")),
+                "duration_ms {bad} should be rejected"
+            );
+        }
     }
 
     #[test]

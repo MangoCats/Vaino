@@ -70,6 +70,8 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `RLK` — Library relink: binding a transported library to a target's paths
 - `SUI` — Sampo Console: the library-builder's own web interface (distinct from `UI`, which is the player's)
 - `PL` — Derived-data payload: the one format carried by all three transports
+- `MPD` — MPD integration: the Program Director as a guest in someone else's player
+- `SRC` — Sources of truth: ranking two answers to one question, see [GOV002](GOV002-sources-of-truth.md)
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
