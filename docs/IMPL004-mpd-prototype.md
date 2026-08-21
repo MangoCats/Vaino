@@ -12,16 +12,27 @@ Six stages on `feat/mpd-director`. Each ends in a **measurable claim**, and the 
 
 **`[IMPL-MPD-005]` `vaino-core` is not needed for this.** GUIDE004 wants that extraction for phones, where a separate crate must cross a language boundary `[GDE-AND-045]`. `vaino-mpd` is a binary in *this* crate: it calls `Library::director()` directly, exactly as `vaino` and `station` do. **The port that needs the extraction is not this one**, and conflating them would put a refactor in front of a prototype.
 
-**`[IMPL-MPD-008]` There is no MPD to test against yet, and that is the first decision.** Two candidates, and they test different things:
+**`[IMPL-MPD-008]` There is no MPD to test against yet, and that is the first decision.** Three candidates, not two, and they are not alternatives so much as tests of different things.
 
-| Where | Tests | Cost |
-| :--- | :--- | :--- |
-| **On the appliance**, pointed at `/srv/library/audio` | the **same-tree** case, on the real library, with correct Linux paths after relink | changes the appliance; MPD would index 7,230 files |
-| **A container on the desktop**, pointed at the Windows `Music` tree | the **cross-platform** case, and therefore `[SPEC-RLK-025]`'s private-use codepoints | none, but a different filesystem to the one that matters |
+| | tests | audio | risk |
+| :--- | :--- | :--- | :--- |
+| **MPD on Windows**, native, at the real `Music` tree | the **same-tree prefix** rung, on paths identical to `vaino.db`'s | real | none |
+| **MPD in a Linux container** | the **cross-platform** rung — what happens when 276 private-use paths meet a filesystem with real colons `[SPEC-RLK-025]` | awkward | none |
+| **MPD on the appliance** | the real deployment | real | **see below** |
 
-**The container is the better first target** — it costs nothing, it is repeatable, and it exercises the mapping's hard case rather than its easy one. The appliance comes later, and only with a decision to install MPD there.
+Current Windows builds exist and are not an afterthought: **0.24.14, 13 August 2026** — the same day as the Linux release.
 
-> **A logistics note.** The appliance is currently answering ping intermittently and refusing ssh while playing over Bluetooth — one antenna serving both radios, which `[PI3-FOUND-010]` already measured. Testing a network protocol on that machine *while it plays* is testing two things at once.
+**`[IMPL-MPD-009]` The appliance is not an additional test bed. It is a conversion.** This is the consideration that decides the order, and the first draft of this plan missed it.
+
+In the MPD topology Vaino has **no audio path** — MPD owns the device `[SPEC-MPD-030]`. The appliance's sink is a single Bluetooth speaker, and two players cannot hold it. So running MPD there means **stopping `vaino`**, and the appliance stops being a Vaino-plays box and becomes an MPD-plays box for the duration.
+
+That is a decision about what the appliance *is*, not a test setup. It is also the thing eventually worth proving — a moOde or Volumio owner is in exactly that configuration `[GDE-BAK-080]` — but it should be proved once the design works, not while it is being discovered.
+
+**`[IMPL-MPD-010a]` So: Windows and container for stage 0, Windows through stage 2, the appliance only on purpose.**
+
+Stage 0 needs **no audio at all** — it reads `vaino.db` and an MPD database and writes nothing `[IMPL-MPD-010]` — so the container's weakest point does not apply to it, and running both costs little more than running one. They answer different questions and both answers are wanted.
+
+> **One cost to measure rather than assume.** MPD indexing 7,232 files across a Windows bind mount into a container may be slow enough to matter. If it is, the cross-platform rung can be tested against a **synthetic tree** carrying the real Linux names and no audio — which proves name matching exactly, and gives up only the tag-based rung.
 
 ---
 
