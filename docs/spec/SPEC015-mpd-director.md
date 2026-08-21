@@ -135,47 +135,12 @@ exclusion is not.**
 > playing and keeps the last known elapsed, then judges the outgoing passage
 > against it. This is the one place the design polls, and it is why.
 
-**`[SPEC-MPD-092]` The length the threshold is measured against is Vaino's, never
-MPD's.** *(Decided 2026-08-21, from measurement.)* MPD reports `duration` from an
-estimate rather than a decode — for a VBR MP3 it is size over bitrate, so
-embedded cover art inflates it. Across the 5,373 files both libraries know, **36.9%
-disagree by more than a second**, median error **98.8 s**, worst `+3421 s`; **1,530
-of those move the play threshold**, and the errors run in *both* directions, so no
-correction factor rescues it. Judged against MPD's figure, a 12.07 s track that
-played *in full* was recorded as a skip.
-
-So the resolution ladder `[SPEC-MPD-060]` is load-bearing for **judging**, not only
-for enqueuing: a URI that does not resolve to a Vaino passage yields a verdict
-resting on an estimate, and must be reported as the weaker claim it is. Where the
-passage span is known it supersedes even the file duration, being authoritative by
-construction `[SPEC-DF-030]`.
-
-**`[SPEC-MPD-096]` `rangeid` returning `OK` is not evidence the span landed.**
-*(Decided 2026-08-21, from measurement.)* MPD validates the requested end against
-**its own duration estimate** — the unreliable one `[SPEC-MPD-092]`. Where the end
-exceeds it, MPD accepts the command, silently **drops the end**, reports a
-shortened `Time`, and then plays **to end of file** regardless. Measured: 508 of
-7,994 resolvable passages (**6.4%**), median overrun 11.2 s past the intended end,
-worst 532 s. None fell on a multi-passage capture, so nothing spills into a
-neighbouring song — but that is this library's luck, not a property of the
-protocol.
-
-So every `rangeid` is **read back** and the resulting `Time` compared against the
-span asked for; a mismatch is reported rather than assumed away `[GOV-SRC-030]`.
-Withdrawing the passage instead would make 6.4% of the library unplayable through
-MPD, which is worse than a known overrun. The Director enforces the end itself,
-by advancing at the span boundary using the sampler it already runs — bounding the
-overrun by the sample interval `[SPEC-MPD-105]` rather than by the file's length.
-
-> The residual imprecision is real and is the cost of being a guest: the end
-> lands within one sample interval rather than exactly. Vaino's own engine has no
-> such limit, which is a fair statement of what the MPD path gives up.
-
-**`[SPEC-MPD-094]` A stop ends a passage; a pause does not.** MPD retains `songid`
-across a stop, so a watcher keyed on the song identity alone never notices one — a
-track stopped past its threshold went unrecorded, and stayed unrecorded if nothing
-played after it. A pause is the opposite case: elapsed holds still, the listener
-is coming back, and closing the book on them would count a play as a skip.
+**Three things MPD does that its documentation does not lead you to expect** —
+an unreliable `duration` `[SPEC-MPD-092]`, a `rangeid` that can return `OK`
+without honouring the span `[SPEC-MPD-096]`, and a `songid` retained across a
+stop `[SPEC-MPD-094]` — are measured in
+[SPEC016: What MPD Actually Does](SPEC016-mpd-protocol-findings.md). They are
+kept apart because they change when MPD changes, not when Vaino's intent does.
 
 **`[SPEC-MPD-105]` Both tunables are the listener's, edited on the settings page
 and remembered.** *(Decided 2026-08-21.)*
@@ -250,12 +215,25 @@ boundary** is close — the span end, or the play threshold of an unusually shor
 passage — sample to meet it. A deadline that is known is worth sampling for; a
 uniformly faster clock is not.
 
-**`[SPEC-MPD-115]` A person's own additions feed rotation, exactly as the local
-engine already counts them.** *(Settled 2026-08-21.)* Not a fresh judgement: the
-local engine records whatever is playing without consulting who queued it, and its
-own note describes history as what the listener has **encountered**. Deciding
-otherwise here would make one library behave differently depending on which player
-touched it, and `listener_play_history` records listening rather than deciding.
+**`[SPEC-MPD-115]` A person's own additions feed rotation — and must clear
+`[SPEC-MPD-090]`'s threshold like anything else.** *(Settled 2026-08-21,
+corrected the same day.)* The question hides two, and they have different answers.
+
+***Whose* picks count: all of them.** The local engine records what is playing
+without ever consulting who queued it, and `listener_play_history` records
+listening rather than deciding.
+
+***Whether* a play happened: `[SPEC-MPD-090]`'s rule, not the local engine's.** An
+earlier draft said additions count "exactly as the local engine counts them". That
+is false, in the direction that matters: `[REQ-PD-110]` writes a play *the moment a
+passage begins sounding*, and its note deliberately embraces "a track skipped after
+ten seconds has been encountered". Under `[SPEC-MPD-090]` that skip is not a play.
+
+> **The two paths therefore disagree about one library.** A ten-second skip
+> suppresses a track locally and does nothing through MPD. That is deliberate —
+> rotation was aligned to the scrobbling rule on purpose — but it leaves
+> `listener_play_history` written by two rules, only one of them tightened —
+> which §8 carries as an open question against the local engine.
 
 **`[SPEC-MPD-120]` The Director is active only while MPD is playing.**
 *(Settled 2026-08-21.)* `state: play` and below depth is the entire activation
@@ -279,7 +257,17 @@ drops below depth; resuming refills within one interval.
 
 ## 8. Open
 
-Nothing outstanding. Settled clauses live above.
+1. **`[SPEC-MPD-125]` Whether the local engine should adopt `[SPEC-MPD-090]`'s
+   threshold.** Raised by `[SPEC-MPD-115]`, and larger than the MPD path. Today
+   `[REQ-PD-110]` records a play at the *start* of a passage, faithfully to
+   MuLibPlay; the MPD path requires half-or-four-minutes. Both write the same
+   `listener_play_history`, so the same library accumulates different rotation
+   history depending on which player was running — a ten-second skip suppresses
+   a track locally and is invisible through MPD.
+   Changing it is a **measured divergence from MuLibPlay fidelity**, the class
+   `[SPEC-DIR-210]` already defers under `[GDE-PHS-030]`, and it should be
+   decided as one rather than as a side effect of the MPD work. Not a blocker
+   for stage 3: the MPD path's own rule is settled either way.
 
 ---
 

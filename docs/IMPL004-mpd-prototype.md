@@ -2,7 +2,7 @@
 
 **Implementation Guide — the build order for [SPEC015](spec/SPEC015-mpd-director.md), riskiest part first**
 
-> **Related:** [SPEC015](spec/SPEC015-mpd-director.md) is the design · [GUIDE007](GUIDE007-external-backends-investigation.md) measured the cost · [IMPL003](IMPL003-sampo-console-build.md) for the same shape of plan
+> **Related:** [SPEC015](spec/SPEC015-mpd-director.md) is the design · [SPEC016](spec/SPEC016-mpd-protocol-findings.md) is what these stages measured · [GUIDE007](GUIDE007-external-backends-investigation.md) measured the cost · [IMPL003](IMPL003-sampo-console-build.md) for the same shape of plan
 
 Six stages on `feat/mpd-director`. Each ends in a **measurable claim**, and the order is chosen so that the assumption most likely to be wrong is tested before anything is built on it.
 
