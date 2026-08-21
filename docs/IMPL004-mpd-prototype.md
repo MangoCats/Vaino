@@ -24,7 +24,11 @@ Current Windows builds exist and are not an afterthought: **0.24.14, 13 August 2
 
 **`[IMPL-MPD-009]` The appliance is not an additional test bed. It is a conversion.** This is the consideration that decides the order, and the first draft of this plan missed it.
 
-In the MPD topology Vaino has **no audio path** — MPD owns the device `[SPEC-MPD-030]`. The appliance's sink is a single Bluetooth speaker, and two players cannot hold it. So running MPD there means **stopping `vaino`**, and the appliance stops being a Vaino-plays box and becomes an MPD-plays box for the duration.
+In the MPD topology Vaino has **no audio path** — MPD owns the device `[SPEC-MPD-030]`.
+
+> **Corrected 2026-08-21, by measurement.** This paragraph used to continue: *the appliance's sink is a single Bluetooth speaker, and two players cannot hold it, so running MPD there means stopping `vaino`.* **That was asserted and never tested, and it is false.** The appliance runs PipeWire, whose business is mixing: two independent clients attach to the one MIDDLETON sink and both report `[active]`. `[PI3-NOT-020]` rules out multiple *sinks*, which is a different question and was misread as this one.
+>
+> The consequence is not small. Running MPD does **not** require stopping Vaino, the appliance need not be converted from one kind of box to another, and a handoff between the two is available rather than impossible. See [SPEC018](spec/SPEC018-switching-backends.md).
 
 That is a decision about what the appliance *is*, not a test setup. It is also the thing eventually worth proving — a moOde or Volumio owner is in exactly that configuration `[GDE-BAK-080]` — but it should be proved once the design works, not while it is being discovered.
 
