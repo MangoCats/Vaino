@@ -177,18 +177,18 @@ more here than reach.
 
 ## 6. Recommendation
 
-**`[GDE-BAK-070]` If any of it is built, build MPD, and build the mapping first.** MPD keeps the Album/Radio duality, needs no new dependency, and is the smaller adapter. OpenSubsonic buys client reach at the price of the thing 98.6% of this library is shaped by — which is a poor trade for *this* library, whatever it is for someone else's.
+**`[GDE-BAK-100]` If any of it is built, build MPD, and build the mapping first.** MPD keeps the Album/Radio duality, needs no new dependency, and is the smaller adapter. OpenSubsonic buys client reach at the price of the thing 98.6% of this library is shaped by — which is a poor trade for *this* library, whatever it is for someone else's.
 
-**`[GDE-BAK-075]` And nothing needs deciding to keep the option.** The seam is already there and costs nothing to leave named: the trait compiles, `Engine` satisfies it, tests pass. That is the whole of what this branch establishes, and it can sit unused indefinitely without weighing anything down.
+**`[GDE-BAK-105]` And nothing needs deciding to keep the option.** The seam is already there and costs nothing to leave named: the trait compiles, `Engine` satisfies it, tests pass. That is the whole of what this branch establishes, and it can sit unused indefinitely without weighing anything down.
 
 ---
 
 ## 7. Open
 
-1. **`[GDE-BAK-080]` The mapping, prototyped against a real Navidrome or MPD instance.** Nothing else should start first `[GDE-BAK-025]`.
-2. **`[GDE-BAK-085]` Whether gain can be carried to MPD at all.** ReplayGain is per-file; Vaino's `gain_db` is per-passage `[SPEC-SC-040]`, and two passages in one file may legitimately differ.
-3. **`[GDE-BAK-090]` Whether a remote backend can report plays precisely enough for rotation.** Stage A is the part with six years of tuning behind it `[GDE-PD-010]`, and it is worth less if the history it reads is approximate.
+1. **`[GDE-BAK-110]` The mapping, prototyped against a real Navidrome or MPD instance.** Nothing else should start first `[GDE-BAK-025]`.
+2. **`[GDE-BAK-115]` Whether gain can be carried to MPD at all.** ReplayGain is per-file; Vaino's `gain_db` is per-passage `[SPEC-SC-040]`, and two passages in one file may legitimately differ.
+3. **`[GDE-BAK-120]` Whether a remote backend can report plays precisely enough for rotation.** Stage A is the part with six years of tuning behind it `[GDE-PD-010]`, and it is worth less if the history it reads is approximate.
 
 ---
 
-**Traceability:** `[GDE-BAK-010..095]` · derived from `[GDE-EXT-020]`, `[GDE-BMK-030]`, `[REQ-HW-140]`, `[PI3-API-030]`
+**Traceability:** `[GDE-BAK-010..120]` · derived from `[GDE-EXT-020]`, `[GDE-BMK-030]`, `[REQ-HW-140]`, `[PI3-API-030]`
