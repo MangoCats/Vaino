@@ -192,6 +192,10 @@ fn main() {
             }
         };
         let len: usize = status.get("playlistlength").and_then(|v| v.parse().ok()).unwrap_or(0);
+        // `[SPEC-MPD-120]`: the Director is active **only while playing**. A
+        // stopped or paused player is a person with their hands on the queue,
+        // and appending to it then is the fight the rule exists to prevent.
+        let active = status.get("state").map(|s| s == "play").unwrap_or(false);
 
         if last_len != Some(len) {
             if let Some(prev) = last_len {
@@ -201,7 +205,7 @@ fn main() {
             last_len = Some(len);
         }
 
-        if len >= depth {
+        if !active || len >= depth {
             // The etiquette, and the whole of it: at or above depth, do nothing.
             if run_for.is_some_and(|s| started.elapsed().as_secs_f64() >= s) {
                 break;
