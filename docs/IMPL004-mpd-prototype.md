@@ -63,6 +63,32 @@ Build a tool that reads `vaino.db` and an MPD instance and **writes nothing to e
 > why. That is the same-platform case behaving well; it says nothing yet about
 > a Linux MPD, which is the case that will not `[IMPL-MPD-008]`.
 
+> **Cross-platform half, 2026-08-21.** Measured against the appliance's own
+> file list — 5,745 URIs as a Linux MPD would report them, captured over ssh
+> without installing MPD there `[IMPL-MPD-009]`. A bind-mounted container would
+> **not** have reproduced this: Linux reading NTFS sees the same `U+F03A` bytes
+> Windows stored. Only a tree whose names were *translated* on the way across
+> shows the real condition, and the appliance's is one.
+>
+> | rung | rows | |
+> | :--- | ---: | ---: |
+> | 1 · same-tree prefix | 5,433 | 95.2% |
+> | 3 · unresolved | **276** | **4.8%** |
+>
+> **All 276 failures are exactly the private-use paths, and none resolved** —
+> the prediction was "none" and it is none. `History: America's Greatest Hits`
+> is unreachable from a Windows library by path alone.
+>
+> **And every one of the 276 carries a real recording MBID** — 276 of 276 — so
+> rung 2's ceiling here is total. That is what rung 2 is *for*: rung 1 is
+> sufficient on one platform and insufficient across two, which is the case the
+> ladder was designed against.
+
+**`[IMPL-MPD-011]` Stage 0 is complete, and the gate is passed.** Same-platform
+100%, cross-platform 95.2% by path with the remainder recoverable by recording.
+Nothing in the ladder needs redesigning `[IMPL-MPD-015]`, and the one rule it
+gained came from measurement rather than worry `[IMPL-MPD-013]`.
+
 **`[IMPL-MPD-012]` The 284 shared MBIDs are not an ambiguity. They are the model
 working, and Vaino already implements it.** An earlier reading of this
 measurement called them a hazard — the right music in the wrong file — and that

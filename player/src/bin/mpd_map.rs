@@ -1,6 +1,14 @@
 //! Stage 0: can Vaino name a passage in MPD's terms? `[IMPL-MPD-010]`
 //!
 //!   mpd_map <vaino.db> <music_directory> [host:port]
+//!   mpd_map <vaino.db> <music_directory> --uris <file>
+//!
+//! `--uris` runs the same ladder against a **captured** URI list, one relative
+//! path per line, as a Linux MPD would report them. That is how the
+//! cross-platform half of stage 0 is measured without standing a second MPD up:
+//! a bind-mounted container would not reproduce it, because Linux reading NTFS
+//! sees the very `U+F03A` bytes Windows stored. Only a tree whose names were
+//! *translated* on the way across shows the real condition.
 //!
 //! **Writes to nothing.** It reads `vaino.db`, reads MPD's database, walks the
 //! resolution ladder `[SPEC-MPD-060]`, and prints how far each rung got. This
@@ -28,13 +36,18 @@ struct Row {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 {
-        eprintln!("usage: mpd_map <vaino.db> <music_directory> [host:port]");
+        eprintln!("usage: mpd_map <vaino.db> <music_directory> [host:port | --uris FILE]");
         std::process::exit(2);
     }
     let db_path = PathBuf::from(&args[0]);
     // Normalised the way MPD reports URIs: forward slashes, no trailing one.
     let root = args[1].replace('\\', "/").trim_end_matches('/').to_string();
-    let addr = args.get(2).cloned().unwrap_or_else(|| "127.0.0.1:6600".into());
+    let uri_file = args.iter().position(|a| a == "--uris").and_then(|i| args.get(i + 1)).cloned();
+    let addr = args
+        .get(2)
+        .filter(|a| !a.starts_with("--"))
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1:6600".into());
 
     let db = Connection::open(&db_path).unwrap_or_else(|e| {
         eprintln!("cannot open {}: {e}", db_path.display());
@@ -55,15 +68,34 @@ fn main() {
         it.filter_map(|r| r.ok()).collect()
     };
 
-    let mut mpd = Mpd::connect(&addr).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
-    println!("MPD protocol {} at {addr}", mpd.version);
-    let songs = mpd.songs().unwrap_or_else(|e| {
-        eprintln!("listallinfo: {e}");
-        std::process::exit(1);
-    });
+    let songs: Vec<vaino_player::mpd::Song> = match &uri_file {
+        Some(f) => {
+            let text = std::fs::read_to_string(f).unwrap_or_else(|e| {
+                eprintln!("cannot read {f}: {e}");
+                std::process::exit(1);
+            });
+            println!("URIs from {f} (captured; no tags, so rung 2 cannot run)");
+            text.lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(|l| vaino_player::mpd::Song {
+                    uri: l.replace('\\', "/"),
+                    ..Default::default()
+                })
+                .collect()
+        }
+        None => {
+            let mut mpd = Mpd::connect(&addr).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+            println!("MPD protocol {} at {addr}", mpd.version);
+            mpd.songs().unwrap_or_else(|e| {
+                eprintln!("listallinfo: {e}");
+                std::process::exit(1);
+            })
+        }
+    };
     println!("library rows {}   MPD songs {}\n", rows.len(), songs.len());
 
     // Indexes for the two rungs. Both count collisions rather than silently
