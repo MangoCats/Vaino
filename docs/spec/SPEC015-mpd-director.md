@@ -135,6 +135,27 @@ exclusion is not.**
 > playing and keeps the last known elapsed, then judges the outgoing passage
 > against it. This is the one place the design polls, and it is why.
 
+**`[SPEC-MPD-092]` The length the threshold is measured against is Vaino's, never
+MPD's.** *(Decided 2026-08-21, from measurement.)* MPD reports `duration` from an
+estimate rather than a decode — for a VBR MP3 it is size over bitrate, so
+embedded cover art inflates it. Across the 5,373 files both libraries know, **36.9%
+disagree by more than a second**, median error **98.8 s**, worst `+3421 s`; **1,530
+of those move the play threshold**, and the errors run in *both* directions, so no
+correction factor rescues it. Judged against MPD's figure, a 12.07 s track that
+played *in full* was recorded as a skip.
+
+So the resolution ladder `[SPEC-MPD-060]` is load-bearing for **judging**, not only
+for enqueuing: a URI that does not resolve to a Vaino passage yields a verdict
+resting on an estimate, and must be reported as the weaker claim it is. Where the
+passage span is known it supersedes even the file duration, being authoritative by
+construction `[SPEC-DF-030]`.
+
+**`[SPEC-MPD-094]` A stop ends a passage; a pause does not.** MPD retains `songid`
+across a stop, so a watcher keyed on the song identity alone never notices one — a
+track stopped past its threshold went unrecorded, and stayed unrecorded if nothing
+played after it. A pause is the opposite case: elapsed holds still, the listener
+is coming back, and closing the book on them would count a play as a skip.
+
 **`[SPEC-MPD-105]` Both tunables are the listener's, edited on the settings page
 and remembered.** *(Decided 2026-08-21.)*
 

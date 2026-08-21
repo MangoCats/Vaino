@@ -142,6 +142,39 @@ It reports what it *would* record. It does not write `listener_play_history`, do
 
 > **Claims.** Play tracks by hand from any MPD client and the observer agrees with the scrobbling rule: a track played past half its length (or four minutes) is a play, one skipped earlier is not, and a **12-second passage played whole is a play** — which is where the dropped anti-spam floor is proved rather than asserted `[SPEC-MPD-090]`.
 
+### Result: all four claims hold, and a fifth had to be added
+
+`mpd_watch` against MPD 0.24.14, five scenarios driven over the protocol, 2 s sampling:
+
+| scenario | verdict |
+|---|---|
+| seek to 171 s of 334 s (needs 167.0), then `next` | PLAY |
+| 8 s of a 231 s track (needs 115.7), then `next` | skip |
+| seek past half, **pause 8 s**, resume, then `stop` | PLAY — one continuous watch |
+| the real 12.0 s file, played whole | **PLAY** |
+| stopped and idle | nothing |
+
+Two defects surfaced only under live play, neither reachable by unit test.
+
+**`[IMPL-MPD-022]` A stop is not an absent song.** MPD **retains `songid` across a stop**, so watching the id alone left a track the listener stopped 57% of the way through unjudged — and unjudged *forever* if no later song started. A stop must close the book; a **pause must not**, since elapsed holds still and the listener is coming back.
+
+**`[IMPL-MPD-024]` MPD's `duration` cannot be judged against.** It is an estimate, not a decode, and for a VBR MP3 it is size over bitrate — so embedded cover art inflates it. A 12.07 s track carrying a picture was reported as **22.8 s** (546659 × 8 ÷ 192000), and a track that played *in full* was recorded as a skip.
+
+This is not a corner case. Comparing all 5,373 files MPD and Vaino both know:
+
+| | files | share |
+|---|---:|---:|
+| agree within 1 s | 3,388 | 63.1% |
+| **disagree by more than 1 s** | **1,985** | **36.9%** |
+| — MPD too long | 1,414 | |
+| — MPD too short | 571 | |
+
+Median error among the disagreements is **98.8 s**; the worst is `+3421 s` on a 1457 s track. **1,530 of them move the play threshold.** Errors run in *both* directions, so no correction factor rescues it.
+
+> **Consequence for the design.** The observer is not optional-database. Vaino's decoded duration is the reference and MPD's is the fallback, which makes stage 0's mapping ladder load-bearing at stage 1 rather than merely at stage 2 — the URI must resolve before a verdict can be trusted. Stage 2 replaces even the file duration with the passage span, authoritative by construction `[SPEC-DF-030]`.
+
+A verdict resting on MPD's estimate prints a `~` after the length, so a weaker claim looks weaker.
+
 ---
 
 ## 3. Stage 2 — enqueue, without the Director
