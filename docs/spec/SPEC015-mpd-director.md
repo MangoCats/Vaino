@@ -111,12 +111,68 @@ Resolution order, narrowest first, in the spirit of `[SPEC-DF-040]`:
 
 ---
 
-## 7. Open
+## 7. Settled
 
-1. **`[SPEC-MPD-090]` Whether a play can be told from a skip reliably enough for rotation.** `status` gives elapsed and duration, but the threshold is a judgement and rotation is the stage with six years of tuning behind it.
-2. **`[SPEC-MPD-095]` What happens when a person edits the queue.** MPD's queue is shared: another client may clear it, reorder it, or add its own choices. Vaino must treat that as authoritative rather than fight it, and `[REQ-PD-112]`'s bookkeeping needs to survive passages vanishing for reasons that are not failures.
-3. **`[SPEC-MPD-100]` Whether `vaino-mpd` should also write scrobbles**, or leave that to the clients already doing it.
+**`[SPEC-MPD-090]` A play is a play by the scrobbling rule: half the track, or
+four minutes, whichever comes first.** *(Decided 2026-08-21.)* Both Last.fm and
+ListenBrainz use exactly this threshold, and adopting it rather than inventing
+one buys three things: it is already tuned by services that have watched
+billions of listens, it will agree with whatever scrobbler the user is running
+`[SPEC-MPD-100]`, and it is a number a person can check.
+
+**One deviation, deliberate.** Last.fm additionally ignores tracks under 30
+seconds and ListenBrainz under 5. That floor is an *anti-spam* rule about
+fraudulent submissions to a public service, and it does not apply to a private
+rotation ledger. Vaino's shortest radio passage is **12 seconds**
+`[SPEC-SA-090]`; one that played in full did play, and excluding it would
+suppress nothing but the truth. **The threshold is adopted; the minimum-length
+exclusion is not.**
+
+> **Mechanically, elapsed must be sampled rather than read at the end.** `idle
+> player` fires *after* the change, when `currentsong` and `elapsed` already
+> describe the new song, and `consume 1` removes a skipped song exactly as it
+> removes a finished one. So `vaino-mpd` polls `status` at a low rate while
+> playing and keeps the last known elapsed, then judges the outgoing passage
+> against it. This is the one place the design polls, and it is why.
+
+**`[SPEC-MPD-095]` The queue belongs to whoever is in front of it. The Director
+only ever adds, and only ever below the minimum depth.** *(Decided 2026-08-21.)*
+MPD's queue is shared, and a person editing it is not an error to be corrected.
+
+| A person… | The Director… |
+| :--- | :--- |
+| adds twenty tracks | **adds nothing** — the queue is above depth |
+| reorders | leaves the order alone; reads the tail for flow `[SPEC-DIR-160]` |
+| removes one of Vaino's picks | tops back up to depth, **with a fresh choice** |
+| clears the queue | refills to the minimum, five `[SPEC-MPD-035]` |
+
+**It never removes, never reorders, and never re-adds what was taken out.**
+Putting a rejected pick back is the one behaviour that would read as the machine
+arguing with the listener.
+
+**And a removed pick must be un-counted.** `note_queued` marks a passage as
+recently played so rotation suppresses it while queued; if a person deletes it
+before it plays, `forget_queued` has to run or one deletion suppresses that
+recording and its artist for a full rotation `[REQ-PD-112]`. Locally that is
+driven by `take_dropped`; here the trigger is a queue diff after `idle
+playlist`, and the two must reach the same bookkeeping.
+
+**`[SPEC-MPD-100]` `vaino-mpd` does not scrobble.** *(Decided 2026-08-21.)*
+MPD's ecosystem already carries scrobblers — `mpdscribble`, `mpdas`, and several
+clients — and a second submitter would duplicate every listen. Vaino writes its
+**own** `listener_play_history`, which is a different ledger for a different
+purpose: rotation input, not a public record `[SPEC-DF-055]`. Sharing the
+threshold with the scrobblers `[SPEC-MPD-090]` is what keeps the two agreeing
+about what happened without either writing the other's data.
 
 ---
 
-**Traceability:** `[SPEC-MPD-010..100]` · derived from `[GDE-BAK-035]`, `[GDE-BAK-025]`, `[SPEC-DIR-160]`, `[SPEC-SC-043]`
+## 8. Open
+
+1. **`[SPEC-MPD-110]` How often `status` must be sampled** to judge a play without polling wastefully `[SPEC-MPD-090]`. A four-minute rule tolerates a coarse interval; a half-length rule on a 12-second passage does not, and the two want different answers.
+2. **`[SPEC-MPD-115]` Whether a person's own additions should feed rotation.** They played, so they happened — but they were not chosen by the Director, and counting them shapes future selection by a hand the algorithm cannot see. Probably yes, on the grounds that `listener_play_history` records listening rather than deciding.
+3. **`[SPEC-MPD-120]` What "active" means for the Director** `[SPEC-MPD-095]`. There must be a way to leave it running but quiet, or a person browsing their library fights a daemon that keeps appending.
+
+---
+
+**Traceability:** `[SPEC-MPD-010..120]` · derived from `[GDE-BAK-035]`, `[GDE-BAK-025]`, `[SPEC-DIR-160]`, `[SPEC-SC-043]`
