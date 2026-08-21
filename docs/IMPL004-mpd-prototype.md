@@ -185,6 +185,27 @@ A verdict resting on MPD's estimate prints a `~` after the length, so a weaker c
 
 > **Claims.** A passage plays **its span** and stops — verified against a DAO capture, where naming the file would otherwise play forty songs. The queue holds at depth and refills as `consume` drains it. And the etiquette holds under a person's hands `[SPEC-MPD-095]`: adding twenty tracks stops it adding, clearing refills to five, removing a pick produces a **different** one, and reordering is left alone.
 
+### Result: `rangeid` holds, with one condition worth the whole stage
+
+`mpd_fill` — uniform-random selector, `consume 1`, `addid` then `rangeid`, top up to depth.
+
+**The span is real.** A passage at `2686.740-2958.564` inside a multi-hour capture ran to 271.3 s of its 271.824 s span and then advanced; the remaining ~7,000 s of that file did not play. Across a 400-passage queue every range matched a real passage span to within **1.0 ms**, 127 of them mid-capture, and MPD's `Time` equalled the span every time.
+
+**The etiquette holds**, all four, unmodified:
+
+| a person… | the filler |
+|---|---|
+| adds twenty tracks (queue 22) | added **0** over four poll intervals |
+| clears the queue | refilled to **5** |
+| deletes one of its picks | replaced it with a **different** passage |
+| reorders (`move 0 4`) | left the order exactly as chosen |
+
+**`[IMPL-MPD-032]` And `OK` is not evidence.** MPD validates a range end against *its own* duration estimate — the one stage 1 established is wrong on 36.9% of files. Where the end exceeds it, MPD returns `OK`, **drops the end**, reports a shortened `Time`, and plays to EOF anyway.
+
+I watched it happen: a passage due to end at 136.2 s kept playing past its claimed 79.16 s duration and ran to the file's 146.7 s end. **508 of 7,994 passages (6.4%)**, median overrun 11.2 s, worst 532 s. A live run enqueuing 300 passages flagged 18 — 6.0%, as predicted.
+
+Every `rangeid` is now read back and compared against the span requested `[SPEC-MPD-096]`, `[GOV-SRC-030]`. This is the second stage running to find that a single unreliable number — MPD's `duration` — corrupts something new. It is worth expecting a third.
+
 ---
 
 ## 4. Stage 3 — the Director drives

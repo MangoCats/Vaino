@@ -81,6 +81,7 @@ Where the choice has been made, and on what evidence.
 | **which encoding is this** | `audio_md5` | `recording_mbid`, then `file_path` | `[SPEC-DF-030]`, `[SPEC-DF-035]` |
 | **which MPD URI is this passage** | same-tree prefix | recording MBID, then unresolved | stage 0: 100% same-platform, 95.2% across `[SPEC-MPD-060]` |
 | **is this the file we catalogued** | content hash | path | paths move; `[SPEC-RLK-090]`, `[SPEC-RLK-150]` |
+| **did the span we asked for land** | the queue entry read back | the command's `OK` | `OK` hid a dropped range on 6.4% of passages `[SPEC-MPD-096]` |
 | **which hasher computes `audio_md5`** | *not a ranking* | — | inheritance and purpose, not merit `[SPEC-RLK-080]`, `[SPEC-RLK-086]` |
 
 **`[GOV-SRC-060]` A new pair of sources is added to this register when it is

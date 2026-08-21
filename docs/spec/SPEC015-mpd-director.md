@@ -150,6 +150,27 @@ resting on an estimate, and must be reported as the weaker claim it is. Where th
 passage span is known it supersedes even the file duration, being authoritative by
 construction `[SPEC-DF-030]`.
 
+**`[SPEC-MPD-096]` `rangeid` returning `OK` is not evidence the span landed.**
+*(Decided 2026-08-21, from measurement.)* MPD validates the requested end against
+**its own duration estimate** — the unreliable one `[SPEC-MPD-092]`. Where the end
+exceeds it, MPD accepts the command, silently **drops the end**, reports a
+shortened `Time`, and then plays **to end of file** regardless. Measured: 508 of
+7,994 resolvable passages (**6.4%**), median overrun 11.2 s past the intended end,
+worst 532 s. None fell on a multi-passage capture, so nothing spills into a
+neighbouring song — but that is this library's luck, not a property of the
+protocol.
+
+So every `rangeid` is **read back** and the resulting `Time` compared against the
+span asked for; a mismatch is reported rather than assumed away `[GOV-SRC-030]`.
+Withdrawing the passage instead would make 6.4% of the library unplayable through
+MPD, which is worse than a known overrun. The Director enforces the end itself,
+by advancing at the span boundary using the sampler it already runs — bounding the
+overrun by the sample interval `[SPEC-MPD-105]` rather than by the file's length.
+
+> The residual imprecision is real and is the cost of being a guest: the end
+> lands within one sample interval rather than exactly. Vaino's own engine has no
+> such limit, which is a fair statement of what the MPD path gives up.
+
 **`[SPEC-MPD-094]` A stop ends a passage; a pause does not.** MPD retains `songid`
 across a stop, so a watcher keyed on the song identity alone never notices one — a
 track stopped past its threshold went unrecorded, and stayed unrecorded if nothing
