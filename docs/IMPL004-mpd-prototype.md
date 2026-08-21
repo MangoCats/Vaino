@@ -44,6 +44,47 @@ Build a tool that reads `vaino.db` and an MPD instance and **writes nothing to e
 
 > **Claims.** A number for each rung, over all 5,709 files. Specifically: **how many of the 276 private-use paths (4.8%) survive a prefix match against a Linux MPD** — the answer is expected to be *none*, and measuring that is the point. Ambiguity is reported separately from failure: two Vaino rows resolving to one URI is a different problem from a row resolving to nothing.
 
+> **DONE 2026-08-21, Windows, MPD 0.24.14.** Native build against the real
+> `Music` tree; MPD indexed **5,758 songs** against the library's 5,709 rows.
+> [`player/src/mpd.rs`](../player/src/mpd.rs) is the protocol client —
+> `std::net` and nothing else, as `[SPEC-MPD-070]` claimed — and
+> [`mpd_map`](../player/src/bin/mpd_map.rs) is the measurement.
+>
+> | rung | rows | |
+> | :--- | ---: | ---: |
+> | 1 · same-tree prefix | **5,709** | **100.0%** |
+> | 2 · recording MBID | 0 | 0.0% |
+> | 3 · unresolved | **0** | 0.0% |
+>
+> **Ambiguous: 0.** No library row resolves to more than one MPD song.
+>
+> **All 276 private-use paths resolved.** MPD on Windows reports the *same*
+> `U+F03A` substitution Vaino stored, so the two agree without either knowing
+> why. That is the same-platform case behaving well; it says nothing yet about
+> a Linux MPD, which is the case that will not `[IMPL-MPD-008]`.
+
+**`[IMPL-MPD-012]` Rung 2 is a candidate, not a match — and the measurement says
+so.** MPD carries a recording MBID on **5,462 of 5,758** songs (94.9%), which
+looked like a strong fallback until the collisions were counted: **284 MBIDs are
+shared by more than one song.**
+
+That is not a defect in anyone's data. One recording legitimately appears in
+several files — a duplicate rip, or the same performance on an album and a
+compilation. But Vaino's passage carries `start_ms`, `end_ms` and a gain that
+belong to **one exact encoding** `[SPEC-DF-040]`, so resolving by MBID can find
+the right *music* in the wrong *file* and apply another rip's trim points to it.
+
+**This is `[SPEC-RLK-040]`'s rule arriving by a second road.** Relink already
+holds that `recording_mbid` is *"a candidate, not a match, because passage
+boundaries, trim points and replay gain are encoding-scope and do not transfer
+to a different rip"*. The same sentence governs here, and rung 2 must therefore
+**report rather than bind** whenever its MBID is not unique.
+
+**`[IMPL-MPD-014]` MPD knows 49 songs the library does not.** 5,758 against
+5,709, and relink counted a comparable never-indexed tail `[SPEC-RLK-070]`.
+Those are ingest's business, not the mapping's `[SPEC-RLK-090]` — but a
+`vaino-mpd` that silently ignored them would be hiding a list someone might want.
+
 **`[IMPL-MPD-015]` If the ladder resolves poorly, stop and redesign.** A third rung — `(artist, title, duration)` within a tolerance — is the obvious next idea and is exactly the kind of fuzzy key that produces a plausible wrong answer. It should not be added on instinct; it should be added only if stage 0 shows the first two rungs are insufficient, and then measured for false matches rather than coverage.
 
 ---
