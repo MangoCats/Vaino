@@ -20,6 +20,7 @@ pub mod fade;
 pub mod mixer;
 pub mod output;
 pub mod path;
+pub mod playback;
 pub mod queue;
 pub mod relink;
 pub mod bluetooth;
