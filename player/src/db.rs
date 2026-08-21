@@ -107,6 +107,23 @@ pub(crate) const TAG_TABLE: &str = "
 /// both side by side. Nothing else is stored: MuLibPlay's back covers are
 /// 35.6 MB of its 80.5 MB of art, and a third image nobody displays would be
 /// the same bargain again.
+/// What the listener declined, and how `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
+///
+/// Created by the player rather than left to Sampo's schema pass, for the same
+/// reason as the tables below it: the player is the one **writing** here, on
+/// every rejection, and an existing library that predates this feature would
+/// otherwise fail every write. Those writes are best-effort by design, so the
+/// failure would be a log line and a suppression that silently never happened.
+pub(crate) const REJECTION_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS listener_rejections (
+        rejection_id INTEGER PRIMARY KEY,
+        rejected_at  INTEGER NOT NULL,
+        kind         TEXT NOT NULL,
+        passage_id   INTEGER,
+        mbid         TEXT);
+    CREATE INDEX IF NOT EXISTS listener_reject_mbid
+        ON listener_rejections(mbid, kind);";
+
 pub(crate) const ART_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS cover_art (
         release_mbid TEXT PRIMARY KEY,
@@ -479,6 +496,7 @@ impl PlayerStore {
         // writable handle, so the read path never meets a missing table.
         // Filling it is `tools/fetch_cover_art.py`'s job.
         conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
@@ -1921,9 +1939,7 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
                      played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);
-                 CREATE TABLE listener_rejections (rejection_id INTEGER PRIMARY KEY,
-                     rejected_at INTEGER NOT NULL, kind TEXT NOT NULL,
-                     passage_id INTEGER, mbid TEXT);",
+                 -- listener_rejections is created by PlayerStore::open itself.",
             )
             .unwrap();
         let skipped = "aaaaaaaa-0000-0000-0000-000000000009";

@@ -1152,6 +1152,85 @@ mod tests {
     /// heard `[REQ-VIS-180]`. It went in second for a while, on the mistaken
     /// idea that the sounding passage occupied slot zero -- it does not; it is
     /// in `live` and out of the queue entirely.
+    const DQ_MBID: &str = "aaaaaaaa-0000-0000-0000-000000000007";
+
+    /// Taking a passage out of the queue before it plays is a rejection, and
+    /// the shorter kind `[SPEC-PLAY-055]`.
+    #[test]
+    fn removing_a_queued_passage_records_a_dequeue() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let mut ent = entry(7, "a.mp3");
+        ent.mbid = Some(DQ_MBID.into());
+        e.enqueue(ent);
+        let qid = e.queued().next().expect("queued").qid;
+
+        h.send(Command::RemoveQueued(qid));
+        e.drain_commands();
+
+        assert!(e.queued().next().is_none(), "it really left the queue");
+        let deq = st.last_rejected(crate::db::Rejection::Dequeue).unwrap();
+        assert_eq!(deq.len(), 1, "one dequeue recorded");
+        assert!(deq.contains_key(DQ_MBID), "recorded against its recording");
+        assert!(
+            st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
+            "a removal is not a skip: they earn different windows"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Removing a passage that is not there records nothing. Without the
+    /// existence check a stale id from a browser would suppress a recording the
+    /// listener never touched.
+    #[test]
+    fn removing_a_passage_that_is_not_queued_records_nothing() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let mut ent = entry(7, "a.mp3");
+        ent.mbid = Some(DQ_MBID.into());
+        e.enqueue(ent);
+
+        h.send(Command::RemoveQueued(4242)); // never a real qid
+        e.drain_commands();
+
+        assert!(e.queued().next().is_some(), "the real entry is untouched");
+        assert!(
+            st.last_rejected(crate::db::Rejection::Dequeue).unwrap().is_empty(),
+            "nothing was removed, so nothing was declined"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A passage the engine could not open leaves the queue too, and it must
+    /// leave **no mark** `[REQ-PD-112]`. A failure is not a preference, and
+    /// suppressing a recording because its file was missing would punish the
+    /// listener for a fault they did not commit.
+    #[test]
+    fn a_passage_that_would_not_open_is_not_a_rejection() {
+        let (st, path) = store();
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let mut ent = entry(9, "no-such-file-anywhere.mp3");
+        ent.mbid = Some(DQ_MBID.into());
+        e.enqueue(ent);
+        for _ in 0..8 {
+            e.tick();
+        }
+
+        assert!(!e.take_dropped().is_empty(), "the unopenable passage was dropped");
+        assert!(
+            st.last_rejected(crate::db::Rejection::Dequeue).unwrap().is_empty()
+                && st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
+            "a file that would not open must suppress nothing"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn enqueue_next_puts_a_passage_first_in_the_queue() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
