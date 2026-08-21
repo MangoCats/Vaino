@@ -2019,6 +2019,63 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
+    /// An existing library, written before any of this, must open and work.
+    ///
+    /// This is the shipping question rather than a unit one: the appliance's
+    /// database has a `player_state` with none of the newer columns and no
+    /// `listener_rejections` at all. A query naming a column that does not
+    /// exist fails outright rather than returning nothing, so a missed
+    /// migration is a player that will not start.
+    #[test]
+    fn a_library_from_before_all_this_still_opens() {
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino_legacy_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        // Exactly the old shape: the original five columns, nothing since.
+        {
+            let c = Connection::open(&tmp).unwrap();
+            c.execute_batch(
+                "CREATE TABLE player_state (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     passage_id INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
+                     playing INTEGER NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 1.0,
+                     updated_at TEXT NOT NULL);
+                 INSERT INTO player_state (id, position_ms, playing, volume, updated_at)
+                     VALUES (1, 4321, 1, 0.75, datetime('now'));",
+            )
+            .unwrap();
+        }
+
+        let store = PlayerStore::open(&tmp).expect("an old library must still open");
+
+        // The resume point survives the migration -- it is the one thing in
+        // that row a listener would notice losing.
+        assert_eq!(store.load().unwrap(), Some((None, 4321, true)));
+
+        // New settings read as their defaults, not as zero.
+        let s = store.load_settings().expect("settings readable");
+        let d = Settings::default();
+        assert!((s.volume - 0.75).abs() < 1e-6, "the old value is kept");
+        assert_eq!(s.skip_suppress_h, d.skip_suppress_h);
+        assert_eq!(s.dequeue_suppress_h, d.dequeue_suppress_h);
+        assert_eq!(s.queue_depth, d.queue_depth);
+        assert_eq!(s.sample_interval_ms, d.sample_interval_ms);
+
+        // And the table the player writes rejections to now exists.
+        store.record_rejection(Rejection::Skip, 1, Some("m")).unwrap();
+        assert_eq!(store.last_rejected(Rejection::Skip).unwrap().len(), 1);
+
+        // Writing back does not fail on the migrated row either.
+        store.save_settings(&s).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     /// A rejection is written where suppression can see it and the weighting
     /// cannot, and the two kinds stay apart `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
     #[test]
