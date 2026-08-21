@@ -1932,7 +1932,16 @@ mod tests {
     /// cannot, and the two kinds stay apart `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
     #[test]
     fn rejections_are_recorded_apart_from_plays_and_by_kind() {
-        let tmp = std::env::temp_dir().join(format!("vaino_sk_{}.db", std::process::id()));
+        // Unique per run, not merely per process: a process id is reused, and a
+        // leftover file would meet a bare CREATE TABLE below.
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino_sk_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std::fs::remove_file(&tmp);
         let st = PlayerStore::open(&tmp).unwrap();
         st.conn

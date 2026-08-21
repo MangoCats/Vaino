@@ -253,6 +253,20 @@ The queue refilled to depth after each departure. A passage that never reached t
 
 > **Claims.** The mapping cache measurably shortens a second run. A sticker-aware client displays the explanation with **no change to that client**. And the class-D guarantee holds in the direction that matters here: `listener_play_history` grows, and nothing Vaino writes leaves the machine.
 
+### Result: it writes, it publishes, and one claim was too generous
+
+Run against a **copy** of the library, `--write` opt-in so stage 4 cannot happen by accident.
+
+**The ledger fills, correctly divided.** A passage played past its threshold reached `listener_play_history` (37,238 → 37,239, `PLAY [12782] 206s of 396s`); a passage stopped at 5 s of 724 s went to `listener_rejections` as a **skip**; one deleted from the queue unheard went there as a **dequeue**. Three outcomes, three destinations, one rule deciding `[SPEC-PLAY-010]`. The original library was untouched throughout, which is how the copy earns its keep.
+
+**And the loop closes.** The next run's census opened with **2 suppressed** — the skip and the dequeue just written, now holding those recordings out. Nothing was wired to make that happen; the Director reads the tables it always read.
+
+**Stickers publish.** `vaino.passage`, `vaino.chosen_at`, `vaino.flavor` and a 1,318-byte `vaino.why` land on the URI and read back through the ordinary protocol. The flavor summary is composed from class names, so it says `electronic · not aggressive · instrumental` rather than a vector.
+
+**`[IMPL-MPD-057]` A person's own additions are adopted, or refused by name.** `[SPEC-MPD-115]` settled that they feed rotation, which needs the URI resolved backwards. A hand-added single-song file was adopted and its play recorded. A hand-added **DAO capture was refused** — 5,518 of 5,709 URIs name exactly one radio passage, and the other 191 name up to forty. Guessing one would attribute a play to a passage nobody heard, so it is reported instead `[SPEC-MPD-060]`.
+
+**The cache claim was too generous, and is narrowed.** A sticker lookup costs **0.072 ms**; the `listallinfo` it would replace costs **26 ms** once, for 4.3 MB. So the cache saves ~26 ms per *process*, not per lookup — and in the same-tree case it saves nothing at all, because rung 1 is a string prefix that needs no MPD call. **It pays only where rung 1 fails**, which stage 0 measured at 4.8% of this library and 100% of a cross-platform install. The sticker is kept regardless, because it is also *published data* a client can read — but it was specified as a cache and it is barely one.
+
 ---
 
 ## 6. Stage 5 — settings and containment

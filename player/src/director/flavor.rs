@@ -72,6 +72,19 @@ impl FlavorSchema {
     pub fn index_of(&self, name: &str) -> Option<usize> {
         self.index.get(name).copied()
     }
+    /// How many classes this characteristic has. Two for `danceability`, ten
+    /// for `genre_dortmund`.
+    pub fn width(&self, c: usize) -> usize {
+        self.width[c]
+    }
+    /// The name of one class, for saying what a vector *means* rather than
+    /// what it measures `[SPEC-MPD-050]`.
+    pub fn class_name(&self, c: usize, k: usize) -> Option<&str> {
+        self.class_index[c]
+            .iter()
+            .find(|(_, &pos)| pos == k)
+            .map(|(name, _)| name.as_str())
+    }
 }
 
 /// One subject's flavor: a flat vector plus which characteristics are present.
@@ -90,6 +103,41 @@ impl Flavor {
     }
     pub fn present_count(&self) -> u32 {
         self.present.count_ones()
+    }
+
+    /// The likeliest class of one characteristic, as `(class index, value)`.
+    pub fn top_class(&self, schema: &FlavorSchema, c: usize) -> Option<(usize, f32)> {
+        if !self.has(c) {
+            return None;
+        }
+        let (start, w) = (schema.offset[c], schema.width(c));
+        self.values
+            .get(start..start + w)?
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(k, v)| (k, *v))
+    }
+
+    /// A short human reading of this vector — `danceable · rock · male`.
+    ///
+    /// For publishing to clients that can show a string and nothing else
+    /// `[SPEC-MPD-050]`. Only classes that actually won their characteristic
+    /// appear: a ten-class genre whose best guess is 0.2 says nothing worth
+    /// printing, and printing it anyway would dress a shrug as a finding.
+    pub fn summary(&self, schema: &FlavorSchema, max_terms: usize) -> String {
+        let mut terms: Vec<(f32, String)> = (0..schema.characteristic_count())
+            .filter_map(|c| {
+                let (k, v) = self.top_class(schema, c)?;
+                if v < 0.5 {
+                    return None;
+                }
+                Some((v, schema.class_name(c, k)?.replace('_', " ")))
+            })
+            .collect();
+        terms.sort_by(|a, b| b.0.total_cmp(&a.0));
+        terms.truncate(max_terms);
+        terms.into_iter().map(|(_, n)| n).collect::<Vec<_>>().join(" · ")
     }
 }
 

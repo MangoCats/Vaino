@@ -1,7 +1,8 @@
-//! Stage 3: the Program Director drives MPD `[IMPL-MPD-040]`.
+//! Stages 3 and 4: the Program Director drives MPD, and writes what happened
+//! `[IMPL-MPD-040]`, `[IMPL-MPD-050]`.
 //!
 //!   mpd_direct [host:port] --db vaino.db --root MUSIC_DIRECTORY
-//!              [--depth 5] [--interval 5] [--for SECONDS] [--seed N]
+//!              [--depth 5] [--interval 5] [--for SECONDS] [--seed N] [--write]
 //!
 //! Stage 2 proved `rangeid` under a deliberately stupid selector. This swaps
 //! that selector for `Director::decide` — the same call `Session::refill` makes
@@ -14,21 +15,39 @@
 //! and the same event means two different things depending on whether it was
 //! ever the current song.
 //!
-//! **Writes nothing to the database.** Stage 4 does that `[IMPL-MPD-050]`. What
-//! would be recorded is printed, so the bookkeeping can be judged before it is
-//! given the power to be wrong in a file.
+//! **Writing is opt-in.** Without `--write` this behaves exactly as stage 3
+//! did, printing what it would record. With it, plays go to
+//! `listener_play_history` and rejections to `listener_rejections`
+//! `[SPEC-PLAY-050]` — and **nowhere else**: no scrobbler, no network, nothing
+//! that leaves the machine `[SPEC-MPD-100]`, `[SPEC-DF-055]`.
+//!
+//! What is published instead is a **sticker**, in MPD's own database, which is
+//! where MPD's own clients already look `[SPEC-MPD-050]`. A client that has
+//! never heard of Vaino is unaffected; one that shows stickers gains the "why
+//! this track" panel without a line of code changing.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
+use vaino_player::db::{PlayerStore, Rejection};
 use vaino_player::director::library::{Director, QueuedNote, Rng};
-use vaino_player::mpd::{parse, Mpd};
+use vaino_player::mpd::{parse, quote, Mpd};
+use vaino_player::scrobble::counts_as_play;
 
 /// What the Director handed over, and what MPD did with it.
 struct Offered {
     passage_id: i64,
     title: String,
+    mbid: Option<String>,
+    /// The passage span, from Vaino and never from MPD `[SPEC-MPD-092]`.
+    span_ms: u64,
+    /// Furthest position observed, in ms. With `rangeid` MPD reports `elapsed`
+    /// relative to the range start, so this needs no translation.
+    furthest_ms: u64,
+    /// False when MPD dropped the range end `[SPEC-MPD-096]`; the passage will
+    /// otherwise play to end of file, so the Director must end it itself.
+    span_honoured: bool,
     /// The undo for `note_queued`, held until the passage's fate is known
     /// `[REQ-PD-112]`.
     note: Option<QueuedNote>,
@@ -52,6 +71,9 @@ fn main() {
     let depth: usize = flag(&args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(5);
     let interval: f64 = flag(&args, "--interval").and_then(|v| v.parse().ok()).unwrap_or(5.0);
     let run_for: Option<f64> = flag(&args, "--for").and_then(|v| v.parse().ok());
+    // Stage 4 is the first stage that writes `[IMPL-MPD-050]`, and it says so
+    // out loud: without `--write` it behaves exactly as stage 3 did.
+    let write = args.iter().any(|a| a == "--write");
     let flagged: HashSet<&str> =
         ["--db", "--root", "--depth", "--interval", "--for", "--seed"].into_iter().collect();
     let taken: HashSet<usize> = args
@@ -82,6 +104,50 @@ fn main() {
     });
     let root_norm = root.replace('\\', "/").trim_end_matches('/').to_string();
 
+    // A person's own additions feed rotation `[SPEC-MPD-115]`, so a song this
+    // program did not queue still has to be nameable. URI -> passage, built
+    // once from the library.
+    //
+    // **A file carrying more than one radio passage is left ambiguous**, not
+    // guessed. Added whole, a DAO capture is forty songs; picking one of them
+    // would attribute a play to a passage the listener never heard, which is
+    // the failure `[SPEC-MPD-060]`'s third rung exists to refuse.
+    let mut by_uri: HashMap<String, Option<(i64, Option<String>, u64)>> = HashMap::new();
+    {
+        let mut q = conn
+            .prepare(
+                "SELECT f.path, f.duration_ms, p.passage_id, \
+                    (SELECT pr.mbid FROM passage_recordings pr \
+                     WHERE pr.passage_id = p.passage_id LIMIT 1) \
+                 FROM passages p JOIN files f USING(file_id) WHERE p.kind = 'radio'",
+            )
+            .expect("map uris");
+        let rows = q
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u64,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .expect("read uris");
+        for (path, dur, pid, mbid) in rows.flatten() {
+            let norm = path.replace('\\', "/");
+            let Some(rel) = norm.strip_prefix(&root_norm) else { continue };
+            let uri = rel.trim_start_matches('/').to_string();
+            match by_uri.entry(uri) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    e.insert(None); // a second passage: ambiguous, so refuse both
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(Some((pid, mbid, dur)));
+                }
+            }
+        }
+    }
+    let unambiguous = by_uri.values().filter(|v| v.is_some()).count();
+
     let mut mpd = Mpd::connect(&addr).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);
@@ -94,7 +160,23 @@ fn main() {
             c.eligible, c.suppressed
         );
     }
-    println!("depth {depth}, sampling {interval}s; writes nothing\n");
+    let store = if write {
+        match PlayerStore::open(std::path::Path::new(&db_path)) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("cannot open {db_path} for writing: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+    println!("{unambiguous} of {} URIs name exactly one radio passage", by_uri.len());
+    println!(
+        "depth {depth}, sampling {interval}s; {}",
+        if write { "WRITING plays and rejections" } else { "writes nothing (pass --write)" }
+    );
+    println!("nothing leaves this machine: no scrobble, no network `[SPEC-MPD-100]`\n");
 
     if let Err(e) = mpd.cmd("consume 1") {
         eprintln!("consume: {e}");
@@ -104,6 +186,8 @@ fn main() {
     let started = Instant::now();
     let mut ours: HashMap<String, Offered> = HashMap::new();
     let (mut added, mut played, mut removed, mut unhonoured) = (0u32, 0u32, 0u32, 0u32);
+    let (mut skipped, mut stickered, mut adopted) = (0u32, 0u32, 0u32);
+    let mut unresolved: HashSet<String> = HashSet::new();
 
     loop {
         let status = match mpd.status() {
@@ -120,10 +204,101 @@ fn main() {
 
         // Mark the current song before diffing, so a passage that started
         // between two samples is not mistaken for one removed by hand.
+        let elapsed_ms = status
+            .get("elapsed")
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|s| (s * 1000.0).round() as u64)
+            .unwrap_or(0);
+        // A song this program did not queue is still something the listener
+        // heard `[SPEC-MPD-115]`. Adopt it once, so its play is attributed.
+        if let Some(id) = &current {
+            if !ours.contains_key(id) {
+                let uri = mpd
+                    .cmd("currentsong")
+                    .map(|l| parse(&l).get("file").cloned().unwrap_or_default())
+                    .unwrap_or_default();
+                if !uri.is_empty() {
+                    // The sticker first `[SPEC-MPD-065]`: the mapping is a
+                    // property of this MPD, cached where this MPD keeps it.
+                    let cached: Option<i64> = mpd
+                        .cmd(&format!("sticker get song {} vaino.passage", quote(&uri)))
+                        .ok()
+                        .and_then(|l| {
+                            l.iter()
+                                .find_map(|s| s.strip_prefix("sticker: vaino.passage="))
+                                .and_then(|v| v.parse().ok())
+                        });
+                    let found = match cached {
+                        Some(pid) => by_uri
+                            .get(&uri)
+                            .and_then(|v| v.as_ref())
+                            .map(|(_, m, d)| (pid, m.clone(), *d)),
+                        None => by_uri.get(&uri).and_then(|v| v.clone()),
+                    };
+                    match found {
+                        Some((pid, mbid, file_ms)) => {
+                            if cached.is_none() {
+                                let _ = mpd.cmd(&format!(
+                                    "sticker set song {} {} {}",
+                                    quote(&uri),
+                                    quote("vaino.passage"),
+                                    quote(&pid.to_string())
+                                ));
+                            }
+                            adopted += 1;
+                            println!(
+                                "  adopted a hand-added song as [{pid}]{}",
+                                if cached.is_some() { " (from the sticker cache)" } else { "" }
+                            );
+                            ours.insert(
+                                id.clone(),
+                                Offered {
+                                    passage_id: pid,
+                                    title: uri.rsplit('/').next().unwrap_or(&uri).to_string(),
+                                    mbid,
+                                    // Added whole, so the file's length is the
+                                    // span; there is no range to be relative to.
+                                    span_ms: file_ms,
+                                    furthest_ms: 0,
+                                    span_honoured: true,
+                                    note: None,
+                                    was_current: true,
+                                },
+                            );
+                        }
+                        None => {
+                            if unresolved.insert(uri.clone()) {
+                                println!(
+                                    "  a hand-added song is ambiguous or unknown, so its play \
+                                     is not attributed: {}",
+                                    uri.rsplit('/').next().unwrap_or(&uri)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut overrun: Option<String> = None;
         if let Some(id) = &current {
             if let Some(o) = ours.get_mut(id) {
                 o.was_current = true;
+                if active {
+                    o.furthest_ms = o.furthest_ms.max(elapsed_ms);
+                }
+                // **The Director ends what MPD would not** `[SPEC-MPD-096]`.
+                // Where the span was dropped, MPD plays on to end of file — up
+                // to 532 s past the passage in this library. Advancing here
+                // bounds the overrun by the sample interval instead.
+                if !o.span_honoured && active && o.furthest_ms >= o.span_ms {
+                    overrun = Some(id.clone());
+                }
             }
+        }
+        if let Some(id) = overrun {
+            println!("  span end reached on an unhonoured range; advancing [{id}]");
+            let _ = mpd.cmd("next");
         }
 
         // --- the queue diff, which is this stage's real work ---
@@ -142,11 +317,36 @@ fn main() {
         for id in gone {
             let Some(o) = ours.remove(&id) else { continue };
             if o.was_current {
-                // It reached the front, so it played or was skipped. Either way
-                // the listener met it, and the note stands — the same as
-                // locally, where only an unopenable passage is undone.
-                played += 1;
-                println!("  played or skipped [{}] {}", o.passage_id, o.title);
+                // It reached the front, so the listener met it, and the note
+                // stands — the same as locally, where only an unopenable
+                // passage is undone. Whether it *played* is a separate
+                // question, judged against Vaino's span `[SPEC-PLAY-010]`.
+                let heard = counts_as_play(o.furthest_ms, o.span_ms);
+                let verb = if heard { "PLAY" } else { "skip" };
+                println!(
+                    "  {verb} [{}] {:.0}s of {:.0}s  {}",
+                    o.passage_id,
+                    o.furthest_ms as f64 / 1000.0,
+                    o.span_ms as f64 / 1000.0,
+                    o.title
+                );
+                if heard {
+                    played += 1;
+                } else {
+                    skipped += 1;
+                }
+                if let Some(st) = &store {
+                    let r = if heard {
+                        st.record_play(o.passage_id, o.mbid.as_deref())
+                    } else {
+                        // A skip is not a play, and earns the longer window
+                        // `[SPEC-PLAY-055]`.
+                        st.record_rejection(Rejection::Skip, o.passage_id, o.mbid.as_deref())
+                    };
+                    if let Err(e) = r {
+                        eprintln!("record {verb}: {e}");
+                    }
+                }
             } else {
                 // It never played and it left: a person took it out. Undo the
                 // queueing mark `[REQ-PD-112]` so the Director does not go on
@@ -159,9 +359,16 @@ fn main() {
                 // separate mechanism with a separate window `[SPEC-PLAY-055]`.
                 // Undoing the note is not the same as forgiving the removal.
                 println!(
-                    "  removed by hand [{}] {} -- queue mark undone; would record a dequeue",
+                    "  removed by hand [{}] {} -- queue mark undone, dequeue recorded",
                     o.passage_id, o.title
                 );
+                if let Some(st) = &store {
+                    if let Err(e) =
+                        st.record_rejection(Rejection::Dequeue, o.passage_id, o.mbid.as_deref())
+                    {
+                        eprintln!("record dequeue: {e}");
+                    }
+                }
             }
         }
 
@@ -201,12 +408,52 @@ fn main() {
                         unhonoured += 1;
                         println!("  ! span not honoured for [{}]", e.passage_id);
                     }
+                    // Publish into the world MPD's clients already read
+                    // `[SPEC-MPD-050]`. Nothing is added to MPD to make this
+                    // work, and a client that knows nothing of Vaino is
+                    // unaffected by any of it.
+                    let mut set = |name: &str, value: &str| {
+                        let cmd = format!(
+                            "sticker set song {} {} {}",
+                            quote(&uri),
+                            quote(name),
+                            quote(value)
+                        );
+                        if let Err(err) = mpd.cmd(&cmd) {
+                            eprintln!("sticker {name}: {err}");
+                        }
+                    };
+                    set("vaino.passage", &e.passage_id.to_string());
+                    set("vaino.chosen_at", &now().to_string());
+                    match serde_json::to_string(&decision.why) {
+                        Ok(j) => set("vaino.why", &j),
+                        Err(err) => eprintln!("why: {err}"),
+                    }
+                    let flavor = e
+                        .mbid
+                        .as_deref()
+                        .and_then(|m| director.flavor_summary(m, 3))
+                        .unwrap_or_default();
+                    if !flavor.is_empty() {
+                        set("vaino.flavor", &flavor);
+                    }
+                    stickered += 1;
+
                     let note = director.note_queued(e.passage_id, now());
                     let title = e.title();
-                    println!("  + [{:>6}] {}", e.passage_id, title);
+                    println!("  + [{:>6}] {}  {}", e.passage_id, title, flavor);
                     ours.insert(
                         a.id,
-                        Offered { passage_id: e.passage_id, title, note, was_current: false },
+                        Offered {
+                            passage_id: e.passage_id,
+                            title,
+                            mbid: e.mbid.clone(),
+                            span_ms: e.duration_ms(),
+                            furthest_ms: 0,
+                            span_honoured: a.span_honoured,
+                            note,
+                            was_current: false,
+                        },
                     );
                     added += 1;
                 }
@@ -220,7 +467,16 @@ fn main() {
         std::thread::sleep(Duration::from_secs_f64(interval));
     }
 
-    println!("\noffered {added}; {played} reached the front; {removed} removed by hand");
+    println!(
+        "\noffered {added}; {played} played, {skipped} skipped, {removed} removed by hand"
+    );
+    println!("{stickered} passage(s) published to MPD's stickers `[SPEC-MPD-050]`");
+    if adopted > 0 || !unresolved.is_empty() {
+        println!(
+            "{adopted} hand-added song(s) adopted `[SPEC-MPD-115]`; {} could not be named",
+            unresolved.len()
+        );
+    }
     if unhonoured > 0 {
         println!("{unhonoured} span(s) MPD would not honour `[SPEC-MPD-096]`");
     }

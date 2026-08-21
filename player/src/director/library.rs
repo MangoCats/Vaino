@@ -344,6 +344,14 @@ impl Director {
         )
     }
 
+    /// A short human reading of a recording's flavor `[SPEC-MPD-050]`, for
+    /// publishing to clients that can show a string and nothing else.
+    pub fn flavor_summary(&self, mbid: &str, max_terms: usize) -> Option<String> {
+        let f = self.flavor.get(mbid)?;
+        let s = f.summary(&self.flavor.schema, max_terms);
+        (!s.is_empty()).then_some(s)
+    }
+
     pub fn policy(&self) -> Policy {
         self.policy
     }
