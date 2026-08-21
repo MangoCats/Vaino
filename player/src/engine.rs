@@ -66,6 +66,8 @@ pub struct PlayerState {
     pub skip_fade_ms: u64,
     pub skip_lead_ms: u64,
     pub resume_save_ms: u64,
+    /// Skip suppression window in hours `[SPEC-PLAY-050]`.
+    pub skip_suppress_h: u64,
     /// Reported to the browser so the interface can show it `[PI-SET-016]`.
     pub dev_mode: bool,
     pub active_streams: usize,
@@ -120,6 +122,9 @@ pub enum Command {
     SetSkipLead(u64),
     /// How often the resume point is written, in ms `[REQ-VIS-155]`.
     SetResumeSave(u64),
+    /// How long a skipped passage stays out of selection, in hours
+    /// `[SPEC-PLAY-050]`. Zero turns suppression off.
+    SetSkipSuppress(u64),
     Enqueue(QueueEntry),
     /// Put a passage next rather than last, for a browsed choice
     /// `[REQ-VIS-180]`.
@@ -220,6 +225,8 @@ pub struct Engine {
     /// because every one of these writes lands on the appliance's most
     /// volatile partition `[PI-C-010]`.
     resume_save_ms: u64,
+    /// How long a skipped passage stays out of selection `[SPEC-PLAY-050]`.
+    skip_suppress_h: u64,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -227,6 +234,9 @@ pub struct Engine {
     recorded: bool,
     /// The passage currently at the head of `live`, so `recorded` can reset.
     head: Option<i64>,
+    /// Its MBID, kept because a skip is written *after* the passage has gone
+    /// and the entry it came from is no longer reachable `[SPEC-PLAY-050]`.
+    head_mbid: Option<String>,
     /// Passages chosen but never opened, waiting to be reported `[REQ-PD-112]`.
     ///
     /// The engine drops them; only the Director can undo having counted them,
@@ -292,9 +302,11 @@ impl Engine {
             pending_resume: None,
             last_save: Instant::now(),
             resume_save_ms: crate::RESUME_SAVE_MS,
+            skip_suppress_h: crate::SKIP_SUPPRESS_H,
             saved: None,
             recorded: false,
             head: None,
+            head_mbid: None,
             shown: None,
             dropped: Vec::new(),
             underruns_playing: 0,
@@ -390,6 +402,11 @@ impl Engine {
                 Ok(Command::SetResumeSave(ms)) => {
                     self.resume_save_ms =
                         ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
+                    self.remember_settings();
+                }
+                Ok(Command::SetSkipSuppress(h)) => {
+                    self.skip_suppress_h =
+                        h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
                     self.remember_settings();
                 }
                 Ok(Command::SetSkipLead(ms)) => {
@@ -577,7 +594,7 @@ impl Engine {
     fn remember_settings(&self) {
         if let Some(store) = &self.store {
             if let Err(e) = store.save_settings(self.volume, self.skip_fade_ms, self.skip_lead_ms,
-                                       self.resume_save_ms)
+                                       self.resume_save_ms, self.skip_suppress_h)
             {
                 eprintln!("save settings: {e}");
             }
@@ -587,7 +604,9 @@ impl Engine {
     /// Put back what was last chosen. Clamped on the way in, because a value
     /// from disk deserves no more trust than one from the network.
     pub fn apply_settings(&mut self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
-                          resume_save_ms: u64) {
+                          resume_save_ms: u64, skip_suppress_h: u64) {
+        self.skip_suppress_h =
+            skip_suppress_h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
         self.resume_save_ms =
             resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
         self.volume = volume.clamp(0.0, 1.0);
@@ -846,26 +865,63 @@ impl Engine {
         if !self.playing {
             return;
         }
-        let Some(live) = self.live.first() else { return };
-        let id = live.entry.passage_id;
+        // Everything needed is read off the head first, so the borrow ends
+        // before any of the bookkeeping below wants `&mut self`.
+        let (id, mbid, heard_ms, span_ms) = {
+            let Some(live) = self.live.first() else { return };
+            (
+                live.entry.passage_id,
+                live.entry.mbid.clone(),
+                self.audible_ms(live),
+                live.entry.duration_ms(),
+            )
+        };
         // The guard has to follow the head, not just remember the last write.
         // While every started passage was recorded these were the same thing;
         // now that a passage can finish unrecorded, a stale id would suppress
         // the next honest play of the same passage.
         if self.head != Some(id) {
+            // The outgoing passage left without reaching the threshold: it did
+            // not play, and it is not forgotten either `[SPEC-PLAY-050]`.
+            if let (Some(prev), false) = (self.head, self.recorded) {
+                self.note_skip(prev);
+            }
             self.head = Some(id);
+            self.head_mbid = mbid.clone();
             self.recorded = false;
         }
         if self.recorded {
             return;
         }
-        if !crate::scrobble::counts_as_play(self.audible_ms(live), live.entry.duration_ms()) {
+        if !crate::scrobble::counts_as_play(heard_ms, span_ms) {
             return;
         }
         self.recorded = true;
         if let Some(store) = &self.store {
-            if let Err(e) = store.record_play(id, live.entry.mbid.as_deref()) {
+            if let Err(e) = store.record_play(id, mbid.as_deref()) {
                 eprintln!("record play: {e}");
+            }
+        }
+    }
+
+    /// The suppression window as the listener has it set `[SPEC-PLAY-050]`.
+    pub fn snapshot_skip_suppress_h(&self) -> u64 {
+        self.skip_suppress_h
+    }
+
+    /// A passage left before it counted as played `[SPEC-PLAY-050]`.
+    ///
+    /// Written to `listener_skip_history`, never to `listener_play_history`:
+    /// the listener rejected it, so it must not gain a play, a ramp or an
+    /// artist mark. The only thing it earns is a spell out of the running.
+    ///
+    /// Best-effort, like `record_play`. A history write must never interrupt
+    /// the music.
+    fn note_skip(&mut self, passage_id: i64) {
+        let mbid = self.head_mbid.take();
+        if let Some(store) = &self.store {
+            if let Err(e) = store.record_skip(passage_id, mbid.as_deref()) {
+                eprintln!("record skip: {e}");
             }
         }
     }

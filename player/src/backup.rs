@@ -37,6 +37,9 @@ use crate::db::DbError;
 /// it is large, and all of it Sampo can produce again.
 pub const LISTENER_TABLES: &[&str] = &[
     "listener_play_history",
+    // A record of what the listener rejected `[SPEC-PLAY-050]`. Small, but no
+    // machine can recreate it: losing it un-suppresses everything they skipped.
+    "listener_skip_history",
     "listener_preferences",
     "listener_likes",
     "listener_programs",

@@ -467,7 +467,7 @@ impl PlayerStore {
         // column. A query naming a column that does not exist fails outright;
         // it does not return nothing.
         for column in ["skip_fade_ms INTEGER", "skip_lead_ms INTEGER",
-                       "resume_save_ms INTEGER"] {
+                       "resume_save_ms INTEGER", "skip_suppress_h INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
         }
@@ -604,21 +604,23 @@ impl PlayerStore {
     /// resume point saved position and playing state and quietly left the
     /// level behind, so it came back at full scale every start.
     pub fn save_settings(&self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
-                         resume_save_ms: u64) -> Result<(), DbError>
+                         resume_save_ms: u64, skip_suppress_h: u64) -> Result<(), DbError>
     {
         self.conn
             .execute(
                 "INSERT INTO player_state
-                     (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms, updated_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, datetime('now'))
+                     (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms,
+                      skip_suppress_h, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, datetime('now'))
                  ON CONFLICT(id) DO UPDATE SET
                      volume = excluded.volume,
                      skip_fade_ms = excluded.skip_fade_ms,
                      skip_lead_ms = excluded.skip_lead_ms,
                      resume_save_ms = excluded.resume_save_ms,
+                     skip_suppress_h = excluded.skip_suppress_h,
                      updated_at = excluded.updated_at",
                 rusqlite::params![volume as f64, skip_fade_ms as i64, skip_lead_ms as i64,
-                                  resume_save_ms as i64],
+                                  resume_save_ms as i64, skip_suppress_h as i64],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
@@ -628,10 +630,10 @@ impl PlayerStore {
     ///
     /// Absent columns and absent rows both mean "never saved", which is a
     /// first run and not a fault: the caller keeps its defaults.
-    pub fn load_settings(&self) -> Option<(f32, u64, u64, u64)> {
+    pub fn load_settings(&self) -> Option<(f32, u64, u64, u64, u64)> {
         self.conn
             .query_row(
-                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms                    FROM player_state WHERE id = 1",
+                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h \n                 FROM player_state WHERE id = 1",
                 [],
                 |r| {
                     Ok((
@@ -639,6 +641,8 @@ impl PlayerStore {
                         r.get::<_, Option<i64>>(1)?.unwrap_or(crate::SKIP_FADE_MS as i64) as u64,
                         r.get::<_, Option<i64>>(2)?.unwrap_or(crate::SKIP_LEAD_MS as i64) as u64,
                         r.get::<_, Option<i64>>(3)?.unwrap_or(crate::RESUME_SAVE_MS as i64) as u64,
+                        r.get::<_, Option<i64>>(4)?
+                            .unwrap_or(crate::SKIP_SUPPRESS_H as i64) as u64,
                     ))
                 },
             )
@@ -697,6 +701,40 @@ impl PlayerStore {
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Record a skip, for suppression and nothing else `[SPEC-PLAY-050]`.
+    ///
+    /// A passage the listener rejected before it reached `[SPEC-PLAY-010]`'s
+    /// threshold did not play, so it must not enter `listener_play_history` —
+    /// but offering it back an hour later is its own kind of wrong. This is the
+    /// narrowest record that fixes that: a timestamp per recording, read only
+    /// by the eligibility gate, feeding no ramp, no artist damping and no count.
+    pub fn record_skip(&self, passage_id: i64, mbid: Option<&str>) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO listener_skip_history (skipped_at, passage_id, mbid) \
+                 VALUES (strftime('%s','now'), ?1, ?2)",
+                rusqlite::params![passage_id, mbid],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// When each recording was last skipped. Only the most recent matters:
+    /// suppression is a window, not an accumulation.
+    pub fn last_skipped(&self) -> Result<std::collections::HashMap<String, i64>, DbError> {
+        let mut q = self
+            .conn
+            .prepare(
+                "SELECT mbid, MAX(skipped_at) FROM listener_skip_history \
+                 WHERE mbid IS NOT NULL GROUP BY mbid",
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = q
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(rows.flatten().collect())
     }
 
     /// The saved resume point, or `None` on a first run.
@@ -1709,15 +1747,17 @@ mod tests {
         let store = PlayerStore::open(&tmp).unwrap();
         assert!(store.load_settings().is_none(), "nothing saved yet");
 
-        store.save_settings(0.5, 2_000, 500, 30_000).unwrap();
-        let (v, fade, lead, resume) = store.load_settings().unwrap();
+        store.save_settings(0.5, 2_000, 500, 30_000, 96).unwrap();
+        let (v, fade, lead, resume, suppress) = store.load_settings().unwrap();
         assert!((v - 0.5).abs() < 1e-6);
-        assert_eq!((fade, lead, resume), (2_000, 500, 30_000));
+        assert_eq!((fade, lead, resume, suppress), (2_000, 500, 30_000, 96));
 
         // A library written before this column existed reads as the default,
         // not as zero -- which would be a write every tick.
         store.conn.execute("UPDATE player_state SET resume_save_ms = NULL", []).unwrap();
         assert_eq!(store.load_settings().unwrap().3, crate::RESUME_SAVE_MS);
+        store.conn.execute("UPDATE player_state SET skip_suppress_h = NULL", []).unwrap();
+        assert_eq!(store.load_settings().unwrap().4, crate::SKIP_SUPPRESS_H);
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -1825,6 +1865,39 @@ mod tests {
         assert_eq!(rows, vec![(7, Some("aaaaaaaa-0000-0000-0000-000000000001".into())), (8, None)],
                    "an unidentified passage still records a play");
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// A skip is written where suppression can see it and the weighting cannot
+    /// `[SPEC-PLAY-050]`.
+    #[test]
+    fn skips_are_recorded_apart_from_plays() {
+        let tmp = std::env::temp_dir().join(format!("vaino_sk_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let st = PlayerStore::open(&tmp).unwrap();
+        st.conn
+            .execute_batch(
+                "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                     played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);
+                 CREATE TABLE listener_skip_history (skip_id INTEGER PRIMARY KEY,
+                     skipped_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);",
+            )
+            .unwrap();
+        let m = "aaaaaaaa-0000-0000-0000-000000000009";
+        st.record_skip(11, Some(m)).unwrap();
+
+        // Visible to suppression...
+        assert!(st.last_skipped().unwrap().contains_key(m));
+        // ...and absent from the table rotation and recovery read.
+        let plays: i64 = st
+            .conn
+            .query_row("SELECT COUNT(*) FROM listener_play_history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(plays, 0, "a skip must never become a play");
+
+        // Only the most recent skip matters: a window, not an accumulation.
+        st.record_skip(11, Some(m)).unwrap();
+        assert_eq!(st.last_skipped().unwrap().len(), 1);
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

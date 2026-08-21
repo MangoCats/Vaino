@@ -130,6 +130,10 @@ pub struct Policy {
     pub coupling: ArtistCoupling,
     pub artist_scale: TimeScale,
     pub track_scale: TimeScale,
+    /// How long a *skipped* recording is held out, in seconds
+    /// `[SPEC-PLAY-050]`. Zero disables suppression entirely, which is a
+    /// legitimate choice and the reason this is not an `Option`.
+    pub skip_suppress_s: f64,
 }
 
 /// Another recording that shares this one's rotation `[SPEC-DIR-116]` — a
@@ -165,6 +169,10 @@ pub struct Weighing {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exclusion {
+    /// The listener skipped this recording recently `[SPEC-PLAY-050]`. A hard
+    /// block for a window and **nothing else** — it damps no weight, marks no
+    /// artist and feeds no ramp, because a skip is not a play.
+    SkipSuppressed,
     ArtistRotationBlock,
     TrackRotationBlock,
     RelatedRotationBlock,
@@ -206,6 +214,10 @@ pub struct Candidate<'a> {
     pub track_age_s: Option<f64>,
     /// Seconds since anything by this artist last played; `None` if never.
     pub artist_age_s: Option<f64>,
+    /// Seconds since this recording was last **skipped**; `None` if never.
+    /// Deliberately separate from `track_age_s`: a skip suppresses and does
+    /// not otherwise participate `[SPEC-PLAY-050]`.
+    pub skip_age_s: Option<f64>,
     /// Other recordings of the same song `[SPEC-DIR-116]`. Borrowed rather
     /// than owned: most candidates have none, and a selection pass weighs
     /// thousands.
@@ -233,6 +245,16 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     }
     if c.depth_s > MAX_DEPTH_S {
         return Weighing::excluded(Exclusion::TooDeep);
+    }
+
+    // A recently skipped recording is out, and that is the whole of its
+    // effect `[SPEC-PLAY-050]`. Placed with the passage filters rather than in
+    // the track pass to make the point structurally: nothing below reads
+    // `skip_age_s`, so a skip cannot leak into a ramp or an artist mark.
+    if let Some(age) = c.skip_age_s {
+        if policy.skip_suppress_s > 0.0 && age < policy.skip_suppress_s {
+            return Weighing::excluded(Exclusion::SkipSuppressed);
+        }
     }
 
     // --- artist pass ---
@@ -340,6 +362,41 @@ mod tests {
         assert_eq!(recovery_weight(9e9, rot, rec), 1.0, "and stays there");
     }
 
+    /// A skip suppresses for a window, and does nothing else at all
+    /// `[SPEC-PLAY-050]`.
+    #[test]
+    fn a_recent_skip_is_excluded_and_an_old_one_is_not() {
+        let window = 156.0 * 3600.0;
+        let policy = Policy { skip_suppress_s: window, ..Default::default() };
+        let mut c = candidate();
+
+        c.skip_age_s = Some(window - 1.0);
+        assert_eq!(weigh(&c, &policy).excluded, Some(Exclusion::SkipSuppressed));
+
+        c.skip_age_s = Some(window + 1.0);
+        assert!(weigh(&c, &policy).is_eligible(), "out of the window, back in the running");
+    }
+
+    #[test]
+    fn a_skip_changes_no_weight_once_its_window_has_passed() {
+        // The whole of `[SPEC-PLAY-050]`: suppression, and no other effect.
+        // A passage skipped long ago must weigh exactly as one never skipped.
+        let policy = Policy { skip_suppress_s: 156.0 * 3600.0, ..Default::default() };
+        let mut skipped = candidate();
+        skipped.track_age_s = Some(seconds(DEF_ROTATION_TRK) * 4.0);
+        let never = skipped;
+        skipped.skip_age_s = Some(400.0 * 3600.0);
+        assert_eq!(weigh(&skipped, &policy), weigh(&never, &policy));
+    }
+
+    #[test]
+    fn a_zero_window_turns_suppression_off() {
+        let policy = Policy { skip_suppress_s: 0.0, ..Default::default() };
+        let mut c = candidate();
+        c.skip_age_s = Some(1.0); // skipped a second ago
+        assert!(weigh(&c, &policy).is_eligible(), "zero must disable, not block forever");
+    }
+
     fn candidate<'a>() -> Candidate<'a> {
         Candidate {
             length_s: LENGTH_MIDPOINT_S,
@@ -348,6 +405,7 @@ mod tests {
             artist: Tuning::artist_defaults(),
             track_age_s: None,
             artist_age_s: None,
+            skip_age_s: None,
             related: &[],
             occasion: 1.0,
         }
@@ -569,6 +627,7 @@ mod tests {
             coupling: ArtistCoupling::Damped,
             artist_scale: TimeScale::new(1.0),
             track_scale: TimeScale::new(1.0),
+            skip_suppress_s: 0.0,
         };
         assert_eq!(weigh(&c, &Policy::default()), weigh(&c, &explicit));
     }

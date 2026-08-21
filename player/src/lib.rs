@@ -91,6 +91,16 @@ pub const RESUME_SAVE_MS: u64 = 5_000;
 pub const RESUME_SAVE_MIN_MS: u64 = 1_000;
 pub const RESUME_SAVE_MAX_MS: u64 = 300_000;
 
+/// How long a *skipped* passage is held out of selection `[SPEC-PLAY-050]`.
+///
+/// 156 hours is six and a half days: long enough that a rejected passage does
+/// not return within the week, and offset from a whole week so it does not
+/// come back on the same day at the same time.
+pub const SKIP_SUPPRESS_H: u64 = 156;
+/// Zero is a legitimate setting: it turns skip suppression off entirely.
+pub const SKIP_SUPPRESS_MIN_H: u64 = 0;
+pub const SKIP_SUPPRESS_MAX_H: u64 = 8_760; // a year
+
 pub const SKIP_LEAD_MIN_MS: u64 = 100;
 pub const SKIP_LEAD_MAX_MS: u64 = 2_000;
 

@@ -64,6 +64,11 @@ pub struct SkipShape {
     pub resume_save_ms: u64,
     pub resume_save_min_ms: u64,
     pub resume_save_max_ms: u64,
+    /// Skip suppression `[SPEC-PLAY-050]`, with its bounds so the control can
+    /// draw itself without hard-coding them.
+    pub skip_suppress_h: u64,
+    pub skip_suppress_min_h: u64,
+    pub skip_suppress_max_h: u64,
 }
 
 #[derive(Serialize)]
@@ -197,6 +202,9 @@ impl From<&PlayerState> for Snapshot {
                 resume_save_ms: s.resume_save_ms,
                 resume_save_min_ms: crate::RESUME_SAVE_MIN_MS,
                 resume_save_max_ms: crate::RESUME_SAVE_MAX_MS,
+                skip_suppress_h: s.skip_suppress_h,
+                skip_suppress_min_h: crate::SKIP_SUPPRESS_MIN_H,
+                skip_suppress_max_h: crate::SKIP_SUPPRESS_MAX_H,
             },
             program: None,
             reload_status: None,
@@ -240,6 +248,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/skip/fade/:ms", post(set_skip_fade))
         .route("/skip/lead/:ms", post(set_skip_lead))
         .route("/resume/save/:ms", post(set_resume_save))
+        .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/program/:id", post(set_program))
         .route("/library/reload", post(reload_library))
         .route("/audio/radios", get(radios))
@@ -516,6 +525,15 @@ async fn set_resume_save(
     axum::extract::Path(ms): axum::extract::Path<u64>,
 ) -> StatusCode {
     ui.handle.send(Command::SetResumeSave(ms));
+    StatusCode::NO_CONTENT
+}
+
+/// How long a skipped passage stays out of selection `[SPEC-PLAY-050]`.
+async fn set_skip_suppress(
+    State(ui): State<Ui>,
+    axum::extract::Path(hours): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetSkipSuppress(hours));
     StatusCode::NO_CONTENT
 }
 

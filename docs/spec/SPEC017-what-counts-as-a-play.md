@@ -75,16 +75,48 @@ That reasoning is not wrong, but it answers a different question from the one
 which is the class of change `[SPEC-DIR-210]` already defers under
 `[GDE-PHS-030]` — and it is recorded here rather than absorbed silently.
 
-> **Consequence, stated rather than discovered later: a skipped passage is no
-> longer suppressed.** Under the old rule, skipping a track after ten seconds
-> pushed it down the rotation for a while. Under this one it was never played, so
-> nothing suppresses it and the Director may offer it again soon. Whether a
-> *skip* should carry its own short suppression, separate from a play, is
-> **open** — it is a different mechanism, not a tuning of this one, and it should
-> not be smuggled in as a side effect of aligning the threshold.
+---
+
+## 4. A skip suppresses, and does nothing else
+
+Aligning the threshold left a gap: under the old rule a ten-second skip pushed a
+track down the rotation, and under `[SPEC-PLAY-010]` it was never played, so
+nothing held it back at all. The answer is not to loosen the threshold — a skip
+is genuinely not a listen — but to give the skip its own narrow effect.
+
+**`[SPEC-PLAY-050]` A skipped passage is held out of selection for a window, and
+that is its entire consequence.** *(Settled 2026-08-21.)* It is written to
+`listener_skip_history`, never to `listener_play_history`, and the eligibility
+gate is the only thing that reads it. It contributes **no** play count, **no**
+recovery ramp, **no** artist mark and **no** weight of any kind — a passage whose
+window has passed weighs exactly as one never skipped, which is asserted rather
+than described.
+
+Structurally rather than by convention: `skip_age_s` is a separate field from
+`track_age_s`, the gate sits with the passage filters *above* the artist and
+track passes, and nothing below it reads the value. A skip cannot leak into a
+ramp because there is no path from one to the other.
+
+**`[SPEC-PLAY-060]` The window is the listener's, default 156 hours.** Six and a
+half days: long enough that a rejected passage does not return within the week,
+and deliberately offset from a whole week so it does not come back on the same
+day at the same time. Edited on the Vaino skin settings page and persisted like
+the other tunables `[REQ-VIS-155]`, taking effect live rather than at the next
+rebuild. **Zero is legitimate** and turns suppression off, which is why the
+window is a number and not an on/off switch with a number beside it.
+
+> **A skip is deliberately not stored per passage.** The window is keyed by
+> recording MBID, like rotation itself, so rejecting one encoding of a song
+> suppresses the song rather than sending the selector to a different copy of the
+> take the listener just refused.
+
+`listener_skip_history` is **Class D** and never travels `[SPEC-DF-055]`: it is
+an account of one listener's reactions, which is exactly the material that must
+not ride along in a payload.
 
 ---
 
-**Traceability:** `[SPEC-PLAY-010..040]` · implemented in `player/src/scrobble.rs`
+**Traceability:** `[SPEC-PLAY-010..060]` · implemented in `player/src/scrobble.rs`
+and `player/src/director/frequency.rs`
 · consumed by `[REQ-PD-110]`, `[SPEC-MPD-090]` · rationale
 [SPEC015](SPEC015-mpd-director.md), [SPEC016](SPEC016-mpd-protocol-findings.md)
