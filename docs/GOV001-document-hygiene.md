@@ -84,6 +84,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `CLD` — Hosted flavor service: what it would be, and whether it pays for itself
 - `EXT` — Driving other players with Vaino's selection, and where that stops
 - `BAK` — External backends: the measured cost of an MPD/OpenSubsonic adapter
+- `MPD` — The Director as an MPD client: leverage, extension via stickers, mapping
 
 ---
 
@@ -112,6 +113,8 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-CLD-*]` | Hosted flavor lookup instead of Sampo on the device | [GUIDE005-flavor-service.md](GUIDE005-flavor-service.md) |
 | `[GDE-EXT-*]` | The Director driving other players; why streaming is closed | [GUIDE006-director-as-a-guest.md](GUIDE006-director-as-a-guest.md) |
 | `[GDE-BAK-*]` | Measured cost of an MPD / OpenSubsonic backend, and its containment | [GUIDE007-external-backends-investigation.md](GUIDE007-external-backends-investigation.md) |
+| `[SPEC-MPD-050]` | Extending MPD through its sticker database, without patching it | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#4-extending-mpd-without-patching-mpd) |
+| `[SPEC-MPD-060]` | Mapping a Vaino passage to an MPD URI | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#5-the-mapping-which-is-the-hard-part) |
 | `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
 | `[PI3-*]` | Speaker link: design and the player's contract | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md) |
