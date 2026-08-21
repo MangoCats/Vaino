@@ -86,6 +86,27 @@ one answers 404); `systemctl --dry-run poweroff` reports it permitted and ready;
 and `player_state` is observably being written. The one untested step is the
 transition itself.
 
+**`[PI5-PWR-030]` On power-up it resumes playing, if it was playing.**
+`player_state` has recorded the play flag since the row existed, and the session
+read that column and **threw it away** — so an appliance that lost power, or was
+shut down deliberately, came back holding its place and silent. Restoring the
+position but not the intention is half a resume.
+
+It is safe against a missing speaker without waiting for one, and the mechanism
+was already present rather than added: playing marks the supervisor's interest,
+a dummy sink is treated as a *failure* `[PI3-API-030]`, and a failed output
+makes `path.audible()` false — so the engine advances nothing while nobody can
+hear it. One change was needed: the supervisor checked for a dummy up to
+`WATCH` (20 s) after playback began, which is 20 s of clock racing through music
+nobody hears. It now checks **immediately** on any transition into playing,
+which is exactly when a speaker is most likely to be absent.
+
+> **Verified 2026-08-20** on the appliance: `resuming passage 15192 at 30.2s`,
+> then `resuming playback: it was playing when it last stopped`, then the
+> position advancing under a real sink. The dummy path is by construction and by
+> the immediate check; it was **not** observed, because the speaker reconnected
+> before the test could run.
+
 ---
 
 ## 3. Two things this work exposed
@@ -113,6 +134,7 @@ appliance, `/etc/sudoers.d/` also contains the Raspberry Pi OS default:
 So the player already has passwordless root for everything, and the closed verb
 set is defence that is not presently defending. The design is still the right
 one — it is what makes the helper safe *if* the blanket rule is removed — but
-the document claims a property the machine does not have. **Unresolved:**
-whether to drop the default rule, which is a decision about how the appliance is
-administered rather than about Vaino.
+the document claims a property the machine does not have. **Settled 2026-08-20: it stays.** This is a
+development machine and passwordless sudo is appropriate to it. A final
+appliance design may want a tighter model; this one does not, and the narrow
+verb set remains the right shape for whenever that happens.

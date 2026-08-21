@@ -111,6 +111,8 @@ pub struct Session {
     /// Where the saved passage left off, if there was one `[REQ-AUD-140]`.
     pub resume_ms: u64,
     resume_id: Option<i64>,
+    /// Was it playing when it last stopped? `[PI5-PWR-030]`
+    resume_playing: bool,
     depth: usize,
     director: Option<Director>,
     rng: Rng,
@@ -148,9 +150,13 @@ impl Session {
             .map_err(|e| eprintln!("resume state unavailable ({e}); continuing without it"))
             .ok();
         let saved = store.as_ref().and_then(|s| s.load().ok()).flatten();
-        let (resume_id, resume_ms) = match saved {
-            Some((Some(id), pos, _)) => (Some(id), pos),
-            _ => (None, 0),
+        // The saved play state is carried, not discarded. It was read and
+        // thrown away here for as long as the row has existed, which is why an
+        // appliance that lost power came back silent even though it had been
+        // playing `[PI5-PWR-030]`.
+        let (resume_id, resume_ms, resume_playing) = match saved {
+            Some((Some(id), pos, playing)) => (Some(id), pos, playing),
+            _ => (None, 0, false),
         };
         // Selection degrades rather than fails: a library without the Program
         // Director's tables still plays, just uniformly at random.
@@ -166,6 +172,7 @@ impl Session {
             store,
             resume_ms,
             resume_id,
+            resume_playing,
             depth,
             director,
             rng: Rng::from_clock(),
@@ -298,6 +305,14 @@ impl Session {
         if let Ok(mut c) = self.controls.lock() {
             c.reload_status = Some(what.to_string());
         }
+    }
+
+    /// Was the player playing when it last saved? `[PI5-PWR-030]`
+    ///
+    /// A caller decides what to do with that: `vaino` resumes playback, while
+    /// `station` starts when told to and has no use for it.
+    pub fn resume_playing(&self) -> bool {
+        self.resume_playing
     }
 
     /// Name a passage before it is shown `[REQ-VIS-170]`.

@@ -457,6 +457,16 @@ impl Engine {
         self.path.set_playing(on);
     }
 
+    /// Begin playing because the saved state said so `[PI5-PWR-030]`.
+    ///
+    /// Public where `set_playing` is not, and named for the occasion rather
+    /// than the mechanism: this is the one caller that is not a person pressing
+    /// something, and reading `engine.play_on_resume()` at the call site says
+    /// why it is happening where `engine.set_playing(true)` would not.
+    pub fn play_on_resume(&mut self) {
+        self.set_playing(true);
+    }
+
     /// Fade the sounding passage out and cross into the next `[REQ-AUD-162]`.
     ///
     /// Dropping the passage here is not enough on its own, and the comment that

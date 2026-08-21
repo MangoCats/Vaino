@@ -164,6 +164,16 @@ fn supervise(
             Ok(PathRequest::SetPlaying(on)) => {
                 playing = on;
                 out.set_playing(on);
+                // Check for a dummy AT ONCE when playback starts, rather than
+                // up to WATCH later. A speaker that is not there is never more
+                // likely than at the moment someone presses play -- and never
+                // more so than when the machine has just booted and resumed
+                // `[PI5-PWR-030]`. Until it is noticed, the ring drains into
+                // the discard sink and the clock advances through music nobody
+                // can hear: exactly the lie `[PI3-API-030]` exists to stop.
+                if on {
+                    watch_at = Instant::now();
+                }
             }
             Ok(PathRequest::Reopen) => {
                 // Same path as a recovery: a reopen landing on a device that is

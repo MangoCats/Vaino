@@ -156,9 +156,28 @@ fn engine_thread(
         return; // nobody left to control it
     }
 
-    // Paused until told otherwise. The producers fill regardless, so pressing
-    // Play in the browser starts on a primed pipeline rather than an underrun
-    // [REQ-AUD-142].
+    // Resume the play STATE, not just the position `[PI5-PWR-030]`.
+    //
+    // `player_state` has always recorded whether it was playing, and the
+    // session read that column and threw it away -- so an appliance that lost
+    // power, or was shut down deliberately from the settings page, came back
+    // holding its place and silent. Restoring the position but not the
+    // intention is half a resume.
+    //
+    // Safe against a missing speaker without waiting for one. Playing marks
+    // the supervisor's interest, it checks for a dummy sink immediately rather
+    // than up to WATCH later, and a dummy is treated as a failure -- which
+    // makes `path.audible()` false, and the engine advances nothing while
+    // nobody can hear it. So this resumes into silence only for as long as it
+    // takes to notice, and the position is not spent.
+    if session.resume_playing() {
+        println!("resuming playback: it was playing when it last stopped");
+        engine.play_on_resume();
+    }
+
+    // Otherwise paused until told otherwise. The producers fill regardless, so
+    // pressing Play in the browser starts on a primed pipeline rather than an
+    // underrun [REQ-AUD-142].
     while !engine.is_shutdown() {
         let submitted = engine.tick();
         // Continuous radio: the queue never runs dry, so playback never ends.
