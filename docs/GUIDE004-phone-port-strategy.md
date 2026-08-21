@@ -140,7 +140,87 @@ a sandbox that makes moving 44 GB a design problem rather than a command.
 
 ---
 
-## 5. Recommendation
+## 5. Would anyone use it? An estimate, not a measurement
+
+Everything above is checkable. This section is judgement, and is marked as such
+because the rest of this repository is not `[GDE-LES-030]`.
+
+**`[GDE-IOS-040]` The market exists, is real, and is small.** Measured 2026:
+**86% of recorded-music spending is streaming**, across 865 million paid
+subscriptions. The ownership counter-current is genuine — vinyl reached ~$1.8 bn
+globally in its **19th consecutive growth year**, and subscription fatigue is a
+named trend — but it is one to two percent of the money, and iOS already has
+**200+ local-player apps**. The niche is served, not empty: Doppler at **$9
+once**, Evermusic free with 19k ratings, Marvis, Flacbox, VOX.
+
+**The vinyl number is weaker evidence than it looks.** Buying a record is a
+physical, ritual, collectible act. Vaino needs someone who maintains a large
+*tagged digital* library. Those populations overlap without being the same, and
+conflating them is how a niche gets overestimated.
+
+**`[GDE-IOS-045]` The binding constraint is Sampo, not price, licence or Apple.**
+Apple is not the obstacle — local players are plentiful and unmolested, and MIT
+raises no App Store conflict at all. The obstacle is the first hour:
+
+1. own thousands of local files, already tagged;
+2. run a **Python + Essentia** pipeline on an x86 desktop — and the only macOS
+   Essentia build is **x86_64 from 2015** `[GDE-FEX-137]`, so on Apple Silicon
+   that is an eleven-year-old binary under Rosetta;
+3. register an **AcoustID API key** `[SPEC-SA-055]`;
+4. wait — extraction measured at **22.7 h for this library** `[SPEC-SA-025]`;
+5. move audio and payload into an application sandbox with no rsync.
+
+Steps 2–4 are not consumer steps, and are barely enthusiast steps. **Whatever
+the phone app costs, its addressable market is capped by Sampo's**, and Sampo is
+the hard part. That is the number that decides adoption, and it is small.
+
+**`[GDE-IOS-050]` The unlock, if one is wanted, is decoupling from Sampo.** The
+2022 AcousticBrainz dump already covers **8,001 of 8,542 recordings — 93.7%** of
+this library `[GDE-FEX-055]`. A phone that fetched flavor *by recording MBID*
+from a precomputed set would need no Essentia, no 22 hours and no desktop for
+mainstream music, and would fall back to tags for the rest. That changes the
+addressable market by orders of magnitude and is a **product decision, not a
+port decision** — it belongs before any Swift is written, not after.
+
+**`[GDE-IOS-055]` On the two business models, the free one is stronger, and the
+subscription is the weakest of the three obvious options.**
+
+| | MIT, free | $0.99/yr, closed | one-time ~$9, either licence |
+| :--- | :--- | :--- | :--- |
+| Net per user | $0 | **$0.84/yr** at 15% `[GDE-IOS-060]` | ~$7.65 once |
+| Break-even on the $99/yr Developer Program | n/a | **118 subscribers, recurring** | 13 sales |
+| Fits the audience | **yes** | **no — they are subscription-averse by definition** | yes; it is what Doppler proved |
+| Fits `LICENSING.md` | yes | **no** | either |
+
+Three things make **$0.99/yr** the worst option rather than a modest one.
+**The economics do not clear support**: one email exchange costs more than a
+year of that subscriber. **The positioning is self-defeating**: the people who
+reject streaming subscriptions are being sold a subscription, and closing the
+source alienates the FOSS-sympathetic half of the same audience. And **the
+friction is identical to a larger price** — the decision to enter a payment
+method costs the user the same at $0.99 as at $9.
+
+If money is wanted, the market has already answered: **one-time purchase**,
+which is what Doppler charges and what this audience buys.
+
+**`[GDE-IOS-060]` Realistic outcome, stated plainly.** For a free MIT app,
+launched with a candid README and posted where such things are read: **hundreds
+to low thousands of installs, tens of sustained users**. Not because it is
+poor — because the funnel narrows at "run this desktop pipeline first". For the
+subscription version, materially fewer, since it adds a paywall to the *same*
+funnel and subtracts the goodwill.
+
+**`[GDE-IOS-065]` Which is a reason to be clear about the goal, not to stop.**
+This project descends from six years of one person's listening `[GDE-BMK-020]`,
+and its stated purpose is to fix new-music induction for that library
+`[GDE-CHT-020]`. Publishing costs little once the port exists, and someone
+finding it is a bonus rather than the point. **Building it *for* adoption is the
+version that would disappoint** — that version needs the Sampo decoupling
+`[GDE-IOS-050]` first, and that is a different project.
+
+---
+
+## 6. Recommendation
 
 **`[GDE-AND-040]` Build ground-up on both, and read the others rather than fork them.** On Android that is a judgement — the fork is possible and the shell it saves is mostly unwanted. On iOS it is not a judgement: nothing mature exists to fork, and a copyleft fork could not be distributed if it did.
 
@@ -152,7 +232,7 @@ On Android specifically: The engineering saved by forking is the shell; the shel
 
 ---
 
-## 6. Open
+## 7. Open
 
 1. **`[GDE-AND-060]` Whether the phone runs the existing web UI in a WebView.** `axum` and `tokio` are Apache-2.0/MIT and the three skins already exist `[REQ-VIS-160]`. Maximum reuse, at the cost of a non-native feel and a server on a battery. Cheap to spike, and it would answer how much native UI is really wanted.
 2. **`[GDE-AND-065]` Battery cost of the Director.** Measured on the appliance at 9.86 s and ~12 MB per rebuild `[IMPL-SUI-075]`; per-selection cost is unmeasured, and a phone budget is not a Pi budget.
@@ -160,4 +240,4 @@ On Android specifically: The engineering saved by forking is the shell; the shel
 
 ---
 
-**Traceability:** `[GDE-AND-010..070]`, `[GDE-IOS-010..035]` · derived from [LICENSING.md](../LICENSING.md), `[GDE-ARC-018]`, `[SPEC-DF-080]`, `[GDE-FBD-040]`
+**Traceability:** `[GDE-AND-010..070]`, `[GDE-IOS-010..065]` · derived from [LICENSING.md](../LICENSING.md), `[GDE-ARC-018]`, `[SPEC-DF-080]`, `[GDE-FBD-040]`
