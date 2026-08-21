@@ -18,6 +18,10 @@ pub mod decoder;
 pub mod engine;
 pub mod fade;
 pub mod mixer;
+/// The MPD protocol client `[SPEC-MPD-070]`. `std::net` and nothing else, and
+/// absent entirely from a build that did not ask for it.
+#[cfg(feature = "mpd")]
+pub mod mpd;
 pub mod output;
 pub mod path;
 pub mod playback;
@@ -29,6 +33,7 @@ pub mod session;
 pub mod tags;
 pub mod web;
 pub mod resample;
+pub mod scrobble;
 
 /// Frames of audio buffered per passage. 15 s at 44.1 kHz.
 ///
@@ -88,6 +93,40 @@ pub const SKIP_LEAD_MS: u64 = 500;
 pub const RESUME_SAVE_MS: u64 = 5_000;
 pub const RESUME_SAVE_MIN_MS: u64 = 1_000;
 pub const RESUME_SAVE_MAX_MS: u64 = 300_000;
+
+/// How long a *skipped* passage is held out of selection `[SPEC-PLAY-050]`.
+///
+/// 156 hours is six and a half days: long enough that a rejected passage does
+/// not return within the week, and offset from a whole week so it does not
+/// come back on the same day at the same time.
+pub const SKIP_SUPPRESS_H: u64 = 156;
+/// Zero is a legitimate setting: it turns skip suppression off entirely.
+pub const SKIP_SUPPRESS_MIN_H: u64 = 0;
+pub const SKIP_SUPPRESS_MAX_H: u64 = 8_760; // a year
+
+/// How long a passage *removed from the queue before it played* is held out
+/// `[SPEC-PLAY-055]`. Shorter than a skip: declining to hear something now is a
+/// weaker statement than stopping it once it had started.
+pub const DEQUEUE_SUPPRESS_H: u64 = 18;
+pub const DEQUEUE_SUPPRESS_MIN_H: u64 = 0;
+pub const DEQUEUE_SUPPRESS_MAX_H: u64 = 8_760;
+
+/// How many passages the Director keeps queued ahead `[SPEC-MPD-105]`.
+///
+/// A listener setting rather than a launch flag: it governs the local engine
+/// and the MPD Director alike, and both read it from the same row.
+pub const QUEUE_DEPTH: usize = 5;
+/// One is the floor: below it there is no lookahead, and the crossfade has
+/// nothing to fade into.
+pub const QUEUE_DEPTH_MIN: usize = 1;
+pub const QUEUE_DEPTH_MAX: usize = 50;
+
+/// How often `status` is read while playing, to judge a play against
+/// `[SPEC-PLAY-010]`'s threshold and to end a span MPD would not
+/// `[SPEC-MPD-096]`. Five seconds `[SPEC-MPD-105]`.
+pub const SAMPLE_INTERVAL_MS: u64 = 5_000;
+pub const SAMPLE_INTERVAL_MIN_MS: u64 = 1_000;
+pub const SAMPLE_INTERVAL_MAX_MS: u64 = 60_000;
 
 pub const SKIP_LEAD_MIN_MS: u64 = 100;
 pub const SKIP_LEAD_MAX_MS: u64 = 2_000;

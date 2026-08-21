@@ -66,6 +66,13 @@ pub struct PlayerState {
     pub skip_fade_ms: u64,
     pub skip_lead_ms: u64,
     pub resume_save_ms: u64,
+    /// Skip suppression window in hours `[SPEC-PLAY-050]`.
+    pub skip_suppress_h: u64,
+    /// Queue-removal suppression window in hours `[SPEC-PLAY-055]`.
+    pub dequeue_suppress_h: u64,
+    /// Passages kept ahead, and how often a guest samples `[SPEC-MPD-105]`.
+    pub queue_depth: usize,
+    pub sample_interval_ms: u64,
     /// Reported to the browser so the interface can show it `[PI-SET-016]`.
     pub dev_mode: bool,
     pub active_streams: usize,
@@ -120,6 +127,16 @@ pub enum Command {
     SetSkipLead(u64),
     /// How often the resume point is written, in ms `[REQ-VIS-155]`.
     SetResumeSave(u64),
+    /// How long a skipped passage stays out of selection, in hours
+    /// `[SPEC-PLAY-050]`. Zero turns suppression off.
+    SetSkipSuppress(u64),
+    /// The same for a passage removed from the queue unheard
+    /// `[SPEC-PLAY-055]`.
+    SetDequeueSuppress(u64),
+    /// How many passages to keep queued ahead `[SPEC-MPD-105]`.
+    SetQueueDepth(usize),
+    /// How often a guest backend samples `status`, in ms `[SPEC-MPD-105]`.
+    SetSampleInterval(u64),
     Enqueue(QueueEntry),
     /// Put a passage next rather than last, for a browsed choice
     /// `[REQ-VIS-180]`.
@@ -220,10 +237,25 @@ pub struct Engine {
     /// because every one of these writes lands on the appliance's most
     /// volatile partition `[PI-C-010]`.
     resume_save_ms: u64,
+    /// How long a skipped passage stays out of selection `[SPEC-PLAY-050]`.
+    skip_suppress_h: u64,
+    /// How long a passage removed from the queue unheard stays out
+    /// `[SPEC-PLAY-055]`.
+    dequeue_suppress_h: u64,
+    /// How often a guest backend should sample `status` `[SPEC-MPD-105]`. The
+    /// local engine does not poll; it holds the value so one row owns every
+    /// listener setting and the settings page has one place to read.
+    sample_interval_ms: u64,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
-    recorded: Option<i64>,
+    /// Whether the passage at `head` has been written to history yet.
+    recorded: bool,
+    /// The passage currently at the head of `live`, so `recorded` can reset.
+    head: Option<i64>,
+    /// Its MBID, kept because a skip is written *after* the passage has gone
+    /// and the entry it came from is no longer reachable `[SPEC-PLAY-050]`.
+    head_mbid: Option<String>,
     /// Passages chosen but never opened, waiting to be reported `[REQ-PD-112]`.
     ///
     /// The engine drops them; only the Director can undo having counted them,
@@ -256,7 +288,8 @@ impl Engine {
     /// it -- and took the output lock to do so. A tenth of a second is well
     /// inside what any consumer can perceive and two orders of magnitude less
     /// work.
-    const PUBLISH_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+    pub(crate) const PUBLISH_EVERY: std::time::Duration =
+        std::time::Duration::from_millis(100);
 
     /// `out` of `None` runs the full pipeline into a discard sink — useful for
     /// tests and headless hosts, but note it reports no device rate and so
@@ -289,8 +322,13 @@ impl Engine {
             pending_resume: None,
             last_save: Instant::now(),
             resume_save_ms: crate::RESUME_SAVE_MS,
+            skip_suppress_h: crate::SKIP_SUPPRESS_H,
+            dequeue_suppress_h: crate::DEQUEUE_SUPPRESS_H,
+            sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
             saved: None,
-            recorded: None,
+            recorded: false,
+            head: None,
+            head_mbid: None,
             shown: None,
             dropped: Vec::new(),
             underruns_playing: 0,
@@ -388,6 +426,26 @@ impl Engine {
                         ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
                     self.remember_settings();
                 }
+                Ok(Command::SetSkipSuppress(h)) => {
+                    self.skip_suppress_h =
+                        h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
+                    self.remember_settings();
+                }
+                Ok(Command::SetDequeueSuppress(h)) => {
+                    self.dequeue_suppress_h =
+                        h.clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
+                    self.remember_settings();
+                }
+                Ok(Command::SetQueueDepth(n)) => {
+                    self.queue.min_depth =
+                        n.clamp(crate::QUEUE_DEPTH_MIN, crate::QUEUE_DEPTH_MAX);
+                    self.remember_settings();
+                }
+                Ok(Command::SetSampleInterval(ms)) => {
+                    self.sample_interval_ms =
+                        ms.clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
+                    self.remember_settings();
+                }
                 Ok(Command::SetSkipLead(ms)) => {
                     self.skip_lead_ms =
                         ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
@@ -434,7 +492,28 @@ impl Engine {
                     self.skip();
                 }
                 Ok(Command::RemoveQueued(id)) => {
-                    self.queue.remove(id);
+                    // Taken out by hand before it ever played: a weaker
+                    // statement than a skip, and it earns the shorter window
+                    // `[SPEC-PLAY-055]`. Read before the removal, since after it
+                    // there is nothing left to name.
+                    //
+                    // Deliberately NOT the same path as a passage the engine
+                    // could not open: that is a failure, not a preference, and
+                    // `[REQ-PD-112]` requires it leave no mark at all.
+                    let declined = self
+                        .queue
+                        .iter()
+                        .find(|e| e.qid == id)
+                        .map(|e| (e.passage_id, e.mbid.clone()));
+                    if self.queue.remove(id) {
+                        if let Some((passage_id, mbid)) = declined {
+                            self.note_rejection(
+                                crate::db::Rejection::Dequeue,
+                                passage_id,
+                                mbid.as_deref(),
+                            );
+                        }
+                    }
                 }
                 Ok(Command::ShiftQueued(id, delta)) => {
                     self.queue.shift(id, delta);
@@ -572,27 +651,50 @@ impl Engine {
     /// record a volume must never interrupt the music.
     fn remember_settings(&self) {
         if let Some(store) = &self.store {
-            if let Err(e) = store.save_settings(self.volume, self.skip_fade_ms, self.skip_lead_ms,
-                                       self.resume_save_ms)
-            {
+            if let Err(e) = store.save_settings(&self.settings()) {
                 eprintln!("save settings: {e}");
             }
         }
     }
 
+    /// The listener's settings as the engine currently holds them.
+    pub fn settings(&self) -> crate::db::Settings {
+        crate::db::Settings {
+            volume: self.volume,
+            skip_fade_ms: self.skip_fade_ms,
+            skip_lead_ms: self.skip_lead_ms,
+            resume_save_ms: self.resume_save_ms,
+            skip_suppress_h: self.skip_suppress_h,
+            dequeue_suppress_h: self.dequeue_suppress_h,
+            queue_depth: self.queue.min_depth,
+            sample_interval_ms: self.sample_interval_ms,
+        }
+    }
+
     /// Put back what was last chosen. Clamped on the way in, because a value
     /// from disk deserves no more trust than one from the network.
-    pub fn apply_settings(&mut self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
-                          resume_save_ms: u64) {
+    pub fn apply_settings(&mut self, s: &crate::db::Settings) {
         self.resume_save_ms =
-            resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
-        self.volume = volume.clamp(0.0, 1.0);
+            s.resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
+        self.skip_suppress_h =
+            s.skip_suppress_h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
+        self.dequeue_suppress_h = s
+            .dequeue_suppress_h
+            .clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
+        // The queue depth is a listener setting now, not a launch flag
+        // `[SPEC-MPD-105]`, and it governs this engine as much as the MPD one.
+        self.queue.min_depth =
+            s.queue_depth.clamp(crate::QUEUE_DEPTH_MIN, crate::QUEUE_DEPTH_MAX);
+        self.sample_interval_ms = s
+            .sample_interval_ms
+            .clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
+        self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);
         }
-        self.skip_fade_ms = skip_fade_ms.min(crate::SKIP_FADE_MAX_MS);
+        self.skip_fade_ms = s.skip_fade_ms.min(crate::SKIP_FADE_MAX_MS);
         self.skip_lead_ms =
-            skip_lead_ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
+            s.skip_lead_ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
     }
 
     /// Passages that were chosen but could not be opened, taken once.
@@ -818,15 +920,23 @@ impl Engine {
         self.saved = Some(key);
     }
 
-    /// Write a play to history the moment a passage begins sounding
-    /// `[REQ-PD-110]`.
+    /// Write a play to history once enough of the passage has been heard
+    /// `[SPEC-PLAY-010]`, `[SPEC-PLAY-030]`.
     ///
-    /// At the START of playback, not on completion. Rotation exists to space
-    /// out what the listener has *encountered*, and a track skipped after ten
-    /// seconds has been encountered — suppressing it for a while is the wanted
-    /// behaviour, not a bug. It also matches MuLibPlay, whose own note says the
-    /// history structures update "as each new track finishes playing (or is put
-    /// in the play queue)".
+    /// **Not at the start of playback.** *(Changed 2026-08-21.)* This used to
+    /// write the moment a passage began sounding, following MuLibPlay, whose
+    /// note says history updates "as each new track finishes playing (or is put
+    /// in the play queue)" — and it argued that a track skipped after ten
+    /// seconds had been *encountered*, so suppressing it was wanted.
+    ///
+    /// That is now a **measured divergence from MuLibPlay** `[GDE-PHS-030]`.
+    /// The threshold is half the passage or four minutes, the same rule the MPD
+    /// path judges by and the same one Last.fm and ListenBrainz use, because
+    /// both paths write this one table and it cannot mean two things
+    /// `[SPEC-PLAY-030]`.
+    ///
+    /// Measured against **audible** position, net of output buffering: what the
+    /// listener heard, not what the decoder reached.
     ///
     /// A failure here must never interrupt playback: history is what the next
     /// selection reads, not what this one depends on.
@@ -834,15 +944,64 @@ impl Engine {
         if !self.playing {
             return;
         }
-        let Some(live) = self.live.first() else { return };
-        let id = live.entry.passage_id;
-        if self.recorded == Some(id) {
+        // Everything needed is read off the head first, so the borrow ends
+        // before any of the bookkeeping below wants `&mut self`.
+        let (id, mbid, heard_ms, span_ms) = {
+            let Some(live) = self.live.first() else { return };
+            (
+                live.entry.passage_id,
+                live.entry.mbid.clone(),
+                self.audible_ms(live),
+                live.entry.duration_ms(),
+            )
+        };
+        // The guard has to follow the head, not just remember the last write.
+        // While every started passage was recorded these were the same thing;
+        // now that a passage can finish unrecorded, a stale id would suppress
+        // the next honest play of the same passage.
+        if self.head != Some(id) {
+            // The outgoing passage left without reaching the threshold: it did
+            // not play, and it is not forgotten either `[SPEC-PLAY-050]`.
+            if let (Some(prev), false) = (self.head, self.recorded) {
+                let prev_mbid = self.head_mbid.take();
+                self.note_rejection(crate::db::Rejection::Skip, prev, prev_mbid.as_deref());
+            }
+            self.head = Some(id);
+            self.head_mbid = mbid.clone();
+            self.recorded = false;
+        }
+        if self.recorded {
             return;
         }
-        self.recorded = Some(id);
+        if !crate::scrobble::counts_as_play(heard_ms, span_ms) {
+            return;
+        }
+        self.recorded = true;
         if let Some(store) = &self.store {
-            if let Err(e) = store.record_play(id, live.entry.mbid.as_deref()) {
+            if let Err(e) = store.record_play(id, mbid.as_deref()) {
                 eprintln!("record play: {e}");
+            }
+        }
+    }
+
+    /// The suppression windows as the listener has them set, in hours:
+    /// `(skip, dequeue)` `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
+    pub fn snapshot_suppress_h(&self) -> (u64, u64) {
+        (self.skip_suppress_h, self.dequeue_suppress_h)
+    }
+
+    /// A passage the listener declined `[SPEC-PLAY-050]`.
+    ///
+    /// Written to `listener_rejections`, never to `listener_play_history`: it
+    /// must not gain a play, a ramp or an artist mark. The only thing it earns
+    /// is a spell out of the running.
+    ///
+    /// Best-effort, like `record_play`. A history write must never interrupt
+    /// the music.
+    fn note_rejection(&self, kind: crate::db::Rejection, passage_id: i64, mbid: Option<&str>) {
+        if let Some(store) = &self.store {
+            if let Err(e) = store.record_rejection(kind, passage_id, mbid) {
+                eprintln!("record {}: {e}", kind.as_str());
             }
         }
     }
@@ -925,6 +1084,15 @@ impl Engine {
             s.skip_fade_ms = self.skip_fade_ms;
             s.skip_lead_ms = self.skip_lead_ms;
             s.resume_save_ms = self.resume_save_ms;
+            // Every listener setting, published. These were declared on
+            // `PlayerState` and read by the settings page but never filled, so
+            // the page would have offered a confident **0 hours** for both
+            // suppression windows — a control showing a value the engine does
+            // not hold is worse than one showing nothing.
+            s.skip_suppress_h = self.skip_suppress_h;
+            s.dequeue_suppress_h = self.dequeue_suppress_h;
+            s.queue_depth = self.queue.min_depth;
+            s.sample_interval_ms = self.sample_interval_ms;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.lock_failures = self.path.ring.as_ref().map_or(0, |r| r.diagnostics().1);
@@ -1033,6 +1201,136 @@ mod tests {
     /// heard `[REQ-VIS-180]`. It went in second for a while, on the mistaken
     /// idea that the sounding passage occupied slot zero -- it does not; it is
     /// in `live` and out of the queue entirely.
+    const DQ_MBID: &str = "aaaaaaaa-0000-0000-0000-000000000007";
+
+    /// Every listener setting must reach the snapshot the settings page reads.
+    ///
+    /// Two of them did not. `skip_suppress_h` and `dequeue_suppress_h` were
+    /// declared on `PlayerState`, serialised by the web layer and read by the
+    /// skin, but never assigned in `publish` — so the page would have shown a
+    /// confident **0 hours** for both while the engine held 156 and 18. A
+    /// control displaying a value the engine does not hold is worse than one
+    /// displaying nothing, because it invites a person to trust it.
+    #[test]
+    fn every_listener_setting_reaches_the_snapshot() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.tick();
+        let s = h.snapshot();
+        assert_eq!(s.skip_suppress_h, crate::SKIP_SUPPRESS_H);
+        assert_eq!(s.dequeue_suppress_h, crate::DEQUEUE_SUPPRESS_H);
+        assert_eq!(s.queue_depth, 3, "the depth the engine was built with");
+        assert_eq!(s.sample_interval_ms, crate::SAMPLE_INTERVAL_MS);
+
+        // And a change reaches it too, rather than only the default.
+        h.send(Command::SetSkipSuppress(72));
+        h.send(Command::SetDequeueSuppress(9));
+        h.send(Command::SetQueueDepth(8));
+        h.send(Command::SetSampleInterval(2_500));
+        e.drain_commands();
+        // Publishing is throttled to `PUBLISH_EVERY`, so a change made just
+        // after one publish is not visible until the next. Waiting past the
+        // window is what a browser polling the snapshot does anyway.
+        std::thread::sleep(Engine::PUBLISH_EVERY + std::time::Duration::from_millis(20));
+        e.tick();
+        let s = h.snapshot();
+        assert_eq!(
+            (s.skip_suppress_h, s.dequeue_suppress_h, s.queue_depth, s.sample_interval_ms),
+            (72, 9, 8, 2_500)
+        );
+    }
+
+    /// Out-of-range values are clamped rather than accepted, on the way in from
+    /// a browser as much as from a file.
+    #[test]
+    fn settings_from_outside_are_clamped() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        h.send(Command::SetQueueDepth(0));
+        h.send(Command::SetSampleInterval(1));
+        e.drain_commands();
+        std::thread::sleep(Engine::PUBLISH_EVERY + std::time::Duration::from_millis(20));
+        e.tick();
+        let s = h.snapshot();
+        assert_eq!(s.queue_depth, crate::QUEUE_DEPTH_MIN, "a depth of zero has no lookahead");
+        assert_eq!(s.sample_interval_ms, crate::SAMPLE_INTERVAL_MIN_MS);
+    }
+
+    /// Taking a passage out of the queue before it plays is a rejection, and
+    /// the shorter kind `[SPEC-PLAY-055]`.
+    #[test]
+    fn removing_a_queued_passage_records_a_dequeue() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let mut ent = entry(7, "a.mp3");
+        ent.mbid = Some(DQ_MBID.into());
+        e.enqueue(ent);
+        let qid = e.queued().next().expect("queued").qid;
+
+        h.send(Command::RemoveQueued(qid));
+        e.drain_commands();
+
+        assert!(e.queued().next().is_none(), "it really left the queue");
+        let deq = st.last_rejected(crate::db::Rejection::Dequeue).unwrap();
+        assert_eq!(deq.len(), 1, "one dequeue recorded");
+        assert!(deq.contains_key(DQ_MBID), "recorded against its recording");
+        assert!(
+            st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
+            "a removal is not a skip: they earn different windows"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Removing a passage that is not there records nothing. Without the
+    /// existence check a stale id from a browser would suppress a recording the
+    /// listener never touched.
+    #[test]
+    fn removing_a_passage_that_is_not_queued_records_nothing() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let mut ent = entry(7, "a.mp3");
+        ent.mbid = Some(DQ_MBID.into());
+        e.enqueue(ent);
+
+        h.send(Command::RemoveQueued(4242)); // never a real qid
+        e.drain_commands();
+
+        assert!(e.queued().next().is_some(), "the real entry is untouched");
+        assert!(
+            st.last_rejected(crate::db::Rejection::Dequeue).unwrap().is_empty(),
+            "nothing was removed, so nothing was declined"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A passage the engine could not open leaves the queue too, and it must
+    /// leave **no mark** `[REQ-PD-112]`. A failure is not a preference, and
+    /// suppressing a recording because its file was missing would punish the
+    /// listener for a fault they did not commit.
+    #[test]
+    fn a_passage_that_would_not_open_is_not_a_rejection() {
+        let (st, path) = store();
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let mut ent = entry(9, "no-such-file-anywhere.mp3");
+        ent.mbid = Some(DQ_MBID.into());
+        e.enqueue(ent);
+        for _ in 0..8 {
+            e.tick();
+        }
+
+        assert!(!e.take_dropped().is_empty(), "the unopenable passage was dropped");
+        assert!(
+            st.last_rejected(crate::db::Rejection::Dequeue).unwrap().is_empty()
+                && st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
+            "a file that would not open must suppress nothing"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn enqueue_next_puts_a_passage_first_in_the_queue() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);

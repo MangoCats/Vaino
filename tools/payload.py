@@ -170,6 +170,15 @@ def missing_required(payload: dict) -> list[str]:
     for e in payload.get("encodings", []):
         where = e.get("audio_md5", "<no audio_md5>")
         check("encoding", e, where)
+        # Present is not usable. A duration that is a string, a float or zero
+        # satisfies `is None` and then lands as a zero length on the receiver,
+        # against which every play/skip judgement is meaningless
+        # `[SPEC-MPD-092]`. The importer refuses these, so the builder must not
+        # emit them -- a sender that ships a payload it knows to be rejectable
+        # has moved the failure to the far end of a slow transfer.
+        d = e.get("duration_ms")
+        if d is not None and not (isinstance(d, int) and not isinstance(d, bool) and d > 0):
+            out.append(f"{where}: encoding.duration_ms is not a positive integer")
         if not e.get("passages"):
             out.append(f"{where}: no passages")
         for p in e.get("passages", []):

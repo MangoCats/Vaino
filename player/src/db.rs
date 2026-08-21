@@ -107,6 +107,23 @@ pub(crate) const TAG_TABLE: &str = "
 /// both side by side. Nothing else is stored: MuLibPlay's back covers are
 /// 35.6 MB of its 80.5 MB of art, and a third image nobody displays would be
 /// the same bargain again.
+/// What the listener declined, and how `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
+///
+/// Created by the player rather than left to Sampo's schema pass, for the same
+/// reason as the tables below it: the player is the one **writing** here, on
+/// every rejection, and an existing library that predates this feature would
+/// otherwise fail every write. Those writes are best-effort by design, so the
+/// failure would be a log line and a suppression that silently never happened.
+pub(crate) const REJECTION_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS listener_rejections (
+        rejection_id INTEGER PRIMARY KEY,
+        rejected_at  INTEGER NOT NULL,
+        kind         TEXT NOT NULL,
+        passage_id   INTEGER,
+        mbid         TEXT);
+    CREATE INDEX IF NOT EXISTS listener_reject_mbid
+        ON listener_rejections(mbid, kind);";
+
 pub(crate) const ART_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS cover_art (
         release_mbid TEXT PRIMARY KEY,
@@ -439,6 +456,62 @@ pub struct PlayerStore {
     conn: Connection,
 }
 
+/// Every setting the listener owns `[REQ-VIS-155]`, in one row.
+///
+/// A struct rather than a tuple because there are eight of them now and a
+/// nine-element tuple is a way to swap two `u64`s without the compiler minding.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settings {
+    pub volume: f32,
+    pub skip_fade_ms: u64,
+    pub skip_lead_ms: u64,
+    pub resume_save_ms: u64,
+    /// `[SPEC-PLAY-050]`
+    pub skip_suppress_h: u64,
+    /// `[SPEC-PLAY-055]`
+    pub dequeue_suppress_h: u64,
+    /// How many passages to keep ahead. Governs the local engine and the MPD
+    /// Director alike `[SPEC-MPD-105]`.
+    pub queue_depth: usize,
+    /// How often `status` is read while playing `[SPEC-MPD-105]`.
+    pub sample_interval_ms: u64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            volume: 1.0,
+            skip_fade_ms: crate::SKIP_FADE_MS,
+            skip_lead_ms: crate::SKIP_LEAD_MS,
+            resume_save_ms: crate::RESUME_SAVE_MS,
+            skip_suppress_h: crate::SKIP_SUPPRESS_H,
+            dequeue_suppress_h: crate::DEQUEUE_SUPPRESS_H,
+            queue_depth: crate::QUEUE_DEPTH,
+            sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
+        }
+    }
+}
+
+/// The two ways a listener declines a passage `[SPEC-PLAY-055]`.
+///
+/// They differ only in the window they earn. A **skip** is a passage stopped
+/// after it began sounding; a **dequeue** is one removed from the queue before
+/// it ever played, which is the weaker statement and gets the shorter window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rejection {
+    Skip,
+    Dequeue,
+}
+
+impl Rejection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Rejection::Skip => "skip",
+            Rejection::Dequeue => "dequeue",
+        }
+    }
+}
+
 impl PlayerStore {
     pub fn open(path: &std::path::Path) -> Result<Self, DbError> {
         let conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
@@ -459,6 +532,7 @@ impl PlayerStore {
         // writable handle, so the read path never meets a missing table.
         // Filling it is `tools/fetch_cover_art.py`'s job.
         conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
@@ -467,7 +541,9 @@ impl PlayerStore {
         // column. A query naming a column that does not exist fails outright;
         // it does not return nothing.
         for column in ["skip_fade_ms INTEGER", "skip_lead_ms INTEGER",
-                       "resume_save_ms INTEGER"] {
+                       "resume_save_ms INTEGER", "skip_suppress_h INTEGER",
+                       "dequeue_suppress_h INTEGER", "queue_depth INTEGER",
+                       "sample_interval_ms INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
         }
@@ -603,43 +679,72 @@ impl PlayerStore {
     /// Volume was already a column here and was never written to it -- the
     /// resume point saved position and playing state and quietly left the
     /// level behind, so it came back at full scale every start.
-    pub fn save_settings(&self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
-                         resume_save_ms: u64) -> Result<(), DbError>
-    {
+    pub fn save_settings(&self, s: &Settings) -> Result<(), DbError> {
         self.conn
             .execute(
                 "INSERT INTO player_state
-                     (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms, updated_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, datetime('now'))
+                     (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms,
+                      skip_suppress_h, dequeue_suppress_h, queue_depth,
+                      sample_interval_ms, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
                  ON CONFLICT(id) DO UPDATE SET
                      volume = excluded.volume,
                      skip_fade_ms = excluded.skip_fade_ms,
                      skip_lead_ms = excluded.skip_lead_ms,
                      resume_save_ms = excluded.resume_save_ms,
+                     skip_suppress_h = excluded.skip_suppress_h,
+                     dequeue_suppress_h = excluded.dequeue_suppress_h,
+                     queue_depth = excluded.queue_depth,
+                     sample_interval_ms = excluded.sample_interval_ms,
                      updated_at = excluded.updated_at",
-                rusqlite::params![volume as f64, skip_fade_ms as i64, skip_lead_ms as i64,
-                                  resume_save_ms as i64],
+                rusqlite::params![
+                    s.volume as f64,
+                    s.skip_fade_ms as i64,
+                    s.skip_lead_ms as i64,
+                    s.resume_save_ms as i64,
+                    s.skip_suppress_h as i64,
+                    s.dequeue_suppress_h as i64,
+                    s.queue_depth as i64,
+                    s.sample_interval_ms as i64,
+                ],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Volume, skip fade and skip lead as they were left.
+    /// The settings as they were left.
     ///
-    /// Absent columns and absent rows both mean "never saved", which is a
-    /// first run and not a fault: the caller keeps its defaults.
-    pub fn load_settings(&self) -> Option<(f32, u64, u64, u64)> {
+    /// Absent columns and absent rows both mean "never saved", which is a first
+    /// run and not a fault: each field falls back to its own default rather
+    /// than the whole read failing.
+    pub fn load_settings(&self) -> Option<Settings> {
+        let d = Settings::default();
         self.conn
             .query_row(
-                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms                    FROM player_state WHERE id = 1",
+                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h,                         dequeue_suppress_h, queue_depth, sample_interval_ms                  FROM player_state WHERE id = 1",
                 [],
                 |r| {
-                    Ok((
-                        r.get::<_, Option<f64>>(0)?.unwrap_or(1.0) as f32,
-                        r.get::<_, Option<i64>>(1)?.unwrap_or(crate::SKIP_FADE_MS as i64) as u64,
-                        r.get::<_, Option<i64>>(2)?.unwrap_or(crate::SKIP_LEAD_MS as i64) as u64,
-                        r.get::<_, Option<i64>>(3)?.unwrap_or(crate::RESUME_SAVE_MS as i64) as u64,
-                    ))
+                    Ok(Settings {
+                        volume: r.get::<_, Option<f64>>(0)?.unwrap_or(d.volume as f64) as f32,
+                        skip_fade_ms: r.get::<_, Option<i64>>(1)?.unwrap_or(d.skip_fade_ms as i64)
+                            as u64,
+                        skip_lead_ms: r.get::<_, Option<i64>>(2)?.unwrap_or(d.skip_lead_ms as i64)
+                            as u64,
+                        resume_save_ms: r.get::<_, Option<i64>>(3)?
+                            .unwrap_or(d.resume_save_ms as i64)
+                            as u64,
+                        skip_suppress_h: r.get::<_, Option<i64>>(4)?
+                            .unwrap_or(d.skip_suppress_h as i64)
+                            as u64,
+                        dequeue_suppress_h: r.get::<_, Option<i64>>(5)?
+                            .unwrap_or(d.dequeue_suppress_h as i64)
+                            as u64,
+                        queue_depth: r.get::<_, Option<i64>>(6)?.unwrap_or(d.queue_depth as i64)
+                            as usize,
+                        sample_interval_ms: r.get::<_, Option<i64>>(7)?
+                            .unwrap_or(d.sample_interval_ms as i64)
+                            as u64,
+                    })
                 },
             )
             .ok()
@@ -698,6 +803,55 @@ impl PlayerStore {
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
+
+    /// Record a rejection, for suppression and nothing else `[SPEC-PLAY-050]`.
+    ///
+    /// A passage the listener declined did not play, so it must not enter
+    /// `listener_play_history` — but offering it back an hour later is its own
+    /// kind of wrong. This is the narrowest record that fixes that: a timestamp
+    /// per recording per kind, read only by the eligibility gate, feeding no
+    /// ramp, no artist damping and no count.
+    ///
+    /// **The window is applied when the gate runs, not stored here**
+    /// `[SPEC-PLAY-055]`. Keeping the instant and the kind rather than an expiry
+    /// is what lets the listener change a window and have it apply to what they
+    /// have already rejected; an expiry computed under yesterday's setting would
+    /// outlive the setting itself.
+    pub fn record_rejection(
+        &self,
+        kind: Rejection,
+        passage_id: i64,
+        mbid: Option<&str>,
+    ) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO listener_rejections (rejected_at, kind, passage_id, mbid)                  VALUES (strftime('%s','now'), ?1, ?2, ?3)",
+                rusqlite::params![kind.as_str(), passage_id, mbid],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// When each recording was last rejected in this way. Only the most recent
+    /// matters: suppression is a window, not an accumulation.
+    pub fn last_rejected(
+        &self,
+        kind: Rejection,
+    ) -> Result<std::collections::HashMap<String, i64>, DbError> {
+        let mut q = self
+            .conn
+            .prepare(
+                "SELECT mbid, MAX(rejected_at) FROM listener_rejections                  WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = q
+            .query_map([kind.as_str()], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(rows.flatten().collect())
+    }
+
 
     /// The saved resume point, or `None` on a first run.
     pub fn load(&self) -> Result<Option<(Option<i64>, u64, bool)>, DbError> {
@@ -1709,15 +1863,53 @@ mod tests {
         let store = PlayerStore::open(&tmp).unwrap();
         assert!(store.load_settings().is_none(), "nothing saved yet");
 
-        store.save_settings(0.5, 2_000, 500, 30_000).unwrap();
-        let (v, fade, lead, resume) = store.load_settings().unwrap();
-        assert!((v - 0.5).abs() < 1e-6);
-        assert_eq!((fade, lead, resume), (2_000, 500, 30_000));
+        let want = Settings {
+            volume: 0.5,
+            skip_fade_ms: 2_000,
+            skip_lead_ms: 500,
+            resume_save_ms: 30_000,
+            skip_suppress_h: 96,
+            dequeue_suppress_h: 12,
+            queue_depth: 7,
+            sample_interval_ms: 3_000,
+        };
+        store.save_settings(&want).unwrap();
+        let got = store.load_settings().unwrap();
+        assert!((got.volume - want.volume).abs() < 1e-6);
+        assert_eq!(
+            (got.skip_fade_ms, got.skip_lead_ms, got.resume_save_ms),
+            (want.skip_fade_ms, want.skip_lead_ms, want.resume_save_ms)
+        );
+        assert_eq!(
+            (got.skip_suppress_h, got.dequeue_suppress_h, got.queue_depth, got.sample_interval_ms),
+            (96, 12, 7, 3_000)
+        );
 
-        // A library written before this column existed reads as the default,
-        // not as zero -- which would be a write every tick.
-        store.conn.execute("UPDATE player_state SET resume_save_ms = NULL", []).unwrap();
-        assert_eq!(store.load_settings().unwrap().3, crate::RESUME_SAVE_MS);
+        // A library written before a column existed reads as THAT field's
+        // default, not as zero, and not by failing the whole read.
+        let d = Settings::default();
+        for (col, expect) in [
+            ("resume_save_ms", d.resume_save_ms),
+            ("skip_suppress_h", d.skip_suppress_h),
+            ("dequeue_suppress_h", d.dequeue_suppress_h),
+            ("sample_interval_ms", d.sample_interval_ms),
+        ] {
+            store
+                .conn
+                .execute(&format!("UPDATE player_state SET {col} = NULL"), [])
+                .unwrap();
+            let got = store.load_settings().unwrap();
+            let actual = match col {
+                "resume_save_ms" => got.resume_save_ms,
+                "skip_suppress_h" => got.skip_suppress_h,
+                "dequeue_suppress_h" => got.dequeue_suppress_h,
+                _ => got.sample_interval_ms,
+            };
+            assert_eq!(actual, expect, "{col} must fall back to its own default");
+        }
+        store.conn.execute("UPDATE player_state SET queue_depth = NULL", []).unwrap();
+        assert_eq!(store.load_settings().unwrap().queue_depth, d.queue_depth);
+
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -1825,6 +2017,111 @@ mod tests {
         assert_eq!(rows, vec![(7, Some("aaaaaaaa-0000-0000-0000-000000000001".into())), (8, None)],
                    "an unidentified passage still records a play");
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// An existing library, written before any of this, must open and work.
+    ///
+    /// This is the shipping question rather than a unit one: the appliance's
+    /// database has a `player_state` with none of the newer columns and no
+    /// `listener_rejections` at all. A query naming a column that does not
+    /// exist fails outright rather than returning nothing, so a missed
+    /// migration is a player that will not start.
+    #[test]
+    fn a_library_from_before_all_this_still_opens() {
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino_legacy_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        // Exactly the old shape: the original five columns, nothing since.
+        {
+            let c = Connection::open(&tmp).unwrap();
+            c.execute_batch(
+                "CREATE TABLE player_state (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     passage_id INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
+                     playing INTEGER NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 1.0,
+                     updated_at TEXT NOT NULL);
+                 INSERT INTO player_state (id, position_ms, playing, volume, updated_at)
+                     VALUES (1, 4321, 1, 0.75, datetime('now'));",
+            )
+            .unwrap();
+        }
+
+        let store = PlayerStore::open(&tmp).expect("an old library must still open");
+
+        // The resume point survives the migration -- it is the one thing in
+        // that row a listener would notice losing.
+        assert_eq!(store.load().unwrap(), Some((None, 4321, true)));
+
+        // New settings read as their defaults, not as zero.
+        let s = store.load_settings().expect("settings readable");
+        let d = Settings::default();
+        assert!((s.volume - 0.75).abs() < 1e-6, "the old value is kept");
+        assert_eq!(s.skip_suppress_h, d.skip_suppress_h);
+        assert_eq!(s.dequeue_suppress_h, d.dequeue_suppress_h);
+        assert_eq!(s.queue_depth, d.queue_depth);
+        assert_eq!(s.sample_interval_ms, d.sample_interval_ms);
+
+        // And the table the player writes rejections to now exists.
+        store.record_rejection(Rejection::Skip, 1, Some("m")).unwrap();
+        assert_eq!(store.last_rejected(Rejection::Skip).unwrap().len(), 1);
+
+        // Writing back does not fail on the migrated row either.
+        store.save_settings(&s).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A rejection is written where suppression can see it and the weighting
+    /// cannot, and the two kinds stay apart `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
+    #[test]
+    fn rejections_are_recorded_apart_from_plays_and_by_kind() {
+        // Unique per run, not merely per process: a process id is reused, and a
+        // leftover file would meet a bare CREATE TABLE below.
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino_sk_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let st = PlayerStore::open(&tmp).unwrap();
+        st.conn
+            .execute_batch(
+                "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                     played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);
+                 -- listener_rejections is created by PlayerStore::open itself.",
+            )
+            .unwrap();
+        let skipped = "aaaaaaaa-0000-0000-0000-000000000009";
+        let dropped = "aaaaaaaa-0000-0000-0000-00000000000d";
+        st.record_rejection(Rejection::Skip, 11, Some(skipped)).unwrap();
+        st.record_rejection(Rejection::Dequeue, 12, Some(dropped)).unwrap();
+
+        // Each kind sees only its own: they earn different windows, so mixing
+        // them would apply the wrong one.
+        let skips = st.last_rejected(Rejection::Skip).unwrap();
+        let deqs = st.last_rejected(Rejection::Dequeue).unwrap();
+        assert!(skips.contains_key(skipped) && !skips.contains_key(dropped));
+        assert!(deqs.contains_key(dropped) && !deqs.contains_key(skipped));
+
+        // Neither becomes a play.
+        let plays: i64 = st
+            .conn
+            .query_row("SELECT COUNT(*) FROM listener_play_history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(plays, 0, "a rejection must never become a play");
+
+        // Only the most recent of a kind matters: a window, not an accumulation.
+        st.record_rejection(Rejection::Skip, 11, Some(skipped)).unwrap();
+        assert_eq!(st.last_rejected(Rejection::Skip).unwrap().len(), 1);
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

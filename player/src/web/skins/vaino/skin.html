@@ -73,6 +73,14 @@
     <div class="setting">
       <label for="resumesave">Save position every</label>
       <span><input type="number" id="resumesave" step="0.5"> s</span>
+      <label for="skipsuppress" title="A skipped passage is held out of selection for this long. It is not counted as played.">Hold a skipped track out for</label>
+      <span><input type="number" id="skipsuppress" step="1"> h</span>
+      <label for="dequeuesuppress" title="A track taken out of the queue before it played is held out for this long. The longer of the two windows wins.">Hold a removed track out for</label>
+      <span><input type="number" id="dequeuesuppress" step="1"> h</span>
+      <label for="queuedepth" title="How many passages the Program Director keeps queued ahead. At or above this it adds nothing.">Keep queued ahead</label>
+      <span><input type="number" id="queuedepth" step="1"> passages</span>
+      <label for="sampleinterval" title="How often a guest backend such as MPD reads playback position. Vaino's own engine does not poll.">Guest sampling interval</label>
+      <span><input type="number" id="sampleinterval" step="0.5"> s</span>
       <p>How often the playback position is written to disk. Longer means
          fewer writes on an appliance's flash; at worst this much position is
          lost to a power cut. Track changes and pause are always saved at once.</p>

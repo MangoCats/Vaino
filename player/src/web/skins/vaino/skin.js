@@ -70,6 +70,15 @@
   skipLead.onchange = () => Vaino.skipLead(skipLead.value * 1000);
   const resumeSave = $('resumesave');
   resumeSave.onchange = () => Vaino.resumeSave(resumeSave.value * 1000);
+  // A skip suppresses; it does not count as played `[SPEC-PLAY-050]`.
+  const skipSuppress = $('skipsuppress');
+  skipSuppress.onchange = () => Vaino.skipSuppress(skipSuppress.value);
+  const dequeueSuppress = $('dequeuesuppress');
+  dequeueSuppress.onchange = () => Vaino.dequeueSuppress(dequeueSuppress.value);
+  const queueDepth = $('queuedepth');
+  queueDepth.onchange = () => Vaino.queueDepth(queueDepth.value);
+  const sampleInterval = $('sampleinterval');
+  sampleInterval.onchange = () => Vaino.sampleInterval(sampleInterval.value * 1000);
 
   // Each term is shown separately, never just the product: a single number
   // cannot be argued with, and arguing with it is the point [SPEC-DIR-190].
@@ -108,6 +117,26 @@
       resumeSave.min = k.resume_save_min_ms / 1000;
       resumeSave.max = k.resume_save_max_ms / 1000;
       resumeSave.value = (k.resume_save_ms / 1000).toFixed(1);
+    }
+    if (k.skip_suppress_h != null && document.activeElement !== skipSuppress) {
+      skipSuppress.min = k.skip_suppress_min_h;
+      skipSuppress.max = k.skip_suppress_max_h;
+      skipSuppress.value = k.skip_suppress_h;
+    }
+    if (k.dequeue_suppress_h != null && document.activeElement !== dequeueSuppress) {
+      dequeueSuppress.min = k.dequeue_suppress_min_h;
+      dequeueSuppress.max = k.dequeue_suppress_max_h;
+      dequeueSuppress.value = k.dequeue_suppress_h;
+    }
+    if (k.queue_depth != null && document.activeElement !== queueDepth) {
+      queueDepth.min = k.queue_depth_min;
+      queueDepth.max = k.queue_depth_max;
+      queueDepth.value = k.queue_depth;
+    }
+    if (k.sample_interval_ms != null && document.activeElement !== sampleInterval) {
+      sampleInterval.min = k.sample_interval_min_ms / 1000;
+      sampleInterval.max = k.sample_interval_max_ms / 1000;
+      sampleInterval.value = (k.sample_interval_ms / 1000).toFixed(1);
     }
   }
 

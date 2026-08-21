@@ -130,6 +130,14 @@ pub struct Policy {
     pub coupling: ArtistCoupling,
     pub artist_scale: TimeScale,
     pub track_scale: TimeScale,
+    /// How long a *skipped* recording is held out, in seconds
+    /// `[SPEC-PLAY-050]`. Zero disables suppression entirely, which is a
+    /// legitimate choice and the reason this is not an `Option`.
+    pub skip_suppress_s: f64,
+    /// How long a recording *removed from the queue unheard* is held out
+    /// `[SPEC-PLAY-055]`. Shorter by default: declining to hear something now
+    /// says less than stopping it once it had started.
+    pub dequeue_suppress_s: f64,
 }
 
 /// Another recording that shares this one's rotation `[SPEC-DIR-116]` — a
@@ -165,6 +173,13 @@ pub struct Weighing {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exclusion {
+    /// The listener skipped this recording recently `[SPEC-PLAY-050]`. A hard
+    /// block for a window and **nothing else** — it damps no weight, marks no
+    /// artist and feeds no ramp, because a skip is not a play.
+    SkipSuppressed,
+    /// The listener took this recording out of the queue before it played
+    /// `[SPEC-PLAY-055]`. Same effect, shorter window by default.
+    DequeueSuppressed,
     ArtistRotationBlock,
     TrackRotationBlock,
     RelatedRotationBlock,
@@ -206,6 +221,13 @@ pub struct Candidate<'a> {
     pub track_age_s: Option<f64>,
     /// Seconds since anything by this artist last played; `None` if never.
     pub artist_age_s: Option<f64>,
+    /// Seconds since this recording was last **skipped**; `None` if never.
+    /// Deliberately separate from `track_age_s`: a skip suppresses and does
+    /// not otherwise participate `[SPEC-PLAY-050]`.
+    pub skip_age_s: Option<f64>,
+    /// Seconds since this recording was last **removed from the queue unheard**;
+    /// `None` if never `[SPEC-PLAY-055]`.
+    pub dequeue_age_s: Option<f64>,
     /// Other recordings of the same song `[SPEC-DIR-116]`. Borrowed rather
     /// than owned: most candidates have none, and a selection pass weighs
     /// thousands.
@@ -233,6 +255,34 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     }
     if c.depth_s > MAX_DEPTH_S {
         return Weighing::excluded(Exclusion::TooDeep);
+    }
+
+    // A recently rejected recording is out, and that is the whole of its
+    // effect `[SPEC-PLAY-050]`. Placed with the passage filters rather than in
+    // the track pass to make the point structurally: nothing below reads these
+    // ages, so a rejection cannot leak into a ramp or an artist mark.
+    //
+    // **The longer remaining window wins** `[SPEC-PLAY-057]`. Two rejections of
+    // the same recording do not shorten each other, so a track skipped six days
+    // ago is not released early by being dequeued today — the block is the
+    // union of the windows, and the reason reported is whichever has longer to
+    // run, so the "why" panel names the one actually holding it out.
+    let remaining = |age: Option<f64>, window: f64| -> Option<f64> {
+        match age {
+            Some(a) if window > 0.0 && a < window => Some(window - a),
+            _ => None,
+        }
+    };
+    let held = [
+        (remaining(c.skip_age_s, policy.skip_suppress_s), Exclusion::SkipSuppressed),
+        (remaining(c.dequeue_age_s, policy.dequeue_suppress_s), Exclusion::DequeueSuppressed),
+    ];
+    if let Some((_, reason)) = held
+        .iter()
+        .filter(|(left, _)| left.is_some())
+        .max_by(|a, b| a.0.unwrap().total_cmp(&b.0.unwrap()))
+    {
+        return Weighing::excluded(*reason);
     }
 
     // --- artist pass ---
@@ -340,6 +390,83 @@ mod tests {
         assert_eq!(recovery_weight(9e9, rot, rec), 1.0, "and stays there");
     }
 
+    const SKIP_W: f64 = 156.0 * 3600.0;
+    const DEQ_W: f64 = 18.0 * 3600.0;
+    fn windows() -> Policy {
+        Policy { skip_suppress_s: SKIP_W, dequeue_suppress_s: DEQ_W, ..Default::default() }
+    }
+
+    /// A rejection suppresses for a window, and does nothing else at all
+    /// `[SPEC-PLAY-050]`.
+    #[test]
+    fn a_recent_skip_is_excluded_and_an_old_one_is_not() {
+        let mut c = candidate();
+        c.skip_age_s = Some(SKIP_W - 1.0);
+        assert_eq!(weigh(&c, &windows()).excluded, Some(Exclusion::SkipSuppressed));
+
+        c.skip_age_s = Some(SKIP_W + 1.0);
+        assert!(weigh(&c, &windows()).is_eligible(), "out of the window, back in the running");
+    }
+
+    /// A dequeue earns its own, shorter window `[SPEC-PLAY-055]`.
+    #[test]
+    fn a_dequeue_suppresses_for_its_own_shorter_window() {
+        let mut c = candidate();
+        c.dequeue_age_s = Some(DEQ_W - 1.0);
+        assert_eq!(weigh(&c, &windows()).excluded, Some(Exclusion::DequeueSuppressed));
+
+        // Past 18 h it is free again -- it never earned the 156 h of a skip.
+        c.dequeue_age_s = Some(DEQ_W + 1.0);
+        assert!(weigh(&c, &windows()).is_eligible());
+    }
+
+    /// The longer remaining window wins, and a second rejection cannot shorten
+    /// the first `[SPEC-PLAY-057]`.
+    #[test]
+    fn the_greater_suppression_wins() {
+        let mut c = candidate();
+        // Skipped 155.5 h ago: 0.5 h of a 156 h window left. Dequeued just now:
+        // 18 h left. The dequeue is longer, so it holds and it is the reason.
+        c.skip_age_s = Some(155.5 * 3600.0);
+        c.dequeue_age_s = Some(0.0);
+        assert_eq!(weigh(&c, &windows()).excluded, Some(Exclusion::DequeueSuppressed));
+
+        // Skipped an hour ago: 155 h left, far more than any dequeue. The skip
+        // holds, and being dequeued today does NOT release it early.
+        c.skip_age_s = Some(3600.0);
+        c.dequeue_age_s = Some(0.0);
+        assert_eq!(weigh(&c, &windows()).excluded, Some(Exclusion::SkipSuppressed));
+
+        // And the union really is a union: dequeued long ago, skipped recently.
+        c.dequeue_age_s = Some(DEQ_W * 10.0);
+        assert_eq!(weigh(&c, &windows()).excluded, Some(Exclusion::SkipSuppressed));
+    }
+
+    #[test]
+    fn a_rejection_changes_no_weight_once_its_window_has_passed() {
+        // The whole of `[SPEC-PLAY-050]`: suppression, and no other effect. A
+        // passage rejected long ago must weigh exactly as one never rejected.
+        let mut rejected = candidate();
+        rejected.track_age_s = Some(seconds(DEF_ROTATION_TRK) * 4.0);
+        let never = rejected;
+        rejected.skip_age_s = Some(400.0 * 3600.0);
+        rejected.dequeue_age_s = Some(400.0 * 3600.0);
+        assert_eq!(weigh(&rejected, &windows()), weigh(&never, &windows()));
+    }
+
+    #[test]
+    fn a_zero_window_turns_that_suppression_off() {
+        let mut c = candidate();
+        c.skip_age_s = Some(1.0);
+        c.dequeue_age_s = Some(1.0);
+        let off = Policy { skip_suppress_s: 0.0, dequeue_suppress_s: 0.0, ..Default::default() };
+        assert!(weigh(&c, &off).is_eligible(), "zero must disable, not block forever");
+
+        // Independently: skip off, dequeue still on.
+        let half = Policy { skip_suppress_s: 0.0, dequeue_suppress_s: DEQ_W, ..Default::default() };
+        assert_eq!(weigh(&c, &half).excluded, Some(Exclusion::DequeueSuppressed));
+    }
+
     fn candidate<'a>() -> Candidate<'a> {
         Candidate {
             length_s: LENGTH_MIDPOINT_S,
@@ -348,6 +475,8 @@ mod tests {
             artist: Tuning::artist_defaults(),
             track_age_s: None,
             artist_age_s: None,
+            skip_age_s: None,
+            dequeue_age_s: None,
             related: &[],
             occasion: 1.0,
         }
@@ -569,6 +698,8 @@ mod tests {
             coupling: ArtistCoupling::Damped,
             artist_scale: TimeScale::new(1.0),
             track_scale: TimeScale::new(1.0),
+            skip_suppress_s: 0.0,
+            dequeue_suppress_s: 0.0,
         };
         assert_eq!(weigh(&c, &Policy::default()), weigh(&c, &explicit));
     }

@@ -70,6 +70,9 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `RLK` — Library relink: binding a transported library to a target's paths
 - `SUI` — Sampo Console: the library-builder's own web interface (distinct from `UI`, which is the player's)
 - `PL` — Derived-data payload: the one format carried by all three transports
+- `MPD` — MPD integration: the Program Director as a guest in someone else's player
+- `SRC` — Sources of truth: ranking two answers to one question, see [GOV002](GOV002-sources-of-truth.md)
+- `PLAY` — What counts as a play, for every path that writes `listener_play_history`
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -115,8 +118,12 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-BAK-*]` | Measured cost of an MPD / OpenSubsonic backend, and its containment | [GUIDE007-external-backends-investigation.md](GUIDE007-external-backends-investigation.md) |
 | `[SPEC-MPD-050]` | Extending MPD through its sticker database, without patching it | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#4-extending-mpd-without-patching-mpd) |
 | `[SPEC-MPD-060]` | Mapping a Vaino passage to an MPD URI | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#5-the-mapping-which-is-the-hard-part) |
+| `[SPEC-MPD-092]` | MPD's measured protocol behaviour, as against its documentation | [SPEC016-mpd-protocol-findings.md](spec/SPEC016-mpd-protocol-findings.md) |
+| `[SPEC-PLAY-*]` | When a play is written to history — one rule, every path | [SPEC017-what-counts-as-a-play.md](spec/SPEC017-what-counts-as-a-play.md) |
+| `[IMPL-MPD-*]` | Prototyping the MPD Director: the plan, and what it measured | [IMPL004](IMPL004-mpd-prototype.md), [IMPL005](IMPL005-mpd-prototype-results.md) |
 | `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
+| `[IMPL-MPD-*]` | MPD Director prototype: build order, riskiest part first | [IMPL004-mpd-prototype.md](IMPL004-mpd-prototype.md) |
 | `[PI3-*]` | Speaker link: design and the player's contract | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md) |
 | `[PI3-FOUND-*]`, `[PI3-ROCKER-*]`, `[PI3-LED-*]` | What operating the speaker taught | [PI004-speaker-operation.md](../VainoPi/PI004-speaker-operation.md) |
 | `[PI5-LIB-*]` | Getting the real library onto the appliance, and its cost | [PI005-appliance-library.md](../VainoPi/PI005-appliance-library.md) |
