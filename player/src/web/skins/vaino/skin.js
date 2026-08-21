@@ -413,6 +413,38 @@
     }
   }
 
+  // ----------------------------------------------------------------- power
+  // Two steps, because there is no third. An appliance reached only through
+  // this page cannot be switched back on from it, so a misclick costs a walk
+  // to the plug -- the same reason the speaker change asks "can you hear it?"
+  // rather than trusting one press `[PI3-UI-030]`.
+  $('pw-ask').onclick = () => {
+    $('pw-confirm').hidden = false;
+    $('pw-ask').disabled = true;
+  };
+  $('pw-no').onclick = () => {
+    $('pw-confirm').hidden = true;
+    $('pw-ask').disabled = false;
+  };
+  $('pw-yes').onclick = async () => {
+    $('pw-yes').disabled = true;
+    $('pw-no').disabled = true;
+    $('pw-hint').textContent = 'Saving where you were, then shutting down…';
+    try {
+      const r = await fetch('/power/off', { method: 'POST' });
+      // 202, not 204: accepted. The process answering is about to be stopped,
+      // so it cannot honestly report that the machine finished the job.
+      $('pw-hint').textContent = r.ok
+        ? 'Shutting down. Wait for the light to go out before pulling power.'
+        : `Could not shut down: ${await r.text()}`;
+    } catch (e) {
+      // The socket dying IS the expected ending here, so it is not an error.
+      $('pw-hint').textContent =
+        'Shutting down. Wait for the light to go out before pulling power.';
+    }
+    $('pw-confirm').hidden = true;
+  };
+
   // ---------------------------------------------------------------- radios
   // A blocked radio looks exactly like a broken button `[PI3-FOUND-050]`: the
   // speaker was paired, bonded, trusted and flashing, and Connect did nothing

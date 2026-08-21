@@ -54,11 +54,26 @@ ssh "$HOST" "sudo cp -f $REMOTE ${REMOTE}.prev 2>/dev/null;
              sudo install -m 755 /tmp/vaino.new $REMOTE;
              sudo systemctl start vaino" || die "install failed"
 
-# Give it a moment to bind, then ask the RUNNING process what it is. A 404 here
-# means an older binary is serving, whatever the checksum on disk says.
-sleep 8
-CODE=$(ssh "$HOST" "curl -s -o /dev/null -w '%{http_code}' -X POST \
-        http://localhost:$PORT/command/reopen-output")
+# Ask the RUNNING process what it is. A 404 here means an older binary is
+# serving, whatever the checksum on disk says.
+#
+# POLLED, not a fixed wait. This was `sleep 8`, which was true when the
+# appliance held a 31-file test library and false the moment it held the real
+# one: the Program Director is built at startup and takes 9.86 s over 8,330
+# passages [SPEC-RLK-075 measures the sibling case], so the web server binds at
+# about 15 s. The check therefore began failing a good binary and rolling it
+# back, reporting "did not answer" -- which invites diagnosing the build rather
+# than the deadline. A number tuned against small data that silently rots as
+# the data grows is the same shape of fault as the quadratic browse in
+# [REQ-LIB-165].
+DEADLINE=${VAINO_DEPLOY_WAIT:-90}
+CODE=000
+for _ in $(seq 1 "$DEADLINE"); do
+    CODE=$(ssh "$HOST" "curl -s -o /dev/null -w '%{http_code}' --max-time 3 -X POST \
+            http://localhost:$PORT/command/reopen-output" 2>/dev/null)
+    [ "$CODE" = "204" ] && break
+    sleep 1
+done
 if [ "$CODE" = "204" ]; then
     echo "deploy: running, and answering as the new build"
     ssh "$HOST" "systemctl is-active vaino; journalctl -u vaino -n 3 --no-pager | tail -3"

@@ -56,3 +56,63 @@ command, against a **running** player and with no lock contention, and
 > **Cost, for planning.** 2 h 37 m of hashing `[SPEC-RLK-075]`, during which the
 > player is stopped and the appliance is silent. That is the number to quote
 > before starting one, not the hour SPEC012 originally estimated.
+
+---
+
+## 2. Turning it off on purpose
+
+**`[PI5-PWR-010]` The settings page can shut the appliance down.** An appliance
+whose only interface is a web page has no other way to be switched off, and
+pulling its power is how an SD card is corrupted and a database left mid-write.
+`POST /power/off` does three things in order, and the first is what a bare
+`poweroff` misses:
+
+1. **`Command::Persist` writes the resume point now.** It is otherwise saved on
+   an interval `[REQ-VIS-155]`, so a *deliberate* shutdown would still lose up
+   to that much position — in exactly the case someone took care over.
+2. **systemd stops the services and unmounts**, rather than power being cut
+   under a live filesystem.
+3. **The reply is 202, not 204.** Accepted, not done: the process answering is
+   about to be stopped, so it cannot honestly claim the machine finished.
+
+The button asks twice, because there is no third press available — nothing on
+that page can switch the machine back on, and the walk to the plug is the cost
+of a misclick `[PI3-UI-030]`.
+
+**`[PI5-PWR-020]` Verified without using it.** Powering the appliance off to
+prove it powers off is a poor trade when the evidence can be had otherwise:
+`GET /power/off` answers **405**, which is a POST-only route present (a missing
+one answers 404); `systemctl --dry-run poweroff` reports it permitted and ready;
+and `player_state` is observably being written. The one untested step is the
+transition itself.
+
+---
+
+## 3. Two things this work exposed
+
+**`[PI5-DEP-010]` The deploy script's health check had rotted, and rolled back a
+good binary.** `deploy-player.sh` waited `sleep 8` then asked the running player
+to identify itself. That was true against the 31-file test library and false the
+moment the appliance held the real one: the Program Director is built at startup
+and takes **9.86 s** over 8,330 passages, so the web server binds at about
+**15 s**. The check failed a perfectly good build and rolled it back, reporting
+*"new build did not answer"* — which invites diagnosing the build rather than the
+deadline. It now **polls** to a bounded deadline instead of guessing one.
+
+This is the same shape as the quadratic browse in `[REQ-LIB-165]`: a number
+tuned against small data, correct when written, silently wrong once the data
+grew, and with no commit to bisect because nothing changed but the library.
+
+**`[PI5-PRIV-010]` The narrow sudoers rule is not currently narrowing anything.**
+`[PI3-PRIV-*]` describes reaching BlueZ "through a sudoers rule naming that one
+binary rather than by granting the player broader rights". Measured on the
+appliance, `/etc/sudoers.d/` also contains the Raspberry Pi OS default:
+
+    pi ALL=(ALL) NOPASSWD: ALL
+
+So the player already has passwordless root for everything, and the closed verb
+set is defence that is not presently defending. The design is still the right
+one — it is what makes the helper safe *if* the blanket rule is removed — but
+the document claims a property the machine does not have. **Unresolved:**
+whether to drop the default rule, which is a decision about how the appliance is
+administered rather than about Vaino.

@@ -103,6 +103,20 @@
       <span><select id="prog"></select></span>
       <p id="progmode"></p>
     </div>
+    <div class="setting" id="power">
+      <label>Shut down</label>
+      <span><button type="button" id="pw-ask">Shut down the appliance</button></span>
+      <p id="pw-hint">Stops the music and powers the machine off properly.
+         Turning it back on needs a hand at the plug.</p>
+    </div>
+    <div class="setting" id="pw-confirm" hidden>
+      <label>Really shut down?</label>
+      <span>
+        <button type="button" id="pw-yes">Yes, shut down</button>
+        <button type="button" id="pw-no">Cancel</button>
+      </span>
+      <p>Nothing on this page can switch it back on.</p>
+    </div>
   </section>
 
   <div id="link">Connecting…</div>

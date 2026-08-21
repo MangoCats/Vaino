@@ -141,6 +141,13 @@ pub enum Command {
     /// cosmetic -- it looks like it worked, and is silent -- unless the output
     /// is reopened `[PI3-WHY-020]`.
     ReopenOutput,
+    /// Write the resume point NOW, ignoring the save interval `[REQ-VIS-155]`.
+    ///
+    /// For the moments the interval was not designed for: the machine is about
+    /// to be powered off deliberately `[PI5-PWR-010]`, and losing the last few
+    /// seconds of position to a timer would be a shame in exactly the case a
+    /// person took care over.
+    Persist,
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
     Shutdown,
@@ -432,6 +439,7 @@ impl Engine {
                 Ok(Command::ShiftQueued(id, delta)) => {
                     self.queue.shift(id, delta);
                 }
+                Ok(Command::Persist) => self.persist(true),
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
                     self.shutdown = true;
                     return;

@@ -243,6 +243,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/program/:id", post(set_program))
         .route("/library/reload", post(reload_library))
         .route("/audio/radios", get(radios))
+        .route("/power/off", post(power_off))
         .route("/audio/radio/:kind/:state", post(set_radio))
         .with_state(ui)
 }
@@ -689,6 +690,50 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
 /// settings panel is the only thing that needs it.
 async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
     axum::Json(crate::sink::current())
+}
+
+/// Shut the appliance down gracefully `[PI5-PWR-010]`.
+///
+/// An appliance whose only interface is a web page has no other way to be
+/// turned off, and pulling its power is how an SD card is corrupted and how a
+/// database is left mid-write. This exists so that stops being the only option.
+///
+/// Three steps, in order, and the first is the one a bare `poweroff` misses:
+///
+/// 1. **Write the resume point now.** It is otherwise saved on an interval
+///    `[REQ-VIS-155]`, so a deliberate shutdown would still lose up to that
+///    much position -- in exactly the case someone took care over.
+/// 2. **Hand off to systemd**, which stops the services and unmounts, rather
+///    than cutting power under a live filesystem.
+/// 3. **Answer 202, not 204.** The request is accepted; whether the machine
+///    completes it is not something this reply can honestly claim, since the
+///    process making it is about to be stopped.
+async fn power_off(State(ui): State<Ui>) -> Response {
+    ui.handle.send(Command::Persist);
+    // Long enough for the engine to take the command off the channel and write
+    // one row; short enough that a person does not wonder if the click landed.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // Detached, and deliberately not awaited: systemd stops this very service
+    // as part of the transition, so waiting for the child to exit would mean
+    // waiting to be killed.
+    match std::process::Command::new("sudo")
+        .arg("-n")
+        .arg("systemctl")
+        .arg("poweroff")
+        .spawn()
+    {
+        Ok(_) => (
+            StatusCode::ACCEPTED,
+            "shutting down; wait for the light to go out before pulling power",
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not begin shutdown: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 /// Every radio and whether it is blocked `[PI3-RF-010]`.
