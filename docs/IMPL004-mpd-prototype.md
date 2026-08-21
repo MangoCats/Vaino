@@ -63,22 +63,41 @@ Build a tool that reads `vaino.db` and an MPD instance and **writes nothing to e
 > why. That is the same-platform case behaving well; it says nothing yet about
 > a Linux MPD, which is the case that will not `[IMPL-MPD-008]`.
 
-**`[IMPL-MPD-012]` Rung 2 is a candidate, not a match — and the measurement says
-so.** MPD carries a recording MBID on **5,462 of 5,758** songs (94.9%), which
-looked like a strong fallback until the collisions were counted: **284 MBIDs are
-shared by more than one song.**
+**`[IMPL-MPD-012]` The 284 shared MBIDs are not an ambiguity. They are the model
+working, and Vaino already implements it.** An earlier reading of this
+measurement called them a hazard — the right music in the wrong file — and that
+was wrong in both directions.
 
-That is not a defect in anyone's data. One recording legitimately appears in
-several files — a duplicate rip, or the same performance on an album and a
-compilation. But Vaino's passage carries `start_ms`, `end_ms` and a gain that
-belong to **one exact encoding** `[SPEC-DF-040]`, so resolving by MBID can find
-the right *music* in the wrong *file* and apply another rip's trim points to it.
+**Selection is recording-scoped; playback is encoding-scoped.** Two rips of one
+recording share an artist, a recording id and a flavor vector, so for rotation,
+recovery, restraint and artist blocking they are **one thing**. Which of them
+sounds is a lower question, and once it is answered *that file's own*
+`start_ms`, `end_ms` and gain govern — because those are properties of the
+encoding `[SPEC-DF-040]` and of nothing else.
 
-**This is `[SPEC-RLK-040]`'s rule arriving by a second road.** Relink already
-holds that `recording_mbid` is *"a candidate, not a match, because passage
-boundaries, trim points and replay gain are encoding-scope and do not transfer
-to a different rip"*. The same sentence governs here, and rung 2 must therefore
-**report rather than bind** whenever its MBID is not unique.
+Confirmed in the code rather than assumed: `last_played` and `artist_of` are
+keyed by **mbid**, while `length_bonus` is computed from `c.length_s` on each
+candidate **row**, and rows are passages. Recording-scope above, encoding-scope
+below, already built.
+
+**Which answers how the encoding gets chosen: it is not a separate step.** The
+duplicates enter the roulette as their own candidates and compete, and because
+the length bonus reads the encoding's own length, a longer or shorter rip is
+weighted on its own terms. Rotation then suppresses the *recording*, so
+whichever won, the other is suppressed with it and neither returns early.
+
+**`[IMPL-MPD-013]` One real constraint survives, and it is narrower than the
+worry it replaces: the times must come from whatever actually plays.** A mapping
+may resolve to any encoding of the right recording. What it may **not** do is
+hand MPD a URI for file B while sending `rangeid` computed from file A's
+passage — that would apply one rip's trim to another's audio, which is the
+encoding-scope rule broken rather than applied.
+
+So the mapping's output is a **pair from one file** — `(uri, passage)` — never a
+URI from one and times from another. Where rung 1 resolves, that is automatic.
+Where rung 2 resolves by recording, the passage must be re-chosen to match the
+song MPD will actually play, and if Vaino holds no passage for that encoding it
+has nothing legitimate to send and should say so.
 
 **`[IMPL-MPD-014]` MPD knows 49 songs the library does not.** 5,758 against
 5,709, and relink counted a comparable never-indexed tail `[SPEC-RLK-070]`.
