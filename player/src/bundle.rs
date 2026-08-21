@@ -108,7 +108,7 @@ pub fn unacceptable(doc: &Value) -> Vec<String> {
         // **zero** — and a zero duration is not a small error, it is a length
         // against which every play/skip judgement is meaningless
         // `[SPEC-MPD-092]`. Reject it here rather than default it later.
-        if req(e, "duration_ms") && !num(e, "duration_ms").is_some_and(|d| d > 0) {
+        if req(e, "duration_ms") && num(e, "duration_ms").is_none_or(|d| d <= 0) {
             out.push(format!("{md5}: encoding.duration_ms is not a positive integer"));
         }
         // A payload disagreeing with ITSELF. `[SPEC-DF-070]` ranks a payload

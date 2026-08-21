@@ -86,6 +86,78 @@ impl Mpd {
     }
 }
 
+/// Quote a value for the protocol: wrap in `"`, backslash-escape `"` and `\`.
+pub fn quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
+}
+
+/// `key: value` lines as a map. Later keys win, which is what `status` wants.
+pub fn parse(lines: &[String]) -> std::collections::HashMap<String, String> {
+    lines
+        .iter()
+        .filter_map(|l| l.split_once(": "))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// What happened when a passage was offered to MPD.
+#[derive(Debug, Clone)]
+pub struct Added {
+    /// MPD's song id, the handle for everything afterwards.
+    pub id: String,
+    /// Whether MPD honoured the span. `false` means it kept the add, dropped
+    /// the end, and will play past the passage `[SPEC-MPD-096]`.
+    pub span_honoured: bool,
+}
+
+impl Mpd {
+    /// `status`, parsed.
+    pub fn status(&mut self) -> Result<std::collections::HashMap<String, String>, String> {
+        self.cmd("status").map(|l| parse(&l))
+    }
+
+    /// Add a passage and bound it to its span.
+    ///
+    /// **The span is read back rather than assumed** `[SPEC-MPD-096]`,
+    /// `[GOV-SRC-030]`: `rangeid` returns `OK` even when it silently drops an
+    /// end that exceeds MPD's own duration estimate, and that estimate is wrong
+    /// on 36.9% of this library `[SPEC-MPD-092]`. An `OK` is not evidence.
+    ///
+    /// A refused `rangeid` withdraws the add: naming a file without its span
+    /// plays the whole capture, which is forty songs where one was wanted.
+    pub fn add_ranged(&mut self, uri: &str, start_ms: i64, end_ms: i64) -> Result<Added, String> {
+        let id = self
+            .cmd(&format!("addid {}", quote(uri)))
+            .map(|l| parse(&l).get("Id").cloned())?
+            .ok_or_else(|| format!("addid returned no Id for {uri}"))?;
+        let range = format!(
+            "rangeid {id} {:.3}:{:.3}",
+            start_ms as f64 / 1000.0,
+            end_ms as f64 / 1000.0
+        );
+        if let Err(e) = self.cmd(&range) {
+            let _ = self.cmd(&format!("deleteid {id}"));
+            return Err(format!("rangeid refused ({e}); add withdrawn"));
+        }
+        let want = (end_ms - start_ms) as f64 / 1000.0;
+        let span_honoured = self
+            .cmd(&format!("playlistid {id}"))
+            .ok()
+            .and_then(|l| parse(&l).get("Time").and_then(|t| t.parse::<f64>().ok()))
+            .is_some_and(|t| (t - want).abs() <= 1.5);
+        Ok(Added { id, span_honoured })
+    }
+}
+
 /// One song as MPD describes it. Only the fields the mapping ladder consults.
 #[derive(Debug, Default, Clone)]
 pub struct Song {

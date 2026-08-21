@@ -214,7 +214,34 @@ Every `rangeid` is now read back and compared against the span requested `[SPEC-
 
 **`[IMPL-MPD-045]` And the bookkeeping is the part to get right, not the selection.** `note_queued` when a passage is added; `forget_queued` when one leaves without playing `[REQ-PD-112]`. Locally that is driven by `take_dropped`; here it is a queue diff after `idle playlist`, and a deletion by a person must reach the same place as a file that would not open.
 
-> **Claims.** Over a session, the census `[GDE-PD-010]` behaves as it does locally: rotation suppresses what has just played, artists block, and a passage deleted from the queue by hand does **not** stay suppressed.
+> **Claims.** Over a session, the census `[GDE-PD-010]` behaves as it does locally: rotation suppresses what has just played, artists block, and a passage deleted from the queue by hand does **not** stay suppressed *by its queueing mark*.
+>
+> *(The last clause was written before `[SPEC-PLAY-055]`. Undoing the queueing mark and forgiving the removal are now two different things: the mark comes off, and a dequeue earns its own 18-hour window. Stage 3 writes nothing, so the window is reported rather than applied.)*
+
+### Result: the Director drives, and the diff tells the two departures apart
+
+`mpd_direct` — `Director::decide` with the queued ids as the exclusion set and the last of them as the flow tail, which is `Session::refill`'s call unchanged. **No selection logic is reimplemented**, and that was the point of the stage.
+
+**The census moves as it does locally.** Over one session, with five passages offered:
+
+| | before | after |
+|---|---:|---:|
+| eligible | 8,089 | 7,810 |
+| artist-blocked | 0 | **280** |
+
+`note_queued` marks the recording and its artist as each passage is offered, so artists block for the rest of the session — the behaviour `[GDE-PD-010]` describes, reached without touching the Director.
+
+**`[IMPL-MPD-047]` The queue diff is the whole of the difficulty, and it turns on one bit.** A song id leaving MPD's queue means two opposite things, and MPD reports the departure identically either way. The distinguishing fact is whether that song was *ever the current one* — which only the sampler can know, because `consume` retires a skipped song exactly as it retires a finished one. Both branches observed:
+
+```
+played or skipped [9440] 4                    <- reached the front; the mark stands
+played or skipped [9830] CatchAFire
+removed by hand   [2274] I Heard It Through…  <- never played; mark undone
+```
+
+The queue refilled to depth after each departure. A passage that never reached the front has its `note_queued` undone `[REQ-PD-112]`, so the Director stops believing it was heard — the same place a file that would not open reaches locally, arrived at by a different road.
+
+---
 
 ---
 
