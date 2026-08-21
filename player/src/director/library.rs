@@ -157,10 +157,12 @@ pub struct Director {
     last_played: HashMap<String, i64>,
     // (see `QueuedNote` for why the previous values are handed back)
     artist_last_played: HashMap<String, i64>,
-    /// When each recording was last skipped `[SPEC-PLAY-050]`. A separate map
-    /// from `last_played` on purpose: a skip suppresses and does nothing else,
+    /// When each recording was last skipped, and last removed from the queue
+    /// unheard `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`. Separate maps from
+    /// `last_played` on purpose: a rejection suppresses and does nothing else,
     /// so it must not be reachable from anything that computes a weight.
     last_skipped: HashMap<String, i64>,
+    last_dequeued: HashMap<String, i64>,
     relations: HashMap<String, Vec<(String, f64)>>,
     occasions: Occasions,
     flavor: FlavorIndex,
@@ -281,23 +283,27 @@ impl Director {
                 |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)),
             )
             .ok();
-        // Skips, for suppression only `[SPEC-PLAY-050]`. An absent table is a
-        // library that predates the feature, not a fault: no skips recorded
+        // Rejections, for suppression only `[SPEC-PLAY-050]`. An absent table is
+        // a library that predates the feature, not a fault: nothing recorded
         // means nothing suppressed.
-        let last_skipped: HashMap<String, i64> = conn
-            .prepare(
-                "SELECT mbid, MAX(skipped_at) FROM listener_skip_history                  WHERE mbid IS NOT NULL GROUP BY mbid",
+        let rejected = |kind: &str| -> HashMap<String, i64> {
+            conn.prepare(
+                "SELECT mbid, MAX(rejected_at) FROM listener_rejections                  WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
             )
             .and_then(|mut q| {
-                q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                q.query_map([kind], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
                     .map(|rows| rows.flatten().collect())
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+        };
+        let last_skipped = rejected("skip");
+        let last_dequeued = rejected("dequeue");
 
         let policy = Policy {
             artist_scale: scales.map(|s| TimeScale::new(s.0)).unwrap_or_default(),
             track_scale: scales.map(|s| TimeScale::new(s.1)).unwrap_or_default(),
             skip_suppress_s: crate::SKIP_SUPPRESS_H as f64 * 3600.0,
+            dequeue_suppress_s: crate::DEQUEUE_SUPPRESS_H as f64 * 3600.0,
             ..Default::default()
         };
 
@@ -305,6 +311,7 @@ impl Director {
             rows,
             policy,
             last_skipped,
+            last_dequeued,
             track_tuning,
             artist_tuning,
             artist_of,
@@ -319,17 +326,22 @@ impl Director {
         })
     }
 
-    /// Change the skip suppression window `[SPEC-PLAY-050]`, in hours.
+    /// Change the suppression windows `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`, as
+    /// `(skip, dequeue)` in hours.
     ///
-    /// Live rather than rebuild-only: it is a listener setting, and a slider
-    /// that needs a restart to take effect is a slider that lies.
-    pub fn set_skip_suppress_h(&mut self, hours: u64) {
-        self.policy.skip_suppress_s = hours as f64 * 3600.0;
+    /// Live rather than rebuild-only: they are listener settings, and a control
+    /// that needs a restart to take effect is a control that lies.
+    pub fn set_suppress_h(&mut self, (skip, dequeue): (u64, u64)) {
+        self.policy.skip_suppress_s = skip as f64 * 3600.0;
+        self.policy.dequeue_suppress_s = dequeue as f64 * 3600.0;
     }
 
-    /// The window currently in force, in hours.
-    pub fn skip_suppress_h(&self) -> u64 {
-        (self.policy.skip_suppress_s / 3600.0).round() as u64
+    /// The windows currently in force, in hours.
+    pub fn suppress_h(&self) -> (u64, u64) {
+        (
+            (self.policy.skip_suppress_s / 3600.0).round() as u64,
+            (self.policy.dequeue_suppress_s / 3600.0).round() as u64,
+        )
     }
 
     pub fn policy(&self) -> Policy {
@@ -423,6 +435,7 @@ impl Director {
                     artist,
                     track_age_s: mbid.and_then(|m| self.age(&self.last_played, m, now)),
                     skip_age_s: mbid.and_then(|m| self.age(&self.last_skipped, m, now)),
+                    dequeue_age_s: mbid.and_then(|m| self.age(&self.last_dequeued, m, now)),
                     artist_age_s: artist_id
                         .and_then(|a| self.age(&self.artist_last_played, a, now)),
                     related: &related_buf,
@@ -707,6 +720,13 @@ impl Director {
                 Some(Exclusion::TrackRotationBlock) => c.track_blocked += 1,
                 Some(Exclusion::RelatedRotationBlock) => c.related_blocked += 1,
                 Some(Exclusion::BelowMinWeight) => c.below_min_weight += 1,
+                // Counted apart from `filtered`, which means "the wrong shape".
+                // A suppressed passage is the right shape and is coming back
+                // `[SPEC-PLAY-050]`; folding the two together would report a
+                // library as permanently smaller than it is.
+                Some(Exclusion::SkipSuppressed) | Some(Exclusion::DequeueSuppressed) => {
+                    c.suppressed += 1
+                }
                 Some(_) => c.filtered += 1,
             }
         }
@@ -717,6 +737,9 @@ impl Director {
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Census {
     pub eligible: usize,
+    /// Held out because the listener recently declined them `[SPEC-PLAY-050]`.
+    /// Temporary by construction, unlike `filtered`.
+    pub suppressed: usize,
     pub artist_blocked: usize,
     pub track_blocked: usize,
     pub related_blocked: usize,

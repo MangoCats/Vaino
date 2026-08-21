@@ -68,6 +68,8 @@ pub struct PlayerState {
     pub resume_save_ms: u64,
     /// Skip suppression window in hours `[SPEC-PLAY-050]`.
     pub skip_suppress_h: u64,
+    /// Queue-removal suppression window in hours `[SPEC-PLAY-055]`.
+    pub dequeue_suppress_h: u64,
     /// Reported to the browser so the interface can show it `[PI-SET-016]`.
     pub dev_mode: bool,
     pub active_streams: usize,
@@ -125,6 +127,9 @@ pub enum Command {
     /// How long a skipped passage stays out of selection, in hours
     /// `[SPEC-PLAY-050]`. Zero turns suppression off.
     SetSkipSuppress(u64),
+    /// The same for a passage removed from the queue unheard
+    /// `[SPEC-PLAY-055]`.
+    SetDequeueSuppress(u64),
     Enqueue(QueueEntry),
     /// Put a passage next rather than last, for a browsed choice
     /// `[REQ-VIS-180]`.
@@ -227,6 +232,9 @@ pub struct Engine {
     resume_save_ms: u64,
     /// How long a skipped passage stays out of selection `[SPEC-PLAY-050]`.
     skip_suppress_h: u64,
+    /// How long a passage removed from the queue unheard stays out
+    /// `[SPEC-PLAY-055]`.
+    dequeue_suppress_h: u64,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -303,6 +311,7 @@ impl Engine {
             last_save: Instant::now(),
             resume_save_ms: crate::RESUME_SAVE_MS,
             skip_suppress_h: crate::SKIP_SUPPRESS_H,
+            dequeue_suppress_h: crate::DEQUEUE_SUPPRESS_H,
             saved: None,
             recorded: false,
             head: None,
@@ -409,6 +418,11 @@ impl Engine {
                         h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
                     self.remember_settings();
                 }
+                Ok(Command::SetDequeueSuppress(h)) => {
+                    self.dequeue_suppress_h =
+                        h.clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
+                    self.remember_settings();
+                }
                 Ok(Command::SetSkipLead(ms)) => {
                     self.skip_lead_ms =
                         ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
@@ -455,7 +469,28 @@ impl Engine {
                     self.skip();
                 }
                 Ok(Command::RemoveQueued(id)) => {
-                    self.queue.remove(id);
+                    // Taken out by hand before it ever played: a weaker
+                    // statement than a skip, and it earns the shorter window
+                    // `[SPEC-PLAY-055]`. Read before the removal, since after it
+                    // there is nothing left to name.
+                    //
+                    // Deliberately NOT the same path as a passage the engine
+                    // could not open: that is a failure, not a preference, and
+                    // `[REQ-PD-112]` requires it leave no mark at all.
+                    let declined = self
+                        .queue
+                        .iter()
+                        .find(|e| e.qid == id)
+                        .map(|e| (e.passage_id, e.mbid.clone()));
+                    if self.queue.remove(id) {
+                        if let Some((passage_id, mbid)) = declined {
+                            self.note_rejection(
+                                crate::db::Rejection::Dequeue,
+                                passage_id,
+                                mbid.as_deref(),
+                            );
+                        }
+                    }
                 }
                 Ok(Command::ShiftQueued(id, delta)) => {
                     self.queue.shift(id, delta);
@@ -594,7 +629,8 @@ impl Engine {
     fn remember_settings(&self) {
         if let Some(store) = &self.store {
             if let Err(e) = store.save_settings(self.volume, self.skip_fade_ms, self.skip_lead_ms,
-                                       self.resume_save_ms, self.skip_suppress_h)
+                                       self.resume_save_ms, self.skip_suppress_h,
+                                       self.dequeue_suppress_h)
             {
                 eprintln!("save settings: {e}");
             }
@@ -604,9 +640,12 @@ impl Engine {
     /// Put back what was last chosen. Clamped on the way in, because a value
     /// from disk deserves no more trust than one from the network.
     pub fn apply_settings(&mut self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
-                          resume_save_ms: u64, skip_suppress_h: u64) {
+                          resume_save_ms: u64, skip_suppress_h: u64,
+                          dequeue_suppress_h: u64) {
         self.skip_suppress_h =
             skip_suppress_h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
+        self.dequeue_suppress_h = dequeue_suppress_h
+            .clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
         self.resume_save_ms =
             resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
         self.volume = volume.clamp(0.0, 1.0);
@@ -884,7 +923,8 @@ impl Engine {
             // The outgoing passage left without reaching the threshold: it did
             // not play, and it is not forgotten either `[SPEC-PLAY-050]`.
             if let (Some(prev), false) = (self.head, self.recorded) {
-                self.note_skip(prev);
+                let prev_mbid = self.head_mbid.take();
+                self.note_rejection(crate::db::Rejection::Skip, prev, prev_mbid.as_deref());
             }
             self.head = Some(id);
             self.head_mbid = mbid.clone();
@@ -904,24 +944,24 @@ impl Engine {
         }
     }
 
-    /// The suppression window as the listener has it set `[SPEC-PLAY-050]`.
-    pub fn snapshot_skip_suppress_h(&self) -> u64 {
-        self.skip_suppress_h
+    /// The suppression windows as the listener has them set, in hours:
+    /// `(skip, dequeue)` `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
+    pub fn snapshot_suppress_h(&self) -> (u64, u64) {
+        (self.skip_suppress_h, self.dequeue_suppress_h)
     }
 
-    /// A passage left before it counted as played `[SPEC-PLAY-050]`.
+    /// A passage the listener declined `[SPEC-PLAY-050]`.
     ///
-    /// Written to `listener_skip_history`, never to `listener_play_history`:
-    /// the listener rejected it, so it must not gain a play, a ramp or an
-    /// artist mark. The only thing it earns is a spell out of the running.
+    /// Written to `listener_rejections`, never to `listener_play_history`: it
+    /// must not gain a play, a ramp or an artist mark. The only thing it earns
+    /// is a spell out of the running.
     ///
     /// Best-effort, like `record_play`. A history write must never interrupt
     /// the music.
-    fn note_skip(&mut self, passage_id: i64) {
-        let mbid = self.head_mbid.take();
+    fn note_rejection(&self, kind: crate::db::Rejection, passage_id: i64, mbid: Option<&str>) {
         if let Some(store) = &self.store {
-            if let Err(e) = store.record_skip(passage_id, mbid.as_deref()) {
-                eprintln!("record skip: {e}");
+            if let Err(e) = store.record_rejection(kind, passage_id, mbid) {
+                eprintln!("record {}: {e}", kind.as_str());
             }
         }
     }

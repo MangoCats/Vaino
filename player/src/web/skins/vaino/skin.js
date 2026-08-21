@@ -73,6 +73,8 @@
   // A skip suppresses; it does not count as played `[SPEC-PLAY-050]`.
   const skipSuppress = $('skipsuppress');
   skipSuppress.onchange = () => Vaino.skipSuppress(skipSuppress.value);
+  const dequeueSuppress = $('dequeuesuppress');
+  dequeueSuppress.onchange = () => Vaino.dequeueSuppress(dequeueSuppress.value);
 
   // Each term is shown separately, never just the product: a single number
   // cannot be argued with, and arguing with it is the point [SPEC-DIR-190].
@@ -116,6 +118,11 @@
       skipSuppress.min = k.skip_suppress_min_h;
       skipSuppress.max = k.skip_suppress_max_h;
       skipSuppress.value = k.skip_suppress_h;
+    }
+    if (k.dequeue_suppress_h != null && document.activeElement !== dequeueSuppress) {
+      dequeueSuppress.min = k.dequeue_suppress_min_h;
+      dequeueSuppress.max = k.dequeue_suppress_max_h;
+      dequeueSuppress.value = k.dequeue_suppress_h;
     }
   }
 

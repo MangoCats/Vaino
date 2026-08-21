@@ -77,42 +77,73 @@ which is the class of change `[SPEC-DIR-210]` already defers under
 
 ---
 
-## 4. A skip suppresses, and does nothing else
+## 4. Declining a passage suppresses it, and does nothing else
 
 Aligning the threshold left a gap: under the old rule a ten-second skip pushed a
 track down the rotation, and under `[SPEC-PLAY-010]` it was never played, so
 nothing held it back at all. The answer is not to loosen the threshold — a skip
-is genuinely not a listen — but to give the skip its own narrow effect.
+is genuinely not a listen — but to give the rejection its own narrow effect.
 
-**`[SPEC-PLAY-050]` A skipped passage is held out of selection for a window, and
+**`[SPEC-PLAY-050]` A rejected passage is held out of selection for a window, and
 that is its entire consequence.** *(Settled 2026-08-21.)* It is written to
-`listener_skip_history`, never to `listener_play_history`, and the eligibility
-gate is the only thing that reads it. It contributes **no** play count, **no**
-recovery ramp, **no** artist mark and **no** weight of any kind — a passage whose
-window has passed weighs exactly as one never skipped, which is asserted rather
-than described.
+`listener_rejections`, never to `listener_play_history`, and the eligibility gate
+is the only thing that reads it. It contributes **no** play count, **no** recovery
+ramp, **no** artist mark and **no** weight of any kind — a passage whose window
+has passed weighs exactly as one never rejected, which is asserted rather than
+described.
 
-Structurally rather than by convention: `skip_age_s` is a separate field from
-`track_age_s`, the gate sits with the passage filters *above* the artist and
-track passes, and nothing below it reads the value. A skip cannot leak into a
-ramp because there is no path from one to the other.
+Structurally rather than by convention: the rejection ages are separate fields
+from `track_age_s`, the gate sits with the passage filters *above* the artist and
+track passes, and nothing below it reads them. A rejection cannot leak into a ramp
+because there is no path from one to the other.
 
-**`[SPEC-PLAY-060]` The window is the listener's, default 156 hours.** Six and a
-half days: long enough that a rejected passage does not return within the week,
-and deliberately offset from a whole week so it does not come back on the same
-day at the same time. Edited on the Vaino skin settings page and persisted like
-the other tunables `[REQ-VIS-155]`, taking effect live rather than at the next
-rebuild. **Zero is legitimate** and turns suppression off, which is why the
-window is a number and not an on/off switch with a number beside it.
+**`[SPEC-PLAY-055]` Two ways of declining, two windows.** They are not the same
+statement and do not earn the same silence.
 
-> **A skip is deliberately not stored per passage.** The window is keyed by
-> recording MBID, like rotation itself, so rejecting one encoding of a song
-> suppresses the song rather than sending the selector to a different copy of the
-> take the listener just refused.
+| kind | what happened | default |
+| :--- | :--- | ---: |
+| **skip** | the passage began sounding and was stopped before `[SPEC-PLAY-010]`'s threshold | **156 h** |
+| **dequeue** | the passage was removed from the queue by hand, never having played | **18 h** |
 
-`listener_skip_history` is **Class D** and never travels `[SPEC-DF-055]`: it is
-an account of one listener's reactions, which is exactly the material that must
-not ride along in a payload.
+156 hours is six and a half days: long enough that a rejected passage does not
+return within the week, and deliberately offset from a whole week so it does not
+come back on the same day at the same time. A dequeue earns less because
+declining to hear something *now* says less than stopping it once it had started.
+
+**Not every departure from the queue is a rejection.** A passage the engine could
+not open leaves the queue too, and it must leave no mark at all `[REQ-PD-112]` —
+that is a failure, not a preference. Only a removal the listener asked for counts.
+
+**`[SPEC-PLAY-057]` Where windows overlap, the longer remaining one wins.** A
+second rejection can only extend suppression, never shorten it: a track skipped
+155.5 hours ago has half an hour left, and being dequeued today holds it for 18
+more; a track skipped an hour ago has 155 hours left, and a dequeue today changes
+nothing. The block is the **union** of the windows, and the reason reported is
+whichever has longer to run, so the "why" panel names the one actually holding it
+out.
+
+This falls out of storing *when* and *how* rather than an expiry. It is also what
+lets a listener change a window and have it apply to what they have already
+rejected — an expiry computed under yesterday's setting would outlive the setting.
+
+**`[SPEC-PLAY-060]` Both windows are the listener's**, edited on the Vaino skin
+settings page and persisted like the other tunables `[REQ-VIS-155]`, taking effect
+live rather than at the next rebuild. **Zero is legitimate** for either and turns
+that suppression off, which is why each is a number rather than a switch with a
+number beside it.
+
+> **Suppression is keyed by recording MBID, not by passage.** Rejecting one
+> encoding of a song suppresses the song — every passage under that MBID, as
+> rotation itself works. Keying per passage would send the selector to a
+> different copy of the take the listener had just refused.
+
+Held-out passages are counted apart from filtered ones in the census: a
+suppressed passage is the right shape and is coming back, and folding the two
+together would report a library as permanently smaller than it is.
+
+`listener_rejections` is **Class D** and never travels `[SPEC-DF-055]`: it is an
+account of one listener's reactions, exactly the material that must not ride
+along in a payload.
 
 ---
 

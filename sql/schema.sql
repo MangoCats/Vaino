@@ -199,19 +199,23 @@ CREATE TABLE IF NOT EXISTS listener_play_history (
 CREATE INDEX IF NOT EXISTS listener_play_time ON listener_play_history(played_at);
 CREATE INDEX IF NOT EXISTS listener_play_mbid ON listener_play_history(mbid);
 
--- A skip is not a play [SPEC-PLAY-010], and this table is why it can still
--- matter. Recorded ONLY so a passage the listener rejected is not offered back
--- immediately [SPEC-PLAY-050]; it feeds no ramp, no artist damping and no
+-- Declining a song is not a play [SPEC-PLAY-010], and this table is why it can
+-- still matter. Recorded ONLY so a passage the listener rejected is not offered
+-- back immediately [SPEC-PLAY-050]; it feeds no ramp, no artist damping and no
 -- count. Class D, never travels [SPEC-DF-055].
-CREATE TABLE IF NOT EXISTS listener_skip_history (
-    skip_id     INTEGER PRIMARY KEY,
-    skipped_at  INTEGER NOT NULL,           -- unix seconds
-    passage_id  INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
+--
+-- `kind` separates the two ways of declining, because they earn different
+-- windows [SPEC-PLAY-055]: 'skip' is a passage stopped after it began sounding,
+-- 'dequeue' is one removed from the queue before it ever played.
+CREATE TABLE IF NOT EXISTS listener_rejections (
+    rejection_id INTEGER PRIMARY KEY,
+    rejected_at  INTEGER NOT NULL,          -- unix seconds
+    kind         TEXT NOT NULL,             -- 'skip' | 'dequeue'
+    passage_id   INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
     -- denormalised for the same reason as listener_play_history [SPEC-SC-095]
-    mbid        TEXT
+    mbid         TEXT
 );
-CREATE INDEX IF NOT EXISTS listener_skip_time ON listener_skip_history(skipped_at);
-CREATE INDEX IF NOT EXISTS listener_skip_mbid ON listener_skip_history(mbid);
+CREATE INDEX IF NOT EXISTS listener_reject_mbid ON listener_rejections(mbid, kind);
 
 -- rotation/recovery are log-scale: seconds = 10^v * 3600 [SPEC-DIR-110].
 -- Defaults when absent: track 2.0/2.6, artist 1.0/1.0, restraint 0.0

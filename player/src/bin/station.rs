@@ -55,6 +55,7 @@ fn main() {
         println!("      blocked: {} artist, {} track, {} related | {} under min weight, {} filtered",
                  c.artist_blocked, c.track_blocked, c.related_blocked,
                  c.below_min_weight, c.filtered);
+        println!("      suppressed by a recent skip or removal: {}", c.suppressed);
     } else {
         println!("pool: program director unavailable; random selection");
     }

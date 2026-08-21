@@ -347,10 +347,10 @@ impl Session {
         // Before the store is handed over, since it is the thing that holds
         // them: volume and the skip shape as they were last left
         // `[REQ-VIS-155]`.
-        if let Some((v, fade, lead, resume, suppress)) =
+        if let Some((v, fade, lead, resume, suppress, dequeue)) =
             self.store.as_ref().and_then(|s| s.load_settings())
         {
-            engine.apply_settings(v, fade, lead, resume, suppress);
+            engine.apply_settings(v, fade, lead, resume, suppress, dequeue);
         }
         if let Some(s) = self.store.take() {
             engine.attach_store(s);
@@ -402,9 +402,9 @@ impl Session {
             // The listener's suppression window lives with the other settings
             // and is persisted by the engine `[REQ-VIS-155]`; the Director is
             // told when it moves `[SPEC-PLAY-050]`.
-            let want = engine.snapshot_skip_suppress_h();
-            if d.skip_suppress_h() != want {
-                d.set_skip_suppress_h(want);
+            let want = engine.snapshot_suppress_h();
+            if d.suppress_h() != want {
+                d.set_suppress_h(want);
             }
         }
 

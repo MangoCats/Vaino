@@ -526,6 +526,7 @@ const Vaino = (() => {
     skipLead: ms => post(`/skip/lead/${Math.round(ms)}`),
     resumeSave: ms => post(`/resume/save/${Math.round(ms)}`),
     skipSuppress: h => post(`/skip/suppress/${Math.round(h)}`),
+    dequeueSuppress: h => post(`/dequeue/suppress/${Math.round(h)}`),
     // The player page: load the chosen skin, then follow the socket.
     async start() {
       catalogue = await fetch('/skins').then(r => r.json()).catch(() => []);

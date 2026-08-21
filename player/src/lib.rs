@@ -101,6 +101,13 @@ pub const SKIP_SUPPRESS_H: u64 = 156;
 pub const SKIP_SUPPRESS_MIN_H: u64 = 0;
 pub const SKIP_SUPPRESS_MAX_H: u64 = 8_760; // a year
 
+/// How long a passage *removed from the queue before it played* is held out
+/// `[SPEC-PLAY-055]`. Shorter than a skip: declining to hear something now is a
+/// weaker statement than stopping it once it had started.
+pub const DEQUEUE_SUPPRESS_H: u64 = 18;
+pub const DEQUEUE_SUPPRESS_MIN_H: u64 = 0;
+pub const DEQUEUE_SUPPRESS_MAX_H: u64 = 8_760;
+
 pub const SKIP_LEAD_MIN_MS: u64 = 100;
 pub const SKIP_LEAD_MAX_MS: u64 = 2_000;
 

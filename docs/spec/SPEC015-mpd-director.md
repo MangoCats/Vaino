@@ -232,8 +232,8 @@ changed, not because the wording did.
 
 > **One table, one rule.** Both paths call the same function `[SPEC-PLAY-030]`,
 > so `listener_play_history` means the same thing whichever player wrote it. A
-> passage the listener *skipped* is held out of selection on its own account
-> `[SPEC-PLAY-050]`, which is a suppression and not a play.
+> passage the listener *declined* is held out of selection on its own
+> account — see `[SPEC-PLAY-050]` — which is a suppression and not a play.
 
 **`[SPEC-MPD-120]` The Director is active only while MPD is playing.**
 *(Settled 2026-08-21.)* `state: play` and below depth is the entire activation

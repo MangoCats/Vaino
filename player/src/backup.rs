@@ -38,8 +38,8 @@ use crate::db::DbError;
 pub const LISTENER_TABLES: &[&str] = &[
     "listener_play_history",
     // A record of what the listener rejected `[SPEC-PLAY-050]`. Small, but no
-    // machine can recreate it: losing it un-suppresses everything they skipped.
-    "listener_skip_history",
+    // machine can recreate it: losing it un-suppresses everything they declined.
+    "listener_rejections",
     "listener_preferences",
     "listener_likes",
     "listener_programs",

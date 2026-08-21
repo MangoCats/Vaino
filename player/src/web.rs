@@ -69,6 +69,10 @@ pub struct SkipShape {
     pub skip_suppress_h: u64,
     pub skip_suppress_min_h: u64,
     pub skip_suppress_max_h: u64,
+    /// Queue-removal suppression `[SPEC-PLAY-055]`, with its bounds.
+    pub dequeue_suppress_h: u64,
+    pub dequeue_suppress_min_h: u64,
+    pub dequeue_suppress_max_h: u64,
 }
 
 #[derive(Serialize)]
@@ -205,6 +209,9 @@ impl From<&PlayerState> for Snapshot {
                 skip_suppress_h: s.skip_suppress_h,
                 skip_suppress_min_h: crate::SKIP_SUPPRESS_MIN_H,
                 skip_suppress_max_h: crate::SKIP_SUPPRESS_MAX_H,
+                dequeue_suppress_h: s.dequeue_suppress_h,
+                dequeue_suppress_min_h: crate::DEQUEUE_SUPPRESS_MIN_H,
+                dequeue_suppress_max_h: crate::DEQUEUE_SUPPRESS_MAX_H,
             },
             program: None,
             reload_status: None,
@@ -249,6 +256,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/skip/lead/:ms", post(set_skip_lead))
         .route("/resume/save/:ms", post(set_resume_save))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
+        .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/program/:id", post(set_program))
         .route("/library/reload", post(reload_library))
         .route("/audio/radios", get(radios))
@@ -534,6 +542,16 @@ async fn set_skip_suppress(
     axum::extract::Path(hours): axum::extract::Path<u64>,
 ) -> StatusCode {
     ui.handle.send(Command::SetSkipSuppress(hours));
+    StatusCode::NO_CONTENT
+}
+
+/// How long a passage removed from the queue unheard stays out
+/// `[SPEC-PLAY-055]`.
+async fn set_dequeue_suppress(
+    State(ui): State<Ui>,
+    axum::extract::Path(hours): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetDequeueSuppress(hours));
     StatusCode::NO_CONTENT
 }
 
