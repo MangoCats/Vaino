@@ -81,6 +81,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `CHT` / `ARC` / `PHS` / `FBD` / `DIS` / `OPN` — Charter, architecture decisions, phases, forbidden patterns, disposal register, open questions
 - `AND` — Phone port strategy: routes onto a phone, and what each costs
 - `IOS` — Phone port strategy, iOS-specific: store terms, audio stack, toolchain
+- `CLD` — Hosted flavor service: what it would be, and whether it pays for itself
 
 ---
 
@@ -106,6 +107,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-DIS-*]` | Predecessor disposal register | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#5-disposal-register) |
 | `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
 | `[GDE-AND-*]` | Phone ports (Android, iOS): fork vs ground-up, and the licence that decides it | [GUIDE004-phone-port-strategy.md](GUIDE004-phone-port-strategy.md) |
+| `[GDE-CLD-*]` | Hosted flavor lookup instead of Sampo on the device | [GUIDE005-flavor-service.md](GUIDE005-flavor-service.md) |
 | `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
 | `[PI3-*]` | Speaker link: design and the player's contract | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md) |
