@@ -126,8 +126,6 @@ fn main() {
     let db_path = flag(&args, "--db");
     let root = flag(&args, "--root");
     // `[SPEC-MPD-095]`: at or above the depth, the Director adds nothing.
-    let depth: usize = flag(&args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(5);
-    let interval: f64 = flag(&args, "--interval").and_then(|v| v.parse().ok()).unwrap_or(5.0);
     let run_for: Option<f64> = flag(&args, "--for").and_then(|v| v.parse().ok());
     let seed: u64 = flag(&args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(0x9E37_79B9_7F4A_7C15);
 
@@ -136,6 +134,16 @@ fn main() {
         eprintln!("       [--depth 5] [--interval 5] [--for SECONDS] [--seed N]");
         std::process::exit(2);
     };
+    // The listener's settings own these `[SPEC-MPD-105]`; the flags override.
+    let saved = vaino_player::db::PlayerStore::open(std::path::Path::new(&db_path))
+        .ok()
+        .and_then(|s| s.load_settings())
+        .unwrap_or_default();
+    let depth: usize =
+        flag(&args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(saved.queue_depth);
+    let interval: f64 = flag(&args, "--interval")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(saved.sample_interval_ms as f64 / 1000.0);
     let flagged: HashSet<String> =
         ["--db", "--root", "--depth", "--interval", "--for", "--seed"].iter().map(|s| s.to_string()).collect();
     let values: HashSet<usize> = args

@@ -120,6 +120,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-MPD-060]` | Mapping a Vaino passage to an MPD URI | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#5-the-mapping-which-is-the-hard-part) |
 | `[SPEC-MPD-092]` | MPD's measured protocol behaviour, as against its documentation | [SPEC016-mpd-protocol-findings.md](spec/SPEC016-mpd-protocol-findings.md) |
 | `[SPEC-PLAY-*]` | When a play is written to history — one rule, every path | [SPEC017-what-counts-as-a-play.md](spec/SPEC017-what-counts-as-a-play.md) |
+| `[IMPL-MPD-*]` | Prototyping the MPD Director: the plan, and what it measured | [IMPL004](IMPL004-mpd-prototype.md), [IMPL005](IMPL005-mpd-prototype-results.md) |
 | `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
 | `[IMPL-MPD-*]` | MPD Director prototype: build order, riskiest part first | [IMPL004-mpd-prototype.md](IMPL004-mpd-prototype.md) |

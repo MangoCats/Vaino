@@ -18,6 +18,9 @@ pub mod decoder;
 pub mod engine;
 pub mod fade;
 pub mod mixer;
+/// The MPD protocol client `[SPEC-MPD-070]`. `std::net` and nothing else, and
+/// absent entirely from a build that did not ask for it.
+#[cfg(feature = "mpd")]
 pub mod mpd;
 pub mod output;
 pub mod path;
@@ -107,6 +110,23 @@ pub const SKIP_SUPPRESS_MAX_H: u64 = 8_760; // a year
 pub const DEQUEUE_SUPPRESS_H: u64 = 18;
 pub const DEQUEUE_SUPPRESS_MIN_H: u64 = 0;
 pub const DEQUEUE_SUPPRESS_MAX_H: u64 = 8_760;
+
+/// How many passages the Director keeps queued ahead `[SPEC-MPD-105]`.
+///
+/// A listener setting rather than a launch flag: it governs the local engine
+/// and the MPD Director alike, and both read it from the same row.
+pub const QUEUE_DEPTH: usize = 5;
+/// One is the floor: below it there is no lookahead, and the crossfade has
+/// nothing to fade into.
+pub const QUEUE_DEPTH_MIN: usize = 1;
+pub const QUEUE_DEPTH_MAX: usize = 50;
+
+/// How often `status` is read while playing, to judge a play against
+/// `[SPEC-PLAY-010]`'s threshold and to end a span MPD would not
+/// `[SPEC-MPD-096]`. Five seconds `[SPEC-MPD-105]`.
+pub const SAMPLE_INTERVAL_MS: u64 = 5_000;
+pub const SAMPLE_INTERVAL_MIN_MS: u64 = 1_000;
+pub const SAMPLE_INTERVAL_MAX_MS: u64 = 60_000;
 
 pub const SKIP_LEAD_MIN_MS: u64 = 100;
 pub const SKIP_LEAD_MAX_MS: u64 = 2_000;

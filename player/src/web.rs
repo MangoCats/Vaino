@@ -73,6 +73,13 @@ pub struct SkipShape {
     pub dequeue_suppress_h: u64,
     pub dequeue_suppress_min_h: u64,
     pub dequeue_suppress_max_h: u64,
+    /// Passages kept ahead, and the guest sampling rate `[SPEC-MPD-105]`.
+    pub queue_depth: usize,
+    pub queue_depth_min: usize,
+    pub queue_depth_max: usize,
+    pub sample_interval_ms: u64,
+    pub sample_interval_min_ms: u64,
+    pub sample_interval_max_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -212,6 +219,12 @@ impl From<&PlayerState> for Snapshot {
                 dequeue_suppress_h: s.dequeue_suppress_h,
                 dequeue_suppress_min_h: crate::DEQUEUE_SUPPRESS_MIN_H,
                 dequeue_suppress_max_h: crate::DEQUEUE_SUPPRESS_MAX_H,
+                queue_depth: s.queue_depth,
+                queue_depth_min: crate::QUEUE_DEPTH_MIN,
+                queue_depth_max: crate::QUEUE_DEPTH_MAX,
+                sample_interval_ms: s.sample_interval_ms,
+                sample_interval_min_ms: crate::SAMPLE_INTERVAL_MIN_MS,
+                sample_interval_max_ms: crate::SAMPLE_INTERVAL_MAX_MS,
             },
             program: None,
             reload_status: None,
@@ -257,6 +270,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/resume/save/:ms", post(set_resume_save))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
+        .route("/queue/depth/:n", post(set_queue_depth))
+        .route("/sample/interval/:ms", post(set_sample_interval))
         .route("/program/:id", post(set_program))
         .route("/library/reload", post(reload_library))
         .route("/audio/radios", get(radios))
@@ -552,6 +567,24 @@ async fn set_dequeue_suppress(
     axum::extract::Path(hours): axum::extract::Path<u64>,
 ) -> StatusCode {
     ui.handle.send(Command::SetDequeueSuppress(hours));
+    StatusCode::NO_CONTENT
+}
+
+/// How many passages the Director keeps ahead `[SPEC-MPD-105]`.
+async fn set_queue_depth(
+    State(ui): State<Ui>,
+    axum::extract::Path(n): axum::extract::Path<usize>,
+) -> StatusCode {
+    ui.handle.send(Command::SetQueueDepth(n));
+    StatusCode::NO_CONTENT
+}
+
+/// How often a guest backend samples `status` `[SPEC-MPD-105]`.
+async fn set_sample_interval(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetSampleInterval(ms));
     StatusCode::NO_CONTENT
 }
 

@@ -68,8 +68,18 @@ fn main() {
         eprintln!("       [--depth 5] [--interval 5] [--for SECONDS] [--seed N]");
         std::process::exit(2);
     };
-    let depth: usize = flag(&args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(5);
-    let interval: f64 = flag(&args, "--interval").and_then(|v| v.parse().ok()).unwrap_or(5.0);
+    // The listener's settings own these `[SPEC-MPD-105]`; the flags are an
+    // override for a test run, not the source of truth. Read before the
+    // Director so a bad value fails early rather than mid-session.
+    let saved = PlayerStore::open(std::path::Path::new(&db_path))
+        .ok()
+        .and_then(|s| s.load_settings())
+        .unwrap_or_default();
+    let depth: usize =
+        flag(&args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(saved.queue_depth);
+    let interval: f64 = flag(&args, "--interval")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(saved.sample_interval_ms as f64 / 1000.0);
     let run_for: Option<f64> = flag(&args, "--for").and_then(|v| v.parse().ok());
     // Stage 4 is the first stage that writes `[IMPL-MPD-050]`, and it says so
     // out loud: without `--write` it behaves exactly as stage 3 did.

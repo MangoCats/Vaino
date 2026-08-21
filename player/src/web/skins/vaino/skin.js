@@ -75,6 +75,10 @@
   skipSuppress.onchange = () => Vaino.skipSuppress(skipSuppress.value);
   const dequeueSuppress = $('dequeuesuppress');
   dequeueSuppress.onchange = () => Vaino.dequeueSuppress(dequeueSuppress.value);
+  const queueDepth = $('queuedepth');
+  queueDepth.onchange = () => Vaino.queueDepth(queueDepth.value);
+  const sampleInterval = $('sampleinterval');
+  sampleInterval.onchange = () => Vaino.sampleInterval(sampleInterval.value * 1000);
 
   // Each term is shown separately, never just the product: a single number
   // cannot be argued with, and arguing with it is the point [SPEC-DIR-190].
@@ -123,6 +127,16 @@
       dequeueSuppress.min = k.dequeue_suppress_min_h;
       dequeueSuppress.max = k.dequeue_suppress_max_h;
       dequeueSuppress.value = k.dequeue_suppress_h;
+    }
+    if (k.queue_depth != null && document.activeElement !== queueDepth) {
+      queueDepth.min = k.queue_depth_min;
+      queueDepth.max = k.queue_depth_max;
+      queueDepth.value = k.queue_depth;
+    }
+    if (k.sample_interval_ms != null && document.activeElement !== sampleInterval) {
+      sampleInterval.min = k.sample_interval_min_ms / 1000;
+      sampleInterval.max = k.sample_interval_max_ms / 1000;
+      sampleInterval.value = (k.sample_interval_ms / 1000).toFixed(1);
     }
   }
 

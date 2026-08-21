@@ -70,6 +70,9 @@ pub struct PlayerState {
     pub skip_suppress_h: u64,
     /// Queue-removal suppression window in hours `[SPEC-PLAY-055]`.
     pub dequeue_suppress_h: u64,
+    /// Passages kept ahead, and how often a guest samples `[SPEC-MPD-105]`.
+    pub queue_depth: usize,
+    pub sample_interval_ms: u64,
     /// Reported to the browser so the interface can show it `[PI-SET-016]`.
     pub dev_mode: bool,
     pub active_streams: usize,
@@ -130,6 +133,10 @@ pub enum Command {
     /// The same for a passage removed from the queue unheard
     /// `[SPEC-PLAY-055]`.
     SetDequeueSuppress(u64),
+    /// How many passages to keep queued ahead `[SPEC-MPD-105]`.
+    SetQueueDepth(usize),
+    /// How often a guest backend samples `status`, in ms `[SPEC-MPD-105]`.
+    SetSampleInterval(u64),
     Enqueue(QueueEntry),
     /// Put a passage next rather than last, for a browsed choice
     /// `[REQ-VIS-180]`.
@@ -235,6 +242,10 @@ pub struct Engine {
     /// How long a passage removed from the queue unheard stays out
     /// `[SPEC-PLAY-055]`.
     dequeue_suppress_h: u64,
+    /// How often a guest backend should sample `status` `[SPEC-MPD-105]`. The
+    /// local engine does not poll; it holds the value so one row owns every
+    /// listener setting and the settings page has one place to read.
+    sample_interval_ms: u64,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -277,7 +288,8 @@ impl Engine {
     /// it -- and took the output lock to do so. A tenth of a second is well
     /// inside what any consumer can perceive and two orders of magnitude less
     /// work.
-    const PUBLISH_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+    pub(crate) const PUBLISH_EVERY: std::time::Duration =
+        std::time::Duration::from_millis(100);
 
     /// `out` of `None` runs the full pipeline into a discard sink — useful for
     /// tests and headless hosts, but note it reports no device rate and so
@@ -312,6 +324,7 @@ impl Engine {
             resume_save_ms: crate::RESUME_SAVE_MS,
             skip_suppress_h: crate::SKIP_SUPPRESS_H,
             dequeue_suppress_h: crate::DEQUEUE_SUPPRESS_H,
+            sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
             saved: None,
             recorded: false,
             head: None,
@@ -421,6 +434,16 @@ impl Engine {
                 Ok(Command::SetDequeueSuppress(h)) => {
                     self.dequeue_suppress_h =
                         h.clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
+                    self.remember_settings();
+                }
+                Ok(Command::SetQueueDepth(n)) => {
+                    self.queue.min_depth =
+                        n.clamp(crate::QUEUE_DEPTH_MIN, crate::QUEUE_DEPTH_MAX);
+                    self.remember_settings();
+                }
+                Ok(Command::SetSampleInterval(ms)) => {
+                    self.sample_interval_ms =
+                        ms.clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
                     self.remember_settings();
                 }
                 Ok(Command::SetSkipLead(ms)) => {
@@ -628,33 +651,50 @@ impl Engine {
     /// record a volume must never interrupt the music.
     fn remember_settings(&self) {
         if let Some(store) = &self.store {
-            if let Err(e) = store.save_settings(self.volume, self.skip_fade_ms, self.skip_lead_ms,
-                                       self.resume_save_ms, self.skip_suppress_h,
-                                       self.dequeue_suppress_h)
-            {
+            if let Err(e) = store.save_settings(&self.settings()) {
                 eprintln!("save settings: {e}");
             }
         }
     }
 
+    /// The listener's settings as the engine currently holds them.
+    pub fn settings(&self) -> crate::db::Settings {
+        crate::db::Settings {
+            volume: self.volume,
+            skip_fade_ms: self.skip_fade_ms,
+            skip_lead_ms: self.skip_lead_ms,
+            resume_save_ms: self.resume_save_ms,
+            skip_suppress_h: self.skip_suppress_h,
+            dequeue_suppress_h: self.dequeue_suppress_h,
+            queue_depth: self.queue.min_depth,
+            sample_interval_ms: self.sample_interval_ms,
+        }
+    }
+
     /// Put back what was last chosen. Clamped on the way in, because a value
     /// from disk deserves no more trust than one from the network.
-    pub fn apply_settings(&mut self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
-                          resume_save_ms: u64, skip_suppress_h: u64,
-                          dequeue_suppress_h: u64) {
-        self.skip_suppress_h =
-            skip_suppress_h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
-        self.dequeue_suppress_h = dequeue_suppress_h
-            .clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
+    pub fn apply_settings(&mut self, s: &crate::db::Settings) {
         self.resume_save_ms =
-            resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
-        self.volume = volume.clamp(0.0, 1.0);
+            s.resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
+        self.skip_suppress_h =
+            s.skip_suppress_h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
+        self.dequeue_suppress_h = s
+            .dequeue_suppress_h
+            .clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
+        // The queue depth is a listener setting now, not a launch flag
+        // `[SPEC-MPD-105]`, and it governs this engine as much as the MPD one.
+        self.queue.min_depth =
+            s.queue_depth.clamp(crate::QUEUE_DEPTH_MIN, crate::QUEUE_DEPTH_MAX);
+        self.sample_interval_ms = s
+            .sample_interval_ms
+            .clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
+        self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);
         }
-        self.skip_fade_ms = skip_fade_ms.min(crate::SKIP_FADE_MAX_MS);
+        self.skip_fade_ms = s.skip_fade_ms.min(crate::SKIP_FADE_MAX_MS);
         self.skip_lead_ms =
-            skip_lead_ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
+            s.skip_lead_ms.clamp(crate::SKIP_LEAD_MIN_MS, crate::SKIP_LEAD_MAX_MS);
     }
 
     /// Passages that were chosen but could not be opened, taken once.
@@ -1044,6 +1084,15 @@ impl Engine {
             s.skip_fade_ms = self.skip_fade_ms;
             s.skip_lead_ms = self.skip_lead_ms;
             s.resume_save_ms = self.resume_save_ms;
+            // Every listener setting, published. These were declared on
+            // `PlayerState` and read by the settings page but never filled, so
+            // the page would have offered a confident **0 hours** for both
+            // suppression windows — a control showing a value the engine does
+            // not hold is worse than one showing nothing.
+            s.skip_suppress_h = self.skip_suppress_h;
+            s.dequeue_suppress_h = self.dequeue_suppress_h;
+            s.queue_depth = self.queue.min_depth;
+            s.sample_interval_ms = self.sample_interval_ms;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.lock_failures = self.path.ring.as_ref().map_or(0, |r| r.diagnostics().1);
@@ -1153,6 +1202,57 @@ mod tests {
     /// idea that the sounding passage occupied slot zero -- it does not; it is
     /// in `live` and out of the queue entirely.
     const DQ_MBID: &str = "aaaaaaaa-0000-0000-0000-000000000007";
+
+    /// Every listener setting must reach the snapshot the settings page reads.
+    ///
+    /// Two of them did not. `skip_suppress_h` and `dequeue_suppress_h` were
+    /// declared on `PlayerState`, serialised by the web layer and read by the
+    /// skin, but never assigned in `publish` — so the page would have shown a
+    /// confident **0 hours** for both while the engine held 156 and 18. A
+    /// control displaying a value the engine does not hold is worse than one
+    /// displaying nothing, because it invites a person to trust it.
+    #[test]
+    fn every_listener_setting_reaches_the_snapshot() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.tick();
+        let s = h.snapshot();
+        assert_eq!(s.skip_suppress_h, crate::SKIP_SUPPRESS_H);
+        assert_eq!(s.dequeue_suppress_h, crate::DEQUEUE_SUPPRESS_H);
+        assert_eq!(s.queue_depth, 3, "the depth the engine was built with");
+        assert_eq!(s.sample_interval_ms, crate::SAMPLE_INTERVAL_MS);
+
+        // And a change reaches it too, rather than only the default.
+        h.send(Command::SetSkipSuppress(72));
+        h.send(Command::SetDequeueSuppress(9));
+        h.send(Command::SetQueueDepth(8));
+        h.send(Command::SetSampleInterval(2_500));
+        e.drain_commands();
+        // Publishing is throttled to `PUBLISH_EVERY`, so a change made just
+        // after one publish is not visible until the next. Waiting past the
+        // window is what a browser polling the snapshot does anyway.
+        std::thread::sleep(Engine::PUBLISH_EVERY + std::time::Duration::from_millis(20));
+        e.tick();
+        let s = h.snapshot();
+        assert_eq!(
+            (s.skip_suppress_h, s.dequeue_suppress_h, s.queue_depth, s.sample_interval_ms),
+            (72, 9, 8, 2_500)
+        );
+    }
+
+    /// Out-of-range values are clamped rather than accepted, on the way in from
+    /// a browser as much as from a file.
+    #[test]
+    fn settings_from_outside_are_clamped() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        h.send(Command::SetQueueDepth(0));
+        h.send(Command::SetSampleInterval(1));
+        e.drain_commands();
+        std::thread::sleep(Engine::PUBLISH_EVERY + std::time::Duration::from_millis(20));
+        e.tick();
+        let s = h.snapshot();
+        assert_eq!(s.queue_depth, crate::QUEUE_DEPTH_MIN, "a depth of zero has no lookahead");
+        assert_eq!(s.sample_interval_ms, crate::SAMPLE_INTERVAL_MIN_MS);
+    }
 
     /// Taking a passage out of the queue before it plays is a rejection, and
     /// the shorter kind `[SPEC-PLAY-055]`.

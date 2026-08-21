@@ -456,6 +456,42 @@ pub struct PlayerStore {
     conn: Connection,
 }
 
+/// Every setting the listener owns `[REQ-VIS-155]`, in one row.
+///
+/// A struct rather than a tuple because there are eight of them now and a
+/// nine-element tuple is a way to swap two `u64`s without the compiler minding.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settings {
+    pub volume: f32,
+    pub skip_fade_ms: u64,
+    pub skip_lead_ms: u64,
+    pub resume_save_ms: u64,
+    /// `[SPEC-PLAY-050]`
+    pub skip_suppress_h: u64,
+    /// `[SPEC-PLAY-055]`
+    pub dequeue_suppress_h: u64,
+    /// How many passages to keep ahead. Governs the local engine and the MPD
+    /// Director alike `[SPEC-MPD-105]`.
+    pub queue_depth: usize,
+    /// How often `status` is read while playing `[SPEC-MPD-105]`.
+    pub sample_interval_ms: u64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            volume: 1.0,
+            skip_fade_ms: crate::SKIP_FADE_MS,
+            skip_lead_ms: crate::SKIP_LEAD_MS,
+            resume_save_ms: crate::RESUME_SAVE_MS,
+            skip_suppress_h: crate::SKIP_SUPPRESS_H,
+            dequeue_suppress_h: crate::DEQUEUE_SUPPRESS_H,
+            queue_depth: crate::QUEUE_DEPTH,
+            sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
+        }
+    }
+}
+
 /// The two ways a listener declines a passage `[SPEC-PLAY-055]`.
 ///
 /// They differ only in the window they earn. A **skip** is a passage stopped
@@ -506,7 +542,8 @@ impl PlayerStore {
         // it does not return nothing.
         for column in ["skip_fade_ms INTEGER", "skip_lead_ms INTEGER",
                        "resume_save_ms INTEGER", "skip_suppress_h INTEGER",
-                       "dequeue_suppress_h INTEGER"] {
+                       "dequeue_suppress_h INTEGER", "queue_depth INTEGER",
+                       "sample_interval_ms INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
         }
@@ -642,16 +679,14 @@ impl PlayerStore {
     /// Volume was already a column here and was never written to it -- the
     /// resume point saved position and playing state and quietly left the
     /// level behind, so it came back at full scale every start.
-    pub fn save_settings(&self, volume: f32, skip_fade_ms: u64, skip_lead_ms: u64,
-                         resume_save_ms: u64, skip_suppress_h: u64,
-                         dequeue_suppress_h: u64) -> Result<(), DbError>
-    {
+    pub fn save_settings(&self, s: &Settings) -> Result<(), DbError> {
         self.conn
             .execute(
                 "INSERT INTO player_state
                      (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms,
-                      skip_suppress_h, dequeue_suppress_h, updated_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+                      skip_suppress_h, dequeue_suppress_h, queue_depth,
+                      sample_interval_ms, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
                  ON CONFLICT(id) DO UPDATE SET
                      volume = excluded.volume,
                      skip_fade_ms = excluded.skip_fade_ms,
@@ -659,35 +694,57 @@ impl PlayerStore {
                      resume_save_ms = excluded.resume_save_ms,
                      skip_suppress_h = excluded.skip_suppress_h,
                      dequeue_suppress_h = excluded.dequeue_suppress_h,
+                     queue_depth = excluded.queue_depth,
+                     sample_interval_ms = excluded.sample_interval_ms,
                      updated_at = excluded.updated_at",
-                rusqlite::params![volume as f64, skip_fade_ms as i64, skip_lead_ms as i64,
-                                  resume_save_ms as i64, skip_suppress_h as i64,
-                                  dequeue_suppress_h as i64],
+                rusqlite::params![
+                    s.volume as f64,
+                    s.skip_fade_ms as i64,
+                    s.skip_lead_ms as i64,
+                    s.resume_save_ms as i64,
+                    s.skip_suppress_h as i64,
+                    s.dequeue_suppress_h as i64,
+                    s.queue_depth as i64,
+                    s.sample_interval_ms as i64,
+                ],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Volume, skip fade and skip lead as they were left.
+    /// The settings as they were left.
     ///
-    /// Absent columns and absent rows both mean "never saved", which is a
-    /// first run and not a fault: the caller keeps its defaults.
-    pub fn load_settings(&self) -> Option<(f32, u64, u64, u64, u64, u64)> {
+    /// Absent columns and absent rows both mean "never saved", which is a first
+    /// run and not a fault: each field falls back to its own default rather
+    /// than the whole read failing.
+    pub fn load_settings(&self) -> Option<Settings> {
+        let d = Settings::default();
         self.conn
             .query_row(
-                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h, \n                        dequeue_suppress_h FROM player_state WHERE id = 1",
+                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h,                         dequeue_suppress_h, queue_depth, sample_interval_ms                  FROM player_state WHERE id = 1",
                 [],
                 |r| {
-                    Ok((
-                        r.get::<_, Option<f64>>(0)?.unwrap_or(1.0) as f32,
-                        r.get::<_, Option<i64>>(1)?.unwrap_or(crate::SKIP_FADE_MS as i64) as u64,
-                        r.get::<_, Option<i64>>(2)?.unwrap_or(crate::SKIP_LEAD_MS as i64) as u64,
-                        r.get::<_, Option<i64>>(3)?.unwrap_or(crate::RESUME_SAVE_MS as i64) as u64,
-                        r.get::<_, Option<i64>>(4)?
-                            .unwrap_or(crate::SKIP_SUPPRESS_H as i64) as u64,
-                        r.get::<_, Option<i64>>(5)?
-                            .unwrap_or(crate::DEQUEUE_SUPPRESS_H as i64) as u64,
-                    ))
+                    Ok(Settings {
+                        volume: r.get::<_, Option<f64>>(0)?.unwrap_or(d.volume as f64) as f32,
+                        skip_fade_ms: r.get::<_, Option<i64>>(1)?.unwrap_or(d.skip_fade_ms as i64)
+                            as u64,
+                        skip_lead_ms: r.get::<_, Option<i64>>(2)?.unwrap_or(d.skip_lead_ms as i64)
+                            as u64,
+                        resume_save_ms: r.get::<_, Option<i64>>(3)?
+                            .unwrap_or(d.resume_save_ms as i64)
+                            as u64,
+                        skip_suppress_h: r.get::<_, Option<i64>>(4)?
+                            .unwrap_or(d.skip_suppress_h as i64)
+                            as u64,
+                        dequeue_suppress_h: r.get::<_, Option<i64>>(5)?
+                            .unwrap_or(d.dequeue_suppress_h as i64)
+                            as u64,
+                        queue_depth: r.get::<_, Option<i64>>(6)?.unwrap_or(d.queue_depth as i64)
+                            as usize,
+                        sample_interval_ms: r.get::<_, Option<i64>>(7)?
+                            .unwrap_or(d.sample_interval_ms as i64)
+                            as u64,
+                    })
                 },
             )
             .ok()
@@ -1806,19 +1863,53 @@ mod tests {
         let store = PlayerStore::open(&tmp).unwrap();
         assert!(store.load_settings().is_none(), "nothing saved yet");
 
-        store.save_settings(0.5, 2_000, 500, 30_000, 96, 12).unwrap();
-        let (v, fade, lead, resume, suppress, dequeue) = store.load_settings().unwrap();
-        assert!((v - 0.5).abs() < 1e-6);
-        assert_eq!((fade, lead, resume, suppress, dequeue), (2_000, 500, 30_000, 96, 12));
+        let want = Settings {
+            volume: 0.5,
+            skip_fade_ms: 2_000,
+            skip_lead_ms: 500,
+            resume_save_ms: 30_000,
+            skip_suppress_h: 96,
+            dequeue_suppress_h: 12,
+            queue_depth: 7,
+            sample_interval_ms: 3_000,
+        };
+        store.save_settings(&want).unwrap();
+        let got = store.load_settings().unwrap();
+        assert!((got.volume - want.volume).abs() < 1e-6);
+        assert_eq!(
+            (got.skip_fade_ms, got.skip_lead_ms, got.resume_save_ms),
+            (want.skip_fade_ms, want.skip_lead_ms, want.resume_save_ms)
+        );
+        assert_eq!(
+            (got.skip_suppress_h, got.dequeue_suppress_h, got.queue_depth, got.sample_interval_ms),
+            (96, 12, 7, 3_000)
+        );
 
-        // A library written before this column existed reads as the default,
-        // not as zero -- which would be a write every tick.
-        store.conn.execute("UPDATE player_state SET resume_save_ms = NULL", []).unwrap();
-        assert_eq!(store.load_settings().unwrap().3, crate::RESUME_SAVE_MS);
-        store.conn.execute("UPDATE player_state SET skip_suppress_h = NULL", []).unwrap();
-        assert_eq!(store.load_settings().unwrap().4, crate::SKIP_SUPPRESS_H);
-        store.conn.execute("UPDATE player_state SET dequeue_suppress_h = NULL", []).unwrap();
-        assert_eq!(store.load_settings().unwrap().5, crate::DEQUEUE_SUPPRESS_H);
+        // A library written before a column existed reads as THAT field's
+        // default, not as zero, and not by failing the whole read.
+        let d = Settings::default();
+        for (col, expect) in [
+            ("resume_save_ms", d.resume_save_ms),
+            ("skip_suppress_h", d.skip_suppress_h),
+            ("dequeue_suppress_h", d.dequeue_suppress_h),
+            ("sample_interval_ms", d.sample_interval_ms),
+        ] {
+            store
+                .conn
+                .execute(&format!("UPDATE player_state SET {col} = NULL"), [])
+                .unwrap();
+            let got = store.load_settings().unwrap();
+            let actual = match col {
+                "resume_save_ms" => got.resume_save_ms,
+                "skip_suppress_h" => got.skip_suppress_h,
+                "dequeue_suppress_h" => got.dequeue_suppress_h,
+                _ => got.sample_interval_ms,
+            };
+            assert_eq!(actual, expect, "{col} must fall back to its own default");
+        }
+        store.conn.execute("UPDATE player_state SET queue_depth = NULL", []).unwrap();
+        assert_eq!(store.load_settings().unwrap().queue_depth, d.queue_depth);
+
         let _ = std::fs::remove_file(&tmp);
     }
 

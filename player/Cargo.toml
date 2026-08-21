@@ -5,6 +5,13 @@ edition = "2021"
 description = "Vaino audio player: bounded streaming decode, crossfade, queue"
 license = "MIT"
 
+# The MPD Director is off unless asked for `[SPEC-MPD-070]`, `[IMPL-MPD-065]`.
+# Gated LAST, deliberately: gating first would have meant five stages developed
+# behind a flag nobody had turned on.
+[features]
+default = []
+mpd = []
+
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
 rubato = "0.15"
@@ -23,6 +30,29 @@ serde_json = "1"
 [[bin]]
 name = "vaino"
 path = "src/bin/vaino.rs"
+
+# Declared rather than auto-discovered, which is the only way to attach
+# `required-features`: without these entries cargo compiles every `src/bin/*.rs`
+# unconditionally, and the gate would be decorative.
+[[bin]]
+name = "mpd_map"
+path = "src/bin/mpd_map.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "mpd_watch"
+path = "src/bin/mpd_watch.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "mpd_fill"
+path = "src/bin/mpd_fill.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "mpd_direct"
+path = "src/bin/mpd_direct.rs"
+required-features = ["mpd"]
 
 [[bin]]
 name = "flavorcheck"
