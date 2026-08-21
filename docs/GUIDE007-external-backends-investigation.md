@@ -106,7 +106,76 @@ A build without them contains no adapter code, no adapter dependencies, and no l
 
 ---
 
-## 5. Recommendation
+## 5. Who actually runs MPD
+
+**`[GDE-BAK-065]` There is no telemetry, so every figure below is a proxy or a
+biased sample, and is labelled as one.** MPD is a daemon installed from distro
+repositories. Nobody counts downloads, and the project asks users nothing.
+
+**Debian, live data taken 2026-08-21** from `popcon.debian.org` — 282,629
+opted-in submissions, the whole 10.8 MB table of 107,824 packages:
+
+| package | installed | **regular users** | use / install |
+| :--- | ---: | ---: | ---: |
+| vlc | 43,661 | 142 | 0.3% |
+| rhythmbox | 41,427 | 2,074 | 5.0% |
+| quodlibet | 25,314 | 1,636 | 6.5% |
+| mpv | 21,841 | 5,875 | 26.9% |
+| **mpd** | **1,461** | **1,367** | **93.6%** |
+
+**`[GDE-BAK-070]` The install count is the wrong number, and the ratio is the
+finding.** Across the 26,052 Debian packages with 200+ installs the **median
+use/install ratio is 7.5%**; MPD's 93.6% is higher than **99.5% of them**. VLC
+and Rhythmbox arrive with desktop meta-packages and are mostly never used as
+anyone's music player. Nobody installs MPD by accident.
+
+Read by *regular users* rather than installs, MPD's 1,367 is **66% of
+Rhythmbox's 2,074 — on one twenty-eighth the installs.**
+
+**`[GDE-BAK-075]` The distro skew is 19×, and it points at tinkerers.** Arch's
+`pkgstats` puts **mpd at 9.81%** of reporting systems against Debian's 0.52%.
+Calibration on the same source: `firefox` 69.81%, `mpdecimal` (a transitive
+dependency) 98.93% — so the scale is real. MPD is roughly nineteen times more
+prevalent among people who assembled their own system.
+
+**`[GDE-BAK-080]` The largest population is invisible to both.** Volumio, moOde
+and RuneAudio — the mainstream Raspberry Pi audiophile distributions — are built
+on MPD. Their users never install a package and appear in no package survey.
+**That segment is precisely VainoPi's own category**: a small board playing a
+local library to a DAC.
+
+**`[GDE-BAK-085]` Development is alive; the last release was eight days ago.**
+19,899 commits, 2.7k stars, 422 forks, 158 open issues, 8 open pull requests.
+Series cadence: 0.19 (2016), 0.20 (2018), 0.21 (2020), 0.22 (2021), 0.23 (2025),
+**0.24 — 13 August 2026**. Around sixty actively maintained clients are listed
+across console, web, desktop, Android, Wear OS and **iOS**.
+
+**`[GDE-BAK-090]` "Keeping up with the latest version" is answered by distro
+policy, not by users.** There are no download counters, and MPD arrives through
+package managers. Arch users are current within days by construction; Debian
+stable users run whatever the freeze caught, for years. **The actionable
+consequence: target the 0.19 protocol surface.** `rangeid` has been there since
+2016 `[GDE-BAK-035]`, so it is in every version anyone is plausibly running, and
+depending on anything newer would exclude the stable-distro half of the user
+base for years.
+
+**`[GDE-BAK-095]` Absolute scale, stated with its uncertainty.** Popcon captures
+an unknown and small fraction of Debian installs, so the counts cannot be
+multiplied up responsibly. The defensible statement is: **tens of thousands to
+low hundreds of thousands of systems worldwide**, dominated by the embedded and
+audiophile segment, with engagement in the top half-percent of all packaged
+software.
+
+**And that population is unusually well matched to this project.** GUIDE004 §5
+put Vaino's ceiling at people who maintain a large tagged local library and will
+run a desktop pipeline `[GDE-IOS-045]`. That is close to a description of the
+MPD user: self-selected, deliberate, already running a headless daemon against
+files they own. **Small, and almost exactly the right people** — which is worth
+more here than reach.
+
+---
+
+## 6. Recommendation
 
 **`[GDE-BAK-070]` If any of it is built, build MPD, and build the mapping first.** MPD keeps the Album/Radio duality, needs no new dependency, and is the smaller adapter. OpenSubsonic buys client reach at the price of the thing 98.6% of this library is shaped by — which is a poor trade for *this* library, whatever it is for someone else's.
 
@@ -114,7 +183,7 @@ A build without them contains no adapter code, no adapter dependencies, and no l
 
 ---
 
-## 6. Open
+## 7. Open
 
 1. **`[GDE-BAK-080]` The mapping, prototyped against a real Navidrome or MPD instance.** Nothing else should start first `[GDE-BAK-025]`.
 2. **`[GDE-BAK-085]` Whether gain can be carried to MPD at all.** ReplayGain is per-file; Vaino's `gain_db` is per-passage `[SPEC-SC-040]`, and two passages in one file may legitimately differ.
@@ -122,4 +191,4 @@ A build without them contains no adapter code, no adapter dependencies, and no l
 
 ---
 
-**Traceability:** `[GDE-BAK-010..090]` · derived from `[GDE-EXT-020]`, `[GDE-BMK-030]`, `[REQ-HW-140]`, `[PI3-API-030]`
+**Traceability:** `[GDE-BAK-010..095]` · derived from `[GDE-EXT-020]`, `[GDE-BMK-030]`, `[REQ-HW-140]`, `[PI3-API-030]`
