@@ -223,7 +223,10 @@ pub struct Engine {
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
-    recorded: Option<i64>,
+    /// Whether the passage at `head` has been written to history yet.
+    recorded: bool,
+    /// The passage currently at the head of `live`, so `recorded` can reset.
+    head: Option<i64>,
     /// Passages chosen but never opened, waiting to be reported `[REQ-PD-112]`.
     ///
     /// The engine drops them; only the Director can undo having counted them,
@@ -290,7 +293,8 @@ impl Engine {
             last_save: Instant::now(),
             resume_save_ms: crate::RESUME_SAVE_MS,
             saved: None,
-            recorded: None,
+            recorded: false,
+            head: None,
             shown: None,
             dropped: Vec::new(),
             underruns_playing: 0,
@@ -818,15 +822,23 @@ impl Engine {
         self.saved = Some(key);
     }
 
-    /// Write a play to history the moment a passage begins sounding
-    /// `[REQ-PD-110]`.
+    /// Write a play to history once enough of the passage has been heard
+    /// `[SPEC-PLAY-010]`, `[SPEC-PLAY-030]`.
     ///
-    /// At the START of playback, not on completion. Rotation exists to space
-    /// out what the listener has *encountered*, and a track skipped after ten
-    /// seconds has been encountered — suppressing it for a while is the wanted
-    /// behaviour, not a bug. It also matches MuLibPlay, whose own note says the
-    /// history structures update "as each new track finishes playing (or is put
-    /// in the play queue)".
+    /// **Not at the start of playback.** *(Changed 2026-08-21.)* This used to
+    /// write the moment a passage began sounding, following MuLibPlay, whose
+    /// note says history updates "as each new track finishes playing (or is put
+    /// in the play queue)" — and it argued that a track skipped after ten
+    /// seconds had been *encountered*, so suppressing it was wanted.
+    ///
+    /// That is now a **measured divergence from MuLibPlay** `[GDE-PHS-030]`.
+    /// The threshold is half the passage or four minutes, the same rule the MPD
+    /// path judges by and the same one Last.fm and ListenBrainz use, because
+    /// both paths write this one table and it cannot mean two things
+    /// `[SPEC-PLAY-030]`.
+    ///
+    /// Measured against **audible** position, net of output buffering: what the
+    /// listener heard, not what the decoder reached.
     ///
     /// A failure here must never interrupt playback: history is what the next
     /// selection reads, not what this one depends on.
@@ -836,10 +848,21 @@ impl Engine {
         }
         let Some(live) = self.live.first() else { return };
         let id = live.entry.passage_id;
-        if self.recorded == Some(id) {
+        // The guard has to follow the head, not just remember the last write.
+        // While every started passage was recorded these were the same thing;
+        // now that a passage can finish unrecorded, a stale id would suppress
+        // the next honest play of the same passage.
+        if self.head != Some(id) {
+            self.head = Some(id);
+            self.recorded = false;
+        }
+        if self.recorded {
             return;
         }
-        self.recorded = Some(id);
+        if !crate::scrobble::counts_as_play(self.audible_ms(live), live.entry.duration_ms()) {
+            return;
+        }
+        self.recorded = true;
         if let Some(store) = &self.store {
             if let Err(e) = store.record_play(id, live.entry.mbid.as_deref()) {
                 eprintln!("record play: {e}");

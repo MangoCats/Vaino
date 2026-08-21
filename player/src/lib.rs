@@ -30,6 +30,7 @@ pub mod session;
 pub mod tags;
 pub mod web;
 pub mod resample;
+pub mod scrobble;
 
 /// Frames of audio buffered per passage. 15 s at 44.1 kHz.
 ///

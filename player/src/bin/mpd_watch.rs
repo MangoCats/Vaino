@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use vaino_player::mpd::Mpd;
+use vaino_player::scrobble::{counts_as_play_s, FOUR_MINUTES_MS};
 
 /// Vaino's durations, keyed by the URI MPD would report `[SPEC-MPD-060]`.
 ///
@@ -58,9 +59,6 @@ fn vaino_durations(db_path: &str, root: &str) -> Result<HashMap<String, f64>, St
     Ok(out)
 }
 
-/// The threshold `[SPEC-MPD-090]` adopts, in seconds.
-const FOUR_MINUTES: f64 = 240.0;
-
 /// What the sampler knows about the song currently on air.
 struct Watching {
     songid: String,
@@ -76,21 +74,6 @@ struct Watching {
     from_vaino: bool,
     samples: u32,
     first_seen: Instant,
-}
-
-/// Would a scrobbler count this as played?
-///
-/// **An unknown duration is never a play.** MPD reports no `duration` while
-/// stopped, so a naive `half of zero` made a song that had not played at all
-/// pass the threshold — observed on the first live run, judging a stopped
-/// leftover as PLAY at "0.0s of 0.0s". Absent evidence is not evidence, which
-/// is the same rule `[REQ-LIB-165]` applies to an unmatched fingerprint.
-fn is_play(furthest_s: f64, duration_s: f64) -> bool {
-    if duration_s <= 0.0 {
-        return false;
-    }
-    let threshold = (duration_s / 2.0).min(FOUR_MINUTES);
-    furthest_s + 0.001 >= threshold
 }
 
 fn parse(lines: &[String]) -> HashMap<String, String> {
@@ -247,8 +230,9 @@ fn main() {
 }
 
 fn verdict(c: &Watching, plays: &mut u32, skips: &mut u32) {
-    let threshold = (c.duration_s / 2.0).min(FOUR_MINUTES);
-    let played = is_play(c.furthest_s, c.duration_s);
+    let four_minutes = FOUR_MINUTES_MS as f64 / 1000.0;
+    let threshold = (c.duration_s / 2.0).min(four_minutes);
+    let played = counts_as_play_s(c.furthest_s, c.duration_s);
     if played {
         *plays += 1;
     } else {
@@ -276,37 +260,13 @@ fn verdict(c: &Watching, plays: &mut u32, skips: &mut u32) {
 mod tests {
     use super::*;
 
+    /// The rule itself is tested in `vaino_player::scrobble`. What matters here
+    /// is that this binary asks *that* question rather than its own -- the two
+    /// having drifted apart is what `[SPEC-PLAY-030]` exists to prevent.
     #[test]
-    fn half_a_short_track_is_enough() {
-        assert!(is_play(90.0, 180.0));
-        assert!(!is_play(89.0, 180.0));
-    }
-
-    #[test]
-    fn four_minutes_caps_a_long_one() {
-        // A 20-minute piece needs four minutes, not ten.
-        assert!(is_play(240.0, 1200.0));
-        assert!(!is_play(239.0, 1200.0));
-    }
-
-    #[test]
-    fn a_twelve_second_passage_played_whole_is_a_play() {
-        // The case the anti-spam floor would have thrown away
-        // `[SPEC-MPD-090]`: Last.fm ignores anything under 30 s.
-        assert!(is_play(12.0, 12.0));
-        assert!(is_play(6.0, 12.0));
-        assert!(!is_play(5.0, 12.0));
-    }
-
-    #[test]
-    fn an_unknown_duration_is_never_a_play() {
-        // What a stopped MPD reports, and what the first live run got wrong.
-        assert!(!is_play(0.0, 0.0));
-        assert!(!is_play(30.0, 0.0));
-    }
-
-    #[test]
-    fn an_early_skip_is_not_a_play() {
-        assert!(!is_play(10.0, 300.0));
+    fn the_observer_judges_by_the_shared_rule() {
+        assert!(counts_as_play_s(6.0, 12.0));
+        assert!(!counts_as_play_s(5.0, 12.0));
+        assert!(!counts_as_play_s(0.0, 0.0), "an unknown duration is never a play");
     }
 }

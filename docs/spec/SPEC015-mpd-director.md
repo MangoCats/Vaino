@@ -113,12 +113,12 @@ Resolution order, narrowest first, in the spirit of `[SPEC-DF-040]`:
 
 ## 7. Settled
 
-**`[SPEC-MPD-090]` A play is a play by the scrobbling rule: half the track, or
-four minutes, whichever comes first.** *(Decided 2026-08-21.)* Both Last.fm and
-ListenBrainz use exactly this threshold, and adopting it rather than inventing
-one buys three things: it is already tuned by services that have watched
-billions of listens, it will agree with whatever scrobbler the user is running
-`[SPEC-MPD-100]`, and it is a number a person can check.
+**`[SPEC-MPD-090]` A play is a play by the rule every path shares: half the
+passage, or four minutes, whichever comes first** — defined once in
+[SPEC017: What Counts as a Play](SPEC017-what-counts-as-a-play.md) and imported
+here rather than restated. *(Decided 2026-08-21; promoted out of this document
+the same day, once it was settled that the local engine obeys it too
+`[SPEC-PLAY-030]`.)*
 
 **One deviation, deliberate.** Last.fm additionally ignores tracks under 30
 seconds and ListenBrainz under 5. That floor is an *anti-spam* rule about
@@ -223,17 +223,17 @@ corrected the same day.)* The question hides two, and they have different answer
 without ever consulting who queued it, and `listener_play_history` records
 listening rather than deciding.
 
-***Whether* a play happened: `[SPEC-MPD-090]`'s rule, not the local engine's.** An
-earlier draft said additions count "exactly as the local engine counts them". That
-is false, in the direction that matters: `[REQ-PD-110]` writes a play *the moment a
-passage begins sounding*, and its note deliberately embraces "a track skipped after
-ten seconds has been encountered". Under `[SPEC-MPD-090]` that skip is not a play.
+***Whether* a play happened: `[SPEC-PLAY-010]`'s rule.** An earlier draft said
+additions count "exactly as the local engine counts them", which was false at the
+time: the engine wrote a play the moment a passage began sounding, so a
+ten-second skip counted locally and not through MPD. **The engine now obeys the
+same threshold** `[SPEC-PLAY-030]`, and the sentence is true because the code
+changed, not because the wording did.
 
-> **The two paths therefore disagree about one library.** A ten-second skip
-> suppresses a track locally and does nothing through MPD. That is deliberate —
-> rotation was aligned to the scrobbling rule on purpose — but it leaves
-> `listener_play_history` written by two rules, only one of them tightened —
-> which §8 carries as an open question against the local engine.
+> **One table, one rule.** Both paths call the same function `[SPEC-PLAY-030]`,
+> so `listener_play_history` means the same thing whichever player wrote it.
+> What that cost — a skipped passage is no longer suppressed at all — is
+> recorded against the rule itself `[SPEC-PLAY-040]`.
 
 **`[SPEC-MPD-120]` The Director is active only while MPD is playing.**
 *(Settled 2026-08-21.)* `state: play` and below depth is the entire activation
@@ -257,17 +257,14 @@ drops below depth; resuming refills within one interval.
 
 ## 8. Open
 
-1. **`[SPEC-MPD-125]` Whether the local engine should adopt `[SPEC-MPD-090]`'s
-   threshold.** Raised by `[SPEC-MPD-115]`, and larger than the MPD path. Today
-   `[REQ-PD-110]` records a play at the *start* of a passage, faithfully to
-   MuLibPlay; the MPD path requires half-or-four-minutes. Both write the same
-   `listener_play_history`, so the same library accumulates different rotation
-   history depending on which player was running — a ten-second skip suppresses
-   a track locally and is invisible through MPD.
-   Changing it is a **measured divergence from MuLibPlay fidelity**, the class
-   `[SPEC-DIR-210]` already defers under `[GDE-PHS-030]`, and it should be
-   decided as one rather than as a side effect of the MPD work. Not a blocker
-   for stage 3: the MPD path's own rule is settled either way.
+**`[SPEC-MPD-125]` Settled 2026-08-21: the local engine adopts the threshold.**
+The scrobbling alignment is not the MPD path's local convention — it applies to
+Vaino's own playback equally. Moved to
+[SPEC017](SPEC017-what-counts-as-a-play.md), which now owns the rule for every
+path; `[SPEC-PLAY-040]` records the MuLibPlay divergence and the one consequence
+that came with it.
+
+Nothing else outstanding.
 
 ---
 
