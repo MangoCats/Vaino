@@ -135,6 +135,31 @@ exclusion is not.**
 > playing and keeps the last known elapsed, then judges the outgoing passage
 > against it. This is the one place the design polls, and it is why.
 
+**`[SPEC-MPD-105]` Both tunables are the listener's, edited on the settings page
+and remembered.** *(Decided 2026-08-21.)*
+
+| Parameter | Default | Meaning |
+| :--- | ---: | :--- |
+| **queue depth** | **5** | how many passages the Director keeps ahead. **At or above it, the Director adds nothing** `[SPEC-MPD-095]`. |
+| **status sample interval** | **5 s** | how often `status` is read while playing, to judge a play against `[SPEC-MPD-090]`'s threshold |
+
+They follow the pattern the player already has for skip fade, skip lead and
+resume-save `[REQ-VIS-155]`: written the moment a control moves rather than on a
+timer, persisted in `player_state` beside the three columns already there, and
+with their **bounds carried in the snapshot** so the control offers exactly what
+the engine accepts rather than keeping a second copy of the limits.
+
+**Queue depth is a promotion, not a new setting.** It exists today as
+`vaino --depth N`, defaulting to 5, reachable only by editing a service file.
+Moving it to the settings page makes it adjustable on an appliance whose only
+interface is a web page, and it applies to the **local** engine as well — the
+same number, one place, whichever backend is playing.
+
+**The sample interval has a floor worth respecting.** `[SPEC-MPD-110]` is why:
+five seconds resolves a four-minute rule easily and a 12-second passage badly,
+so the useful range is small at the bottom and the cost of the default being
+wrong is a misjudged play rather than a missed one.
+
 **`[SPEC-MPD-095]` The queue belongs to whoever is in front of it. The Director
 only ever adds, and only ever below the minimum depth.** *(Decided 2026-08-21.)*
 MPD's queue is shared, and a person editing it is not an error to be corrected.
@@ -169,7 +194,7 @@ about what happened without either writing the other's data.
 
 ## 8. Open
 
-1. **`[SPEC-MPD-110]` How often `status` must be sampled** to judge a play without polling wastefully `[SPEC-MPD-090]`. A four-minute rule tolerates a coarse interval; a half-length rule on a 12-second passage does not, and the two want different answers.
+1. **`[SPEC-MPD-110]` Whether one interval can serve both halves of the rule.** Five seconds `[SPEC-MPD-105]` judges a four-minute threshold to within 2% and a 12-second passage to within 40%. The floor may need to follow the passage rather than the clock — sampling near the half-mark of whatever is playing — which is a smaller change than it sounds and should be measured before it is assumed necessary.
 2. **`[SPEC-MPD-115]` Whether a person's own additions should feed rotation.** They played, so they happened — but they were not chosen by the Director, and counting them shapes future selection by a hand the algorithm cannot see. Probably yes, on the grounds that `listener_play_history` records listening rather than deciding.
 3. **`[SPEC-MPD-120]` What "active" means for the Director** `[SPEC-MPD-095]`. There must be a way to leave it running but quiet, or a person browsing their library fights a daemon that keeps appending.
 
