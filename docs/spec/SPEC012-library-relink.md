@@ -100,10 +100,21 @@ path that resolves to nothing.
 
 **`[SPEC-RLK-070]`** `ffmpeg -i F -vn -c:a copy -f md5 -` hashes the encoded
 packets as they are read — no decode, so the work is I/O. Measured end to end:
-**5,742 files in 423 s**, 74 ms each, against the schema's estimate of ~70. On
-the appliance, bounded by SD card read, a full relink should be **under an
-hour** — against the 11 hours the same library takes to arrive over the Pi
-Zero 2 W's Wi-Fi, not a cost worth optimising.
+**5,742 files in 423 s**, 74 ms each, against the schema's estimate of ~70.
+
+**`[SPEC-RLK-075]` On the appliance it is 2 h 37 m, not the hour this document
+guessed.** *(Measured 2026-08-20, first full run on the Pi Zero 2 W: 5,745 files,
+~1.6 s each — **21× the desktop's 74 ms**, and 2.6× the estimate.)* The estimate
+was an extrapolation from x86 timings with a hand-wave at "bounded by SD card
+read"; the hardware disagreed. It remains a cost not worth optimising — the same
+library takes 11 hours to arrive over that Pi's Wi-Fi — but it is long enough to
+plan around, and long enough that **the player must be stopped for it** rather
+than merely discouraged.
+
+It is also long enough that the all-or-nothing shape matters: hashing completes
+before any path is written, so an interruption at 97% loses the run entire.
+`[SPEC-RLK-110]`'s "the rows it reached are correct" is about consistency, not
+progress — no row is reached until the walk ends.
 
 First end-to-end run, database carrying target paths and audio at its source —
 the deployment case exactly:
