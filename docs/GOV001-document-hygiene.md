@@ -79,6 +79,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `LES` — Distilled lessons
 - `FEX` — Feature extraction strategy (P0 critical path)
 - `CHT` / `ARC` / `PHS` / `FBD` / `DIS` / `OPN` — Charter, architecture decisions, phases, forbidden patterns, disposal register, open questions
+- `AND` — Android port strategy: routes to a phone, and what each costs
 
 ---
 
@@ -103,6 +104,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-FBD-*]` | Forbidden patterns | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#4-forbidden-patterns) |
 | `[GDE-DIS-*]` | Predecessor disposal register | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#5-disposal-register) |
 | `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
+| `[GDE-AND-*]` | Android port: fork vs ground-up, and the licence that decides it | [GUIDE004-android-port-strategy.md](GUIDE004-android-port-strategy.md) |
 | `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
 | `[PI3-*]` | Speaker link: design and the player's contract | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md) |
