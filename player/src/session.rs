@@ -59,6 +59,10 @@ pub struct Controls {
     /// Whether a guest is attached at all. Without one the control is not
     /// offered, rather than offered and refused.
     pub guest_available: bool,
+    /// What the guest *is* — "MPD at 127.0.0.1:6600" rather than "MPD". An
+    /// option naming a category tells a listener nothing about whether the
+    /// thing behind it is the one they are looking at.
+    pub guest_name: Option<String>,
     /// A request to change sides. The same intent-cell pattern as
     /// `reload_requested`, and for the same reason: the backends are not `Sync`
     /// and the browser cannot reach them.

@@ -159,6 +159,7 @@ pub struct Snapshot {
     /// switch did `[SPEC-BK-025]`.
     pub backend: Option<String>,
     pub guest_available: bool,
+    pub guest_name: Option<String>,
     pub switch_status: Option<String>,
     /// The Director's pool as `(eligible, total)`, so a rebuild's effect is
     /// visible rather than asserted: importing music and reloading moves
@@ -240,6 +241,7 @@ impl From<&PlayerState> for Snapshot {
             reload_status: None,
             backend: None,
             guest_available: false,
+            guest_name: None,
             switch_status: None,
             pool: None,
             program_manual: false,
@@ -773,6 +775,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.reload_status = c.reload_status.clone();
             snap.backend = c.backend.clone();
             snap.guest_available = c.guest_available;
+            snap.guest_name = c.guest_name.clone();
             snap.switch_status = c.switch_status.clone();
             snap.pool = c.pool;
             snap.programs = c

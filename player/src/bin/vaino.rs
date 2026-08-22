@@ -235,6 +235,10 @@ fn engine_thread(
                 println!("MPD guest attached at {addr}; Vaino is still the one playing");
                 if let Ok(mut c) = controls_for_switch.lock() {
                     c.guest_available = true;
+                    c.guest_name = Some(format!("MPD at {addr}"));
+                    // Something true before the first switch, so the control is
+                    // evidently working rather than evidently blank.
+                    c.switch_status = Some("Vaino is playing; the guest is attached and idle".into());
                 }
             }
             Err(e) => eprintln!("MPD guest unavailable ({e}); continuing on the local engine"),

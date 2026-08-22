@@ -84,6 +84,29 @@
   const backendSel = $('backend');
   backendSel.onchange = () => Vaino.switchBackend(backendSel.value);
 
+  // Copy the build to the clipboard `[REQ-VIS-200]`. The point of showing it is
+  // that someone can quote it somewhere else, and retyping a twelve-character
+  // hash is how the wrong one gets quoted. Confirms in place, because a copy
+  // that says nothing is indistinguishable from a button that does nothing.
+  const buildCopy = $('buildcopy');
+  buildCopy.onclick = async () => {
+    const text = $('buildtext').textContent;
+    const said = t => { buildCopy.textContent = t;
+                        setTimeout(() => { buildCopy.textContent = '⧉'; }, 1200); };
+    try {
+      await navigator.clipboard.writeText(text);
+      said('✓');
+    } catch {
+      // Denied, or an insecure origin. Select it instead so a manual copy is
+      // one keystroke rather than a careful drag.
+      const r = document.createRange();
+      r.selectNodeContents($('buildtext'));
+      const sel = window.getSelection();
+      sel.removeAllRanges(); sel.addRange(r);
+      said('✗');
+    }
+  };
+
   // Each term is shown separately, never just the product: a single number
   // cannot be argued with, and arguing with it is the point [SPEC-DIR-190].
   // Terms sitting at 1.0 did nothing, and are dimmed rather than hidden --
@@ -113,7 +136,7 @@
   // expected is missing, which is exactly when the answer is hardest to get by
   // any other means.
   function renderBuild(s) {
-    if (s.build) $('build').textContent = s.build;
+    if (s.build) $('buildtext').textContent = s.build;
   }
 
   function renderBackend(s) {
@@ -122,6 +145,10 @@
     const show = !!s.guest_available;
     if (row) row.hidden = !show;
     if (label) label.hidden = !show;
+    // Name the guest rather than its category: "MPD at 127.0.0.1:6600" says
+    // whether the thing behind the option is the one being looked at.
+    const guestOpt = backendSel.querySelector('option[value=mpd]');
+    if (guestOpt && s.guest_name) guestOpt.textContent = `${s.guest_name} (spans only)`;
     if (s.backend && document.activeElement !== backendSel) backendSel.value = s.backend;
     $('switchstatus').textContent = s.switch_status || '';
   }

@@ -68,6 +68,17 @@
             font-size: .8125rem; min-width: 4.4rem; text-align: right; }
   select { font: inherit; font-size: .875rem; padding: .25rem .4rem; color: inherit;
            background: transparent; border: 1px solid var(--line); border-radius: 6px; }
+  /* The POPUP is not the box. A transparent select with inherited colour looks
+     right closed -- the page paints behind it -- and in dark mode paints near
+     white text onto the system's light popup, where it cannot be read. The
+     dropdown then appears to hold only the selected item. Options carry the
+     skin's own colours so the list is legible wherever the browser draws it. */
+  select option { background: var(--bg); color: var(--fg); }
+  /* A copy affordance sitting beside text it copies `[REQ-VIS-200]`. */
+  .copy { font: inherit; font-size: .8125rem; line-height: 1; cursor: pointer;
+          color: var(--dim); background: transparent; border: 1px solid transparent;
+          border-radius: 4px; padding: .1rem .25rem; margin-left: .35rem; }
+  .copy:hover { color: var(--fg); border-color: var(--line); }
   #progmode { font-size: .75rem; opacity: .7; }
   /* No list markers: the controls lead the row now, and a number in front of
      them would put two unrelated things in the same column. */
