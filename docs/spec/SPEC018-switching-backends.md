@@ -41,10 +41,10 @@ seconds** to load before it can make a sound. Neither is acceptable for
 something a listener does on impulse. Loading the Director once and switching
 the output costs neither.
 
-The seam already existed and is now **load-bearing**: `Session::refill`,
-`tend_rebuild` and `adopt` take `&mut dyn Playback`, not `&mut Engine`
-`[SPEC-BK-022]`. `Engine` satisfies the trait with nothing in `engine.rs`
-touched, which was the spike's claim and survives.
+**`[SPEC-BK-022]` The session drives a backend, not the engine.** *(Built
+2026-08-21.)* `Session::refill`, `tend_rebuild` and `adopt` take
+`&mut dyn Playback`. `Engine` satisfies the trait with nothing in `engine.rs`
+touched, which was the spike's claim and survives contact.
 
 **The trait had to narrow to carry weight, though.** As written it asked for
 `queued() -> Vec<QueueEntry>` — a deep clone of every queued passage, per tick,
