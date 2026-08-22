@@ -73,17 +73,40 @@
     <div class="setting">
       <label for="resumesave">Save position every</label>
       <span><input type="number" id="resumesave" step="0.5"> s</span>
-      <label for="skipsuppress" title="A skipped passage is held out of selection for this long. It is not counted as played.">Hold a skipped track out for</label>
+      <p>How often the playback position is written to disk. Longer means
+         fewer writes on an appliance's flash; at worst this much position is
+         lost to a power cut. Track changes and pause are always saved at once.</p>
+    </div>
+    <div class="setting">
+      <label for="skipsuppress">Hold a skipped track out for</label>
       <span><input type="number" id="skipsuppress" step="1"> h</span>
-      <label for="dequeuesuppress" title="A track taken out of the queue before it played is held out for this long. The longer of the two windows wins.">Hold a removed track out for</label>
+      <p>A track you skip is held out of selection for this long. It is not
+         counted as played. Zero turns it off.</p>
+    </div>
+    <div class="setting">
+      <label for="dequeuesuppress">Hold a removed track out for</label>
       <span><input type="number" id="dequeuesuppress" step="1"> h</span>
-      <label for="queuedepth" title="How many passages the Program Director keeps queued ahead. At or above this it adds nothing.">Keep queued ahead</label>
+      <p>A track you take out of the queue before it played is held out for
+         this long &mdash; less than a skip, because declining to hear
+         something now says less than stopping it once it had started. Where
+         both apply, the longer remaining window wins.</p>
+    </div>
+    <div class="setting">
+      <label for="queuedepth">Keep queued ahead</label>
       <span><input type="number" id="queuedepth" step="1"> passages</span>
-      <label for="sampleinterval" title="How often a guest backend such as MPD reads playback position. Vaino's own engine does not poll.">Guest sampling interval</label>
+      <p>How many passages the Program Director keeps ahead. At or above this
+         it adds nothing, so anything you queue yourself simply stands.</p>
+    </div>
+    <div class="setting">
+      <label for="sampleinterval">Guest sampling interval</label>
       <span><input type="number" id="sampleinterval" step="0.5"> s</span>
-      <label>Server build</label>
-      <span><small id="buildtext" title="The version and the commit it was built from. '+dirty' means the source tree had uncommitted changes, so the hash names where it started rather than what was compiled.">—</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">⧉</button></span>
-      <label for="backend" title="Which player is sounding. MPD gives you around sixty client apps; Vaino's own engine keeps per-passage gain and crossfades, which MPD cannot express.">Playing through</label>
+      <p>How often a guest backend such as MPD is asked where playback has
+         reached. Vaino's own engine never polls &mdash; it knows. This also
+         bounds how late a passage can end when the guest will not honour its
+         span.</p>
+    </div>
+    <div class="setting">
+      <label for="backend">Playing through</label>
       <span>
         <select id="backend">
           <option value="vaino">Vaino (gain, crossfades)</option>
@@ -91,9 +114,16 @@
         </select>
         <small id="switchstatus"></small>
       </span>
-      <p>How often the playback position is written to disk. Longer means
-         fewer writes on an appliance's flash; at worst this much position is
-         lost to a power cut. Track changes and pause are always saved at once.</p>
+      <p>Which player is sounding. A guest such as MPD brings its own client
+         apps; Vaino's own engine keeps per-passage gain and crossfades, which
+         a guest cannot express. The queue moves across either way.</p>
+    </div>
+    <div class="setting">
+      <label>Server build</label>
+      <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>
+      <p>The version and the commit this server was built from. <code>+dirty</code>
+         means the source tree had uncommitted changes, so the hash names where
+         the build started rather than what was compiled.</p>
     </div>
     <div class="setting" id="radios">
       <label>Radios</label>

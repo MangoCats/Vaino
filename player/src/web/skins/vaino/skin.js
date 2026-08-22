@@ -140,11 +140,11 @@
   }
 
   function renderBackend(s) {
-    const row = backendSel.closest('span');
-    const label = document.querySelector('label[for=backend]');
-    const show = !!s.guest_available;
-    if (row) row.hidden = !show;
-    if (label) label.hidden = !show;
+    // The whole block, not the control alone: each setting now carries its
+    // own label and explanation, and hiding only the `<span>` would leave a
+    // heading and a paragraph describing a control that is not there.
+    const block = backendSel.closest('.setting');
+    if (block) block.hidden = !s.guest_available;
     // Name the guest rather than its category: "MPD at 127.0.0.1:6600" says
     // whether the thing behind the option is the one being looked at.
     const guestOpt = backendSel.querySelector('option[value=mpd]');
