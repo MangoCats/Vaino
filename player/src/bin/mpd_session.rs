@@ -17,9 +17,11 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use vaino_player::db::PlayerStore;
+use vaino_player::engine::Engine;
 use vaino_player::mpd_backend::MpdBackend;
 use vaino_player::playback::Playback;
 use vaino_player::session::Session;
+use vaino_player::switch::{Side, Switching};
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -58,54 +60,74 @@ fn main() {
     });
     println!("session opened in {:.1}s", loading.elapsed().as_secs_f64());
 
-    let mut backend = MpdBackend::connect(&addr, &root, depth, interval).unwrap_or_else(|e| {
+    let mut guest = MpdBackend::connect(&addr, &root, depth, interval).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);
     });
     if write {
         match PlayerStore::open(Path::new(&db)) {
-            Ok(s) => backend.attach_store(s),
+            Ok(s) => guest.attach_store(s),
             Err(e) => {
                 eprintln!("cannot open {db} for writing: {e}");
                 std::process::exit(1);
             }
         }
     }
-    let caps = backend.capabilities();
+
+    // A *real* engine, with a silent output. This is the local backend the
+    // appliance would be using; only the sound card is absent, so a queue that
+    // arrives here has arrived somewhere that could play it.
+    let (engine, _handle) = Engine::new(vaino_player::path::PathHandle::silent(), depth);
+    let mut sw = Switching::new(Box::new(engine));
+    sw.attach_guest(Box::new(guest));
+    sw.switch_to(Side::Guest).expect("guest attached");
+
     println!(
-        "backend: MPD at {addr}, depth {depth}, sampling {interval}ms; \
-         spans {} gain {} ramps {}",
-        caps.spans, caps.gain, caps.ramps
+        "backend: MPD at {addr}, depth {depth}, sampling {interval}ms; spans {} gain {} ramps {}",
+        sw.capabilities().spans,
+        sw.capabilities().gain,
+        sw.capabilities().ramps
     );
-    println!("{}\n", if write { "WRITING plays and rejections" } else { "writes nothing" });
+    println!("{}
+", if write { "WRITING plays and rejections" } else { "writes nothing" });
     if let Some(c) = session.census() {
-        println!("pool: {} eligible, {} suppressed\n", c.eligible, c.suppressed);
+        println!("pool: {} eligible, {} suppressed
+", c.eligible, c.suppressed);
     }
 
     let suppress = (saved.skip_suppress_h, saved.dequeue_suppress_h);
     let started = Instant::now();
-    let mut last_reported = 0usize;
+    let mut last = 0usize;
     while started.elapsed().as_secs_f64() < run_for {
-        backend.tick();
-        // The one line this program exists to run.
-        session.refill(&mut backend, suppress);
-
-        let n = backend.queued_ids().len();
-        if n != last_reported {
-            println!(
-                "  queue: {n} passage(s) from the Director, {:.0}s of music ahead",
-                backend.queued_ms() as f64 / 1000.0
-            );
-            last_reported = n;
+        sw.tick();
+        session.refill(&mut sw, suppress);
+        let n = sw.queued_ids().len();
+        if n != last {
+            println!("  MPD queue: {n} passage(s), {:.0}s ahead", sw.queued_ms() as f64 / 1000.0);
+            last = n;
         }
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    println!("\nfinal queue: {:?}", backend.queued_ids());
-    if let Some(c) = session.census() {
-        println!(
-            "pool now: {} eligible, {} suppressed, {} artist-blocked",
-            c.eligible, c.suppressed, c.artist_blocked
-        );
+    // --- the handoff `[SPEC-BK-030]` ---
+    println!("
+handing MPD -> Vaino");
+    let before = sw.queued_ids();
+    println!("  MPD was holding {} passage(s): {:?}", before.len(), before);
+    match session.hand_over(&mut sw, Side::Local) {
+        Ok(c) => {
+            println!("  carried {} passage(s) to the local engine: {:?}", c.moved.len(), c.moved);
+            if !c.lost.is_empty() {
+                println!("  the library could no longer build: {:?}", c.lost);
+            }
+        }
+        Err(e) => println!("  refused: {e}"),
     }
+    println!("  now active: {:?}", sw.active());
+    println!("  local engine holds {} passage(s): {:?}", sw.queued_ids().len(), sw.queued_ids());
+    println!(
+        "  capabilities now: gain {} ramps {} (the local side can do what MPD cannot)",
+        sw.capabilities().gain,
+        sw.capabilities().ramps
+    );
 }

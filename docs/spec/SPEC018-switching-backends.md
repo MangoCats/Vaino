@@ -91,6 +91,24 @@ Both may hold a PipeWire stream at once, so the changeover is a **crossfade**
 rather than a gap — the same `[REQ-AUD-158]` shape a skip already uses, and the
 reason it is available is the first measurement above.
 
+**`[SPEC-BK-032]` The queue crosses as passage ids, and is rebuilt on arrival.**
+*(Built 2026-08-21.)* `Session::hand_over` switches the side, reads each carried
+id back out of the library, and enqueues it into the incoming backend. **Spans
+are re-derived rather than carried**: `start_ms`, `end_ms`, gain and ramps
+belong to the passage, not to whichever backend last played it, and handing over
+a built entry would have carried the outgoing side's idea of the passage into
+the next one.
+
+The transfer lives on the session because the session is the only thing holding
+a library; a backend has no business holding one. A passage the library has
+renumbered away since the queue was built is skipped and named, and the
+Director's queueing mark for it is undone `[REQ-PD-112]` — it never played.
+
+Demonstrated against a live MPD and a **real** `Engine` on a silent output: MPD
+holding three Director-selected passages, `hand_over` to the local side, all
+three rebuilt and queued there, and the reported capabilities flipping from
+`gain false ramps false` to `gain true ramps true` in the same breath.
+
 **`[SPEC-BK-035]` Position and queue transfer, as far as they can.**
 
 | moving | the current passage | the rest of the queue |

@@ -59,6 +59,44 @@ where
     out
 }
 
+/// What a queue transfer moved, and what it lost on the way.
+#[derive(Debug, Default, PartialEq)]
+pub struct Carried {
+    /// Passages now queued on the incoming backend, in order.
+    pub moved: Vec<i64>,
+    /// Passages the library could no longer build. Named, not counted.
+    pub lost: Vec<i64>,
+}
+
+/// Re-offer a carried queue to whichever backend is now live.
+///
+/// **The spans are re-derived here, not carried.** A passage id is the whole of
+/// what crosses `[SPEC-BK-030]`; `start_ms`, `end_ms`, gain and ramps are read
+/// from the library again, because they belong to the passage and not to
+/// whichever backend last played it. Handing over a built `QueueEntry` would
+/// have carried the *previous* backend's idea of the passage into the next one.
+///
+/// A passage that cannot be rebuilt is reported and skipped, for the same
+/// reason an unnameable guest entry is `[SPEC-BK-045]`: a library that has been
+/// rescanned since the queue was built may have renumbered it away, and that is
+/// not a reason to refuse the switch.
+pub fn carry_queue<F>(ids: &[i64], into: &mut dyn Playback, build: F) -> Carried
+where
+    F: Fn(i64) -> Option<QueueEntry>,
+{
+    let mut out = Carried::default();
+    for &id in ids {
+        match build(id) {
+            Some(e) => {
+                into.enqueue(e);
+                out.moved.push(id);
+            }
+            None => out.lost.push(id),
+        }
+    }
+    out
+}
+
 /// Two backends, one of them sounding.
 pub struct Switching {
     local: Box<dyn Playback>,
@@ -250,6 +288,28 @@ mod tests {
         let got = adopt_queue(&queue, |_| None);
         assert!(got.passages.is_empty());
         assert_eq!(got.dropped.len(), 2, "reported, and the switch still proceeds");
+    }
+
+    /// A queue crosses as ids, and arrives rebuilt from the library
+    /// `[SPEC-BK-030]`.
+    #[test]
+    fn a_carried_queue_is_rebuilt_on_the_far_side() {
+        let mut dest = Fake::default();
+        let got = carry_queue(&[7, 8], &mut dest, |id| Some(entry(id)));
+        assert_eq!(got.moved, vec![7, 8]);
+        assert!(got.lost.is_empty());
+        assert_eq!(dest.queued_ids(), vec![7, 8], "order is the listener's order");
+    }
+
+    /// A passage the library can no longer build is reported and skipped, not
+    /// allowed to stop the switch `[SPEC-BK-045]`.
+    #[test]
+    fn a_passage_the_library_lost_does_not_stop_the_switch() {
+        let mut dest = Fake::default();
+        let got = carry_queue(&[7, 999, 8], &mut dest, |id| (id != 999).then(|| entry(id)));
+        assert_eq!(got.moved, vec![7, 8]);
+        assert_eq!(got.lost, vec![999], "named, so a caller can say which");
+        assert_eq!(dest.queued_ids(), vec![7, 8]);
     }
 
     /// The session talks to one thing; which side answers is not its business.

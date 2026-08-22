@@ -488,6 +488,46 @@ impl Session {
         }
     }
 
+    /// Move the session to the other backend, carrying the queue `[SPEC-BK-030]`.
+    ///
+    /// The session is the only thing here holding a library, which is why the
+    /// transfer lives on it: `[SPEC-BK-030]` carries **passage ids**, and only
+    /// the library can turn one back into something playable. Spans are read
+    /// again on arrival rather than carried, because a span belongs to the
+    /// passage and not to whichever backend last played it.
+    ///
+    /// Returns what did not make it, by name. A passage the library has
+    /// renumbered away since the queue was built is skipped rather than allowed
+    /// to refuse the switch, for the same reason an unnameable guest entry is
+    /// `[SPEC-BK-045]`.
+    pub fn hand_over(
+        &mut self,
+        sw: &mut crate::switch::Switching,
+        target: crate::switch::Side,
+    ) -> Result<crate::switch::Carried, String> {
+        let carried = sw.switch_to(target)?;
+        let lib = &self.lib;
+        let mut out = crate::switch::carry_queue(&carried, sw, |id| {
+            lib.passage(id)
+                .map(|mut e| {
+                    lib.describe(&mut e);
+                    e
+                })
+                .ok()
+        });
+        // Anything the Director had marked as queued but which did not survive
+        // the crossing never played, so it must not go on counting as though it
+        // had `[REQ-PD-112]` — the same place a file that would not open ends
+        // up, reached by a different road.
+        for id in &out.lost {
+            if let (Some(note), Some(d)) = (self.notes.remove(id), self.director.as_mut()) {
+                d.forget_queued(note);
+            }
+        }
+        out.moved.dedup();
+        Ok(out)
+    }
+
     /// How the pool looks right now — for the panel, and for diagnosing a
     /// station that has gone quiet `[SPEC-DIR-190]`.
     pub fn census(&self) -> Option<crate::director::library::Census> {

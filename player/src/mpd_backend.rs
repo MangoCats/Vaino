@@ -104,6 +104,37 @@ impl MpdBackend {
         uri_under(&self.root, &e.path)
     }
 
+    /// Every URI in MPD's queue, in play order — **including what a person
+    /// added by hand**.
+    ///
+    /// Not on the trait, because only a handoff wants it. `queued_ids` reports
+    /// what the Director offered; this reports what the *listener* would see,
+    /// and the difference is exactly the songs Vaino did not choose. Carrying
+    /// only our own would silently discard theirs `[SPEC-BK-045]`.
+    pub fn queue_uris(&mut self) -> Vec<String> {
+        match self.mpd.cmd("playlistinfo") {
+            Ok(lines) => lines
+                .iter()
+                .filter_map(|l| l.strip_prefix("file: "))
+                .map(|s| s.to_string())
+                .collect(),
+            Err(e) => {
+                eprintln!("mpd playlistinfo: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Stop sounding, without losing the connection.
+    ///
+    /// A handoff away from MPD leaves MPD *running* — it is a guest that may be
+    /// wanted again in a moment, and its clients are still someone's remote
+    /// control `[SPEC-BK-025]`.
+    pub fn stop_sounding(&mut self) {
+        let _ = self.mpd.cmd("stop");
+        self.playing = false;
+    }
+
     /// Judge a passage that has left MPD's queue, and record what it was.
     fn retire(&mut self, o: Offered) {
         if !o.was_current {
