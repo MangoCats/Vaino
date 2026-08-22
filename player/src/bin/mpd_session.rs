@@ -1,7 +1,8 @@
 //! The whole of `[SPEC018]` in one program: Vaino's own session, playing MPD.
 //!
 //!   mpd_session [host:port] --db vaino.db --root MUSIC_DIRECTORY
-//!               [--depth N] [--interval MS] [--for SECONDS] [--write]
+//!               [--depth N] [--interval MS] [--write]
+//!               [--for SECONDS] [--then-handoff]
 //!
 //! **Nothing here selects anything.** It opens a `Session` — the same one
 //! `vaino` runs — hands it an [`MpdBackend`] instead of an `Engine`, and calls
@@ -31,11 +32,19 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (Some(db), Some(root)) = (flag(&args, "--db"), flag(&args, "--root")) else {
         eprintln!("usage: mpd_session [host:port] --db vaino.db --root MUSIC_DIRECTORY");
-        eprintln!("       [--depth N] [--interval MS] [--for SECONDS] [--write]");
+        eprintln!("       [--depth N] [--interval MS] [--write]");
+        eprintln!("       [--for SECONDS] [--then-handoff]");
         std::process::exit(2);
     };
     let write = args.iter().any(|a| a == "--write");
-    let run_for: f64 = flag(&args, "--for").and_then(|v| v.parse().ok()).unwrap_or(30.0);
+    // **No default duration.** Without `--for` this runs until interrupted,
+    // which is what a listening session is: a client such as Cantata is driving
+    // playback and the Director is keeping the queue full behind it.
+    let run_for: Option<f64> = flag(&args, "--for").and_then(|v| v.parse().ok());
+    // The handoff is a demonstration, and demonstrating it ends the session --
+    // it stops MPD, which would pull the floor out from under whatever client
+    // is playing. Off unless asked for.
+    let then_handoff = args.iter().any(|a| a == "--then-handoff");
     let addr = args
         .iter()
         .find(|a| a.contains(':') && !a.starts_with("--") && !a.contains('/'))
@@ -64,6 +73,18 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     });
+    // Teach it to name what the listener queues themselves `[SPEC-MPD-115]`.
+    match rusqlite::Connection::open(&db)
+        .map_err(|e| e.to_string())
+        .and_then(|c| vaino_player::mpd_backend::nameable_uris(&c, &root))
+    {
+        Ok(names) => {
+            let unambiguous = names.values().filter(|v| v.is_some()).count();
+            println!("{unambiguous} of {} URIs name exactly one radio passage", names.len());
+            guest.attach_names(names);
+        }
+        Err(e) => eprintln!("cannot name the library's URIs ({e}); hand-added songs will not count"),
+    }
     if write {
         match PlayerStore::open(Path::new(&db)) {
             Ok(s) => guest.attach_store(s),
@@ -98,7 +119,7 @@ fn main() {
     let suppress = (saved.skip_suppress_h, saved.dequeue_suppress_h);
     let started = Instant::now();
     let mut last = 0usize;
-    while started.elapsed().as_secs_f64() < run_for {
+    while run_for.is_none_or(|s| started.elapsed().as_secs_f64() < s) {
         sw.tick();
         session.refill(&mut sw, suppress);
         let n = sw.queued_ids().len();
@@ -107,6 +128,12 @@ fn main() {
             last = n;
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+
+    if !then_handoff {
+        println!("
+stopping; MPD keeps playing and keeps its queue");
+        return;
     }
 
     // --- the handoff `[SPEC-BK-030]` ---

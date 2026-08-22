@@ -34,6 +34,57 @@ fn uri_under(root: &str, path: &std::path::Path) -> Option<String> {
     norm.strip_prefix(root).map(|r| r.trim_start_matches('/').to_string())
 }
 
+/// What a URI names, when it names exactly one thing.
+///
+/// `None` means **ambiguous**, which is not the same as unknown and must not be
+/// treated as it: the file is in the library, it simply carries more than one
+/// radio passage, and a whole-file entry could be any of them `[SPEC-MPD-060]`.
+pub type Nameable = Option<(i64, Option<String>, u64)>;
+
+/// Build the URI → passage map a backend needs to adopt a person's own
+/// additions `[SPEC-MPD-115]`.
+///
+/// A file carrying more than one radio passage is recorded as ambiguous rather
+/// than resolved to one of them. Added whole, a DAO capture is forty songs, and
+/// attributing a play to whichever passage happened to be first would credit
+/// one nobody heard.
+pub fn nameable_uris(
+    conn: &rusqlite::Connection,
+    root: &str,
+) -> Result<HashMap<String, Nameable>, String> {
+    let root = root.replace('\\', "/").trim_end_matches('/').to_string();
+    let mut q = conn
+        .prepare(
+            "SELECT f.path, f.duration_ms, p.passage_id,                 (SELECT pr.mbid FROM passage_recordings pr                  WHERE pr.passage_id = p.passage_id LIMIT 1)              FROM passages p JOIN files f USING(file_id) WHERE p.kind = 'radio'",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = q
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u64,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out: HashMap<String, Nameable> = HashMap::new();
+    for (path, dur, pid, mbid) in rows.flatten() {
+        let norm = path.replace('\\', "/");
+        let Some(rel) = norm.strip_prefix(&root) else { continue };
+        let uri = rel.trim_start_matches('/').to_string();
+        match out.entry(uri) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                e.insert(None); // a second passage: ambiguous
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(Some((pid, mbid, dur)));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A passage handed to MPD, and what has become of it.
 struct Offered {
     passage_id: i64,
@@ -64,6 +115,10 @@ pub struct MpdBackend {
     playing: bool,
     dropped: Vec<i64>,
     store: Option<PlayerStore>,
+    /// URI → passage, for adopting what the listener queued `[SPEC-MPD-115]`.
+    names: HashMap<String, Nameable>,
+    /// Reported once each, so a log is not a stream of the same complaint.
+    unnameable: HashSet<String>,
     lost: bool,
 }
 
@@ -90,8 +145,16 @@ impl MpdBackend {
             playing: false,
             dropped: Vec::new(),
             store: None,
+            names: HashMap::new(),
+            unnameable: HashSet::new(),
             lost: false,
         })
+    }
+
+    /// Teach it to name what the listener queues `[SPEC-MPD-115]`. Without
+    /// this, a song added by hand plays and counts for nothing.
+    pub fn attach_names(&mut self, names: HashMap<String, Nameable>) {
+        self.names = names;
     }
 
     /// Where plays and rejections are written `[SPEC-PLAY-030]`. Optional, so a
@@ -230,6 +293,47 @@ impl MpdBackend {
             .and_then(|v| v.parse::<f64>().ok())
             .map(|s| (s * 1000.0).round() as u64)
             .unwrap_or(0);
+
+        // **A song this backend did not queue is still one the listener heard**
+        // `[SPEC-MPD-115]`. Adopt it once, so its play is attributed and its
+        // artist blocks like any other. Without this a person's own additions
+        // sound and count for nothing.
+        if let Some(id) = current.clone() {
+            if !self.ours.contains_key(&id) {
+                let uri = self
+                    .mpd
+                    .cmd("currentsong")
+                    .map(|l| crate::mpd::parse(&l).get("file").cloned().unwrap_or_default())
+                    .unwrap_or_default();
+                match self.names.get(&uri) {
+                    Some(Some((pid, mbid, file_ms))) => {
+                        self.ours.insert(
+                            id.clone(),
+                            Offered {
+                                passage_id: *pid,
+                                mbid: mbid.clone(),
+                                // Queued whole, so the file's length is the
+                                // span; there is no range to be relative to.
+                                span_ms: *file_ms,
+                                furthest_ms: 0,
+                                span_honoured: true,
+                                was_current: true,
+                            },
+                        );
+                    }
+                    // Ambiguous, or not in the library at all. Reported once
+                    // rather than guessed at `[SPEC-MPD-060]`, and once rather
+                    // than on every sample.
+                    _ if !uri.is_empty() && self.unnameable.insert(uri.clone()) => {
+                        eprintln!(
+                            "a queued song could not be named, so its play is not attributed: {}",
+                            uri.rsplit('/').next().unwrap_or(&uri)
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         let mut overrun = false;
         if let Some(id) = &current {
