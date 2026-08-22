@@ -1,6 +1,6 @@
 # SPEC019: Lyrics
 
-**Design Specification — Tier 2 · storage and Vaino's own skins built; the guest half measured, not built**
+**Design Specification — Tier 2 · storage, Vaino's own skins, and the cache route built and confirmed against a client; the music-folder sidecar measured, not built**
 
 MuLibPlay accumulated lyrics for a quarter of the library. This is how they
 reach Vaino, its own skins, and — as far as the protocol allows — a guest's
@@ -141,7 +141,16 @@ about is a file the client never opens.
 **Named by what MPD will report, not by what Vaino believes.** For a cue track
 that is the sheet's own `TITLE`/`PERFORMER`, which Vaino wrote from MusicBrainz;
 for an ordinary file it is the file's tags. Measured on the live library:
-**2,235 songs written**, one file each, captures included.
+**2,235 songs written**, one file each, captures included, and a second run
+rewrites none of them.
+
+**Confirmed in Cantata, both halves, 2026-08-22.** An ordinary file
+(Fiona Apple, *The First Taste*) shows its words, which proves the path, the
+nested layout and the name encoding. A passage **inside a capture**
+(The Police, *King of Pain*, inside `Synchronicity.mp3`) shows its own words
+too — and that is the half worth testing, because a capture's name comes from
+the cue sheet rather than from file tags `[SPEC-MPD-056]`. Had the two naming
+paths disagreed, the file would have sat there unopened.
 
 **`[SPEC-LYR-075]` The cache is on the client's machine, not the server's — and
 this is the limit to state before anyone relies on it.** It works when Vaino and
