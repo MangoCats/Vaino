@@ -179,6 +179,16 @@ impl Playback for crate::engine::Engine {
 /// `Cut` where there is no output to fade: a silent path or a failed device has
 /// nothing to ramp down, and reporting a fade there would be the lie
 /// `[PI3-API-030]` refuses.
+/// **The local engine publishes nothing, and needs to.**
+///
+/// Vaino's own UI reads the decision store and the explanation log directly
+/// `[REQ-VIS-100]`, so a sticker would be a second copy of something it already
+/// has, kept somewhere it never looks. Publishing exists for *guests*, whose
+/// clients have no other way to learn why a track was chosen `[SPEC-MPD-050]`.
+impl crate::switch::Publish for Engine {
+    fn publish_reasoning(&mut self, _p: i64, _why: &str, _flavor: &str, _at: i64) {}
+}
+
 impl crate::switch::FadeOut for Engine {
     fn fade_out(&mut self, ms: u64) -> crate::switch::Stopped {
         if self.fade_to_silence(ms) {

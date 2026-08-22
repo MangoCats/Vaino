@@ -80,9 +80,24 @@ pub trait FadeOut {
     fn fade_out(&mut self, ms: u64) -> Stopped;
 }
 
-/// What [`Switching`] holds: something that plays, and can stop gracefully.
-pub trait Backend: Playback + FadeOut {}
-impl<T: Playback + FadeOut> Backend for T {}
+/// A backend that can publish the Director's reasoning where its own clients
+/// will find it `[SPEC-MPD-050]`.
+///
+/// Separate from [`Playback`] for the reason `FadeOut` is: publishing is
+/// something a *guest* wants, because its clients have no other way to learn
+/// why a track was chosen. Vaino's own UI reads the decision store directly and
+/// needs none of it, so putting this on the playback trait would have made every
+/// backend answer a question only one of them is asked.
+pub trait Publish {
+    /// `why` is the weight decomposition as JSON `[REQ-VIS-100]`; `flavor` is a
+    /// short human reading and may be empty; `chosen_at` is unix seconds.
+    fn publish_reasoning(&mut self, passage_id: i64, why: &str, flavor: &str, chosen_at: i64);
+}
+
+/// What [`Switching`] holds: something that plays, stops gracefully, and can
+/// say why it is playing what it is.
+pub trait Backend: Playback + FadeOut + Publish {}
+impl<T: Playback + FadeOut + Publish> Backend for T {}
 
 /// What a queue transfer moved, and what it lost on the way.
 #[derive(Debug, Default, PartialEq)]
@@ -209,6 +224,22 @@ impl Switching {
     }
 }
 
+/// Forwarding the other two capabilities as well, so `Switching` is a
+/// [`Backend`] and can be handed to a session like any other.
+impl Publish for Switching {
+    fn publish_reasoning(&mut self, passage_id: i64, why: &str, flavor: &str, at: i64) {
+        self.live_mut().publish_reasoning(passage_id, why, flavor, at)
+    }
+}
+
+/// Stopping a `Switching` stops whichever side is sounding — the other one
+/// already is not.
+impl FadeOut for Switching {
+    fn fade_out(&mut self, ms: u64) -> Stopped {
+        self.live_mut().fade_out(ms)
+    }
+}
+
 /// Forwarding, so the session cannot tell `[SPEC-BK-025]`.
 impl Playback for Switching {
     /// **The live side's, never the union.** Reporting `FULL` while a guest is
@@ -266,6 +297,9 @@ mod tests {
         caps: Option<Capabilities>,
         faded_ms: Option<u64>,
         can_fade: bool,
+    }
+    impl Publish for Fake {
+        fn publish_reasoning(&mut self, _p: i64, _w: &str, _f: &str, _a: i64) {}
     }
     impl FadeOut for Fake {
         fn fade_out(&mut self, ms: u64) -> Stopped {
@@ -367,6 +401,12 @@ mod tests {
         assert_eq!(dest.queued_ids(), vec![7, 8]);
     }
 
+    impl Publish for Cutter {
+        fn publish_reasoning(&mut self, _p: i64, _w: &str, _f: &str, _a: i64) {}
+    }
+    impl Publish for Fader {
+        fn publish_reasoning(&mut self, _p: i64, _w: &str, _f: &str, _a: i64) {}
+    }
     struct Cutter;
     impl FadeOut for Cutter {
         fn fade_out(&mut self, _ms: u64) -> Stopped {

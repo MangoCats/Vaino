@@ -96,6 +96,24 @@ switch: now on mpd   (faded, 5 passage(s) carried)
 switch: now on vaino (faded, 6 passage(s) carried)
 ```
 
+**`[SPEC-BK-029]` Publishing is a third capability, not a fourth playback
+method.** *(Built 2026-08-22.)* A guest's clients have no other way to learn why
+a track was chosen, so the Director's reasoning is published to them
+`[SPEC-MPD-050]`. Vaino's own UI reads the decision store directly and needs
+none of it, so `Publish` sits beside `FadeOut` rather than on `Playback` — a
+backend should not have to answer a question only one of them is asked. The
+local engine implements it as a no-op and says why.
+
+Published **after** the enqueue, since a sticker is addressed by the URI the
+backend has only just chosen, and encoded before the explanation log consumes
+the decision.
+
+> **A carried queue arrives without reasoning.** `carry_queue` moves passage
+> ids and no more — see `[SPEC-BK-032]` — so the explanations stay behind in the log they were written to.
+> So a passage handed to MPD by a *switch* has `vaino.passage` and nothing else
+> until the Director next chooses it. Stated because it was found by looking:
+> the stickers appeared to work and were in fact fourteen hours stale.
+
 **`[SPEC-BK-025]` Switching backend is not switching player.** The Program
 Director, the library, the flavor index, `listener_play_history`, the settings
 and the web UI with its three skins are all *above* the seam and do not notice.

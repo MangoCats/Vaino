@@ -397,7 +397,7 @@ impl Session {
     /// Takes a **backend**, not the engine `[SPEC-BK-020]`. The suppression
     /// windows arrive as an argument because they are the *listener's*
     /// settings, not the backend's: whoever is playing, they are the same.
-    pub fn refill(&mut self, engine: &mut dyn Playback, suppress: (u64, u64)) {
+    pub fn refill(&mut self, engine: &mut dyn crate::switch::Backend, suppress: (u64, u64)) {
         // Before anything else, and deliberately before the shortfall check:
         // a rebuild must not start while the queue is short `[IMPL-SUI-075]`.
         self.tend_rebuild(&*engine);
@@ -482,12 +482,29 @@ impl Session {
                         Err(e) => eprintln!("encode decision: {e}"),
                     }
                 }
+                // The reasoning, encoded before the log consumes it.
+                let why_json = serde_json::to_string(&decision.why).ok();
                 if let Ok(mut log) = self.explanations.lock() {
                     log.insert(decision.why);
                 }
                 let mut entry = entry;
                 Self::describe(&self.lib, &mut entry);
+                // A short human reading of the flavor, for clients that can
+                // show a string and nothing else `[SPEC-MPD-050]`.
+                // `d` is the director already borrowed for this pass; asking
+                // self.director again here would borrow it twice.
+                let flavor = entry
+                    .mbid
+                    .as_deref()
+                    .and_then(|m| d.flavor_summary(m, 3))
+                    .unwrap_or_default();
+                let passage_id = entry.passage_id;
                 engine.enqueue(entry);
+                // **After** the enqueue: a sticker is addressed by the URI the
+                // backend has only just chosen for this passage.
+                if let Some(json) = why_json {
+                    engine.publish_reasoning(passage_id, &json, &flavor, now);
+                }
             }
         }
 

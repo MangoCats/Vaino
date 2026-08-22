@@ -88,6 +88,9 @@ pub fn nameable_uris(
 /// A passage handed to MPD, and what has become of it.
 struct Offered {
     passage_id: i64,
+    /// The URI it was added under. A sticker is addressed by URI, and the
+    /// reasoning arrives after the add.
+    uri: String,
     mbid: Option<String>,
     /// The span from Vaino, never MPD's estimate of it `[SPEC-MPD-092]`.
     span_ms: u64,
@@ -311,6 +314,7 @@ impl MpdBackend {
                             id.clone(),
                             Offered {
                                 passage_id: *pid,
+                                uri: uri.clone(),
                                 mbid: mbid.clone(),
                                 // Queued whole, so the file's length is the
                                 // span; there is no range to be relative to.
@@ -375,6 +379,40 @@ impl MpdBackend {
     }
 }
 
+/// **The whole point of the sticker approach** `[SPEC-MPD-050]`: a client that
+/// has never heard of Vaino is unaffected, and one that shows stickers gains a
+/// "why this track" panel without a line of code changing. Nothing is added to
+/// MPD to make it work.
+impl crate::switch::Publish for MpdBackend {
+    fn publish_reasoning(&mut self, passage_id: i64, why: &str, flavor: &str, at: i64) {
+        let Some(uri) = self
+            .ours
+            .values()
+            .find(|o| o.passage_id == passage_id)
+            .map(|o| o.uri.clone())
+        else {
+            return; // never offered here, so there is nothing to hang it on
+        };
+        let mut set = |name: &str, value: &str| {
+            if value.is_empty() {
+                return;
+            }
+            let cmd = format!(
+                "sticker set song {} {} {}",
+                quote(&uri),
+                quote(name),
+                quote(value)
+            );
+            if let Err(e) = self.mpd.cmd(&cmd) {
+                eprintln!("sticker {name}: {e}");
+            }
+        };
+        set("vaino.why", why);
+        set("vaino.flavor", flavor);
+        set("vaino.chosen_at", &at.to_string());
+    }
+}
+
 impl crate::switch::FadeOut for MpdBackend {
     fn fade_out(&mut self, ms: u64) -> crate::switch::Stopped {
         if self.fade_out_inner(ms) {
@@ -412,6 +450,7 @@ impl Playback for MpdBackend {
                     added.id,
                     Offered {
                         passage_id: entry.passage_id,
+                        uri: uri.clone(),
                         mbid: entry.mbid.clone(),
                         span_ms: entry.end_ms.saturating_sub(entry.start_ms),
                         furthest_ms: 0,
