@@ -170,6 +170,19 @@ impl Playback for crate::engine::Engine {
     }
 }
 
+/// **The local engine cuts, today.**
+///
+/// Reported as a cut rather than claimed as a fade, because that is what it
+/// does `[PI3-API-030]`. The machinery for a real one is already here — `Fade`,
+/// its curves, and the `skip_fade_ms` a skip already uses `[REQ-AUD-158]` — but
+/// nothing yet drives it to silence on demand, and wiring that is audio-path
+/// work rather than a line in a trait impl `[SPEC-BK-030]`.
+impl crate::switch::FadeOut for Engine {
+    fn fade_out(&mut self, _ms: u64) -> crate::switch::Stopped {
+        crate::switch::Stopped::Cut
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

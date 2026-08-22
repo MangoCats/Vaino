@@ -77,6 +77,18 @@ track stopped past its threshold went unrecorded, and stayed unrecorded if nothi
 played after it. A pause is the opposite case: elapsed holds still, the listener
 is coming back, and closing the book on them would count a play as a skip.
 
+**`[SPEC-MPD-099]` MPD cannot be asked to fade, and may not be able to at all.**
+*(Measured 2026-08-21.)* The protocol has a global `crossfade` between songs and
+it has `stop`. There is no "fade out over N ms", so a fade must be built from
+`setvol` steps — and `setvol` is refused outright with **`ACK [5@0] {setvol} No
+mixer`** when the output plugin has none. MPD's `null` output has none; a
+PipeWire or ALSA output, which is what an appliance runs, does.
+
+So a fade *out of* MPD is conditional on the deployment rather than on the
+protocol. `[SPEC-BK-030]`'s crossfade is therefore asymmetric: Vaino can always
+fade its own side, and MPD can only sometimes fade its own. Which happens is
+reported rather than assumed `[PI3-API-030]`.
+
 **`[SPEC-MPD-098]` Clearing a queue while playing stops MPD.** *(Observed
 2026-08-21.)* Not a Vaino decision but load-bearing for one: it is what makes
 `[SPEC-MPD-120]`'s activation rule close on itself, since the gesture that means

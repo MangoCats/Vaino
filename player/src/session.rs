@@ -505,7 +505,17 @@ impl Session {
         sw: &mut crate::switch::Switching,
         target: crate::switch::Side,
     ) -> Result<crate::switch::Carried, String> {
-        let carried = sw.switch_to(target)?;
+        self.hand_over_over(sw, target, 0).map(|(c, _)| c)
+    }
+
+    /// The same, fading the outgoing side out first `[SPEC-BK-030]`.
+    pub fn hand_over_over(
+        &mut self,
+        sw: &mut crate::switch::Switching,
+        target: crate::switch::Side,
+        fade_ms: u64,
+    ) -> Result<(crate::switch::Carried, crate::switch::Stopped), String> {
+        let (carried, stopped) = sw.switch_to_over(target, fade_ms)?;
         let lib = &self.lib;
         let mut out = crate::switch::carry_queue(&carried, sw, |id| {
             lib.passage(id)
@@ -525,7 +535,7 @@ impl Session {
             }
         }
         out.moved.dedup();
-        Ok(out)
+        Ok((out, stopped))
     }
 
     /// How the pool looks right now — for the panel, and for diagnosing a

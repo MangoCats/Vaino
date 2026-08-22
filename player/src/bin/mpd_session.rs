@@ -21,7 +21,7 @@ use vaino_player::engine::Engine;
 use vaino_player::mpd_backend::MpdBackend;
 use vaino_player::playback::Playback;
 use vaino_player::session::Session;
-use vaino_player::switch::{Side, Switching};
+use vaino_player::switch::{Side, Stopped, Switching};
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -113,9 +113,17 @@ fn main() {
     println!("
 handing MPD -> Vaino");
     let before = sw.queued_ids();
+
     println!("  MPD was holding {} passage(s): {:?}", before.len(), before);
-    match session.hand_over(&mut sw, Side::Local) {
-        Ok(c) => {
+    match session.hand_over_over(&mut sw, Side::Local, 600) {
+        Ok((c, stopped)) => {
+            println!(
+                "  MPD {}",
+                match stopped {
+                    Stopped::Faded => "faded out over 600ms",
+                    Stopped::Cut => "CUT -- no mixer on its output, so no fade was possible",
+                }
+            );
             println!("  carried {} passage(s) to the local engine: {:?}", c.moved.len(), c.moved);
             if !c.lost.is_empty() {
                 println!("  the library could no longer build: {:?}", c.lost);

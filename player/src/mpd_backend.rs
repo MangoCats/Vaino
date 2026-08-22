@@ -125,6 +125,49 @@ impl MpdBackend {
         }
     }
 
+    /// Fade out and stop, returning whether the fade was real.
+    ///
+    /// **MPD cannot be asked to fade.** The protocol has a global `crossfade`
+    /// between songs and it has `stop`; there is no "fade out over N ms". So a
+    /// fade has to be built from `setvol` steps — and `setvol` is refused with
+    /// **`No mixer`** unless the output plugin has one `[SPEC-MPD-099]`.
+    ///
+    /// Measured: MPD's `null` output has no mixer at all, so on a test rig this
+    /// returns `false` and cuts. A PipeWire or ALSA output — what an appliance
+    /// actually runs — does have one. Reporting which happened is the point:
+    /// silently cutting where a fade was promised is the class of lie
+    /// `[PI3-API-030]` refuses.
+    ///
+    /// The listener's volume is **restored** afterwards. It is theirs, their
+    /// other clients display it, and borrowing it for a second is only
+    /// acceptable if it is given back.
+    fn fade_out_inner(&mut self, ms: u64) -> bool {
+        let start = self
+            .mpd
+            .status()
+            .ok()
+            .and_then(|s| s.get("volume").and_then(|v| v.parse::<i64>().ok()))
+            .filter(|v| *v >= 0);
+        let Some(start) = start else {
+            self.stop_sounding();
+            return false;
+        };
+        const STEPS: u64 = 8;
+        let step = Duration::from_millis((ms / STEPS).max(1));
+        for i in 1..=STEPS {
+            let level = start - (start * i as i64 / STEPS as i64);
+            if self.mpd.cmd(&format!("setvol {}", level.max(0))).is_err() {
+                // The mixer went away mid-fade. Stop rather than leave the
+                // listener's volume somewhere they did not put it.
+                break;
+            }
+            std::thread::sleep(step);
+        }
+        self.stop_sounding();
+        let _ = self.mpd.cmd(&format!("setvol {start}"));
+        true
+    }
+
     /// Stop sounding, without losing the connection.
     ///
     /// A handoff away from MPD leaves MPD *running* — it is a guest that may be
@@ -224,6 +267,16 @@ impl MpdBackend {
             if let Some(o) = self.ours.remove(&id) {
                 self.retire(o);
             }
+        }
+    }
+}
+
+impl crate::switch::FadeOut for MpdBackend {
+    fn fade_out(&mut self, ms: u64) -> crate::switch::Stopped {
+        if self.fade_out_inner(ms) {
+            crate::switch::Stopped::Faded
+        } else {
+            crate::switch::Stopped::Cut
         }
     }
 }

@@ -87,9 +87,25 @@ Only the thing that turns a queue into sound is exchanged.
 ## 3. What a handoff does
 
 **`[SPEC-BK-030]` The outgoing backend stops sounding; the incoming one starts.**
-Both may hold a PipeWire stream at once, so the changeover is a **crossfade**
+Both may hold a PipeWire stream at once, so the changeover *can* be a crossfade
 rather than a gap — the same `[REQ-AUD-158]` shape a skip already uses, and the
 reason it is available is the first measurement above.
+
+**Built so far: the changeover, and an honest account of how it stopped.**
+`switch_to_over` stops the outgoing side before switching — after would silence
+the side just arrived at — and returns `Faded` or `Cut`. Neither side fades
+unconditionally:
+
+| side | can it fade? |
+| :--- | :--- |
+| MPD | **only with a mixer on its output** `[SPEC-MPD-099]`; measured `Cut` on a null output, expected to fade on PipeWire |
+| Vaino's engine | **not yet.** `Fade`, its curves and `skip_fade_ms` all exist `[REQ-AUD-158]`; nothing drives them to silence on demand |
+
+So today a switch is reliable and audible as a stop-then-start. Saying `Faded`
+where it cut would be the failure `[PI3-API-030]` names, so the caller is told
+which happened and the local engine reports `Cut` rather than flattering itself.
+Driving the existing fade machinery to silence is the remaining audio-path work,
+and it is deliberately not a line in a trait impl.
 
 **`[SPEC-BK-032]` The queue crosses as passage ids, and is rebuilt on arrival.**
 *(Built 2026-08-21.)* `Session::hand_over` switches the side, reads each carried
@@ -139,6 +155,25 @@ get it.
 > cannot be exact. The requirement and the constraint agree, which is luck worth
 > noticing rather than design.
 
+**`[SPEC-BK-037]` The passage that was sounding is judged as it stops, exactly
+as a skip is.** *(Settled 2026-08-21.)* No new rule, and that is the finding:
+`[SPEC-PLAY-010]` already asks whether enough was heard, and a handoff is just
+another way for a passage to stop being heard. It is judged once, by the side
+it was sounding on, against what that side observed.
+
+This is only simple because **the sounding passage does not cross**. What
+crosses is the queue `[SPEC-BK-032]`, and a queue does not include what is
+already playing. Carrying the current passage as well would make it possible to
+judge it twice — once as it stopped on one side, once as it ended on the other —
+and the fix for that is not to carry it but to hand over what was already heard
+along with it. That is the price of true mid-passage seamlessness, and it is not
+paid here.
+
+> **So a handoff costs the remainder of one passage**, and the crossfade is
+> between that passage and the next one rather than within it. For MPD → Vaino
+> this was named as acceptable. For Vaino → MPD it is the open edge of the
+> design, and the honest version of "seamless" that is built today.
+
 **`[SPEC-BK-040]` What a listener loses by moving to MPD is stated before they
 move, not discovered after.** `Capabilities::MPD` drops `gain` and `ramps`: per
 passage gain cannot be expressed at all, and lead-in/lead-out degrade to one
@@ -172,10 +207,7 @@ be driven by MPD clients. Three problems that plan carried simply do not arise:
    installed on the appliance today. Resident costs memory that measurement says
    is tight; on-demand costs an indexing pass at switch time. Measure the index
    over 5,705 files before choosing.
-2. **`[SPEC-BK-065]` What a crossfaded handoff does to the rotation ledger.**
-   Two backends sounding at once for a second is two passages in flight, and
-   `[SPEC-PLAY-010]` judges one at a time. Probably: the outgoing passage is
-   judged at the moment it stops sounding, exactly as a skip is.
+2. *(Settled — moved to `[SPEC-BK-037]` below.)*
 3. *(Settled — moved to `[SPEC-BK-045]` below.)*
 
 ---

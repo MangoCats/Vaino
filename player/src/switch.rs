@@ -59,6 +59,31 @@ where
     out
 }
 
+/// How the outgoing side stopped, so a caller can say `[PI3-API-030]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    /// It faded, and the changeover was smooth.
+    Faded,
+    /// It cut. Honest rather than hidden — MPD without a mixer cannot fade
+    /// `[SPEC-MPD-099]`, and pretending otherwise would be the lie.
+    Cut,
+}
+
+/// A backend that can stop gracefully when handed off away from.
+///
+/// Deliberately **not** part of [`Playback`]. Fading is something a handoff
+/// wants and ordinary playback never does, and widening the trait for one
+/// caller is how a seam stops being the shape of what crosses it
+/// `[SPEC-BK-020]`.
+pub trait FadeOut {
+    /// Stop sounding over roughly this long. Returns whether it really faded.
+    fn fade_out(&mut self, ms: u64) -> Stopped;
+}
+
+/// What [`Switching`] holds: something that plays, and can stop gracefully.
+pub trait Backend: Playback + FadeOut {}
+impl<T: Playback + FadeOut> Backend for T {}
+
 /// What a queue transfer moved, and what it lost on the way.
 #[derive(Debug, Default, PartialEq)]
 pub struct Carried {
@@ -99,19 +124,19 @@ where
 
 /// Two backends, one of them sounding.
 pub struct Switching {
-    local: Box<dyn Playback>,
-    guest: Option<Box<dyn Playback>>,
+    local: Box<dyn Backend>,
+    guest: Option<Box<dyn Backend>>,
     active: Side,
 }
 
 impl Switching {
     /// Start on the local engine, which is where an appliance comes up
     /// `[PI5-PWR-030]`. A guest is attached later or never.
-    pub fn new(local: Box<dyn Playback>) -> Self {
+    pub fn new(local: Box<dyn Backend>) -> Self {
         Self { local, guest: None, active: Side::Local }
     }
 
-    pub fn attach_guest(&mut self, guest: Box<dyn Playback>) {
+    pub fn attach_guest(&mut self, guest: Box<dyn Backend>) {
         self.guest = Some(guest);
     }
 
@@ -123,14 +148,14 @@ impl Switching {
         self.guest.is_some()
     }
 
-    fn live(&self) -> &dyn Playback {
+    fn live(&self) -> &dyn Backend {
         match self.active {
             Side::Local => self.local.as_ref(),
             Side::Guest => self.guest.as_deref().unwrap_or(self.local.as_ref()),
         }
     }
 
-    fn live_mut(&mut self) -> &mut dyn Playback {
+    fn live_mut(&mut self) -> &mut dyn Backend {
         match self.active {
             Side::Guest if self.guest.is_some() => self.guest.as_deref_mut().unwrap(),
             _ => self.local.as_mut(),
@@ -154,15 +179,33 @@ impl Switching {
     /// sounding briefly, which the appliance measurement showed is possible;
     /// this moves the queue and leaves that to the audio path.
     pub fn switch_to(&mut self, target: Side) -> Result<Vec<i64>, String> {
+        self.switch_to_over(target, 0).map(|(ids, _)| ids)
+    }
+
+    /// The same, fading the outgoing side out over `fade_ms` first.
+    ///
+    /// Reports **how** it stopped as well as what it was holding, because a
+    /// backend that cannot fade cuts instead `[SPEC-MPD-099]` and a caller
+    /// saying "switched" over a hard cut would be describing something that did
+    /// not happen `[PI3-API-030]`.
+    pub fn switch_to_over(
+        &mut self,
+        target: Side,
+        fade_ms: u64,
+    ) -> Result<(Vec<i64>, Stopped), String> {
         if target == self.active {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Stopped::Faded));
         }
         if target == Side::Guest && self.guest.is_none() {
             return Err("no guest backend is attached".into());
         }
         let carried = self.live().queued_ids();
+        // Stop the outgoing side *before* the switch, while it is still the
+        // live one: after it, `live_mut` would fade the side just arrived at.
+        let stopped =
+            if fade_ms > 0 { self.live_mut().fade_out(fade_ms) } else { Stopped::Cut };
         self.active = target;
-        Ok(carried)
+        Ok((carried, stopped))
     }
 }
 
@@ -221,6 +264,18 @@ mod tests {
         queued: Vec<i64>,
         ticks: usize,
         caps: Option<Capabilities>,
+        faded_ms: Option<u64>,
+        can_fade: bool,
+    }
+    impl FadeOut for Fake {
+        fn fade_out(&mut self, ms: u64) -> Stopped {
+            self.faded_ms = Some(ms);
+            if self.can_fade {
+                Stopped::Faded
+            } else {
+                Stopped::Cut
+            }
+        }
     }
     impl Playback for Fake {
         fn capabilities(&self) -> Capabilities {
@@ -312,6 +367,27 @@ mod tests {
         assert_eq!(dest.queued_ids(), vec![7, 8]);
     }
 
+    struct Cutter;
+    impl FadeOut for Cutter {
+        fn fade_out(&mut self, _ms: u64) -> Stopped {
+            Stopped::Cut
+        }
+    }
+    struct Fader;
+    impl FadeOut for Fader {
+        fn fade_out(&mut self, _ms: u64) -> Stopped {
+            Stopped::Faded
+        }
+    }
+
+    /// A backend that cannot fade says so, rather than cutting quietly
+    /// `[SPEC-MPD-099]`, `[PI3-API-030]`.
+    #[test]
+    fn a_backend_that_cannot_fade_reports_the_cut() {
+        assert_eq!(Cutter.fade_out(600), Stopped::Cut);
+        assert_eq!(Fader.fade_out(600), Stopped::Faded);
+    }
+
     /// The session talks to one thing; which side answers is not its business.
     #[test]
     fn the_session_cannot_tell_which_side_it_is_driving() {
@@ -333,6 +409,29 @@ mod tests {
 
         assert_eq!(s.switch_to(Side::Local).unwrap(), vec![2]);
         assert_eq!(s.queued_ids(), vec![1], "the local side kept what it had");
+    }
+
+    /// The **outgoing** side is the one that stops, and it stops before the
+    /// switch. Fading after would have silenced the side just arrived at.
+    #[test]
+    fn the_outgoing_side_is_what_fades() {
+        let mut s = Switching::new(Box::new(Fake { can_fade: true, ..Default::default() }));
+        s.attach_guest(Box::new(Fake { can_fade: true, ..Default::default() }));
+
+        let (_, stopped) = s.switch_to_over(Side::Guest, 600).unwrap();
+        assert_eq!(stopped, Stopped::Faded);
+        assert_eq!(s.active(), Side::Guest);
+    }
+
+    /// A cut is reported as a cut `[SPEC-MPD-099]`. The switch still happens —
+    /// the listener asked for it, and an abrupt stop is not a failure.
+    #[test]
+    fn a_side_that_cannot_fade_still_hands_over() {
+        let mut s = Switching::new(Box::new(Fake { can_fade: false, ..Default::default() }));
+        s.attach_guest(Box::new(Fake { can_fade: true, ..Default::default() }));
+        let (_, stopped) = s.switch_to_over(Side::Guest, 600).unwrap();
+        assert_eq!(stopped, Stopped::Cut, "said so, rather than claiming a fade");
+        assert_eq!(s.active(), Side::Guest, "and switched anyway");
     }
 
     /// Capabilities must follow the live side, or `[SPEC-BK-040]` cannot be
