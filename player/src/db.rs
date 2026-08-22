@@ -496,6 +496,9 @@ pub struct Settings {
     /// name a passage inside a capture `[REQ-VIS-205]`. **Off by default**:
     /// nothing else in Vaino puts a file there.
     pub cue_sheets: bool,
+    /// Whether Vaino may write cover art into the music folder so a guest can
+    /// show the album `[REQ-VIS-210]`. **Off by default**, for the same reason.
+    pub covers: bool,
 }
 
 impl Default for Settings {
@@ -510,6 +513,7 @@ impl Default for Settings {
             queue_depth: crate::QUEUE_DEPTH,
             sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
             cue_sheets: false,
+            covers: false,
         }
     }
 }
@@ -567,7 +571,7 @@ impl PlayerStore {
                        "resume_save_ms INTEGER", "skip_suppress_h INTEGER",
                        "dequeue_suppress_h INTEGER", "queue_depth INTEGER",
                        "sample_interval_ms INTEGER",
-                       "cue_sheets INTEGER"] {
+                       "cue_sheets INTEGER", "covers INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
         }
@@ -709,8 +713,8 @@ impl PlayerStore {
                 "INSERT INTO player_state
                      (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms,
                       skip_suppress_h, dequeue_suppress_h, queue_depth,
-                      sample_interval_ms, cue_sheets, updated_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
+                      sample_interval_ms, cue_sheets, covers, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
                  ON CONFLICT(id) DO UPDATE SET
                      volume = excluded.volume,
                      skip_fade_ms = excluded.skip_fade_ms,
@@ -721,6 +725,7 @@ impl PlayerStore {
                      queue_depth = excluded.queue_depth,
                      sample_interval_ms = excluded.sample_interval_ms,
                      cue_sheets = excluded.cue_sheets,
+                     covers = excluded.covers,
                      updated_at = excluded.updated_at",
                 rusqlite::params![
                     s.volume as f64,
@@ -732,6 +737,7 @@ impl PlayerStore {
                     s.queue_depth as i64,
                     s.sample_interval_ms as i64,
                     s.cue_sheets as i64,
+                    s.covers as i64,
                 ],
             )
             .map(|_| ())
@@ -747,7 +753,7 @@ impl PlayerStore {
         let d = Settings::default();
         self.conn
             .query_row(
-                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h,                         dequeue_suppress_h, queue_depth, sample_interval_ms,                         cue_sheets FROM player_state WHERE id = 1",
+                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h,                         dequeue_suppress_h, queue_depth, sample_interval_ms,                         cue_sheets, covers FROM player_state WHERE id = 1",
                 [],
                 |r| {
                     Ok(Settings {
@@ -771,6 +777,7 @@ impl PlayerStore {
                             .unwrap_or(d.sample_interval_ms as i64)
                             as u64,
                         cue_sheets: r.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
+                        covers: r.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                     })
                 },
             )
@@ -1914,6 +1921,7 @@ mod tests {
             queue_depth: 7,
             sample_interval_ms: 3_000,
             cue_sheets: true,
+            covers: true,
         };
         store.save_settings(&want).unwrap();
         let got = store.load_settings().unwrap();

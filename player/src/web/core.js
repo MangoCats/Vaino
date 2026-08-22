@@ -531,6 +531,7 @@ const Vaino = (() => {
     sampleInterval: ms => post(`/sample/interval/${Math.round(ms)}`),
     switchBackend: which => post(`/backend/${which}`),
     cueSheets: on => post(`/cue/${on ? 'on' : 'off'}`),
+    covers: on => post(`/covers/${on ? 'on' : 'off'}`),
     // The player page: load the chosen skin, then follow the socket.
     async start() {
       catalogue = await fetch('/skins').then(r => r.json()).catch(() => []);

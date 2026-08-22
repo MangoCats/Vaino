@@ -27,6 +27,7 @@ pub fn build_id() -> String {
 pub mod backup;
 pub mod bundle;
 /// Cue sheets, so a guest can name a passage inside a capture [SPEC-MPD-056].
+pub mod covers;
 pub mod cue;
 pub mod db;
 pub mod director;

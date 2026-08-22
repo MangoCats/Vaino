@@ -307,6 +307,31 @@ fn engine_thread(
             }
         }
 
+        let covers_ask =
+            controls_for_switch.lock().ok().and_then(|mut c| c.covers_requested.take());
+        if let Some(on) = covers_ask {
+            let said = if !on {
+                "off; covers already written are left alone".to_string()
+            } else {
+                match rusqlite::Connection::open(&db)
+                    .map_err(|e| e.to_string())
+                    .and_then(|c| vaino_player::covers::generate(&c, false))
+                {
+                    Ok(rep) => {
+                        for f in &rep.failed {
+                            eprintln!("cover: {f}");
+                        }
+                        rep.summary()
+                    }
+                    Err(e) => format!("failed: {e}"),
+                }
+            };
+            println!("cover art: {said}");
+            if let Ok(mut c) = controls_for_switch.lock() {
+                c.covers_status = Some(said);
+            }
+        }
+
         // A switch asked for by the browser happens here, where the backends
         // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
         // topped up rather than the outgoing one.

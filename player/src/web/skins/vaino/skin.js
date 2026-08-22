@@ -84,6 +84,9 @@
   const cueSheets = $('cuesheets');
   cueSheets.onchange = () => Vaino.cueSheets(cueSheets.checked);
 
+  const coversBox = $('covers');
+  coversBox.onchange = () => Vaino.covers(coversBox.checked);
+
   const backendSel = $('backend');
   backendSel.onchange = () => Vaino.switchBackend(backendSel.value);
 
@@ -145,6 +148,8 @@
   function renderCue(s) {
     if (document.activeElement !== cueSheets) cueSheets.checked = !!s.cue_sheets;
     $('cuestatus').textContent = s.cue_status || '';
+    if (document.activeElement !== coversBox) coversBox.checked = !!s.covers;
+    $('coversstatus').textContent = s.covers_status || '';
   }
 
   function renderBackend(s) {

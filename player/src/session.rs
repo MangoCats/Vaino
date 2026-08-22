@@ -68,6 +68,9 @@ pub struct Controls {
     /// belongs on the engine thread, not in a request handler.
     pub cue_requested: Option<bool>,
     pub cue_status: Option<String>,
+    /// The same for cover art `[REQ-VIS-210]`.
+    pub covers_requested: Option<bool>,
+    pub covers_status: Option<String>,
 
     /// A request to change sides. The same intent-cell pattern as
     /// `reload_requested`, and for the same reason: the backends are not `Sync`

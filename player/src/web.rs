@@ -164,6 +164,9 @@ pub struct Snapshot {
     /// `[REQ-VIS-205]`
     pub cue_sheets: bool,
     pub cue_status: Option<String>,
+    /// `[REQ-VIS-210]`
+    pub covers: bool,
+    pub covers_status: Option<String>,
     /// The Director's pool as `(eligible, total)`, so a rebuild's effect is
     /// visible rather than asserted: importing music and reloading moves
     /// `total`. Absent when there is no Director.
@@ -247,10 +250,12 @@ impl From<&PlayerState> for Snapshot {
             guest_name: None,
             switch_status: None,
             cue_status: None,
+            covers_status: None,
             pool: None,
             program_manual: false,
             programs: Vec::new(),
             cue_sheets: s.cue_sheets,
+            covers: s.covers,
             dev_mode: s.dev_mode,
             underrun_samples: s.underrun_samples,
             lock_failures: s.lock_failures,
@@ -296,6 +301,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/library/reload", post(reload_library))
         .route("/backend/:which", post(switch_backend))
         .route("/cue/:on", post(set_cue_sheets))
+        .route("/covers/:on", post(set_covers))
         .route("/audio/radios", get(radios))
         .route("/power/off", post(power_off))
         .route("/audio/radio/:kind/:state", post(set_radio))
@@ -738,6 +744,20 @@ async fn set_cue_sheets(
     StatusCode::ACCEPTED
 }
 
+/// Allow or forbid Vaino writing cover art into the music folder
+/// `[REQ-VIS-210]`.
+async fn set_covers(
+    State(ui): State<Ui>,
+    axum::extract::Path(on): axum::extract::Path<String>,
+) -> StatusCode {
+    let want = on == "on" || on == "true" || on == "1";
+    ui.handle.send(Command::SetCovers(want));
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    c.covers_requested = Some(want);
+    c.covers_status = Some(if want { "writing…".into() } else { "off".into() });
+    StatusCode::ACCEPTED
+}
+
 /// Ask for the other backend `[SPEC-BK-030]`.
 ///
 /// Asks; it does not perform. The engine takes the intent on its next pass,
@@ -803,6 +823,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.guest_name = c.guest_name.clone();
             snap.switch_status = c.switch_status.clone();
             snap.cue_status = c.cue_status.clone();
+            snap.covers_status = c.covers_status.clone();
             snap.pool = c.pool;
             snap.programs = c
                 .programs

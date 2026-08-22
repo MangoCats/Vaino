@@ -134,6 +134,19 @@
          starts, and MPD needs a database update to see them.</p>
     </div>
     <div class="setting">
+      <label for="covers">Album art for captures</label>
+      <span><input type="checkbox" id="covers"> write cover images
+        <small id="coversstatus"></small></span>
+      <p>A capture has no art of its own, so a guest shows whatever it finds for
+         the artist &mdash; one cover on every album. Ticking this writes
+         <code>cover.jpg</code> beside each capture that is <em>alone</em> in its
+         folder, using the art Vaino already holds. A capture sharing a folder
+         with others is skipped: one folder has room for one cover, and giving
+         several albums the same picture is the problem rather than the fix.
+         <strong>This writes files into your music folder.</strong> A folder that
+         already has a cover is never touched, whoever put it there.</p>
+    </div>
+    <div class="setting">
       <label>Server build</label>
       <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>
       <p>The version and the commit this server was built from. <code>+dirty</code>

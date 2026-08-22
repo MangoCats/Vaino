@@ -491,6 +491,27 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-210]` Vaino may write cover art into the music folder, and only if
+asked.** A persisted setting, **off by default**, beside the cue one.
+
+MPD's art is directory-based: a picture embedded in the file, or `cover.jpg` in
+the song's folder. **None of the 191 captures here carry embedded art**, so a
+guest falls back to its own artist-level lookup and every album by an artist
+wears one cover. Vaino already holds the right pictures `[REQ-VIS-170]`; this
+puts one where MPD looks.
+
+**Only where the capture is alone in its folder.** A folder has room for exactly
+one cover, and 77 captures share theirs with other captures — six in `Various`,
+five in `Eagles`. Writing there would give several albums the same picture,
+which is the symptom rather than the cure, so those are skipped **and counted**:
+a listener is told how many were left and why, not given a number that looks
+like a failure.
+
+**A folder that already has a cover is never touched**, under any of the names
+MPD looks for and whoever wrote it. A picture already there was somebody's
+choice. That also makes the run idempotent: written once, the folder has a cover
+and is skipped thereafter, including over Vaino's own.
+
 **`[REQ-VIS-205]` Vaino may write cue sheets into the music folder, and only if
 asked.** A persisted setting, **off by default**, on the settings page.
 
