@@ -503,11 +503,23 @@ impl Session {
                     .and_then(|m| d.flavor_summary(m, 3))
                     .unwrap_or_default();
                 let passage_id = entry.passage_id;
+                // What a guest cannot say for itself `[SPEC-MPD-052]`: the
+                // title comes from MusicBrainz and a capture's file tags have
+                // none, so a third of the library would arrive unnamed.
+                let title = entry.title();
+                let artist = entry.artist().unwrap_or_default();
                 engine.enqueue(entry);
                 // **After** the enqueue: a sticker is addressed by the URI the
                 // backend has only just chosen for this passage.
                 if let Some(json) = why_json {
-                    engine.publish_reasoning(passage_id, &json, &flavor, now);
+                    engine.publish(&crate::switch::Published {
+                        passage_id,
+                        why: &json,
+                        flavor: &flavor,
+                        title: &title,
+                        artist: &artist,
+                        chosen_at: now,
+                    });
                 }
             }
         }

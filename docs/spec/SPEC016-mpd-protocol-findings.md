@@ -69,6 +69,36 @@ passage inside a multi-hour capture needs no coordinate translation at all.
 
 ---
 
+## 3. Naming
+
+**`[SPEC-MPD-052]` MPD names a passage from the file's tags, and a capture has
+none.** *(Measured 2026-08-22, reported by a listener.)* A DAO capture is one
+file carrying one set of album-level tags — no per-track title at all — so a
+client reading tags shows the album, or nothing, for every passage inside it.
+
+**2,840 of 8,330 radio passages (34.1%) live in such a file.** A third of
+everything the Director can choose arrives at a client unnamed.
+
+**And the obvious remedy is refused.** `addtagid` exists, is advertised in
+`commands`, and overrides a queue entry's tags — but only for a song MPD does
+not have in its database:
+
+```
+addtagid {id} Title "…"  ->  ACK [4@0] {addtagid} Cannot edit tags of local file
+```
+
+So per-passage naming genuinely cannot be expressed through the queue, which is
+why `Capabilities::MPD` declares `naming: false` rather than treating this as a
+defect to be worked around. Vaino publishes `vaino.title` and `vaino.artist` as
+stickers instead `[SPEC-MPD-050]`: available to any client that reads them, and
+honestly absent from those that do not.
+
+> The capability model missed this until a listener saw album names where track
+> names belonged. `spans`, `gain` and `ramps` were all about *playing* a
+> passage, and nobody asked whether the guest could **say what it was**.
+
+---
+
 ## 3. Transport state
 
 **`[SPEC-MPD-094]` A stop ends a passage; a pause does not.** MPD retains `songid`

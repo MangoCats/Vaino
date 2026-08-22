@@ -384,11 +384,11 @@ impl MpdBackend {
 /// "why this track" panel without a line of code changing. Nothing is added to
 /// MPD to make it work.
 impl crate::switch::Publish for MpdBackend {
-    fn publish_reasoning(&mut self, passage_id: i64, why: &str, flavor: &str, at: i64) {
+    fn publish(&mut self, p: &crate::switch::Published<'_>) {
         let Some(uri) = self
             .ours
             .values()
-            .find(|o| o.passage_id == passage_id)
+            .find(|o| o.passage_id == p.passage_id)
             .map(|o| o.uri.clone())
         else {
             return; // never offered here, so there is nothing to hang it on
@@ -397,19 +397,21 @@ impl crate::switch::Publish for MpdBackend {
             if value.is_empty() {
                 return;
             }
-            let cmd = format!(
-                "sticker set song {} {} {}",
-                quote(&uri),
-                quote(name),
-                quote(value)
-            );
+            let cmd =
+                format!("sticker set song {} {} {}", quote(&uri), quote(name), quote(value));
             if let Err(e) = self.mpd.cmd(&cmd) {
                 eprintln!("sticker {name}: {e}");
             }
         };
-        set("vaino.why", why);
-        set("vaino.flavor", flavor);
-        set("vaino.chosen_at", &at.to_string());
+        set("vaino.why", p.why);
+        set("vaino.flavor", p.flavor);
+        // **Identity, because MPD cannot carry it** `[SPEC-MPD-052]`. A
+        // capture's file tags name the album and no track, so a client reading
+        // tags alone shows the album for every passage inside it. This is the
+        // only place the real title exists on this side.
+        set("vaino.title", p.title);
+        set("vaino.artist", p.artist);
+        set("vaino.chosen_at", &p.chosen_at.to_string());
     }
 }
 

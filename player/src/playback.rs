@@ -47,16 +47,31 @@ pub struct Capabilities {
     pub gain: bool,
     /// Can it ramp in and out, or does a passage begin and end abruptly?
     pub ramps: bool,
+    /// Can it say *what the passage is*?
+    ///
+    /// **Missed in the first draft of this type, and found by a listener.** A
+    /// guest names a passage from the file's tags, and a DAO capture carries
+    /// one set of album-level tags for the whole recording — no per-track
+    /// title at all. **2,840 of 8,330 radio passages here (34.1%) live in such
+    /// a file**, so a third of everything the Director can choose arrives at a
+    /// client with the album's name or none.
+    ///
+    /// Vaino knows the title; it comes from MusicBrainz `[SPEC-DF-030]` and is
+    /// on the queue entry. There is simply no place in MPD's protocol to put
+    /// it: a queue entry's tags are the file's. So this is declared false and
+    /// published out-of-band instead `[SPEC-MPD-050]`.
+    pub naming: bool,
 }
 
 impl Capabilities {
     /// Everything, which is what the built-in engine does.
-    pub const FULL: Self = Self { spans: true, gain: true, ramps: true };
+    pub const FULL: Self = Self { spans: true, gain: true, ramps: true, naming: true };
     /// A whole-file backend: it plays what you name, start to end.
     ///
     /// OpenSubsonic as deployed. `stream` returns a song; HTTP range requests
     /// seek within the bytes, which is not the same as being told to stop.
-    pub const WHOLE_FILE: Self = Self { spans: false, gain: false, ramps: false };
+    pub const WHOLE_FILE: Self =
+        Self { spans: false, gain: false, ramps: false, naming: false };
 
     /// **MPD, and the surprise of this investigation.**
     ///
@@ -67,7 +82,7 @@ impl Capabilities {
     /// trip to OpenSubsonic. `crossfade` exists but is global rather than
     /// per-passage, and ReplayGain is per-file rather than per-span, so gain
     /// and ramps are still lost.
-    pub const MPD: Self = Self { spans: true, gain: false, ramps: false };
+    pub const MPD: Self = Self { spans: true, gain: false, ramps: false, naming: false };
 
     /// Would sending this passage to this backend play something other than
     /// what was chosen?
@@ -186,7 +201,7 @@ impl Playback for crate::engine::Engine {
 /// has, kept somewhere it never looks. Publishing exists for *guests*, whose
 /// clients have no other way to learn why a track was chosen `[SPEC-MPD-050]`.
 impl crate::switch::Publish for Engine {
-    fn publish_reasoning(&mut self, _p: i64, _why: &str, _flavor: &str, _at: i64) {}
+    fn publish(&mut self, _p: &crate::switch::Published<'_>) {}
 }
 
 impl crate::switch::FadeOut for Engine {
