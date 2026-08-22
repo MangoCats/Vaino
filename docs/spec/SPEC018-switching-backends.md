@@ -103,6 +103,19 @@ and must not pretend to be**: 191 of 5,709 files carry more than one radio
 passage, and a whole-file entry could be any of up to forty of them. Those are
 reported, never guessed `[SPEC-MPD-060]`.
 
+**`[SPEC-BK-045]` An MPD entry Vaino cannot name is dropped from the switch,
+not blocked by it.** *(Settled 2026-08-21.)* 191 of 5,709 files carry more than
+one radio passage, so a whole-file entry can be unnameable through no fault of
+the listener. Letting those veto a handoff would put a rare and invisible
+property of the *library* in charge of an action a person just asked for.
+
+The handoff therefore takes what it can name and leaves the rest behind,
+**saying which** — a dropped entry is reported, because silently shortening
+someone's queue is the kind of quiet wrongness `[PI3-API-030]` exists to
+refuse. What is dropped is dropped from the *queue*, not from the library: the
+passage is as playable as it ever was, and the next thing that names it will
+get it.
+
 > **This asymmetry matches what is asked of it.** Seamlessness is wanted
 > Vaino → MPD and merely desirable MPD → Vaino, which is the direction that
 > cannot be exact. The requirement and the constraint agree, which is luck worth
@@ -145,10 +158,7 @@ be driven by MPD clients. Three problems that plan carried simply do not arise:
    Two backends sounding at once for a second is two passages in flight, and
    `[SPEC-PLAY-010]` judges one at a time. Probably: the outgoing passage is
    judged at the moment it stops sounding, exactly as a skip is.
-3. **`[SPEC-BK-070]` Whether an unnameable MPD entry blocks the switch or is
-   dropped from it.** Dropping loses a person's choice; blocking makes 191 files
-   able to veto a handoff. Likely: adopt what is nameable, report the rest, and
-   let the person decide — but that is a decision, not a default.
+3. *(Settled — moved to `[SPEC-BK-045]` below.)*
 
 ---
 

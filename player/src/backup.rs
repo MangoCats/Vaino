@@ -420,7 +420,14 @@ mod tests {
 
     #[test]
     fn a_snapshot_holds_the_listening_and_not_the_library() {
-        let tmp = std::env::temp_dir().join(format!("vaino-bk-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino-bk-{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let db = library(&tmp);
 
@@ -446,7 +453,14 @@ mod tests {
     /// A backup that vanishes when a table is missing is worse than useless.
     #[test]
     fn a_missing_table_is_skipped_rather_than_fatal() {
-        let tmp = std::env::temp_dir().join(format!("vaino-bk2-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino-bk2-{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let db = library(&tmp);           // has no listener_likes at all
         let out = snapshot(&db).expect("a partial schema still backs up");
@@ -461,7 +475,14 @@ mod tests {
     /// now `[REQ-LIB-160]`.
     #[test]
     fn a_restore_follows_recordings_through_renumbering() {
-        let tmp = std::env::temp_dir().join(format!("vaino-rs-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino-rs-{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let db = tmp.join("lib.db");
         let c = Connection::open(&db).unwrap();
@@ -517,7 +538,14 @@ mod tests {
     /// A snapshot has to be readable before it is trusted.
     #[test]
     fn a_snapshot_can_be_inspected_without_restoring_it() {
-        let tmp = std::env::temp_dir().join(format!("vaino-in-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino-in-{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let db = library(&tmp);
         let snap = snapshot(&db).unwrap();
@@ -544,7 +572,14 @@ mod tests {
     /// Three years of hourly snapshots must thin to a ladder, not a pile.
     #[test]
     fn retention_keeps_a_day_a_month_and_a_year() {
-        let tmp = std::env::temp_dir().join(format!("vaino-bk3-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino-bk3-{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let dir = tmp.join("listener-backups");
         std::fs::create_dir_all(&dir).unwrap();
 

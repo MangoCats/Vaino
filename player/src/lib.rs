@@ -34,6 +34,9 @@ pub mod relink;
 pub mod bluetooth;
 pub mod sink;
 pub mod session;
+
+/// Holding two backends and exchanging which one sounds [SPEC-BK-030].
+pub mod switch;
 pub mod tags;
 pub mod web;
 pub mod resample;
