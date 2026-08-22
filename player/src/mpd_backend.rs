@@ -85,6 +85,55 @@ pub fn nameable_uris(
     Ok(out)
 }
 
+/// passage id → the cue track that names it, e.g.
+/// `Rush/TestForEcho.cue/track0002` `[SPEC-MPD-056]`.
+///
+/// Only for captures whose sheet is actually on disk. The track number is the
+/// passage's position among that file's radio passages ordered by start, which
+/// is exactly how [`crate::cue`] numbered them — the two must agree, and this
+/// is the place they do.
+pub fn cue_uris(
+    conn: &rusqlite::Connection,
+    root: &str,
+) -> Result<HashMap<i64, String>, String> {
+    let root_norm = root.replace('\\', "/").trim_end_matches('/').to_string();
+    let mut q = conn
+        .prepare(
+            "SELECT f.path, p.passage_id FROM passages p JOIN files f USING(file_id)              WHERE p.kind = 'radio' ORDER BY f.path, p.start_ms",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = q
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut per_file: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for (path, pid) in rows.flatten() {
+        if !per_file.contains_key(&path) {
+            order.push(path.clone());
+        }
+        per_file.entry(path).or_default().push(pid);
+    }
+    let mut out = HashMap::new();
+    for path in order {
+        let ids = &per_file[&path];
+        // One passage needs no sheet, and `cue::generate` wrote none.
+        if ids.len() < 2 {
+            continue;
+        }
+        let cue_path = std::path::Path::new(&path).with_extension("cue");
+        if !cue_path.exists() {
+            continue;
+        }
+        let norm = cue_path.to_string_lossy().replace('\\', "/");
+        let Some(rel) = norm.strip_prefix(&root_norm) else { continue };
+        let base = rel.trim_start_matches('/');
+        for (i, pid) in ids.iter().enumerate() {
+            out.insert(*pid, format!("{base}/track{:04}", i + 1));
+        }
+    }
+    Ok(out)
+}
+
 /// A passage handed to MPD, and what has become of it.
 struct Offered {
     passage_id: i64,
@@ -120,6 +169,8 @@ pub struct MpdBackend {
     store: Option<PlayerStore>,
     /// URI → passage, for adopting what the listener queued `[SPEC-MPD-115]`.
     names: HashMap<String, Nameable>,
+    /// Cue tracks that name a passage a guest could not `[SPEC-MPD-056]`.
+    cues: HashMap<i64, String>,
     /// Reported once each, so a log is not a stream of the same complaint.
     unnameable: HashSet<String>,
     lost: bool,
@@ -149,6 +200,7 @@ impl MpdBackend {
             dropped: Vec::new(),
             store: None,
             names: HashMap::new(),
+            cues: HashMap::new(),
             unnameable: HashSet::new(),
             lost: false,
         })
@@ -158,6 +210,11 @@ impl MpdBackend {
     /// this, a song added by hand plays and counts for nothing.
     pub fn attach_names(&mut self, names: HashMap<String, Nameable>) {
         self.names = names;
+    }
+
+    /// Teach it which passages have a cue track `[SPEC-MPD-056]`.
+    pub fn attach_cues(&mut self, cues: HashMap<i64, String>) {
+        self.cues = cues;
     }
 
     /// Where plays and rejections are written `[SPEC-PLAY-030]`. Optional, so a
@@ -433,6 +490,44 @@ impl Playback for MpdBackend {
     }
 
     fn enqueue(&mut self, entry: QueueEntry) {
+        let span_ms = entry.end_ms.saturating_sub(entry.start_ms);
+
+        // **A cue track names what a bare file cannot** `[SPEC-MPD-056]`. MPD
+        // applies the cue's own boundaries as a range and reports the real
+        // title, so `rangeid` is not called here — it would overwrite that
+        // range with offsets into the *file* and lose both.
+        //
+        // The cue's end is the next track's start, which is a median 4.8 s
+        // late against a radio span, so the passage is marked as one MPD will
+        // not end correctly and the sampler ends it instead `[SPEC-MPD-096]`.
+        // That is the same machinery, bounding the overrun by one interval.
+        if let Some(uri) = self.cues.get(&entry.passage_id).cloned() {
+            match self.mpd.cmd(&format!("addid {}", quote(&uri))) {
+                Ok(lines) => {
+                    if let Some(id) = crate::mpd::parse(&lines).get("Id").cloned() {
+                        self.ours.insert(
+                            id,
+                            Offered {
+                                passage_id: entry.passage_id,
+                                uri,
+                                mbid: entry.mbid.clone(),
+                                span_ms,
+                                furthest_ms: 0,
+                                span_honoured: false,
+                                was_current: false,
+                            },
+                        );
+                        self.queue_len += 1;
+                        return;
+                    }
+                    eprintln!("addid returned no Id for cue track {uri}");
+                }
+                Err(e) => eprintln!("mpd addid {uri}: {e}"),
+            }
+            // A cue track that would not add is not a reason to give up on the
+            // passage: the file underneath it still plays, just unnamed.
+        }
+
         let Some(uri) = self.uri_for(&entry) else {
             // Outside MPD's music directory, so MPD cannot name it. It never
             // played, and the Director must un-count it `[REQ-PD-112]`.
@@ -454,7 +549,7 @@ impl Playback for MpdBackend {
                         passage_id: entry.passage_id,
                         uri: uri.clone(),
                         mbid: entry.mbid.clone(),
-                        span_ms: entry.end_ms.saturating_sub(entry.start_ms),
+                        span_ms,
                         furthest_ms: 0,
                         span_honoured: added.span_honoured,
                         was_current: false,

@@ -121,7 +121,14 @@ sheet's tracks as separate songs with their own titles and offsets. A capture
 with a cue sheet beside it would name every passage inside it, for every client,
 with no sticker support required.
 
-It is **not** taken here, and the reason is a boundary rather than a difficulty:
+**Taken, behind `[REQ-VIS-205]`.** A cue track is added by URI and **`rangeid` is
+not called on it**: MPD applies the cue's own boundaries as a range and reports
+the real title, and a `rangeid` would overwrite that with offsets into the file
+and lose both. Measured on the queue: cue start 1324.7 s against a radio start
+of 1324.7 s — exact — and a cue end 3.8 s late, which the sampler ends itself
+`[SPEC-MPD-096]` rather than accepting.
+
+What follows is why the *default* is off, not why it was declined:
 it means writing files into the listener's music tree, and Vaino's passages are
 not always a CD's tracks — a radio span trims what an album span keeps
 `[GDE-BMK-030]`. That is a decision about what Vaino is allowed to do to a music

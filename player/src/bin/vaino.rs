@@ -206,6 +206,15 @@ fn engine_thread(
     // The suppression windows are read from the published state rather than
     // from the engine, because the engine is about to stop being reachable by
     // name. They are the listener's settings and the same whoever plays.
+    let saved_cue = vaino_player::db::PlayerStore::open(&db)
+        .ok()
+        .and_then(|s| s.load_settings())
+        .map(|s| s.cue_sheets)
+        .unwrap_or(false);
+    // Read regardless of the feature so the flags parse and report the same
+    // either way; only the guest that consumes them is gated.
+    #[cfg(not(feature = "mpd"))]
+    let _ = (&mpd_addr, &mpd_root, &saved_cue);
     let controls_for_switch = session.controls();
     if let Ok(mut c) = controls_for_switch.lock() {
         c.backend = Some("vaino".into());
@@ -226,6 +235,18 @@ fn engine_thread(
                     match vaino_player::mpd_backend::nameable_uris(&c, &root) {
                         Ok(n) => guest.attach_names(n),
                         Err(e) => eprintln!("cannot name URIs for MPD ({e})"),
+                    }
+                    // Cue tracks, only when the listener has asked for them
+                    // `[REQ-VIS-205]`. Read at startup: sheets written now are
+                    // used from the next run, which the settings page says.
+                    if saved_cue {
+                        match vaino_player::mpd_backend::cue_uris(&c, &root) {
+                            Ok(m) => {
+                                println!("{} passage(s) have a cue track to be named by", m.len());
+                                guest.attach_cues(m);
+                            }
+                            Err(e) => eprintln!("cannot map cue tracks ({e})"),
+                        }
                     }
                 }
                 if let Ok(st) = vaino_player::db::PlayerStore::open(&db) {
