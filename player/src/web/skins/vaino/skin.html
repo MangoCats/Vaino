@@ -81,6 +81,8 @@
       <span><input type="number" id="queuedepth" step="1"> passages</span>
       <label for="sampleinterval" title="How often a guest backend such as MPD reads playback position. Vaino's own engine does not poll.">Guest sampling interval</label>
       <span><input type="number" id="sampleinterval" step="0.5"> s</span>
+      <label>Server build</label>
+      <span><small id="build" title="The version and the commit it was built from. '+dirty' means the source tree had uncommitted changes, so the hash names where it started rather than what was compiled.">—</small></span>
       <label for="backend" title="Which player is sounding. MPD gives you around sixty client apps; Vaino's own engine keeps per-passage gain and crossfades, which MPD cannot express.">Playing through</label>
       <span>
         <select id="backend">

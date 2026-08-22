@@ -10,6 +10,20 @@
 //! (~15 s, ~5.3 MB at 44.1 kHz stereo f32) `[GDE-ARC-050]`, so memory is a
 //! function of how many passages are open, never of how long they are.
 
+/// What this build is, for anything that has to say so `[REQ-VIS-200]`.
+///
+/// Crate version and the commit it was built from. `+dirty` means the tree had
+/// uncommitted changes, so the hash names where it started rather than what was
+/// compiled — a distinction that matters exactly when someone is asking why a
+/// change is not there.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const GIT: &str = env!("VAINO_GIT");
+
+/// `0.1.0 (45b74a6952de)`, or with `+dirty` when the tree was not clean.
+pub fn build_id() -> String {
+    format!("{VERSION} ({GIT})")
+}
+
 pub mod backup;
 pub mod bundle;
 pub mod db;

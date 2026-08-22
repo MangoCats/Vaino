@@ -43,10 +43,16 @@ fn flag(args: &[String], name: &str, default: usize) -> usize {
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
+        eprintln!("vaino {}", vaino_player::build_id());
         eprintln!("usage: vaino <vaino.db> [--port N] [--depth N] [--device NAME]");
         eprintln!("       [--mpd HOST:PORT --mpd-root MUSIC_DIRECTORY]");
         std::process::exit(2);
     }
+    if args.iter().any(|a| a == "--version") {
+        println!("vaino {}", vaino_player::build_id());
+        return;
+    }
+    println!("vaino {}", vaino_player::build_id());
     let db = PathBuf::from(&args[0]);
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);

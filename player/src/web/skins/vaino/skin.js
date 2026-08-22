@@ -104,6 +104,28 @@
 
   // Limits come from the engine, which is what actually enforces them.
   // Fields being edited are left alone, as the volume slider is while held.
+  // **Fed the whole snapshot, not `s.skip`.** These three live at the top
+  // level while the skip shape is a nested object, and reading them off the
+  // nested one silently yielded `undefined` -- which hid the control rather
+  // than erroring, so the page looked finished and offered nothing.
+  // What drew this page `[REQ-VIS-200]`. Shown always, guest or no guest: the
+  // question "which build am I looking at" is asked most often when something
+  // expected is missing, which is exactly when the answer is hardest to get by
+  // any other means.
+  function renderBuild(s) {
+    if (s.build) $('build').textContent = s.build;
+  }
+
+  function renderBackend(s) {
+    const row = backendSel.closest('span');
+    const label = document.querySelector('label[for=backend]');
+    const show = !!s.guest_available;
+    if (row) row.hidden = !show;
+    if (label) label.hidden = !show;
+    if (s.backend && document.activeElement !== backendSel) backendSel.value = s.backend;
+    $('switchstatus').textContent = s.switch_status || '';
+  }
+
   function renderSkip(k) {
     if (!k) return;
     if (document.activeElement !== skipFade) {
@@ -137,13 +159,6 @@
       queueDepth.max = k.queue_depth_max;
       queueDepth.value = k.queue_depth;
     }
-    const backendRow = backendSel.closest('span');
-    const backendLabel = document.querySelector('label[for=backend]');
-    const show = !!k.guest_available;
-    if (backendRow) backendRow.hidden = !show;
-    if (backendLabel) backendLabel.hidden = !show;
-    if (k.backend && document.activeElement !== backendSel) backendSel.value = k.backend;
-    $('switchstatus').textContent = k.switch_status || '';
     if (k.sample_interval_ms != null && document.activeElement !== sampleInterval) {
       sampleInterval.min = k.sample_interval_min_ms / 1000;
       sampleInterval.max = k.sample_interval_max_ms / 1000;
@@ -266,6 +281,8 @@
       ? (s.program_manual ? `${s.program}, chosen` : `${s.program}, by the clock`)
       : '';
     renderSkip(s.skip);
+    renderBackend(s);
+    renderBuild(s);
     renderPick(s);
     $('link').textContent =
       Vaino.status === 'connected' ? 'Connected' : 'Reconnecting…';

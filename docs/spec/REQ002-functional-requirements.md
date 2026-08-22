@@ -491,6 +491,22 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-200]` A running server must say which build it is.** The crate
+version and the commit it was built from, stamped in at compile time and
+published to every skin so any of them can show it.
+
+The question is asked most often when something expected is **missing** — a
+control that is not there, a fix that seems not to have landed, an appliance
+deployed to twice — which is exactly when "which build am I looking at" is
+hardest to answer by any other means, and when asking a person to remember is
+least likely to work.
+
+**A tree with uncommitted changes reports `+dirty`.** A hash alone says which
+commit the tree was *at*, not what was compiled, and a build from an edited tree
+is not that commit. Reporting it as one would be a confident wrong answer of the
+kind `[PI3-API-030]` exists to refuse. Absent git is not a failure: the version
+stands and the hash reads `unknown`.
+
 **`[REQ-VIS-155]` What the listener sets, the player remembers.** Master volume, skip fade and skip lead survive a restart. They are written the moment a control moves rather than on the resume point's one-second timer: they change when a hand moves them and not otherwise, so saving them on that schedule would be a write per second to record that nothing had happened — and a setting that survives everything except a crash before the next tick is not really saved.
 
 > **Volume already had a column and was never written to it.** The resume row saved position and playing state and quietly left the level behind, so it came back at full scale every start. That had been true since the row existed, and reads as "it persists" from the schema alone.

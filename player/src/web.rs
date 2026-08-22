@@ -150,6 +150,10 @@ pub struct Snapshot {
     pub program_manual: bool,
     /// What a live Director rebuild is doing, if one has been asked for
     /// `[IMPL-SUI-075]`. `None` until something requests one.
+    /// What this server is `[REQ-VIS-200]`. Sent to every skin so a person
+    /// looking at a page can say which build drew it, rather than being asked
+    /// to remember.
+    pub build: String,
     pub reload_status: Option<String>,
     /// Which backend is playing, whether a guest exists, and what the last
     /// switch did `[SPEC-BK-025]`.
@@ -232,6 +236,7 @@ impl From<&PlayerState> for Snapshot {
                 sample_interval_max_ms: crate::SAMPLE_INTERVAL_MAX_MS,
             },
             program: None,
+            build: crate::build_id(),
             reload_status: None,
             backend: None,
             guest_available: false,
