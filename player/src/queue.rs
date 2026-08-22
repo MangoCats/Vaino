@@ -237,6 +237,15 @@ impl Queue {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+    /// Drop everything waiting.
+    ///
+    /// For a handoff `[SPEC-BK-030]`: the passages have been read out by id and
+    /// are being rebuilt on the other backend, so leaving copies here would
+    /// mean two answers to what is coming.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     pub fn peek(&self) -> Option<&QueueEntry> {
         self.entries.front()
     }

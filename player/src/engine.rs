@@ -606,6 +606,33 @@ impl Engine {
         }
     }
 
+    /// Fade what is sounding down to silence and stop `[SPEC-BK-030]`.
+    ///
+    /// **This is `skip` with nothing to skip to**, which the skip path already
+    /// handles: emptying the queue first means `admit_due` promotes nothing, and
+    /// the transition it begins has no incoming audio to overlay — so the ring
+    /// fades out and stays out. `skip`'s own comment said as much long before a
+    /// handoff wanted it.
+    ///
+    /// Reusing it rather than writing a second fade is the point. There is one
+    /// place in this engine that takes the ring from sounding to not, and a
+    /// handoff has no business inventing another with its own idea of a curve.
+    ///
+    /// Returns whether an output was actually faded. With no ring — a silent
+    /// path, a failed device — there is nothing to fade and saying otherwise
+    /// would be the lie `[PI3-API-030]` refuses.
+    pub fn fade_to_silence(&mut self, ms: u64) -> bool {
+        // The queue goes first: the passages are already being rebuilt on the
+        // other side, and one left here would be promoted into the fade.
+        self.queue.clear();
+        let had_output = self.path.ring.is_some() && !self.live.is_empty();
+        let saved = self.skip_fade_ms;
+        self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
+        self.skip();
+        self.skip_fade_ms = saved;
+        had_output
+    }
+
     /// Start the next passage when the current one reaches its lead-out point.
     ///
     /// Position-driven via the shared rule, never buffer-driven `[XFD-BEH-C1-020]`.
@@ -984,6 +1011,12 @@ impl Engine {
         }
     }
 
+    /// How many passages are sounding. For tests that need to know the engine
+    /// really went quiet.
+    pub fn snapshot_live(&self) -> usize {
+        self.live.len()
+    }
+
     /// The suppression windows as the listener has them set, in hours:
     /// `(skip, dequeue)` `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
     pub fn snapshot_suppress_h(&self) -> (u64, u64) {
@@ -1202,6 +1235,50 @@ mod tests {
     /// idea that the sounding passage occupied slot zero -- it does not; it is
     /// in `live` and out of the queue entirely.
     const DQ_MBID: &str = "aaaaaaaa-0000-0000-0000-000000000007";
+
+    /// A fade to silence empties the engine, so a handoff leaves nothing
+    /// behind to play `[SPEC-BK-030]`.
+    ///
+    /// The queue in particular: those passages are being rebuilt on the other
+    /// backend, and one left here would be promoted into the fade and start
+    /// playing on a side the listener has just left.
+    #[test]
+    fn a_fade_to_silence_leaves_nothing_queued_or_sounding() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.enqueue(entry(1, "a.mp3"));
+        e.enqueue(entry(2, "b.mp3"));
+        // Deliberately NOT ticked: a tick would try to open these names, fail,
+        // and empty the queue for the wrong reason. What is under test is that
+        // the fade takes the queue, not that a missing file does.
+        assert_eq!(e.queued().count(), 2, "something to lose");
+
+        e.fade_to_silence(600);
+
+        assert!(e.queued().next().is_none(), "the queue went with the handoff");
+        assert_eq!(e.snapshot_live(), 0, "and nothing is sounding");
+    }
+
+    /// With no output there is nothing to fade, and it says so rather than
+    /// claiming a smooth stop that never happened `[PI3-API-030]`.
+    #[test]
+    fn a_silent_path_reports_a_cut_not_a_fade() {
+        use crate::switch::{FadeOut, Stopped};
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.enqueue(entry(1, "a.mp3"));
+        assert_eq!(e.fade_out(600), Stopped::Cut, "no ring, so no fade to claim");
+    }
+
+    /// The listener's own skip shape is not disturbed by a handoff borrowing it.
+    #[test]
+    fn fading_out_restores_the_skip_setting() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        h.send(Command::SetSkipFade(1_500));
+        e.drain_commands();
+        e.fade_to_silence(200);
+        std::thread::sleep(Engine::PUBLISH_EVERY + std::time::Duration::from_millis(20));
+        e.tick();
+        assert_eq!(h.snapshot().skip_fade_ms, 1_500, "borrowed, then given back");
+    }
 
     /// Every listener setting must reach the snapshot the settings page reads.
     ///

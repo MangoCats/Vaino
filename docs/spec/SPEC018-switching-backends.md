@@ -91,21 +91,30 @@ Both may hold a PipeWire stream at once, so the changeover *can* be a crossfade
 rather than a gap — the same `[REQ-AUD-158]` shape a skip already uses, and the
 reason it is available is the first measurement above.
 
-**Built so far: the changeover, and an honest account of how it stopped.**
-`switch_to_over` stops the outgoing side before switching — after would silence
-the side just arrived at — and returns `Faded` or `Cut`. Neither side fades
-unconditionally:
+`switch_to_over` stops the outgoing side **before** switching — after would
+silence the side just arrived at — and returns `Faded` or `Cut`.
 
-| side | can it fade? |
+**`[SPEC-BK-033]` The local fade is `skip` with nothing to skip to.** *(Built
+2026-08-21.)* Emptying the queue first means `admit_due` promotes nothing and
+the transition has no incoming audio to overlay, so the ring fades out and stays
+out. `skip`'s own comment had said exactly this — *"without one this degrades to
+a plain fade to silence"* — years before a handoff wanted it.
+
+Reusing that path rather than writing a second fade is the decision, not an
+economy. There is **one** place in this engine that takes the ring from sounding
+to not, with one curve `[REQ-AUD-158]` and one set of accounting
+`[XFD-ORTH-020]`, and a handoff has no business owning a second idea of what a
+fade is.
+
+| side | fades when |
 | :--- | :--- |
-| MPD | **only with a mixer on its output** `[SPEC-MPD-099]`; measured `Cut` on a null output, expected to fade on PipeWire |
-| Vaino's engine | **not yet.** `Fade`, its curves and `skip_fade_ms` all exist `[REQ-AUD-158]`; nothing drives them to silence on demand |
+| Vaino's engine | there is an output ring and something sounding |
+| MPD | its output plugin has a mixer `[SPEC-MPD-099]` — PipeWire yes, `null` no |
 
-So today a switch is reliable and audible as a stop-then-start. Saying `Faded`
-where it cut would be the failure `[PI3-API-030]` names, so the caller is told
-which happened and the local engine reports `Cut` rather than flattering itself.
-Driving the existing fade machinery to silence is the remaining audio-path work,
-and it is deliberately not a line in a trait impl.
+Neither fades unconditionally, and **which happened is reported**: saying
+`Faded` over a cut is the failure `[PI3-API-030]` names. The engine reports
+`Cut` on a silent path rather than flattering itself, and the listener's own
+skip shape is borrowed and given back.
 
 **`[SPEC-BK-032]` The queue crosses as passage ids, and is rebuilt on arrival.**
 *(Built 2026-08-21.)* `Session::hand_over` switches the side, reads each carried
