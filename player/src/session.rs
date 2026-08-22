@@ -52,6 +52,21 @@ pub struct Controls {
     pub reload_requested: bool,
     /// What the rebuild is doing, for the browser to show. Set by the engine.
     pub reload_status: Option<String>,
+    /// Which backend is sounding, for the browser to show `[SPEC-BK-025]`.
+    /// `None` until the engine has said, which is a starting player rather than
+    /// an absent one.
+    pub backend: Option<String>,
+    /// Whether a guest is attached at all. Without one the control is not
+    /// offered, rather than offered and refused.
+    pub guest_available: bool,
+    /// A request to change sides. The same intent-cell pattern as
+    /// `reload_requested`, and for the same reason: the backends are not `Sync`
+    /// and the browser cannot reach them.
+    pub switch_requested: Option<String>,
+    /// What the last switch did, including what it could not carry
+    /// `[SPEC-BK-045]`.
+    pub switch_status: Option<String>,
+
     /// The Director's pool as `(eligible, total)`, refreshed on adoption.
     ///
     /// Here so a rebuild's effect is **observable** rather than asserted:

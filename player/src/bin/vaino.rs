@@ -44,12 +44,17 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!("usage: vaino <vaino.db> [--port N] [--depth N] [--device NAME]");
+        eprintln!("       [--mpd HOST:PORT --mpd-root MUSIC_DIRECTORY]");
         std::process::exit(2);
     }
     let db = PathBuf::from(&args[0]);
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);
     let device = text_flag(&args, "--device");
+    // A guest backend, offered rather than assumed `[SPEC-BK-020]`. Vaino still
+    // plays; MPD is attached and idle until a switch asks for it.
+    let mpd_addr = text_flag(&args, "--mpd");
+    let mpd_root = text_flag(&args, "--mpd-root");
 
     // The listening -- plays, preferences, programmes -- is the one thing in
     // that file nothing can rebuild `[REQ-LIB-160]`. One snapshot now, so a
@@ -98,7 +103,7 @@ async fn main() {
     let (tx, rx) = sync_channel(1);
     std::thread::Builder::new()
         .name("vaino-engine".into())
-        .spawn(move || engine_thread(db, depth, device, tx))
+        .spawn(move || engine_thread(db, depth, device, mpd_addr, mpd_root, tx))
         .expect("spawn engine thread");
 
     let (handle, why, controls) = match rx.recv() {
@@ -124,10 +129,20 @@ async fn main() {
     }
 }
 
+/// The published state, so the loop can read the listener's settings after the
+/// engine has become an anonymous backend.
+fn state_of(
+    h: &vaino_player::engine::EngineHandle,
+) -> std::sync::Arc<std::sync::Mutex<vaino_player::engine::PlayerState>> {
+    h.state.clone()
+}
+
 fn engine_thread(
     db: PathBuf,
     depth: usize,
     device: Option<String>,
+    mpd_addr: Option<String>,
+    mpd_root: Option<String>,
     tx: std::sync::mpsc::SyncSender<(
         vaino_player::engine::EngineHandle,
         Explanations,
@@ -151,6 +166,9 @@ fn engine_thread(
     println!("{why}");
 
     let (mut engine, handle) = Engine::new(path, session.depth());
+    // Taken before the handle is sent away: the loop below reads the listener's
+    // settings from here once the engine has become an anonymous backend.
+    let published = state_of(&handle);
     session.prime(&mut engine);
     if tx.send((handle, session.explanations(), session.controls())).is_err() {
         return; // nobody left to control it
@@ -175,15 +193,92 @@ fn engine_thread(
         engine.play_on_resume();
     }
 
+    // From here the engine is a **backend** rather than the engine
+    // `[SPEC-BK-020]`. Everything above is setup, which is the process's
+    // business and not a backend's -- priming, the store, the resume.
+    //
+    // The suppression windows are read from the published state rather than
+    // from the engine, because the engine is about to stop being reachable by
+    // name. They are the listener's settings and the same whoever plays.
+    let controls_for_switch = session.controls();
+    if let Ok(mut c) = controls_for_switch.lock() {
+        c.backend = Some("vaino".into());
+    }
+    let mut backend = vaino_player::switch::Switching::new(Box::new(engine));
+
+    #[cfg(feature = "mpd")]
+    if let Some(addr) = mpd_addr {
+        let root = mpd_root.unwrap_or_default();
+        match vaino_player::mpd_backend::MpdBackend::connect(
+            &addr,
+            &root,
+            session.depth(),
+            vaino_player::SAMPLE_INTERVAL_MS,
+        ) {
+            Ok(mut guest) => {
+                if let Ok(c) = rusqlite::Connection::open(&db) {
+                    match vaino_player::mpd_backend::nameable_uris(&c, &root) {
+                        Ok(n) => guest.attach_names(n),
+                        Err(e) => eprintln!("cannot name URIs for MPD ({e})"),
+                    }
+                }
+                if let Ok(st) = vaino_player::db::PlayerStore::open(&db) {
+                    guest.attach_store(st);
+                }
+                backend.attach_guest(Box::new(guest));
+                println!("MPD guest attached at {addr}; Vaino is still the one playing");
+                if let Ok(mut c) = controls_for_switch.lock() {
+                    c.guest_available = true;
+                }
+            }
+            Err(e) => eprintln!("MPD guest unavailable ({e}); continuing on the local engine"),
+        }
+    }
+
     // Otherwise paused until told otherwise. The producers fill regardless, so
     // pressing Play in the browser starts on a primed pipeline rather than an
     // underrun [REQ-AUD-142].
-    while !engine.is_shutdown() {
-        let submitted = engine.tick();
+    while !vaino_player::playback::Playback::is_shutdown(&backend) {
+        let submitted = vaino_player::playback::Playback::tick(&mut backend);
         // Continuous radio: the queue never runs dry, so playback never ends.
         // The backend plays; the settings belong to the process `[SPEC-BK-020]`.
-        let suppress = engine.snapshot_suppress_h();
-        session.refill(&mut engine, suppress);
+        let suppress = published
+            .lock()
+            .map(|s| (s.skip_suppress_h, s.dequeue_suppress_h))
+            .unwrap_or((vaino_player::SKIP_SUPPRESS_H, vaino_player::DEQUEUE_SUPPRESS_H));
+        // A switch asked for by the browser happens here, where the backends
+        // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
+        // topped up rather than the outgoing one.
+        let asked = controls_for_switch.lock().ok().and_then(|mut c| c.switch_requested.take());
+        if let Some(which) = asked {
+            let target = if which == "mpd" {
+                vaino_player::switch::Side::Guest
+            } else {
+                vaino_player::switch::Side::Local
+            };
+            let said = match session.hand_over_over(&mut backend, target, 600) {
+                Ok((carried, stopped)) => {
+                    let how = match stopped {
+                        vaino_player::switch::Stopped::Faded => "faded",
+                        vaino_player::switch::Stopped::Cut => "cut",
+                    };
+                    let lost = if carried.lost.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} could not be carried", carried.lost.len())
+                    };
+                    format!("now on {which} ({how}, {} passage(s) carried{lost})",
+                            carried.moved.len())
+                }
+                Err(e) => format!("refused: {e}"),
+            };
+            println!("switch: {said}");
+            if let Ok(mut c) = controls_for_switch.lock() {
+                c.switch_status = Some(said);
+                c.backend = Some(which);
+            }
+        }
+        session.refill(&mut backend, suppress);
         // Nothing submitted means the ring is comfortably full -- the engine
         // declines to mix less than a threshold's worth -- so there is time to
         // spare. Sleeping through it is the difference between a loop that

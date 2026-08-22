@@ -81,6 +81,14 @@
       <span><input type="number" id="queuedepth" step="1"> passages</span>
       <label for="sampleinterval" title="How often a guest backend such as MPD reads playback position. Vaino's own engine does not poll.">Guest sampling interval</label>
       <span><input type="number" id="sampleinterval" step="0.5"> s</span>
+      <label for="backend" title="Which player is sounding. MPD gives you around sixty client apps; Vaino's own engine keeps per-passage gain and crossfades, which MPD cannot express.">Playing through</label>
+      <span>
+        <select id="backend">
+          <option value="vaino">Vaino (gain, crossfades)</option>
+          <option value="mpd">MPD (spans only)</option>
+        </select>
+        <small id="switchstatus"></small>
+      </span>
       <p>How often the playback position is written to disk. Longer means
          fewer writes on an appliance's flash; at worst this much position is
          lost to a power cut. Track changes and pause are always saved at once.</p>

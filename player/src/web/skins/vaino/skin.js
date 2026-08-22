@@ -79,6 +79,10 @@
   queueDepth.onchange = () => Vaino.queueDepth(queueDepth.value);
   const sampleInterval = $('sampleinterval');
   sampleInterval.onchange = () => Vaino.sampleInterval(sampleInterval.value * 1000);
+  // Which backend is sounding `[SPEC-BK-030]`. Hidden entirely when no guest is
+  // attached: a control that can only be refused is worse than no control.
+  const backendSel = $('backend');
+  backendSel.onchange = () => Vaino.switchBackend(backendSel.value);
 
   // Each term is shown separately, never just the product: a single number
   // cannot be argued with, and arguing with it is the point [SPEC-DIR-190].
@@ -133,6 +137,13 @@
       queueDepth.max = k.queue_depth_max;
       queueDepth.value = k.queue_depth;
     }
+    const backendRow = backendSel.closest('span');
+    const backendLabel = document.querySelector('label[for=backend]');
+    const show = !!k.guest_available;
+    if (backendRow) backendRow.hidden = !show;
+    if (backendLabel) backendLabel.hidden = !show;
+    if (k.backend && document.activeElement !== backendSel) backendSel.value = k.backend;
+    $('switchstatus').textContent = k.switch_status || '';
     if (k.sample_interval_ms != null && document.activeElement !== sampleInterval) {
       sampleInterval.min = k.sample_interval_min_ms / 1000;
       sampleInterval.max = k.sample_interval_max_ms / 1000;

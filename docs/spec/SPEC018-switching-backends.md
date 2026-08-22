@@ -77,6 +77,25 @@ artist-blocked **0 → 180**. The Director, its rotation, its flow and its
 bookkeeping reached a backend that is not the built-in one without knowing they
 had.
 
+**`[SPEC-BK-028]` One process, and the control is on the settings page.**
+*(Built 2026-08-22.)* `vaino --mpd HOST:PORT --mpd-root DIR` attaches MPD as a
+guest and keeps playing locally; a select on the settings page moves the session
+between them, and the page reports which side is sounding and what the last
+switch carried.
+
+The browser cannot reach a backend — they are not `Sync` — so this is the
+intent-cell pattern `[IMPL-SUI-075]` already uses for a library reload: the
+route records a request and replies **accepted**, and the engine thread performs
+it where the backends live. **The control is hidden entirely when no guest is
+attached**, because a control that can only be refused is worse than no control.
+
+Measured, both ways, in one process serving the web UI:
+
+```
+switch: now on mpd   (faded, 5 passage(s) carried)
+switch: now on vaino (faded, 6 passage(s) carried)
+```
+
 **`[SPEC-BK-025]` Switching backend is not switching player.** The Program
 Director, the library, the flavor index, `listener_play_history`, the settings
 and the web UI with its three skins are all *above* the seam and do not notice.

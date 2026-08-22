@@ -151,6 +151,11 @@ pub struct Snapshot {
     /// What a live Director rebuild is doing, if one has been asked for
     /// `[IMPL-SUI-075]`. `None` until something requests one.
     pub reload_status: Option<String>,
+    /// Which backend is playing, whether a guest exists, and what the last
+    /// switch did `[SPEC-BK-025]`.
+    pub backend: Option<String>,
+    pub guest_available: bool,
+    pub switch_status: Option<String>,
     /// The Director's pool as `(eligible, total)`, so a rebuild's effect is
     /// visible rather than asserted: importing music and reloading moves
     /// `total`. Absent when there is no Director.
@@ -228,6 +233,9 @@ impl From<&PlayerState> for Snapshot {
             },
             program: None,
             reload_status: None,
+            backend: None,
+            guest_available: false,
+            switch_status: None,
             pool: None,
             program_manual: false,
             programs: Vec::new(),
@@ -274,6 +282,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/sample/interval/:ms", post(set_sample_interval))
         .route("/program/:id", post(set_program))
         .route("/library/reload", post(reload_library))
+        .route("/backend/:which", post(switch_backend))
         .route("/audio/radios", get(radios))
         .route("/power/off", post(power_off))
         .route("/audio/radio/:kind/:state", post(set_radio))
@@ -697,6 +706,28 @@ async fn reload_library(State(ui): State<Ui>) -> StatusCode {
     StatusCode::ACCEPTED
 }
 
+/// Ask for the other backend `[SPEC-BK-030]`.
+///
+/// Asks; it does not perform. The engine takes the intent on its next pass,
+/// where the backends actually live — the same reason `reload_library` is a
+/// request. The reply is *accepted*, and what the switch managed to carry
+/// appears in `switch_status` a moment later `[SPEC-BK-045]`.
+async fn switch_backend(
+    State(ui): State<Ui>,
+    axum::extract::Path(which): axum::extract::Path<String>,
+) -> StatusCode {
+    if which != "vaino" && which != "mpd" {
+        return StatusCode::BAD_REQUEST;
+    }
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    if !c.guest_available {
+        return StatusCode::CONFLICT; // nothing to switch to
+    }
+    c.switch_requested = Some(which);
+    c.switch_status = Some("requested".into());
+    StatusCode::ACCEPTED
+}
+
 async fn set_program(
     State(ui): State<Ui>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -735,6 +766,9 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.program = c.active.clone();
             snap.program_manual = c.manual_program.is_some();
             snap.reload_status = c.reload_status.clone();
+            snap.backend = c.backend.clone();
+            snap.guest_available = c.guest_available;
+            snap.switch_status = c.switch_status.clone();
             snap.pool = c.pool;
             snap.programs = c
                 .programs
