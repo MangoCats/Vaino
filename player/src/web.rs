@@ -272,6 +272,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
         .route("/why/:passage_id", get(why_for))
+        .route("/lyrics/:passage_id", get(lyrics))
         .route("/art/:passage_id", get(cover_art))
         .route("/art/:passage_id/back", get(cover_art_back))
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
@@ -625,6 +626,41 @@ async fn set_sample_interval(
 ///
 /// Served by passage rather than by album because that is the id a skin has in
 /// hand, and it makes the URL stable enough to cache for a day.
+/// One passage's words `[SPEC-LYR-040]`.
+///
+/// **An endpoint rather than a snapshot field.** The snapshot is published on
+/// every tick and read by every skin; up to 5.8 KB of text in it would be sent
+/// hundreds of times to say what changes once a song. A skin fetches this when
+/// the passage changes, which it already notices.
+///
+/// Plain text, because that is what the words are — a static block, as
+/// MuLibPlay showed them `[SPEC-LYR-045]`. 404 means the library has none, which
+/// is the ordinary case for 72% of passages and not an error worth dressing up.
+async fn lyrics(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    // The query blocks, so it belongs off the runtime.
+    let found = tokio::task::spawn_blocking(move || {
+        crate::db::Library::open(&db).ok().and_then(|lib| lib.lyrics(passage_id))
+    })
+    .await
+    .ok()
+    .flatten();
+    match found {
+        Some(text) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+                REVALIDATE,
+            ],
+            text,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 async fn cover_art(
     State(ui): State<Ui>,
     axum::extract::Path(passage_id): axum::extract::Path<i64>,

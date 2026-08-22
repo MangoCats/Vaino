@@ -263,6 +263,22 @@ impl Library {
         Ok(Self { conn })
     }
 
+    /// The words for a passage, if the library has them `[SPEC-LYR-040]`.
+    ///
+    /// **Looked up by recording, not by passage.** Two passages of one
+    /// recording share its words, and a second rip does not get its own
+    /// `[SPEC-LYR-020]`. An absent table is a library that predates the import,
+    /// not a fault — the query is allowed to fail and mean "none".
+    pub fn lyrics(&self, passage_id: i64) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT l.text FROM passage_recordings pr                    JOIN lyrics l ON l.mbid = pr.mbid                  WHERE pr.passage_id = ?1                  ORDER BY pr.weight DESC LIMIT 1",
+                [passage_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+    }
+
     pub fn passage(&self, passage_id: i64) -> Result<QueueEntry, DbError> {
         self.conn
             .query_row(&format!("SELECT {COLS} {FROM} WHERE p.passage_id = ?1"), [passage_id], row_to_entry)

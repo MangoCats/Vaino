@@ -199,6 +199,19 @@ CREATE TABLE IF NOT EXISTS listener_play_history (
 CREATE INDEX IF NOT EXISTS listener_play_time ON listener_play_history(played_at);
 CREATE INDEX IF NOT EXISTS listener_play_mbid ON listener_play_history(mbid);
 
+-- Words, keyed by the recording rather than the passage [SPEC-LYR-020]. A
+-- recording's words do not change because it was ripped twice, and two passages
+-- of one recording share them -- the same scope `flavor` and `recordings` use.
+--
+-- Class C: they travel [SPEC-LYR-025]. Reference data about a recording, not an
+-- account of one person's listening.
+CREATE TABLE IF NOT EXISTS lyrics (
+    mbid       TEXT PRIMARY KEY REFERENCES recordings(mbid),
+    text       TEXT NOT NULL,
+    source     TEXT NOT NULL,           -- where they came from, e.g. 'mulibplay'
+    fetched_at TEXT NOT NULL
+);
+
 -- Declining a song is not a play [SPEC-PLAY-010], and this table is why it can
 -- still matter. Recorded ONLY so a passage the listener rejected is not offered
 -- back immediately [SPEC-PLAY-050]; it feeds no ramp, no artist damping and no

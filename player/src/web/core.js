@@ -186,6 +186,32 @@ const Vaino = (() => {
     return showArt(box, passageId, true);
   }
 
+  // The words for `passageId`, fetched once per passage `[SPEC-LYR-040]`.
+  //
+  // Fetched rather than pushed: the snapshot goes out on every tick to every
+  // skin, and a song's words change once a song. `lastLyrics` is what stops one
+  // request per tick — the passage id is the whole cache key, because two
+  // passages of one recording share their words anyway.
+  //
+  // A 404 is the ordinary answer for most of the library and empties the box
+  // rather than showing an error: a panel saying "not found" for three tracks
+  // out of four is worse than a panel that is simply not there.
+  let lastLyrics = null;
+  function showLyrics(box, passageId) {
+    if (!box) return;
+    if (passageId == null) { box.textContent = ''; box.hidden = true; lastLyrics = null; return; }
+    if (passageId === lastLyrics) return;
+    lastLyrics = passageId;
+    fetch(`/lyrics/${passageId}`)
+      .then(r => (r.ok ? r.text() : null))
+      .then(t => {
+        if (passageId !== lastLyrics) return;   // a later track won the race
+        box.textContent = t || '';
+        box.hidden = !t;
+      })
+      .catch(() => { box.textContent = ''; box.hidden = true; });
+  }
+
   // Fade from whatever is showing to the cover for `passageId`.
   //
   // The box never empties: the mark sits under both layers, so the element
@@ -518,6 +544,7 @@ const Vaino = (() => {
     bindQueue,
     queueRow,
     showArt,
+    showLyrics,
     artUrl: id => `/art/${id}`,
     command: name => post(`/command/${name}`),
     volume: db => post(`/volume/${db}`),

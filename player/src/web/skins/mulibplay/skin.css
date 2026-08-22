@@ -117,3 +117,11 @@ hr { border: none; border-top: 1px solid #333; margin: 1.2rem 0; }
        white-space: nowrap; }
 .src[data-src="musicbrainz"] { color: #d0a000; border-color: #d0a000; }
 .src[data-src="filename"], .src[data-src="unknown"] { border-style: dashed; }
+
+/* Words `[SPEC-LYR-045]`. Pre-wrapped: the line breaks are the song's, and
+   re-flowing them would run the verses together. Scrolls rather than stretching
+   the page, since the longest here is 5,820 characters. */
+#lyrics { white-space: pre-wrap; font-size: .8125rem; line-height: 1.45;
+          max-height: 18rem; overflow-y: auto; margin: .6rem 0 0;
+          padding: .5rem .6rem; border-radius: 6px;
+          background: rgba(127,127,127,.08); }

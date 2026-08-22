@@ -1,6 +1,6 @@
 # SPEC019: Lyrics
 
-**Design Specification — Tier 2 · PROPOSAL, not built**
+**Design Specification — Tier 2 · storage and Vaino's own skins built; the guest half measured, not built**
 
 MuLibPlay accumulated lyrics for a quarter of the library. This is how they
 reach Vaino, its own skins, and — as far as the protocol allows — a guest's
@@ -101,18 +101,36 @@ does not own.
 capture cannot express per-passage lyrics: **1,624 passages are reachable this
 way, 702 are not**.
 
-**`[SPEC-LYR-060]` For captures, a timed `.lrc` is the interesting idea.**
-An LRC file is `[mm:ss.xx] line`, and one written for a whole capture could
-place each passage's words at that passage's start — so a client following
-synced lyrics would show the right song's words throughout a 40-song file.
-Vaino knows every boundary already; that is what `[SPEC-MPD-056]`'s cue sheets
-are built from.
+**`[SPEC-LYR-060]` The timed `.lrc` idea is dropped, and the lookup order is
+now known rather than guessed.** *(Measured 2026-08-22.)* Cantata's own
+`context/songview.cpp` gives the sequence:
 
-> **Unverified, and it decides whether this is worth building.** Whether
-> Cantata — or any client here — reads `.lrc` at all, and whether it follows one
-> spanning a multi-hour file, has not been tested. That test is cheap: one
-> handwritten `.lrc` beside one capture. It should happen **before** any
-> generator is written, exactly as the cue experiment preceded the cue writer.
+| | tried |
+| ---: | :--- |
+| 1 | `<audiofile>.lyrics` beside the music |
+| 2 | `<audiofile>.txt` |
+| 3 | `cache/lyrics/<artist>/<title>.lyrics` — **nested per artist** |
+| 4 | `cache/lyrics/<artist>/<title>.txt` |
+| 5 | `~/.lyrics/…` (not on Windows) |
+| 6 | online |
+
+Confirmed by experiment: a handwritten `<audiofile>.lyrics` displayed, as a
+**static block** — which is how MuLibPlay showed them and how Vaino will. No
+synchronisation is wanted, so the `.lrc` is unnecessary.
+
+**The order is the design constraint.** The music-folder sidecar wins over the
+cache, so the two routes are ranked rather than complementary:
+
+* **Ordinary files** — one song each — take `<audiofile>.lyrics`. A convention
+  other clients share, and portable.
+* **Captures** cannot: one file, one sidecar, twelve songs. Per-passage words
+  would have to go in the **cache**, keyed by the artist and title the cue sheet
+  already supplies `[SPEC-MPD-056]`.
+
+> **The cache route is not obviously Vaino's to take.** It means writing into
+> another application's private directory, and it is **Cantata-specific** — no
+> other client looks there. That is a different kind of intrusion from the music
+> folder and deserves its own decision, not a fold into the same checkbox.
 
 ---
 
