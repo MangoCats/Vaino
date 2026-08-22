@@ -55,6 +55,11 @@ path = "src/bin/mpd_direct.rs"
 required-features = ["mpd"]
 
 [[bin]]
+name = "mpd_session"
+path = "src/bin/mpd_session.rs"
+required-features = ["mpd"]
+
+[[bin]]
 name = "flavorcheck"
 path = "src/bin/flavorcheck.rs"
 

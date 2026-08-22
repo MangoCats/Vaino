@@ -22,6 +22,10 @@ pub mod mixer;
 /// absent entirely from a build that did not ask for it.
 #[cfg(feature = "mpd")]
 pub mod mpd;
+
+/// MPD driven through the [`playback::Playback`] seam `[SPEC-BK-020]`.
+#[cfg(feature = "mpd")]
+pub mod mpd_backend;
 pub mod output;
 pub mod path;
 pub mod playback;

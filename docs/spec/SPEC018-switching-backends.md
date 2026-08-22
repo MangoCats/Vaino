@@ -62,6 +62,21 @@ Capabilities::FULL  { spans: true, gain: true,  ramps: true  }   Vaino's engine
 Capabilities::MPD   { spans: true, gain: false, ramps: false }   MPD as a guest
 ```
 
+**`[SPEC-BK-027]` Both backends exist, and the session drives either.** *(Built
+2026-08-21.)* `MpdBackend` implements the same trait: `enqueue` becomes `addid`
+plus a verified `rangeid` `[SPEC-MPD-096]`, `tick` becomes a rate-limited poll,
+`take_dropped` reports what MPD would not play, and `shortfall` returns **zero
+unless MPD is playing** — so `[SPEC-MPD-120]`'s activation rule needs no special
+case anywhere else in the session.
+
+Demonstrated by *not* writing a loop. `mpd_session` opens the `Session` that
+`vaino` runs, hands it an `MpdBackend`, and calls `refill`. Against a live MPD
+it filled the queue to depth with Director selections — spans intact, including
+`2312.672-2578.004` inside a capture — and the census moved as it does locally,
+artist-blocked **0 → 180**. The Director, its rotation, its flow and its
+bookkeeping reached a backend that is not the built-in one without knowing they
+had.
+
 **`[SPEC-BK-025]` Switching backend is not switching player.** The Program
 Director, the library, the flavor index, `listener_play_history`, the settings
 and the web UI with its three skins are all *above* the seam and do not notice.
