@@ -20,6 +20,7 @@
 //! So selection is already independent of playback. What follows only writes
 //! that down.
 
+use crate::engine::Engine;
 use crate::queue::QueueEntry;
 
 /// What a backend can actually do, declared rather than assumed.
@@ -90,18 +91,34 @@ pub const WHOLE_FILE_SLACK_MS: u64 = 5_000;
 
 /// The whole of what a session asks of a player.
 ///
-/// Ten methods, of which the last three are lifecycle. `Engine` satisfies it
-/// today without modification, which is the finding: no local behaviour has to
-/// change for a second backend to become possible.
+/// **Nine methods, and the shape now comes from the callers.** *(Narrowed
+/// 2026-08-21, when a session was first driven through it.)*
+///
+/// The spike's own finding stands: every method forwards to one that already
+/// existed, and nothing in `engine.rs` was touched to make it compile. What did
+/// not stand was the width. `queued` returned an owned `Vec<QueueEntry>` — a
+/// deep clone of every queued passage, per tick — where the concrete code had
+/// been careful to hand out borrows.
+///
+/// Looking at what the four call sites want settled it: three want **passage
+/// ids**, one wants the **total queued duration**, none wants a `QueueEntry`.
+/// So the trait asks for those two instead, and the abstraction costs a
+/// `Vec<i64>` rather than a clone of every path, title and tag `[SPEC-BK-020]`.
 pub trait Playback {
+    /// What this backend can honour, declared rather than assumed.
     fn capabilities(&self) -> Capabilities;
 
     /// Add a passage to the back of the queue.
     fn enqueue(&mut self, entry: QueueEntry);
 
-    /// What is queued, in play order. The Director reads this to avoid
-    /// choosing something already coming `[SPEC-DIR-160]`.
-    fn queued(&self) -> Vec<QueueEntry>;
+    /// The passages coming, in play order. The Director reads this to avoid
+    /// choosing something already queued `[SPEC-DIR-160]`, and that is all it
+    /// wants — hence ids rather than entries.
+    fn queued_ids(&self) -> Vec<i64>;
+
+    /// How much play time is queued ahead, in milliseconds. Used to decide
+    /// whether the lookahead is deep enough in *time* rather than in count.
+    fn queued_ms(&self) -> u64;
 
     /// How many more passages are wanted to reach the configured depth.
     fn shortfall(&self) -> usize;
@@ -111,11 +128,46 @@ pub trait Playback {
     /// server has forgotten.
     fn take_dropped(&mut self) -> Vec<i64>;
 
+    /// Begin the first queued passage at this offset, for a resumed session.
+    fn resume_at(&mut self, position_ms: u64);
+
     /// Do a slice of work. For the local engine this mixes; for a remote
     /// backend it polls the server and reconciles.
     fn tick(&mut self) -> usize;
 
     fn is_shutdown(&self) -> bool;
+}
+
+/// The local engine is a backend like any other, and the one that can do
+/// everything `[SPEC-BK-025]`.
+impl Playback for crate::engine::Engine {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::FULL
+    }
+    fn enqueue(&mut self, entry: QueueEntry) {
+        Engine::enqueue(self, entry)
+    }
+    fn queued_ids(&self) -> Vec<i64> {
+        Engine::queued(self).map(|e| e.passage_id).collect()
+    }
+    fn queued_ms(&self) -> u64 {
+        Engine::queued(self).map(|e| e.end_ms.saturating_sub(e.start_ms)).sum()
+    }
+    fn shortfall(&self) -> usize {
+        Engine::shortfall(self)
+    }
+    fn take_dropped(&mut self) -> Vec<i64> {
+        Engine::take_dropped(self)
+    }
+    fn resume_at(&mut self, position_ms: u64) {
+        Engine::resume_at(self, position_ms)
+    }
+    fn tick(&mut self) -> usize {
+        Engine::tick(self)
+    }
+    fn is_shutdown(&self) -> bool {
+        Engine::is_shutdown(self)
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +189,87 @@ mod tests {
             mbid: None,
             naming: Default::default(),
         }
+    }
+
+    /// A backend that is **not** the engine, to prove the seam is a seam.
+    ///
+    /// It holds ids and spans and nothing else — no decoder, no output, no
+    /// path. If the Director can fill this, it can fill MPD `[SPEC-BK-020]`.
+    struct StubBackend {
+        depth: usize,
+        queued: Vec<(i64, u64)>,
+        dropped: Vec<i64>,
+        caps: Capabilities,
+    }
+
+    impl Playback for StubBackend {
+        fn capabilities(&self) -> Capabilities {
+            self.caps
+        }
+        fn enqueue(&mut self, e: QueueEntry) {
+            self.queued.push((e.passage_id, e.end_ms.saturating_sub(e.start_ms)));
+        }
+        fn queued_ids(&self) -> Vec<i64> {
+            self.queued.iter().map(|(id, _)| *id).collect()
+        }
+        fn queued_ms(&self) -> u64 {
+            self.queued.iter().map(|(_, ms)| *ms).sum()
+        }
+        fn shortfall(&self) -> usize {
+            self.depth.saturating_sub(self.queued.len())
+        }
+        fn take_dropped(&mut self) -> Vec<i64> {
+            std::mem::take(&mut self.dropped)
+        }
+        fn resume_at(&mut self, _position_ms: u64) {}
+        fn tick(&mut self) -> usize {
+            0
+        }
+        fn is_shutdown(&self) -> bool {
+            false
+        }
+    }
+
+    /// The refill pattern, run against something with no audio path at all.
+    ///
+    /// This is the whole claim of `[SPEC-BK-020]` in miniature: top up to
+    /// depth, read back what is queued to exclude it from the next choice, and
+    /// measure the lookahead in time. None of it touches `Engine`.
+    #[test]
+    fn a_session_can_fill_a_backend_that_is_not_the_engine() {
+        let mut b = StubBackend {
+            depth: 5,
+            queued: Vec::new(),
+            dropped: Vec::new(),
+            caps: Capabilities::MPD,
+        };
+        let backend: &mut dyn Playback = &mut b;
+
+        assert_eq!(backend.shortfall(), 5, "an empty queue wants the full depth");
+        for i in 0..backend.shortfall() {
+            let mut e = entry(0, 200_000);
+            e.passage_id = 100 + i as i64;
+            backend.enqueue(e);
+        }
+        assert_eq!(backend.shortfall(), 0, "filled to depth, and it stops");
+        assert_eq!(backend.queued_ids(), vec![100, 101, 102, 103, 104]);
+        assert_eq!(backend.queued_ms(), 5 * 200_000, "lookahead measured in time");
+        assert!(!backend.capabilities().gain, "and it says what it cannot do");
+    }
+
+    /// A dropped passage reaches the Director the same way from any backend
+    /// `[REQ-PD-112]`, and is reported once.
+    #[test]
+    fn a_backend_reports_what_it_could_not_play_exactly_once() {
+        let mut b = StubBackend {
+            depth: 2,
+            queued: Vec::new(),
+            dropped: vec![7, 9],
+            caps: Capabilities::MPD,
+        };
+        let backend: &mut dyn Playback = &mut b;
+        assert_eq!(backend.take_dropped(), vec![7, 9]);
+        assert!(backend.take_dropped().is_empty(), "taking clears them");
     }
 
     #[test]
@@ -170,35 +303,5 @@ mod tests {
     fn trailing_slack_still_counts_as_whole() {
         // A trim that stops a few seconds early is not a slice worth refusing.
         assert!(!Capabilities::WHOLE_FILE.would_misplay(&entry(0, 280_000), 284_250));
-    }
-}
-
-/// The built-in engine, satisfying the trait it did not know about.
-///
-/// **The finding this spike exists for.** Every method below forwards to one
-/// that already existed with the same signature: nothing in `engine.rs` was
-/// touched to make this compile. The seam was real before it was named, which
-/// is why a second backend is an addition rather than a refactor.
-impl Playback for crate::engine::Engine {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::FULL
-    }
-    fn enqueue(&mut self, entry: QueueEntry) {
-        crate::engine::Engine::enqueue(self, entry)
-    }
-    fn queued(&self) -> Vec<QueueEntry> {
-        crate::engine::Engine::queued(self).cloned().collect()
-    }
-    fn shortfall(&self) -> usize {
-        crate::engine::Engine::shortfall(self)
-    }
-    fn take_dropped(&mut self) -> Vec<i64> {
-        crate::engine::Engine::take_dropped(self)
-    }
-    fn tick(&mut self) -> usize {
-        crate::engine::Engine::tick(self)
-    }
-    fn is_shutdown(&self) -> bool {
-        crate::engine::Engine::is_shutdown(self)
     }
 }

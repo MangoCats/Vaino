@@ -181,7 +181,9 @@ fn engine_thread(
     while !engine.is_shutdown() {
         let submitted = engine.tick();
         // Continuous radio: the queue never runs dry, so playback never ends.
-        session.refill(&mut engine);
+        // The backend plays; the settings belong to the process `[SPEC-BK-020]`.
+        let suppress = engine.snapshot_suppress_h();
+        session.refill(&mut engine, suppress);
         // Nothing submitted means the ring is comfortably full -- the engine
         // declines to mix less than a threshold's worth -- so there is time to
         // spare. Sleeping through it is the difference between a loop that

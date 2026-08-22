@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use crate::db::{DbError, Library, PlayerStore};
 use crate::director::library::{Director, Explanation, Rng};
 use crate::engine::Engine;
+use crate::playback::Playback;
 
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
@@ -191,7 +192,9 @@ impl Session {
     /// Called before the shortfall check, because a rebuild is exactly what
     /// must **not** happen while the queue is short: the Director is needed to
     /// refill it, and the SD card is needed to decode from it.
-    fn tend_rebuild(&mut self, engine: &Engine) {
+    /// Driven through `Playback` rather than `Engine` `[SPEC-BK-020]`: a
+    /// rebuild waits on how much is queued, and that is true of any backend.
+    fn tend_rebuild(&mut self, engine: &dyn Playback) {
         if let Some(rx) = &self.rebuild {
             match rx.try_recv() {
                 Err(std::sync::mpsc::TryRecvError::Empty) => return, // still building
@@ -235,7 +238,7 @@ impl Session {
         // Enough audio in hand, or a queue already as full as it will get --
         // waiting past that point would be waiting for something that is not
         // coming.
-        let queued_ms: u64 = engine.queued().map(|e| e.end_ms.saturating_sub(e.start_ms)).sum();
+        let queued_ms: u64 = engine.queued_ms();
         if queued_ms < RELOAD_MIN_QUEUE_MS && engine.shortfall() > 0 {
             self.say_reload(&format!(
                 "waiting for {} s of queue before rebuilding ({} s in hand)",
@@ -276,11 +279,11 @@ impl Session {
     /// un-suppressed and could pick a sibling that rotation had ruled out
     /// `[REQ-PD-112]`. The notes are rebuilt rather than moved because each one
     /// holds the *previous* value from the Director that issued it.
-    fn adopt(&mut self, fresh: Director, engine: &Engine) {
+    fn adopt(&mut self, fresh: Director, engine: &dyn Playback) {
         self.director = Some(fresh);
         self.notes.clear();
         let now = unix_now();
-        let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
+        let queued: Vec<i64> = engine.queued_ids();
         if let Some(d) = self.director.as_mut() {
             for id in queued {
                 if let Some(note) = d.note_queued(id, now) {
@@ -365,7 +368,8 @@ impl Session {
                 Err(_) => eprintln!("saved passage {id} is no longer in the library"),
             }
         }
-        self.refill(engine);
+        let suppress = engine.snapshot_suppress_h();
+        self.refill(engine, suppress);
     }
 
     /// Top the queue back up to `depth`. Called every tick in a continuous
@@ -375,10 +379,13 @@ impl Session {
     /// Picks one at a time, telling the Director about each as it goes. Asking
     /// for five at once would weigh all five against the same stale history and
     /// could queue five tracks by one artist `[SPEC-DIR-115]`.
-    pub fn refill(&mut self, engine: &mut Engine) {
+    /// Takes a **backend**, not the engine `[SPEC-BK-020]`. The suppression
+    /// windows arrive as an argument because they are the *listener's*
+    /// settings, not the backend's: whoever is playing, they are the same.
+    pub fn refill(&mut self, engine: &mut dyn Playback, suppress: (u64, u64)) {
         // Before anything else, and deliberately before the shortfall check:
         // a rebuild must not start while the queue is short `[IMPL-SUI-075]`.
-        self.tend_rebuild(engine);
+        self.tend_rebuild(&*engine);
 
         // Apply the browser's programme choice before selecting, and report
         // back what is actually in force -- "auto" resolves to a name only the
@@ -400,9 +407,8 @@ impl Session {
             // The listener's suppression window lives with the other settings
             // and is persisted by the engine `[REQ-VIS-155]`; the Director is
             // told when it moves `[SPEC-PLAY-050]`.
-            let want = engine.snapshot_suppress_h();
-            if d.suppress_h() != want {
-                d.set_suppress_h(want);
+            if d.suppress_h() != suppress {
+                d.set_suppress_h(suppress);
             }
         }
 
@@ -421,7 +427,7 @@ impl Session {
         // passage for the life of the process.
         if !self.notes.is_empty() {
             let queued: std::collections::HashSet<i64> =
-                engine.queued().map(|e| e.passage_id).collect();
+                engine.queued_ids().into_iter().collect();
             self.notes.retain(|id, _| queued.contains(id));
         }
 
@@ -429,8 +435,7 @@ impl Session {
         if short == 0 {
             return;
         }
-        let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
-        let mut chosen: Vec<i64> = queued;
+        let mut chosen: Vec<i64> = engine.queued_ids();
 
         if let Some(d) = &mut self.director {
             for _ in 0..short {

@@ -41,8 +41,21 @@ seconds** to load before it can make a sound. Neither is acceptable for
 something a listener does on impulse. Loading the Director once and switching
 the output costs neither.
 
-The seam already exists. `Playback` and `Capabilities` were written during the
-stage-1 spike `[GDE-BAK-040]`, and `Engine` satisfies the trait unchanged:
+The seam already existed and is now **load-bearing**: `Session::refill`,
+`tend_rebuild` and `adopt` take `&mut dyn Playback`, not `&mut Engine`
+`[SPEC-BK-022]`. `Engine` satisfies the trait with nothing in `engine.rs`
+touched, which was the spike's claim and survives.
+
+**The trait had to narrow to carry weight, though.** As written it asked for
+`queued() -> Vec<QueueEntry>` — a deep clone of every queued passage, per tick,
+where the concrete code handed out borrows. The four call sites want three
+**passage ids** and one **queued duration**, so it asks for those instead and
+costs a `Vec<i64>`. A seam is only free if it is the shape of what crosses it.
+
+**And the settings do not cross it.** `refill` takes the suppression windows as
+an argument rather than asking the backend, because they are the listener's and
+are the same whoever is playing. What stayed on `Engine` is exactly what should:
+`apply_settings`, `attach_store` — process setup, not playback.
 
 ```
 Capabilities::FULL  { spans: true, gain: true,  ramps: true  }   Vaino's engine
