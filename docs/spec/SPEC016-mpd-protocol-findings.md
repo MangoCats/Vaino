@@ -97,6 +97,36 @@ honestly absent from those that do not.
 > names belonged. `spans`, `gain` and `ramps` were all about *playing* a
 > passage, and nobody asked whether the guest could **say what it was**.
 
+**`[SPEC-MPD-054]` And the sticker is not a substitute, measured against a real
+client.** Cantata shows `TestForEcho` and `GoldAsia` — MPD's filename fallback —
+for captures whose `vaino.title` sticker was set correctly at the same moment.
+Stickers make the truth *available*; they do not make a client show it, and no
+client is obliged to look. Publishing them is still right, and it is not a fix.
+
+Two further routes were tried and closed:
+
+| route | result |
+| :--- | :--- |
+| `addtagid` on a database song | `ACK [4@0] Cannot edit tags of local file` |
+| `addid "file:///abs/path"`, to get a song MPD has no database entry for | `ACK [4@0] Access to local files not implemented on **Windows**` |
+
+The second is a *platform* limit rather than a protocol one, so it may work on
+the appliance's Linux MPD and is **untested there**. If it does, a passage could
+be added by absolute path and then named with `addtagid` — correct titles in
+every client, at the cost of losing the database entry the sticker hangs on.
+
+**`[SPEC-MPD-056]` The route that would actually fix it is a cue sheet.** This
+build carries the `cue` and `embcue` playlist plugins, and MPD exposes a cue
+sheet's tracks as separate songs with their own titles and offsets. A capture
+with a cue sheet beside it would name every passage inside it, for every client,
+with no sticker support required.
+
+It is **not** taken here, and the reason is a boundary rather than a difficulty:
+it means writing files into the listener's music tree, and Vaino's passages are
+not always a CD's tracks — a radio span trims what an album span keeps
+`[GDE-BMK-030]`. That is a decision about what Vaino is allowed to do to a music
+folder, and it belongs to the person who owns the folder.
+
 ---
 
 ## 3. Transport state
