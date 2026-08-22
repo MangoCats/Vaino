@@ -147,6 +147,18 @@
          already has a cover is never touched, whoever put it there.</p>
     </div>
     <div class="setting">
+      <label for="lyricscache">Per-song lyrics for a local client</label>
+      <span><input type="checkbox" id="lyricscache"> write into its cache
+        <small id="lyricsstatus"></small></span>
+      <p>A lyrics file beside a capture would hold every song in it at once, so
+         per-song words go where a client keys them by artist and title &mdash;
+         its own cache. Ticking this writes one file per song Vaino has words
+         for. <strong>This writes into another application&rsquo;s data
+         folder</strong>, and it only helps a client running on <em>this</em>
+         machine: a phone in another room keeps its own cache and will not see
+         these. A file already there is never replaced.</p>
+    </div>
+    <div class="setting">
       <label>Server build</label>
       <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>
       <p>The version and the commit this server was built from. <code>+dirty</code>

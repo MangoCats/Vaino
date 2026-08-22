@@ -132,6 +132,25 @@ cache, so the two routes are ranked rather than complementary:
 > other client looks there. That is a different kind of intrusion from the music
 > folder and deserves its own decision, not a fold into the same checkbox.
 
+**`[SPEC-LYR-070]` The cache route is built, behind its own checkbox
+`[REQ-VIS-215]`.** `player/src/lyrics_cache.rs` writes
+`<artist>/<title>.lyrics`, naming each file with a port of Cantata's
+`Covers::encodeName` rather than an approximation — a name the two disagree
+about is a file the client never opens.
+
+**Named by what MPD will report, not by what Vaino believes.** For a cue track
+that is the sheet's own `TITLE`/`PERFORMER`, which Vaino wrote from MusicBrainz;
+for an ordinary file it is the file's tags. Measured on the live library:
+**2,235 songs written**, one file each, captures included.
+
+**`[SPEC-LYR-075]` The cache is on the client's machine, not the server's — and
+this is the limit to state before anyone relies on it.** It works when Vaino and
+the client share a machine and does nothing when the client is elsewhere. The
+music-folder sidecar `[SPEC-LYR-055]` has the opposite property: portable to any
+client anywhere, but blind to the 702 passages inside captures. **They are
+complementary, and neither replaces the other** — which is why they are two
+settings rather than one.
+
 ---
 
 ## 5. What this proposal does not do

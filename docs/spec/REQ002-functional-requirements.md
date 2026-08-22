@@ -491,6 +491,25 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-215]` Vaino may write per-song lyrics into a local client's cache,
+and only if asked.** A persisted setting, **off by default**, the third of this
+kind.
+
+A sidecar belongs to a file, and a capture is one file holding a dozen songs —
+so `<audiofile>.lyrics` can only ever show all twelve at once. A client's own
+cache is keyed by **artist and title**, which a cue track has `[SPEC-MPD-056]`,
+so writing there gives every passage its own words. 2,235 songs on this library.
+
+**Two things make this a heavier ask than the other two, and both are said on
+the settings page rather than only here.** It writes into another application's
+data folder, not the listener's music folder. And **the cache is on the machine
+the client runs on**: it works when Vaino and the client share a machine, and
+does nothing at all when the client is a phone in another room `[SPEC-LYR-075]`.
+
+**A file already there is never replaced**, whatever it holds — a client may
+have fetched and saved it, and that was its choice about its own cache. Written
+once, a second run reports every song as already current and touches nothing.
+
 **`[REQ-VIS-210]` Vaino may write cover art into the music folder, and only if
 asked.** A persisted setting, **off by default**, beside the cue one.
 

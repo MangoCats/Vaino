@@ -167,6 +167,9 @@ pub struct Snapshot {
     /// `[REQ-VIS-210]`
     pub covers: bool,
     pub covers_status: Option<String>,
+    /// `[REQ-VIS-215]`
+    pub lyrics_cache: bool,
+    pub lyrics_status: Option<String>,
     /// The Director's pool as `(eligible, total)`, so a rebuild's effect is
     /// visible rather than asserted: importing music and reloading moves
     /// `total`. Absent when there is no Director.
@@ -251,11 +254,13 @@ impl From<&PlayerState> for Snapshot {
             switch_status: None,
             cue_status: None,
             covers_status: None,
+            lyrics_status: None,
             pool: None,
             program_manual: false,
             programs: Vec::new(),
             cue_sheets: s.cue_sheets,
             covers: s.covers,
+            lyrics_cache: s.lyrics_cache,
             dev_mode: s.dev_mode,
             underrun_samples: s.underrun_samples,
             lock_failures: s.lock_failures,
@@ -303,6 +308,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/backend/:which", post(switch_backend))
         .route("/cue/:on", post(set_cue_sheets))
         .route("/covers/:on", post(set_covers))
+        .route("/lyricscache/:on", post(set_lyrics_cache))
         .route("/audio/radios", get(radios))
         .route("/power/off", post(power_off))
         .route("/audio/radio/:kind/:state", post(set_radio))
@@ -794,6 +800,20 @@ async fn set_covers(
     StatusCode::ACCEPTED
 }
 
+/// Allow or forbid Vaino writing per-song lyrics into a local client's cache
+/// `[REQ-VIS-215]`.
+async fn set_lyrics_cache(
+    State(ui): State<Ui>,
+    axum::extract::Path(on): axum::extract::Path<String>,
+) -> StatusCode {
+    let want = on == "on" || on == "true" || on == "1";
+    ui.handle.send(Command::SetLyricsCache(want));
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    c.lyrics_requested = Some(want);
+    c.lyrics_status = Some(if want { "writing…".into() } else { "off".into() });
+    StatusCode::ACCEPTED
+}
+
 /// Ask for the other backend `[SPEC-BK-030]`.
 ///
 /// Asks; it does not perform. The engine takes the intent on its next pass,
@@ -860,6 +880,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.switch_status = c.switch_status.clone();
             snap.cue_status = c.cue_status.clone();
             snap.covers_status = c.covers_status.clone();
+            snap.lyrics_status = c.lyrics_status.clone();
             snap.pool = c.pool;
             snap.programs = c
                 .programs

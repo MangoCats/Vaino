@@ -332,6 +332,37 @@ fn engine_thread(
             }
         }
 
+        let lyrics_ask =
+            controls_for_switch.lock().ok().and_then(|mut c| c.lyrics_requested.take());
+        if let Some(on) = lyrics_ask {
+            let said = if !on {
+                "off; files already written are left alone".to_string()
+            } else {
+                match vaino_player::lyrics_cache::cache_dir() {
+                    // No cache directory is a machine the client has never run
+                    // on, and there is nothing useful to write there
+                    // `[SPEC-LYR-075]`.
+                    None => "no client cache on this machine; nothing written".to_string(),
+                    Some(dir) => match rusqlite::Connection::open(&db)
+                        .map_err(|e| e.to_string())
+                        .and_then(|c| vaino_player::lyrics_cache::generate(&c, &dir, false))
+                    {
+                        Ok(rep) => {
+                            for f in &rep.failed {
+                                eprintln!("lyrics: {f}");
+                            }
+                            rep.summary()
+                        }
+                        Err(e) => format!("failed: {e}"),
+                    },
+                }
+            };
+            println!("lyrics cache: {said}");
+            if let Ok(mut c) = controls_for_switch.lock() {
+                c.lyrics_status = Some(said);
+            }
+        }
+
         // A switch asked for by the browser happens here, where the backends
         // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
         // topped up rather than the outgoing one.

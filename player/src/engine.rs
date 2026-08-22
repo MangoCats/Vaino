@@ -71,6 +71,8 @@ pub struct PlayerState {
     pub cue_sheets: bool,
     /// `[REQ-VIS-210]`
     pub covers: bool,
+    /// `[REQ-VIS-215]`
+    pub lyrics_cache: bool,
     /// Reported to the browser so the interface can show it `[PI-SET-016]`.
     pub dev_mode: bool,
     pub active_streams: usize,
@@ -138,6 +140,9 @@ pub enum Command {
     SetCueSheets(bool),
     /// Whether Vaino may write cover art into the music folder `[REQ-VIS-210]`.
     SetCovers(bool),
+    /// Whether Vaino may write per-song lyrics into a local client's cache
+    /// `[REQ-VIS-215]`. Turning it on is what asks for them to be written.
+    SetLyricsCache(bool),
     /// How often a guest backend samples `status`, in ms `[SPEC-MPD-105]`.
     SetSampleInterval(u64),
     Enqueue(QueueEntry),
@@ -254,6 +259,8 @@ pub struct Engine {
     cue_sheets: bool,
     /// `[REQ-VIS-210]`
     covers: bool,
+    /// `[REQ-VIS-215]`
+    lyrics_cache: bool,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -335,6 +342,7 @@ impl Engine {
             sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
             cue_sheets: false,
             covers: false,
+            lyrics_cache: false,
             saved: None,
             recorded: false,
             head: None,
@@ -457,6 +465,10 @@ impl Engine {
                 }
                 Ok(Command::SetCovers(on)) => {
                     self.covers = on;
+                    self.remember_settings();
+                }
+                Ok(Command::SetLyricsCache(on)) => {
+                    self.lyrics_cache = on;
                     self.remember_settings();
                 }
                 Ok(Command::SetSampleInterval(ms)) => {
@@ -715,6 +727,7 @@ impl Engine {
             sample_interval_ms: self.sample_interval_ms,
             cue_sheets: self.cue_sheets,
             covers: self.covers,
+            lyrics_cache: self.lyrics_cache,
         }
     }
 
@@ -737,6 +750,7 @@ impl Engine {
             .clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
         self.cue_sheets = s.cue_sheets;
         self.covers = s.covers;
+        self.lyrics_cache = s.lyrics_cache;
         self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);
@@ -1160,6 +1174,7 @@ impl Engine {
             s.sample_interval_ms = self.sample_interval_ms;
             s.cue_sheets = self.cue_sheets;
             s.covers = self.covers;
+            s.lyrics_cache = self.lyrics_cache;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.lock_failures = self.path.ring.as_ref().map_or(0, |r| r.diagnostics().1);

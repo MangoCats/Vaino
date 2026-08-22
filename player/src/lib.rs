@@ -34,6 +34,8 @@ pub mod director;
 pub mod decoder;
 pub mod engine;
 pub mod fade;
+/// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
+pub mod lyrics_cache;
 pub mod mixer;
 /// The MPD protocol client `[SPEC-MPD-070]`. `std::net` and nothing else, and
 /// absent entirely from a build that did not ask for it.
