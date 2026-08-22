@@ -21,12 +21,6 @@ use crate::queue::{should_admit, Queue, QueueEntry};
 use crate::resample::Resampler;
 use crate::BUFFER_FRAMES;
 
-/// How often the resume point reaches the database during steady playback.
-/// Losing at most this much position to a power cut is a fair trade for not
-/// writing to storage thousands of times a second.
-
-
-/// A passage currently decoding and/or sounding.
 struct Live {
     dec: PassageDecoder,
     stream: Stream,
@@ -973,30 +967,40 @@ impl Engine {
         }
         // Everything needed is read off the head first, so the borrow ends
         // before any of the bookkeeping below wants `&mut self`.
-        let (id, mbid, heard_ms, span_ms) = {
-            let Some(live) = self.live.first() else { return };
+        //
+        // **Read even when there is no head.** An empty `live` is not "nothing
+        // to do": it is the strongest evidence a passage has just departed. An
+        // earlier version returned here, so skipping the *last* queued passage
+        // judged nothing at all — the track was abandoned and suppressed
+        // nothing, and the Director could offer it straight back
+        // `[SPEC-PLAY-050]`.
+        let head_now: Option<(i64, Option<String>, u64, u64)> = self.live.first().map(|live| {
             (
                 live.entry.passage_id,
                 live.entry.mbid.clone(),
                 self.audible_ms(live),
                 live.entry.duration_ms(),
             )
-        };
+        });
+        let id_now = head_now.as_ref().map(|(id, ..)| *id);
+
         // The guard has to follow the head, not just remember the last write.
         // While every started passage was recorded these were the same thing;
         // now that a passage can finish unrecorded, a stale id would suppress
         // the next honest play of the same passage.
-        if self.head != Some(id) {
+        if self.head != id_now {
             // The outgoing passage left without reaching the threshold: it did
             // not play, and it is not forgotten either `[SPEC-PLAY-050]`.
             if let (Some(prev), false) = (self.head, self.recorded) {
                 let prev_mbid = self.head_mbid.take();
                 self.note_rejection(crate::db::Rejection::Skip, prev, prev_mbid.as_deref());
             }
-            self.head = Some(id);
-            self.head_mbid = mbid.clone();
+            self.head = id_now;
+            self.head_mbid = head_now.as_ref().and_then(|(_, m, ..)| m.clone());
             self.recorded = false;
         }
+
+        let Some((id, mbid, heard_ms, span_ms)) = head_now else { return };
         if self.recorded {
             return;
         }
@@ -1235,6 +1239,162 @@ mod tests {
     /// idea that the sounding passage occupied slot zero -- it does not; it is
     /// in `live` and out of the queue entirely.
     const DQ_MBID: &str = "aaaaaaaa-0000-0000-0000-000000000007";
+
+    /// Write a decodable WAV of `ms` milliseconds and return its path.
+    ///
+    /// **Generated, not committed.** The oldest gap in this engine's tests was
+    /// that judging a play needs audio to play, and there were no fixtures; a
+    /// binary in the repository would have been one answer, but symphonia's
+    /// default features already bring a RIFF reader and a PCM codec, so silence
+    /// can simply be written on the spot. Silence decodes to frames like
+    /// anything else, and frames are what the clock counts.
+    fn wav_of(ms: u64) -> std::path::PathBuf {
+        const RATE: u32 = 44_100;
+        const CH: u16 = 2;
+        let frames = (RATE as u64 * ms / 1000) as u32;
+        let data = (frames * CH as u32 * 2) as u32;
+        let mut v = Vec::with_capacity(44 + data as usize);
+        v.extend(b"RIFF");
+        v.extend((36 + data).to_le_bytes());
+        v.extend(b"WAVEfmt ");
+        v.extend(16u32.to_le_bytes());
+        v.extend(1u16.to_le_bytes()); // PCM
+        v.extend(CH.to_le_bytes());
+        v.extend(RATE.to_le_bytes());
+        v.extend((RATE * CH as u32 * 2).to_le_bytes());
+        v.extend((CH * 2).to_le_bytes());
+        v.extend(16u16.to_le_bytes());
+        v.extend(b"data");
+        v.extend(data.to_le_bytes());
+        v.resize(44 + data as usize, 0);
+
+        let p = std::env::temp_dir().join(format!(
+            "vaino_fixture_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&p, v).unwrap();
+        p
+    }
+
+    /// Tick until a condition holds, or give up. The silent path is not paced
+    /// by real time, so this converges in milliseconds.
+    fn tick_until(e: &mut Engine, mut done: impl FnMut(&Engine) -> bool) -> bool {
+        for _ in 0..200_000 {
+            if done(e) {
+                return true;
+            }
+            e.tick();
+        }
+        false
+    }
+
+    fn plays(st: &PlayerStore) -> i64 {
+        st.play_count()
+    }
+
+    /// A passage heard past its threshold is written to history
+    /// `[SPEC-PLAY-010]`.
+    ///
+    /// The engine's half of that rule had never been tested end to end: the
+    /// judgement was covered in `scrobble`, but nothing had ever played a
+    /// passage through this engine and checked that a row appeared.
+    #[test]
+    fn a_passage_heard_past_its_threshold_is_recorded() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let wav = wav_of(4_000);
+        let mut ent = entry(41, wav.to_str().unwrap());
+        ent.end_ms = 4_000;
+        ent.mbid = Some("aaaaaaaa-0000-0000-0000-000000000041".into());
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+
+        assert!(tick_until(&mut e, |e| plays(&st) > 0), "a play should have been written");
+        assert_eq!(plays(&st), 1, "and exactly one, however many ticks it took");
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A passage dropped before its threshold is **not** a play, and is
+    /// suppressed instead `[SPEC-PLAY-050]`.
+    #[test]
+    fn a_passage_cut_short_becomes_a_skip_not_a_play() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let long = wav_of(30_000);
+        let short = wav_of(1_000);
+        let mut a = entry(42, long.to_str().unwrap());
+        a.end_ms = 30_000; // threshold 15 s, and we will not get near it
+        a.mbid = Some("aaaaaaaa-0000-0000-0000-000000000042".into());
+        let mut b = entry(43, short.to_str().unwrap());
+        b.end_ms = 1_000;
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        e.drain_commands();
+
+        // Let it sound briefly, then move on -- far short of fifteen seconds.
+        for _ in 0..40 {
+            e.tick();
+        }
+        h.send(Command::Skip);
+        e.drain_commands();
+        assert!(
+            tick_until(&mut e, |e| {
+                st.last_rejected(crate::db::Rejection::Skip).map(|m| !m.is_empty()).unwrap_or(false)
+            }),
+            "the abandoned passage should have been suppressed"
+        );
+        assert_eq!(plays(&st), 0, "and it must never have become a play");
+        let _ = std::fs::remove_file(&long);
+        let _ = std::fs::remove_file(&short);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The **last** passage, abandoned with nothing behind it, must still be
+    /// judged `[SPEC-PLAY-050]`.
+    ///
+    /// The suspicious case: `record_play` reads the head to do its work, so a
+    /// queue that empties leaves it nothing to read. If the rejection is only
+    /// written when some *other* passage takes the head, then skipping the last
+    /// track of an evening suppresses nothing and the Director may offer it
+    /// straight back.
+    #[test]
+    fn skipping_the_last_passage_still_suppresses_it() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let wav = wav_of(30_000);
+        let mut only = entry(44, wav.to_str().unwrap());
+        only.end_ms = 30_000;
+        only.mbid = Some("aaaaaaaa-0000-0000-0000-000000000044".into());
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..40 {
+            e.tick();
+        }
+
+        h.send(Command::Skip);
+        e.drain_commands();
+        let judged = tick_until(&mut e, |_| {
+            st.last_rejected(crate::db::Rejection::Skip).map(|m| !m.is_empty()).unwrap_or(false)
+        });
+        assert!(judged, "an abandoned last passage must still be suppressed");
+        assert_eq!(plays(&st), 0);
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// A fade to silence empties the engine, so a handoff leaves nothing
     /// behind to play `[SPEC-BK-030]`.

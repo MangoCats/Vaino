@@ -114,6 +114,23 @@ pub(crate) const TAG_TABLE: &str = "
 /// every rejection, and an existing library that predates this feature would
 /// otherwise fail every write. Those writes are best-effort by design, so the
 /// failure would be a log line and a suppression that silently never happened.
+/// Where plays are written `[SPEC-PLAY-010]`.
+///
+/// Created by the player for exactly the reason `REJECTION_TABLE` is: the
+/// player is what **writes** here, on every play, and those writes are
+/// best-effort by design. A library that reached this build without Sampo
+/// having run its schema would have failed every one of them as a log line
+/// nobody reads — losing the only irreplaceable data in the system
+/// `[SPEC-DF-090]` while appearing to work.
+pub(crate) const PLAY_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS listener_play_history (
+        play_id     INTEGER PRIMARY KEY,
+        played_at   INTEGER NOT NULL,
+        passage_id  INTEGER,
+        mbid        TEXT);
+    CREATE INDEX IF NOT EXISTS listener_play_time ON listener_play_history(played_at);
+    CREATE INDEX IF NOT EXISTS listener_play_mbid ON listener_play_history(mbid);";
+
 pub(crate) const REJECTION_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS listener_rejections (
         rejection_id INTEGER PRIMARY KEY,
@@ -532,6 +549,7 @@ impl PlayerStore {
         // writable handle, so the read path never meets a missing table.
         // Filling it is `tools/fetch_cover_art.py`'s job.
         conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
@@ -830,6 +848,14 @@ impl PlayerStore {
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// How many plays are on record. For diagnostics, and for anything that
+    /// needs to see the ledger move without reading it all.
+    pub fn play_count(&self) -> i64 {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM listener_play_history", [], |r| r.get(0))
+            .unwrap_or(0)
     }
 
     /// When each recording was last rejected in this way. Only the most recent
@@ -1491,7 +1517,13 @@ mod tests {
              CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT, release_date TEXT,
                  source TEXT, release_group TEXT, status TEXT, primary_type TEXT,
                  secondary_types TEXT, country TEXT, track_count INTEGER);
-             CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, mbid TEXT);
+             -- As SPEC008 declares it, not as the queries here happen to need
+             -- it. A fixture missing `played_at` passed for as long as nothing
+             -- indexed the column, and then failed the moment the player began
+             -- creating the table itself -- the same looseness the note above
+             -- is about.
+             CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                 played_at INTEGER NOT NULL DEFAULT 0, passage_id INTEGER, mbid TEXT);
              INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-000000000001','Wrong Song',NULL,'s');
              CREATE TABLE id_checks (passage_id INTEGER PRIMARY KEY, stored_mbid TEXT NOT NULL,
                  verdict TEXT NOT NULL, score REAL, suggested TEXT, checked_at TEXT NOT NULL);
@@ -1998,12 +2030,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("vaino_ph_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let st = PlayerStore::open(&p).unwrap();
-        st.conn
-            .execute_batch(
-                "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
-                     played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);",
-            )
-            .unwrap();
+        // The table is PlayerStore::open's now.
         st.record_play(7, Some("aaaaaaaa-0000-0000-0000-000000000001")).unwrap();
         st.record_play(8, None).unwrap();
         let rows: Vec<(i64, Option<String>)> = st
@@ -2091,14 +2118,8 @@ mod tests {
                 .as_nanos()
         ));
         let _ = std::fs::remove_file(&tmp);
+        // Both tables are PlayerStore::open's now.
         let st = PlayerStore::open(&tmp).unwrap();
-        st.conn
-            .execute_batch(
-                "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
-                     played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);
-                 -- listener_rejections is created by PlayerStore::open itself.",
-            )
-            .unwrap();
         let skipped = "aaaaaaaa-0000-0000-0000-000000000009";
         let dropped = "aaaaaaaa-0000-0000-0000-00000000000d";
         st.record_rejection(Rejection::Skip, 11, Some(skipped)).unwrap();

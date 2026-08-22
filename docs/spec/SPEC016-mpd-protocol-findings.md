@@ -84,6 +84,18 @@ it has `stop`. There is no "fade out over N ms", so a fade must be built from
 mixer`** when the output plugin has none. MPD's `null` output has none; a
 PipeWire or ALSA output, which is what an appliance runs, does.
 
+Which makes it testable on a development machine after all, and that is worth
+writing down because the first attempt concluded otherwise: MPD's Windows build
+carries `wasapi`, and
+
+```
+audio_output { type "wasapi"  name "…"  mixer_type "software" }
+```
+
+reports a `volume` and accepts `setvol`. The fade path was thought to need the
+appliance because the *test rig* had a `null` output, not because Windows could
+not do it.
+
 So a fade *out of* MPD is conditional on the deployment rather than on the
 protocol. `[SPEC-BK-030]`'s crossfade is therefore asymmetric: Vaino can always
 fade its own side, and MPD can only sometimes fade its own. Which happens is
