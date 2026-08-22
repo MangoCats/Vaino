@@ -159,6 +159,19 @@
          these. A file already there is never replaced.</p>
     </div>
     <div class="setting">
+      <label for="lyricssidecar">Lyrics beside the audio</label>
+      <span><input type="checkbox" id="lyricssidecar"> write into the music folder
+        <small id="sidecarstatus"></small></span>
+      <p>The companion to the setting above, and the one that reaches a client
+         on <em>another</em> machine &mdash; provided that client can read your
+         music folder, since it builds this path from its own Music Folder
+         setting. <strong>This writes files into your music folder.</strong>
+         Captures are deliberately skipped: a client tries this file
+         <em>before</em> the cache, so one written beside a capture would
+         replace each song&rsquo;s own words with all twelve at once. A file
+         already there is never replaced.</p>
+    </div>
+    <div class="setting">
       <label>Server build</label>
       <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>
       <p>The version and the commit this server was built from. <code>+dirty</code>

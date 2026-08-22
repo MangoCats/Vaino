@@ -491,6 +491,22 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-220]` Vaino may write lyrics beside the audio, and only if asked.**
+A persisted setting, **off by default**, the fourth of this kind and the
+companion to the one below.
+
+**1,624 single-passage files; the 702 passages inside captures are skipped on
+purpose.** A client tries the sidecar *before* its cache, so one written beside
+a capture would overrule the per-song words `[REQ-VIS-215]` puts there and show
+all twelve songs at once for every one of them. Skipping captures is what keeps
+the two settings complementary rather than one undoing the other
+`[SPEC-LYR-080]`.
+
+**This is the route that can reach another machine — on one condition.** A
+client builds this path from its own music-folder setting, so it works where
+that client can read the music folder and not otherwise `[SPEC-LYR-085]`. A file
+already there is never replaced, and a second run writes nothing.
+
 **`[REQ-VIS-215]` Vaino may write per-song lyrics into a local client's cache,
 and only if asked.** A persisted setting, **off by default**, the third of this
 kind.

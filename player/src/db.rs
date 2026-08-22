@@ -519,6 +519,10 @@ pub struct Settings {
     /// `[REQ-VIS-215]`. **Off by default**, and useful only where that client
     /// runs on this machine `[SPEC-LYR-075]`.
     pub lyrics_cache: bool,
+    /// Whether Vaino may write lyrics beside the audio `[REQ-VIS-220]`.
+    /// **Off by default**: it writes into the music folder, and it is
+    /// deliberately blind to captures `[SPEC-LYR-080]`.
+    pub lyrics_sidecar: bool,
 }
 
 impl Default for Settings {
@@ -535,6 +539,7 @@ impl Default for Settings {
             cue_sheets: false,
             covers: false,
             lyrics_cache: false,
+            lyrics_sidecar: false,
         }
     }
 }
@@ -593,7 +598,8 @@ impl PlayerStore {
                        "dequeue_suppress_h INTEGER", "queue_depth INTEGER",
                        "sample_interval_ms INTEGER",
                        "cue_sheets INTEGER", "covers INTEGER",
-                       "lyrics_cache INTEGER"] {
+                       "lyrics_cache INTEGER",
+                       "lyrics_sidecar INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
         }
@@ -736,8 +742,8 @@ impl PlayerStore {
                      (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms,
                       skip_suppress_h, dequeue_suppress_h, queue_depth,
                       sample_interval_ms, cue_sheets, covers, lyrics_cache,
-                      updated_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                      lyrics_sidecar, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                          datetime('now'))
                  ON CONFLICT(id) DO UPDATE SET
                      volume = excluded.volume,
@@ -751,6 +757,7 @@ impl PlayerStore {
                      cue_sheets = excluded.cue_sheets,
                      covers = excluded.covers,
                      lyrics_cache = excluded.lyrics_cache,
+                     lyrics_sidecar = excluded.lyrics_sidecar,
                      updated_at = excluded.updated_at",
                 rusqlite::params![
                     s.volume as f64,
@@ -764,6 +771,7 @@ impl PlayerStore {
                     s.cue_sheets as i64,
                     s.covers as i64,
                     s.lyrics_cache as i64,
+                    s.lyrics_sidecar as i64,
                 ],
             )
             .map(|_| ())
@@ -779,7 +787,7 @@ impl PlayerStore {
         let d = Settings::default();
         self.conn
             .query_row(
-                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h,                         dequeue_suppress_h, queue_depth, sample_interval_ms,                         cue_sheets, covers, lyrics_cache FROM player_state WHERE id = 1",
+                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h,                         dequeue_suppress_h, queue_depth, sample_interval_ms,                         cue_sheets, covers, lyrics_cache, lyrics_sidecar FROM player_state WHERE id = 1",
                 [],
                 |r| {
                     Ok(Settings {
@@ -805,6 +813,7 @@ impl PlayerStore {
                         cue_sheets: r.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
                         covers: r.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                         lyrics_cache: r.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+                        lyrics_sidecar: r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
                     })
                 },
             )
@@ -1950,6 +1959,7 @@ mod tests {
             cue_sheets: true,
             covers: true,
             lyrics_cache: true,
+            lyrics_sidecar: true,
         };
         store.save_settings(&want).unwrap();
         let got = store.load_settings().unwrap();

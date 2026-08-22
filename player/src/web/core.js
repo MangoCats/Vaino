@@ -560,6 +560,7 @@ const Vaino = (() => {
     cueSheets: on => post(`/cue/${on ? 'on' : 'off'}`),
     covers: on => post(`/covers/${on ? 'on' : 'off'}`),
     lyricsCache: on => post(`/lyricscache/${on ? 'on' : 'off'}`),
+    lyricsSidecar: on => post(`/lyricssidecar/${on ? 'on' : 'off'}`),
     // The player page: load the chosen skin, then follow the socket.
     async start() {
       catalogue = await fetch('/skins').then(r => r.json()).catch(() => []);

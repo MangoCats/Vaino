@@ -73,6 +73,8 @@ pub struct PlayerState {
     pub covers: bool,
     /// `[REQ-VIS-215]`
     pub lyrics_cache: bool,
+    /// `[REQ-VIS-220]`
+    pub lyrics_sidecar: bool,
     /// Reported to the browser so the interface can show it `[PI-SET-016]`.
     pub dev_mode: bool,
     pub active_streams: usize,
@@ -143,6 +145,8 @@ pub enum Command {
     /// Whether Vaino may write per-song lyrics into a local client's cache
     /// `[REQ-VIS-215]`. Turning it on is what asks for them to be written.
     SetLyricsCache(bool),
+    /// Whether Vaino may write lyrics beside the audio `[REQ-VIS-220]`.
+    SetLyricsSidecar(bool),
     /// How often a guest backend samples `status`, in ms `[SPEC-MPD-105]`.
     SetSampleInterval(u64),
     Enqueue(QueueEntry),
@@ -261,6 +265,8 @@ pub struct Engine {
     covers: bool,
     /// `[REQ-VIS-215]`
     lyrics_cache: bool,
+    /// `[REQ-VIS-220]`
+    lyrics_sidecar: bool,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -343,6 +349,7 @@ impl Engine {
             cue_sheets: false,
             covers: false,
             lyrics_cache: false,
+            lyrics_sidecar: false,
             saved: None,
             recorded: false,
             head: None,
@@ -469,6 +476,10 @@ impl Engine {
                 }
                 Ok(Command::SetLyricsCache(on)) => {
                     self.lyrics_cache = on;
+                    self.remember_settings();
+                }
+                Ok(Command::SetLyricsSidecar(on)) => {
+                    self.lyrics_sidecar = on;
                     self.remember_settings();
                 }
                 Ok(Command::SetSampleInterval(ms)) => {
@@ -728,6 +739,7 @@ impl Engine {
             cue_sheets: self.cue_sheets,
             covers: self.covers,
             lyrics_cache: self.lyrics_cache,
+            lyrics_sidecar: self.lyrics_sidecar,
         }
     }
 
@@ -751,6 +763,7 @@ impl Engine {
         self.cue_sheets = s.cue_sheets;
         self.covers = s.covers;
         self.lyrics_cache = s.lyrics_cache;
+        self.lyrics_sidecar = s.lyrics_sidecar;
         self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);
@@ -1175,6 +1188,7 @@ impl Engine {
             s.cue_sheets = self.cue_sheets;
             s.covers = self.covers;
             s.lyrics_cache = self.lyrics_cache;
+            s.lyrics_sidecar = self.lyrics_sidecar;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.lock_failures = self.path.ring.as_ref().map_or(0, |r| r.diagnostics().1);

@@ -107,12 +107,16 @@ now known rather than guessed.** *(Measured 2026-08-22.)* Cantata's own
 
 | | tried |
 | ---: | :--- |
-| 1 | `<audiofile>.lyrics` beside the music |
-| 2 | `<audiofile>.txt` |
-| 3 | `cache/lyrics/<artist>/<title>.lyrics` — **nested per artist** |
-| 4 | `cache/lyrics/<artist>/<title>.txt` |
-| 5 | `~/.lyrics/…` (not on Windows) |
-| 6 | online |
+| 1 | lyrics embedded in the tags, via TagLib |
+| 2 | `<audiofile>.lyrics` beside the music |
+| 3 | `<audiofile>.txt` |
+| 4 | `cache/lyrics/<artist>/<title>.lyrics` — **nested per artist** |
+| 5 | `cache/lyrics/<artist>/<title>.txt` |
+| 6 | `~/.lyrics/…` (not on Windows) |
+| 7 | online |
+
+*Re-read 2026-08-22: the embedded-tag step was missed the first time. It changes
+nothing here — Vaino does not embed — but the sidecar is second, not first.*
 
 Confirmed by experiment: a handwritten `<audiofile>.lyrics` displayed, as a
 **static block** — which is how MuLibPlay showed them and how Vaino will. No
@@ -159,6 +163,26 @@ music-folder sidecar `[SPEC-LYR-055]` has the opposite property: portable to any
 client anywhere, but blind to the 702 passages inside captures. **They are
 complementary, and neither replaces the other** — which is why they are two
 settings rather than one.
+
+**`[SPEC-LYR-080]` The sidecar is built too, and skips captures on purpose.**
+`player/src/lyrics_sidecar.rs`, behind a fourth checkbox `[REQ-VIS-220]`.
+**1,624 single-passage files** get `<audiofile>.lyrics`; the **702 capture
+passages are left to the cache**.
+
+**The reason is not that a capture cannot express per-song words — it is that
+trying would undo the cache.** The sidecar is tried *before* the cache, so one
+written beside a capture would overrule the 702 per-song files and show all
+twelve songs at once for each of them. Skipping captures is what makes the two
+settings complementary instead of one quietly defeating the other.
+
+**`[SPEC-LYR-085]` The sidecar reaches another machine only where that machine
+can read the music folder.** Cantata builds this path from **its own** Music
+Folder setting joined with the song's path
+(`song.filePath(MPDConnection::self()->getDetails().dir)`), not from anything
+the server sends — MPD carries no lyrics at all `[SPEC-LYR-050]`. So a client
+with the music folder mounted gets them; one with only a network connection to
+MPD gets nothing either way. **Neither route reaches a client that cannot see
+the files**, and the settings page says so rather than implying otherwise.
 
 ---
 

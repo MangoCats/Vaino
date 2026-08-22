@@ -74,6 +74,9 @@ pub struct Controls {
     /// The same for per-song lyrics `[REQ-VIS-215]`.
     pub lyrics_requested: Option<bool>,
     pub lyrics_status: Option<String>,
+    /// The same for the sidecar beside the audio `[REQ-VIS-220]`.
+    pub sidecar_requested: Option<bool>,
+    pub sidecar_status: Option<String>,
 
     /// A request to change sides. The same intent-cell pattern as
     /// `reload_requested`, and for the same reason: the backends are not `Sync`

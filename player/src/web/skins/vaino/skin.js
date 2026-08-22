@@ -90,6 +90,9 @@
   const lyricsBox = $('lyricscache');
   lyricsBox.onchange = () => Vaino.lyricsCache(lyricsBox.checked);
 
+  const sidecarBox = $('lyricssidecar');
+  sidecarBox.onchange = () => Vaino.lyricsSidecar(sidecarBox.checked);
+
   const backendSel = $('backend');
   backendSel.onchange = () => Vaino.switchBackend(backendSel.value);
 
@@ -155,6 +158,8 @@
     $('coversstatus').textContent = s.covers_status || '';
     if (document.activeElement !== lyricsBox) lyricsBox.checked = !!s.lyrics_cache;
     $('lyricsstatus').textContent = s.lyrics_status || '';
+    if (document.activeElement !== sidecarBox) sidecarBox.checked = !!s.lyrics_sidecar;
+    $('sidecarstatus').textContent = s.sidecar_status || '';
   }
 
   function renderBackend(s) {

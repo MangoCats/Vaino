@@ -363,6 +363,31 @@ fn engine_thread(
             }
         }
 
+        let sidecar_ask =
+            controls_for_switch.lock().ok().and_then(|mut c| c.sidecar_requested.take());
+        if let Some(on) = sidecar_ask {
+            let said = if !on {
+                "off; files already written are left alone".to_string()
+            } else {
+                match rusqlite::Connection::open(&db)
+                    .map_err(|e| e.to_string())
+                    .and_then(|c| vaino_player::lyrics_sidecar::generate(&c, false))
+                {
+                    Ok(rep) => {
+                        for f in &rep.failed {
+                            eprintln!("sidecar: {f}");
+                        }
+                        rep.summary()
+                    }
+                    Err(e) => format!("failed: {e}"),
+                }
+            };
+            println!("lyrics sidecar: {said}");
+            if let Ok(mut c) = controls_for_switch.lock() {
+                c.sidecar_status = Some(said);
+            }
+        }
+
         // A switch asked for by the browser happens here, where the backends
         // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
         // topped up rather than the outgoing one.
