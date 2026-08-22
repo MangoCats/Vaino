@@ -491,6 +491,27 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-205]` Vaino may write cue sheets into the music folder, and only if
+asked.** A persisted setting, **off by default**, on the settings page.
+
+A whole-side capture holds one set of tags, so a guest names every passage
+inside it after the file — 34.1% of this library `[SPEC-MPD-052]`. A `.cue`
+sheet beside the capture fixes that for every client, because MPD exposes a cue
+track as its own song with its own title `[SPEC-MPD-056]`.
+
+**The setting exists because of where the files go.** Nothing else in Vaino
+writes into the listener's music folder, and a player that quietly starts doing
+so has taken a decision that was not its to take. So it is asked for, it says
+what it will do before doing it, and it is off until then.
+
+Three properties the implementation must keep: it is **idempotent** (a sheet
+already matching is left alone, so the folder is not rewritten on a whim); it
+**never overwrites a sheet Vaino did not write**, since one that was already
+there may be why the library is arranged as it is; and **unticking leaves
+written sheets alone**, because deleting files from someone's music folder is a
+larger act than declining to add more, and is not what unticking a box asked
+for.
+
 **`[REQ-VIS-200]` A running server must say which build it is.** The crate
 version and the commit it was built from, stamped in at compile time and
 published to every skin so any of them can show it.

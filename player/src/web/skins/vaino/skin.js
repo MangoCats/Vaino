@@ -81,6 +81,9 @@
   sampleInterval.onchange = () => Vaino.sampleInterval(sampleInterval.value * 1000);
   // Which backend is sounding `[SPEC-BK-030]`. Hidden entirely when no guest is
   // attached: a control that can only be refused is worse than no control.
+  const cueSheets = $('cuesheets');
+  cueSheets.onchange = () => Vaino.cueSheets(cueSheets.checked);
+
   const backendSel = $('backend');
   backendSel.onchange = () => Vaino.switchBackend(backendSel.value);
 
@@ -137,6 +140,11 @@
   // any other means.
   function renderBuild(s) {
     if (s.build) $('buildtext').textContent = s.build;
+  }
+
+  function renderCue(s) {
+    if (document.activeElement !== cueSheets) cueSheets.checked = !!s.cue_sheets;
+    $('cuestatus').textContent = s.cue_status || '';
   }
 
   function renderBackend(s) {
@@ -309,6 +317,7 @@
       : '';
     renderSkip(s.skip);
     renderBackend(s);
+    renderCue(s);
     renderBuild(s);
     renderPick(s);
     $('link').textContent =

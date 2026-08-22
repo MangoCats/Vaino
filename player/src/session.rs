@@ -63,6 +63,12 @@ pub struct Controls {
     /// option naming a category tells a listener nothing about whether the
     /// thing behind it is the one they are looking at.
     pub guest_name: Option<String>,
+    /// A request to write cue sheets `[REQ-VIS-205]`, and what came of it.
+    /// The intent-cell pattern again: generation touches the music folder and
+    /// belongs on the engine thread, not in a request handler.
+    pub cue_requested: Option<bool>,
+    pub cue_status: Option<String>,
+
     /// A request to change sides. The same intent-cell pattern as
     /// `reload_requested`, and for the same reason: the backends are not `Sync`
     /// and the browser cannot reach them.

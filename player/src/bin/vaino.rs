@@ -256,6 +256,36 @@ fn engine_thread(
             .lock()
             .map(|s| (s.skip_suppress_h, s.dequeue_suppress_h))
             .unwrap_or((vaino_player::SKIP_SUPPRESS_H, vaino_player::DEQUEUE_SUPPRESS_H));
+        // Writing cue sheets happens here, not in the request handler: it walks
+        // the library and writes into a folder Vaino does not own
+        // `[REQ-VIS-205]`, which is not work to do while a browser waits.
+        let cue_ask = controls_for_switch.lock().ok().and_then(|mut c| c.cue_requested.take());
+        if let Some(on) = cue_ask {
+            let said = if !on {
+                // Turning it off leaves what was written. Deleting files from
+                // someone's music folder is a larger act than declining to add
+                // more, and is not what unticking a box asked for.
+                "off; sheets already written are left alone".to_string()
+            } else {
+                match rusqlite::Connection::open(&db)
+                    .map_err(|e| e.to_string())
+                    .and_then(|c| vaino_player::cue::generate(&c, false))
+                {
+                    Ok(rep) => {
+                        for f in &rep.failed {
+                            eprintln!("cue: {f}");
+                        }
+                        rep.summary()
+                    }
+                    Err(e) => format!("failed: {e}"),
+                }
+            };
+            println!("cue sheets: {said}");
+            if let Ok(mut c) = controls_for_switch.lock() {
+                c.cue_status = Some(said);
+            }
+        }
+
         // A switch asked for by the browser happens here, where the backends
         // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
         // topped up rather than the outgoing one.

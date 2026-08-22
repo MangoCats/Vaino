@@ -161,6 +161,9 @@ pub struct Snapshot {
     pub guest_available: bool,
     pub guest_name: Option<String>,
     pub switch_status: Option<String>,
+    /// `[REQ-VIS-205]`
+    pub cue_sheets: bool,
+    pub cue_status: Option<String>,
     /// The Director's pool as `(eligible, total)`, so a rebuild's effect is
     /// visible rather than asserted: importing music and reloading moves
     /// `total`. Absent when there is no Director.
@@ -243,9 +246,11 @@ impl From<&PlayerState> for Snapshot {
             guest_available: false,
             guest_name: None,
             switch_status: None,
+            cue_status: None,
             pool: None,
             program_manual: false,
             programs: Vec::new(),
+            cue_sheets: s.cue_sheets,
             dev_mode: s.dev_mode,
             underrun_samples: s.underrun_samples,
             lock_failures: s.lock_failures,
@@ -290,6 +295,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/program/:id", post(set_program))
         .route("/library/reload", post(reload_library))
         .route("/backend/:which", post(switch_backend))
+        .route("/cue/:on", post(set_cue_sheets))
         .route("/audio/radios", get(radios))
         .route("/power/off", post(power_off))
         .route("/audio/radio/:kind/:state", post(set_radio))
@@ -713,6 +719,25 @@ async fn reload_library(State(ui): State<Ui>) -> StatusCode {
     StatusCode::ACCEPTED
 }
 
+/// Allow or forbid Vaino writing cue sheets into the music folder
+/// `[REQ-VIS-205]`.
+///
+/// Turning it **on** is what asks for them to be written, and that happens on
+/// the engine thread rather than here: it walks the library and writes into a
+/// folder Vaino does not own, which is not work for a request handler to do
+/// while a browser waits.
+async fn set_cue_sheets(
+    State(ui): State<Ui>,
+    axum::extract::Path(on): axum::extract::Path<String>,
+) -> StatusCode {
+    let want = on == "on" || on == "true" || on == "1";
+    ui.handle.send(Command::SetCueSheets(want));
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    c.cue_requested = Some(want);
+    c.cue_status = Some(if want { "writing…".into() } else { "off".into() });
+    StatusCode::ACCEPTED
+}
+
 /// Ask for the other backend `[SPEC-BK-030]`.
 ///
 /// Asks; it does not perform. The engine takes the intent on its next pass,
@@ -777,6 +802,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.guest_available = c.guest_available;
             snap.guest_name = c.guest_name.clone();
             snap.switch_status = c.switch_status.clone();
+            snap.cue_status = c.cue_status.clone();
             snap.pool = c.pool;
             snap.programs = c
                 .programs

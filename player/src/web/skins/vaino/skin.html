@@ -119,6 +119,19 @@
          a guest cannot express. The queue moves across either way.</p>
     </div>
     <div class="setting">
+      <label for="cuesheets">Name capture tracks for guests</label>
+      <span><input type="checkbox" id="cuesheets"> write cue sheets
+        <small id="cuestatus"></small></span>
+      <p>A whole-side capture holds one set of tags, so a guest such as MPD
+         names every track inside it after the file &mdash; about a third of
+         this library. Ticking this writes a <code>.cue</code> file beside each
+         capture, which guests read to get the real titles.
+         <strong>This writes files into your music folder</strong>, which
+         nothing else in Vaino does; it is why the choice is yours and the
+         default is off. Existing sheets Vaino did not write are left alone,
+         and unticking leaves written ones in place.</p>
+    </div>
+    <div class="setting">
       <label>Server build</label>
       <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>
       <p>The version and the commit this server was built from. <code>+dirty</code>

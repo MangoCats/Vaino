@@ -67,6 +67,8 @@ pub struct PlayerState {
     /// Passages kept ahead, and how often a guest samples `[SPEC-MPD-105]`.
     pub queue_depth: usize,
     pub sample_interval_ms: u64,
+    /// `[REQ-VIS-205]`
+    pub cue_sheets: bool,
     /// Reported to the browser so the interface can show it `[PI-SET-016]`.
     pub dev_mode: bool,
     pub active_streams: usize,
@@ -129,6 +131,9 @@ pub enum Command {
     SetDequeueSuppress(u64),
     /// How many passages to keep queued ahead `[SPEC-MPD-105]`.
     SetQueueDepth(usize),
+    /// Whether Vaino may write cue sheets into the music folder
+    /// `[REQ-VIS-205]`. Turning it on is what asks for them to be written.
+    SetCueSheets(bool),
     /// How often a guest backend samples `status`, in ms `[SPEC-MPD-105]`.
     SetSampleInterval(u64),
     Enqueue(QueueEntry),
@@ -240,6 +245,9 @@ pub struct Engine {
     /// local engine does not poll; it holds the value so one row owns every
     /// listener setting and the settings page has one place to read.
     sample_interval_ms: u64,
+    /// Whether Vaino may write cue sheets into the music folder
+    /// `[REQ-VIS-205]`. Held here for the same reason: one row, one page.
+    cue_sheets: bool,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -319,6 +327,7 @@ impl Engine {
             skip_suppress_h: crate::SKIP_SUPPRESS_H,
             dequeue_suppress_h: crate::DEQUEUE_SUPPRESS_H,
             sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
+            cue_sheets: false,
             saved: None,
             recorded: false,
             head: None,
@@ -433,6 +442,10 @@ impl Engine {
                 Ok(Command::SetQueueDepth(n)) => {
                     self.queue.min_depth =
                         n.clamp(crate::QUEUE_DEPTH_MIN, crate::QUEUE_DEPTH_MAX);
+                    self.remember_settings();
+                }
+                Ok(Command::SetCueSheets(on)) => {
+                    self.cue_sheets = on;
                     self.remember_settings();
                 }
                 Ok(Command::SetSampleInterval(ms)) => {
@@ -689,6 +702,7 @@ impl Engine {
             dequeue_suppress_h: self.dequeue_suppress_h,
             queue_depth: self.queue.min_depth,
             sample_interval_ms: self.sample_interval_ms,
+            cue_sheets: self.cue_sheets,
         }
     }
 
@@ -709,6 +723,7 @@ impl Engine {
         self.sample_interval_ms = s
             .sample_interval_ms
             .clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
+        self.cue_sheets = s.cue_sheets;
         self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);
@@ -1130,6 +1145,7 @@ impl Engine {
             s.dequeue_suppress_h = self.dequeue_suppress_h;
             s.queue_depth = self.queue.min_depth;
             s.sample_interval_ms = self.sample_interval_ms;
+            s.cue_sheets = self.cue_sheets;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.lock_failures = self.path.ring.as_ref().map_or(0, |r| r.diagnostics().1);
