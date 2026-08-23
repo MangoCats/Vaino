@@ -345,6 +345,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/lyricssidecar/:on", post(set_lyrics_sidecar))
         .route("/audio/radios", get(radios))
         .route("/power/off", post(power_off))
+        .route("/power/restart", post(restart_player))
         .route("/audio/radio/:kind/:state", post(set_radio))
         .with_state(ui)
 }
@@ -987,6 +988,48 @@ async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
 /// 3. **Answer 202, not 204.** The request is accepted; whether the machine
 ///    completes it is not something this reply can honestly claim, since the
 ///    process making it is about to be stopped.
+/// Restart the player, without restarting the machine `[REQ-VIS-245]`.
+///
+/// **Several settings only take effect at startup**, because what they change
+/// is read once: cue tracks are mapped when the guest is attached
+/// `[REQ-VIS-205]`, and the Director builds its pool from the library as it
+/// stands. Telling a listener to "restart the player" on an appliance whose
+/// only interface is this page previously meant an SSH session or the plug.
+///
+/// The same first step as a shutdown, and for the same reason: the resume
+/// point is otherwise written on an interval `[REQ-VIS-155]`, so a deliberate
+/// restart would still lose up to that much position — in exactly the case
+/// somebody took care over.
+///
+/// **202, not 204.** The service is about to be stopped by the thing it is
+/// asking, so this reply cannot honestly claim the restart finished
+/// `[PI3-API-030]`.
+async fn restart_player(State(ui): State<Ui>) -> Response {
+    ui.handle.send(Command::Persist);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // `restart` rather than `stop` then `start`: systemd owns the ordering,
+    // and this process does not survive to run a second command anyway.
+    match std::process::Command::new("sudo")
+        .arg("-n")
+        .arg("systemctl")
+        .arg("restart")
+        .arg("vaino")
+        .spawn()
+    {
+        Ok(_) => (
+            StatusCode::ACCEPTED,
+            "restarting; the page will reconnect on its own in a few seconds",
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not restart: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 async fn power_off(State(ui): State<Ui>) -> Response {
     ui.handle.send(Command::Persist);
     // Long enough for the engine to take the command off the channel and write

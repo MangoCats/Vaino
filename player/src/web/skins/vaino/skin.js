@@ -552,6 +552,36 @@
   // this page cannot be switched back on from it, so a misclick costs a walk
   // to the plug -- the same reason the speaker change asks "can you hear it?"
   // rather than trusting one press `[PI3-UI-030]`.
+  // The same ask-then-confirm shape as shutting down: both stop the music,
+  // and neither should happen on one stray click.
+  $('rs-ask').onclick = () => {
+    $('rs-confirm').hidden = false;
+    $('rs-ask').disabled = true;
+  };
+  $('rs-no').onclick = () => {
+    $('rs-confirm').hidden = true;
+    $('rs-ask').disabled = false;
+  };
+  $('rs-yes').onclick = async () => {
+    $('rs-yes').disabled = true;
+    $('rs-no').disabled = true;
+    $('rs-hint').textContent = 'Saving where you were, then restarting…';
+    try {
+      const r = await fetch('/power/restart', { method: 'POST' });
+      $('rs-hint').textContent = r.ok
+        ? 'Restarting. This page reconnects on its own in a few seconds.'
+        : `Could not restart: ${await r.text()}`;
+    } catch (e) {
+      // The socket dying is the expected ending, not a failure.
+      $('rs-hint').textContent =
+        'Restarting. This page reconnects on its own in a few seconds.';
+    }
+    $('rs-confirm').hidden = true;
+    $('rs-yes').disabled = false;
+    $('rs-no').disabled = false;
+    $('rs-ask').disabled = false;
+  };
+
   $('pw-ask').onclick = () => {
     $('pw-confirm').hidden = false;
     $('pw-ask').disabled = true;

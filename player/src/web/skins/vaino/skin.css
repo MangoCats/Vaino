@@ -38,6 +38,11 @@
              background: transparent; color: var(--dim); cursor: pointer; }
   .restart:hover { color: inherit; border-color: currentColor; }
   #undersince { color: var(--dim); font-size: .75rem; margin-left: .3rem; }
+  /* A setting that does nothing until the player is restarted is worth a
+     glance rather than a paragraph, so it gets an edge and not a colour. */
+  .setting p.needs-restart { border-left: 2px solid currentColor; padding-left: .5rem;
+                             opacity: .95; }
+  .setting p.no-restart { opacity: .75; }
   #time { font-variant-numeric: tabular-nums; color: var(--dim); font-size: .875rem; }
   .controls { display: flex; gap: .5rem; margin: 1.5rem 0; }
   button { font: inherit; padding: .5rem 1.1rem; border: 1px solid var(--line);

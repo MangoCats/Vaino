@@ -138,9 +138,13 @@
          <strong>This writes files into your music folder</strong>, which
          nothing else in Vaino does; it is why the choice is yours and the
          default is off. Existing sheets Vaino did not write are left alone,
-         and unticking leaves written ones in place. Sheets are written as soon
-         as you tick; the queue starts <em>using</em> them next time the player
-         starts, and MPD needs a database update to see them.</p>
+         and unticking leaves written ones in place.</p>
+      <p class="needs-restart"><strong>Needs a restart.</strong> The sheets are
+         written the moment you tick, but Vaino reads which passages have a cue
+         track only when it starts and hands that list to the guest &mdash; so
+         titles keep coming out wrong until you use <em>Restart Vaino</em> below.
+         MPD also needs a database update before it can see the new files at
+         all.</p>
     </div>
     <div class="setting">
       <label for="covers">Album art for captures</label>
@@ -154,6 +158,9 @@
          several albums the same picture is the problem rather than the fix.
          <strong>This writes files into your music folder.</strong> A folder that
          already has a cover is never touched, whoever put it there.</p>
+      <p class="no-restart">No restart needed: a guest reads the folder when it
+         is asked for a picture. A client that has already cached the wrong one
+         may need its own refresh.</p>
     </div>
     <div class="setting">
       <label for="lyricscache">Per-song lyrics for a local client</label>
@@ -166,6 +173,9 @@
          folder</strong>, and it only helps a client running on <em>this</em>
          machine: a phone in another room keeps its own cache and will not see
          these. A file already there is never replaced.</p>
+      <p class="no-restart">Vaino needs no restart. <em>The client</em> may:
+         Cantata showed these only after it was restarted, since it reads its
+         cache as it draws a track.</p>
     </div>
     <div class="setting">
       <label for="lyricssidecar">Lyrics beside the audio</label>
@@ -179,6 +189,9 @@
          <em>before</em> the cache, so one written beside a capture would
          replace each song&rsquo;s own words with all twelve at once. A file
          already there is never replaced.</p>
+      <p class="no-restart">Vaino needs no restart. A client reads these beside
+         the audio as it plays a track, so it may need to move off the track and
+         back before it notices one.</p>
     </div>
     <div class="setting">
       <label>Server build</label>
@@ -212,6 +225,22 @@
       <label for="prog">Programme</label>
       <span><select id="prog"></select></span>
       <p id="progmode"></p>
+    </div>
+    <div class="setting" id="restart">
+      <label>Restart the player</label>
+      <span><button type="button" id="rs-ask">Restart Vaino</button></span>
+      <p id="rs-hint">Stops and starts the player, leaving the machine running.
+         Where you were is saved first and picked up again on the way back.
+         Settings that only take effect at startup &mdash; the ones marked below
+         &mdash; need this before they do anything.</p>
+    </div>
+    <div class="setting" id="rs-confirm" hidden>
+      <label>Really restart?</label>
+      <span>
+        <button type="button" id="rs-yes">Yes, restart</button>
+        <button type="button" id="rs-no">Cancel</button>
+      </span>
+      <p>The music stops for a few seconds while the library is reopened.</p>
     </div>
     <div class="setting" id="power">
       <label>Shut down</label>
