@@ -157,13 +157,33 @@ CREATE INDEX ON release_recordings(mbid, chosen DESC, release_mbid);
 | with | **0.93 s** |
 | index build, once | 4.4 s |
 
-Same 694 albums. The index was created, measured and **dropped**: the appliance
-is as it was found, because adding an index to a listener's library is a change
-to their data and not a measurement of it.
+Same 694 albums from the probe query, with the index and without it. *(That
+694 is the releases-backed count; the endpoint answers 708, because it falls
+back to the file's own tag where a passage has no release. Both are right for
+what they count.)*
 
 > **This is `[REQ-LIB-165]`'s shape again** — a query that was fine against a
 > test library and is not fine against a real one. The development machine
 > hides it: the same page there is quick enough that nobody would look.
+
+**`[PI-CHR-067]` Shipped, and measured again afterwards.** The index is created
+in the player's open path, where `chosen` is guaranteed to exist, and the
+single-column index it supersedes is dropped after it rather than before, so
+there is never a start with neither.
+
+| | before | after, cold | after, warm |
+| :--- | ---: | ---: | ---: |
+| `/browse/albums` | 25.7 s | 4.9 s | **1.4 s** |
+| `/browse/tracks` | 8.2 s | 2.1 s | |
+| `/browse/artists` | 835 ms | 825 ms | |
+
+Artists is unchanged because it never touched that table, which is the check
+that the improvement is the one intended rather than a warmer cache.
+
+**The build costs one start and no more.** The first start after deploying took
+**23.0 s** instead of 15.3, the extra being the index; the next was **13.6 s**,
+which is quicker than either. Steady state is a page eighteen times faster for a
+cost paid once.
 
 ---
 
