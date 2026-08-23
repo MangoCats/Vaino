@@ -308,7 +308,7 @@ fn engine_thread(
                         for f in &rep.failed {
                             eprintln!("cue: {f}");
                         }
-                        rep.summary()
+                        rep.summary("cue sheet")
                     }
                     Err(e) => format!("failed: {e}"),
                 }
@@ -333,7 +333,7 @@ fn engine_thread(
                         for f in &rep.failed {
                             eprintln!("cover: {f}");
                         }
-                        rep.summary()
+                        rep.summary("cover")
                     }
                     Err(e) => format!("failed: {e}"),
                 }
@@ -363,7 +363,7 @@ fn engine_thread(
                             for f in &rep.failed {
                                 eprintln!("lyrics: {f}");
                             }
-                            rep.summary()
+                            rep.summary("song")
                         }
                         Err(e) => format!("failed: {e}"),
                     },
@@ -389,7 +389,7 @@ fn engine_thread(
                         for f in &rep.failed {
                             eprintln!("sidecar: {f}");
                         }
-                        rep.summary()
+                        rep.summary("file")
                     }
                     Err(e) => format!("failed: {e}"),
                 }

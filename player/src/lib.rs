@@ -52,6 +52,8 @@ pub mod output;
 pub mod path;
 pub mod playback;
 pub mod queue;
+/// One shape for what a folder-writing run did `[PI3-API-030]`.
+pub mod report;
 pub mod relink;
 pub mod bluetooth;
 pub mod sink;

@@ -25,27 +25,11 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-#[derive(Debug, Default, PartialEq)]
-pub struct Report {
-    pub written: usize,
-    pub unchanged: usize,
-    /// A file already there that this did not write. Left alone.
-    pub kept: usize,
-    pub failed: Vec<String>,
-}
+use crate::report::Written;
 
-impl Report {
-    pub fn summary(&self) -> String {
-        let mut s = format!(
-            "{} song(s) written, {} already current, {} left as they were",
-            self.written, self.unchanged, self.kept
-        );
-        if !self.failed.is_empty() {
-            s.push_str(&format!(", {} failed", self.failed.len()));
-        }
-        s
-    }
-}
+/// Why a song might get no file.
+const KEPT: &str = "left as they were";
+
 
 /// `Covers::encodeName`, which is what Cantata names these with.
 ///
@@ -85,7 +69,7 @@ pub fn cache_dir() -> Option<PathBuf> {
 /// track that is the cue sheet's own `TITLE`/`PERFORMER`, which Vaino wrote from
 /// MusicBrainz; for an ordinary file it is the file's tags. A name taken from
 /// the wrong one of those is a file nothing ever opens.
-pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Report, String> {
+pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Written, String> {
     // A capture's passages are named by the cue sheet; everything else by its
     // own tags. `COALESCE` puts them in that order per row.
     let mut q = conn
@@ -143,32 +127,32 @@ pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Report, 
         want.insert((encode_name(&artist), encode_name(&title)), text);
     }
 
-    let mut rep = Report::default();
+    let mut rep = Written::default();
     for ((artist, title), text) in want {
         let folder = dir.join(&artist);
         let path = folder.join(format!("{title}.lyrics"));
         if let Ok(existing) = std::fs::read_to_string(&path) {
             if existing == text {
-                rep.unchanged += 1;
+                rep.already_current();
             } else {
                 // Someone else's, or an older import. Either way not this run's
                 // to overwrite: a client may have fetched and saved it, and that
                 // was its choice about its own cache.
-                rep.kept += 1;
+                rep.passed_over(KEPT);
             }
             continue;
         }
         if dry_run {
-            rep.written += 1;
+            rep.wrote();
             continue;
         }
         if let Err(e) = std::fs::create_dir_all(&folder) {
-            rep.failed.push(format!("{}: {e}", folder.display()));
+            rep.failed(format!("{}: {e}", folder.display()));
             continue;
         }
         match std::fs::write(&path, &text) {
-            Ok(()) => rep.written += 1,
-            Err(e) => rep.failed.push(format!("{}: {e}", path.display())),
+            Ok(()) => rep.wrote(),
+            Err(e) => rep.failed(format!("{}: {e}", path.display())),
         }
     }
     Ok(rep)
@@ -205,14 +189,18 @@ mod tests {
 
     #[test]
     fn the_summary_distinguishes_written_from_left_alone() {
-        let r = Report {
-            written: 2,
-            unchanged: 5,
-            kept: 1,
-            failed: vec![],
-        };
-        assert!(r.summary().contains("2 song(s) written"));
-        assert!(r.summary().contains("1 left as they were"));
-        assert!(!r.summary().contains("failed"));
+        let mut r = Written::default();
+        for _ in 0..2 {
+            r.wrote();
+        }
+        for _ in 0..5 {
+            r.already_current();
+        }
+        r.passed_over(KEPT);
+        let s = r.summary("song");
+        assert!(s.contains("2 song(s) written"));
+        assert!(s.contains("5 already current"));
+        assert!(s.contains("1 left as they were"));
+        assert!(!s.contains("failed"));
     }
 }

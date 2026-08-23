@@ -25,27 +25,11 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-/// What a generation run did, for the person who asked for it.
-#[derive(Debug, Default, PartialEq)]
-pub struct Report {
-    pub written: usize,
-    pub unchanged: usize,
-    pub skipped: usize,
-    pub failed: Vec<String>,
-}
+use crate::report::Written;
 
-impl Report {
-    pub fn summary(&self) -> String {
-        let mut s = format!(
-            "{} cue sheet(s) written, {} already current, {} skipped",
-            self.written, self.unchanged, self.skipped
-        );
-        if !self.failed.is_empty() {
-            s.push_str(&format!(", {} failed", self.failed.len()));
-        }
-        s
-    }
-}
+/// Why a capture might get no sheet.
+const ONE_PASSAGE: &str = "needed no sheet";
+const NOT_OURS: &str = "left as they were";
 
 /// `MM:SS:FF`, 75 frames to the second, as the format requires.
 fn cue_time(ms: i64) -> String {
@@ -158,7 +142,7 @@ fn sheet(file: &Path, album: &str, tracks: &[(i64, String, String)]) -> Option<S
 /// Idempotent: a sheet whose content already matches is left alone, so running
 /// this twice touches nothing and a listener toggling the setting does not
 /// rewrite their folder.
-pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
+pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
     let mut by_file: HashMap<String, (String, Vec<(i64, String, String)>)> = HashMap::new();
     let mut q = conn
         .prepare(
@@ -194,11 +178,11 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
         e.1.push((start, title, artist));
     }
 
-    let mut rep = Report::default();
+    let mut rep = Written::default();
     for (path, (album, tracks)) in by_file {
         let audio = PathBuf::from(&path);
         let Some(text) = sheet(&audio, &album, &tracks) else {
-            rep.skipped += 1;
+            rep.passed_over(ONE_PASSAGE);
             continue;
         };
         let cue = audio.with_extension("cue");
@@ -206,21 +190,21 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
         // write may be the reason the library is arranged as it is.
         if let Ok(existing) = std::fs::read_to_string(&cue) {
             if existing == text {
-                rep.unchanged += 1;
+                rep.already_current();
                 continue;
             }
             if !existing.starts_with("REM Written by Vaino") {
-                rep.skipped += 1;
+                rep.passed_over(NOT_OURS);
                 continue;
             }
         }
         if dry_run {
-            rep.written += 1;
+            rep.wrote();
             continue;
         }
         match std::fs::write(&cue, &text) {
-            Ok(()) => rep.written += 1,
-            Err(e) => rep.failed.push(format!("{}: {e}", cue.display())),
+            Ok(()) => rep.wrote(),
+            Err(e) => rep.failed(format!("{}: {e}", cue.display())),
         }
     }
     Ok(rep)

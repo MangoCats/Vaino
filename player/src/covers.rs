@@ -22,36 +22,15 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+use crate::report::Written;
+
 /// Names MPD accepts for a folder's cover, in the order it tries them.
 const COVER_NAMES: &[&str] = &["cover.jpg", "cover.png", "cover.tiff", "cover.bmp", "folder.jpg"];
 
-#[derive(Debug, Default, PartialEq)]
-pub struct Report {
-    pub written: usize,
-    /// A folder that already had a cover. **Never replaced**, whoever wrote it:
-    /// a picture already there was chosen by someone, and this is not the place
-    /// to overrule them.
-    pub had_cover: usize,
-    /// A capture sharing its folder, where one cover cannot serve several
-    /// albums.
-    pub shared_folder: usize,
-    /// No front image in the library for that release.
-    pub no_art: usize,
-    pub failed: Vec<String>,
-}
-
-impl Report {
-    pub fn summary(&self) -> String {
-        let mut s = format!(
-            "{} cover(s) written, {} folders already had one, {} shared a folder, {} without art",
-            self.written, self.had_cover, self.shared_folder, self.no_art
-        );
-        if !self.failed.is_empty() {
-            s.push_str(&format!(", {} failed", self.failed.len()));
-        }
-        s
-    }
-}
+/// Why a capture might get no cover.
+const SHARED: &str = "shared a folder";
+const HAS_ONE: &str = "already had a cover";
+const NO_ART: &str = "without art";
 
 /// Does this folder already show a cover to MPD?
 fn has_cover(dir: &Path) -> bool {
@@ -62,7 +41,7 @@ fn has_cover(dir: &Path) -> bool {
 ///
 /// Idempotent by construction: a folder with a cover is left alone, so a second
 /// run writes nothing — including over the covers this wrote last time.
-pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
+pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
     // Captures: a file carrying more than one radio passage.
     let mut q = conn
         .prepare(
@@ -103,22 +82,22 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
         )
         .map_err(|e| e.to_string())?;
 
-    let mut rep = Report::default();
+    let mut rep = Written::default();
     for (file_id, path) in captures {
         let audio = PathBuf::from(&path);
         let Some(dir) = audio.parent() else { continue };
         if per_dir.get(&dir.to_string_lossy().to_string()).copied().unwrap_or(0) > 1 {
-            rep.shared_folder += 1;
+            rep.passed_over(SHARED);
             continue;
         }
         if has_cover(dir) {
-            rep.had_cover += 1;
+            rep.passed_over(HAS_ONE);
             continue;
         }
         let front: Option<Vec<u8>> =
             art.query_row([file_id], |r| r.get::<_, Vec<u8>>(0)).ok();
         let Some(bytes) = front else {
-            rep.no_art += 1;
+            rep.passed_over(NO_ART);
             continue;
         };
         // Named for what it is rather than what it is assumed to be. Every
@@ -126,12 +105,12 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
         // trusting the extension.
         let name = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) { "cover.png" } else { "cover.jpg" };
         if dry_run {
-            rep.written += 1;
+            rep.wrote();
             continue;
         }
         match std::fs::write(dir.join(name), &bytes) {
-            Ok(()) => rep.written += 1,
-            Err(e) => rep.failed.push(format!("{}: {e}", dir.join(name).display())),
+            Ok(()) => rep.wrote(),
+            Err(e) => rep.failed(format!("{}: {e}", dir.join(name).display())),
         }
     }
     Ok(rep)
@@ -183,9 +162,19 @@ mod tests {
 
     #[test]
     fn the_summary_says_why_each_one_was_left_alone() {
-        let r = Report { written: 3, had_cover: 2, shared_folder: 75, no_art: 7, failed: vec![] };
-        let s = r.summary();
+        let mut r = Written::default();
+        for _ in 0..3 {
+            r.wrote();
+        }
+        for _ in 0..75 {
+            r.passed_over(SHARED);
+        }
+        for _ in 0..7 {
+            r.passed_over(NO_ART);
+        }
+        let s = r.summary("cover");
         assert!(s.contains("3 cover(s) written") && s.contains("75 shared a folder"));
+        assert!(s.contains("7 without art"));
         assert!(!s.contains("failed"), "silent when nothing failed");
     }
 }

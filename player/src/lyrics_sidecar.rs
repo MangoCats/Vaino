@@ -34,31 +34,12 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-#[derive(Debug, Default, PartialEq)]
-pub struct Report {
-    pub written: usize,
-    pub unchanged: usize,
-    /// A file already there that this did not write. Left alone.
-    pub kept: usize,
-    /// A passage inside a capture, served by the cache instead
-    /// `[REQ-VIS-215]`.
-    pub in_capture: usize,
-    pub failed: Vec<String>,
-}
+use crate::report::Written;
 
-impl Report {
-    pub fn summary(&self) -> String {
-        let mut s = format!(
-            "{} file(s) written, {} already current, {} left as they were, \
-             {} inside a capture and left to the cache",
-            self.written, self.unchanged, self.kept, self.in_capture
-        );
-        if !self.failed.is_empty() {
-            s.push_str(&format!(", {} failed", self.failed.len()));
-        }
-        s
-    }
-}
+/// Why a song might get no file.
+const KEPT: &str = "left as they were";
+const IN_CAPTURE: &str = "inside a capture";
+
 
 /// `foo.mp3` becomes `foo.lyrics`, which is what the client asks for.
 fn sidecar_of(audio: &Path) -> PathBuf {
@@ -70,7 +51,7 @@ fn sidecar_of(audio: &Path) -> PathBuf {
 /// Idempotent: a sidecar whose content already matches is left alone, and one
 /// holding anything else is never replaced — a file already there was somebody's,
 /// and this is not the place to overrule them.
-pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
+pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
     let mut q = conn
         .prepare(
             "SELECT f.path, l.text, \
@@ -88,30 +69,30 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Report, String> {
         })
         .map_err(|e| e.to_string())?;
 
-    let mut rep = Report::default();
+    let mut rep = Written::default();
     for (path, text, in_file) in rows.flatten() {
         // A capture's words belong in the cache, one file per song. A sidecar
         // here would win over them and show all twelve at once.
         if in_file > 1 {
-            rep.in_capture += 1;
+            rep.passed_over(IN_CAPTURE);
             continue;
         }
         let side = sidecar_of(Path::new(&path));
         if let Ok(existing) = std::fs::read_to_string(&side) {
             if existing == text {
-                rep.unchanged += 1;
+                rep.already_current();
             } else {
-                rep.kept += 1;
+                rep.passed_over(KEPT);
             }
             continue;
         }
         if dry_run {
-            rep.written += 1;
+            rep.wrote();
             continue;
         }
         match std::fs::write(&side, &text) {
-            Ok(()) => rep.written += 1,
-            Err(e) => rep.failed.push(format!("{}: {e}", side.display())),
+            Ok(()) => rep.wrote(),
+            Err(e) => rep.failed(format!("{}: {e}", side.display())),
         }
     }
     Ok(rep)
@@ -190,7 +171,7 @@ mod tests {
         let c = library(&d);
         let rep = generate(&c, false).unwrap();
         assert_eq!(rep.written, 1);
-        assert_eq!(rep.in_capture, 2, "both passages of the capture");
+        assert_eq!(rep.count_of(IN_CAPTURE), 2, "both passages of the capture");
         assert!(rep.failed.is_empty());
         assert_eq!(std::fs::read_to_string(d.join("solo.lyrics")).unwrap(), "words 1");
         assert!(!d.join("capture.lyrics").exists(), "never beside a capture");
@@ -215,7 +196,7 @@ mod tests {
         let c = library(&d);
         std::fs::write(d.join("solo.lyrics"), "mine, not Vaino's").unwrap();
         let rep = generate(&c, false).unwrap();
-        assert_eq!((rep.written, rep.kept), (0, 1));
+        assert_eq!((rep.written, rep.count_of(KEPT)), (0, 1));
         assert_eq!(std::fs::read_to_string(d.join("solo.lyrics")).unwrap(), "mine, not Vaino's");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -234,10 +215,16 @@ mod tests {
     /// The count that matters is the one a listener could misread as a failure.
     #[test]
     fn the_summary_says_what_was_left_to_the_cache() {
-        let r = Report { written: 1624, unchanged: 0, kept: 2, in_capture: 702, failed: vec![] };
-        let s = r.summary();
+        let mut r = Written::default();
+        for _ in 0..1624 {
+            r.wrote();
+        }
+        for _ in 0..702 {
+            r.passed_over(IN_CAPTURE);
+        }
+        let s = r.summary("file");
         assert!(s.contains("1624 file(s) written"));
-        assert!(s.contains("702 inside a capture and left to the cache"));
+        assert!(s.contains("702 inside a capture"));
         assert!(!s.contains("failed"), "silent when nothing failed");
     }
 }
