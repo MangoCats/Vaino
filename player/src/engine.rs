@@ -274,6 +274,7 @@ pub struct Engine {
     /// recorded. Judged as recorded the moment it becomes the head, so it
     /// earns neither a second play nor a rejection `[SPEC-BK-065]`.
     counted_elsewhere: Option<i64>,
+
     /// How much of the sounding passage has actually been **heard**
     /// `[SPEC-PLAY-012]`.
     ///
@@ -660,7 +661,33 @@ impl Engine {
         // incoming overlaps it. Asked before the cut, since afterwards the
         // answer is by definition the fade length.
         let have = self.path.ring.as_ref().map_or(0, |r| r.buffered()).min(fade_samples);
-        let mut overlay = vec![0.0f32; have.saturating_sub(lead_samples)];
+        let wanted = have.saturating_sub(lead_samples);
+
+        // **Fill the incoming stream before cutting the ring** `[PI-CHR-075]`.
+        //
+        // The overlay is mixed from whatever the incoming passage has already
+        // decoded. `prepare_next` opens it early precisely so there is
+        // something there — but opening is not decoding, and `top_up` fills
+        // it over the ticks that follow. A skip landing in that window found
+        // 882 samples where it wanted 132,300, laid almost nothing into the
+        // ring it had just cut, and left about a second of silence
+        // `[PI-CHR-075]`. Measured on the appliance, where seeking into a
+        // 244-minute capture on an SD card holds that window open for
+        // seconds; a desktop closes it too fast to notice.
+        //
+        // Bounded, because this runs where the listener is waiting: enough
+        // attempts to cover the overlay and no more. Falling short is not a
+        // failure — it degrades to the old behaviour rather than blocking.
+        if let Some(l) = self.live.first_mut() {
+            for _ in 0..crate::TOPUP_TRIES_BEFORE_CUT {
+                if l.stream.ring.len() >= wanted || l.stream.finished {
+                    break;
+                }
+                Self::top_up(l);
+            }
+        }
+
+        let mut overlay = vec![0.0f32; wanted];
         if let Some(l) = self.live.first_mut() {
             // Through `mix`, not by reading the ring directly: the fade-in has
             // been applied on the way in `[XFD-ORTH-020]`, and this keeps the

@@ -85,6 +85,14 @@ pub const QUEUE_SHOWN: usize = 12;
 /// large enough that a decode yields more than it costs to ask for.
 pub const DECODE_TOPUP_FRAMES: usize = 4096;
 
+/// How many decode attempts a skip will make to fill the incoming passage
+/// before it cuts the ring `[PI-CHR-075]`.
+///
+/// One attempt yields `DECODE_TOPUP_FRAMES`, so this covers roughly two
+/// seconds at 44.1 kHz — comfortably more than the 1.5 s overlay a default
+/// fade asks for, and bounded because the listener is waiting on it.
+pub const TOPUP_TRIES_BEFORE_CUT: usize = 24;
+
 /// Most tracks one browse request will answer with `[REQ-VIS-180]`.
 ///
 /// A library of 8,000 passages returns in 80 ms, but the number is sent to the
