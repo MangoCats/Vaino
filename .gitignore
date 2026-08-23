@@ -78,3 +78,9 @@ __pycache__/
 *.pyc
 go/vaino.exe
 go/vaino-arm64
+
+# Working files: test database copies, captured logs, protocol probes, an MPD
+# build. 6.1 GB of it, none reproducible from the repository and none belonging
+# in one. Ignored mainly so that `git add -A` cannot stage a gigabyte of
+# somebody's listening history by accident.
+scratch/
