@@ -91,7 +91,7 @@ So this is the third instance of one shape `[SPEC-MPD-052]`: Vaino knows
 something the protocol cannot carry, and the only route is to put a file where
 the client will look.
 
-**`[SPEC-LYR-055]` A sidecar, behind a third opt-in setting.** `<basename>.lyrics`
+**`[SPEC-LYR-055]` A sidecar, behind an opt-in setting of its own.** `<basename>.lyrics`
 beside the audio file, written only when asked, never overwriting one Vaino did
 not write, idempotent — the same three properties `[REQ-VIS-205]` and
 `[REQ-VIS-210]` already keep, for the same reason: it writes into a folder Vaino
