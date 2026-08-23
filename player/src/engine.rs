@@ -280,6 +280,21 @@ pub struct Engine {
     /// Set only while a handoff's fade is running, so the departing head is
     /// not written down as a rejection `[SPEC-BK-065]`.
     handing_over: bool,
+    /// The passage that has finished mixing but is still being heard: which
+    /// one, where it had got to, and when that was `[REQ-VIS-240]`.
+    ///
+    /// A passage leaves `live` when its decoder is exhausted, which is up to a
+    /// ring's depth before its last sample reaches the speaker. Without this
+    /// the displayed position simply stopped there — fifteen seconds short of
+    /// the end, every track.
+    ///
+    /// **Advanced by the clock, not by the ring.** The obvious measure — what
+    /// it had mixed, less what is still buffered — is wrong here: during a
+    /// crossfade the incoming passage is filling that same ring, so its depth
+    /// says nothing about how much of the outgoing one is left. What is left
+    /// is simply time, and audio is played at one second per second.
+    draining: Option<(i64, u64, Instant)>,
+
     /// A passage arriving mid-play whose play another backend has already
     /// recorded. Judged as recorded the moment it becomes the head, so it
     /// earns neither a second play nor a rejection `[SPEC-BK-065]`.
@@ -399,6 +414,7 @@ impl Engine {
             lyrics_sidecar: false,
             handing_over: false,
             counted_elsewhere: None,
+            draining: None,
             heard_ms: 0,
             heard_from: None,
             saved: None,
@@ -1133,6 +1149,16 @@ impl Engine {
     }
 
     fn retire_finished(&mut self) {
+        // **What it had mixed as it left** `[REQ-VIS-240]`. The listener has
+        // not heard the last of it -- a ring's depth of it is still queued for
+        // the device -- and `advance_shown` needs this to keep the clock
+        // moving over that window.
+        for l in self.live.iter().filter(|l| l.stream.is_exhausted()) {
+            // The audible position at the moment it stopped being mixed, and
+            // the moment itself. Everything after this is arithmetic on the
+            // clock.
+            self.draining = Some((l.entry.passage_id, self.audible_ms(l), Instant::now()));
+        }
         self.live.retain(|l| !l.stream.is_exhausted());
     }
 
@@ -1346,7 +1372,20 @@ impl Engine {
                 .live
                 .iter()
                 .find(|l| l.entry.passage_id == entry.passage_id)
-                .map(|l| self.audible_ms(l));
+                .map(|l| self.audible_ms(l))
+                // Gone from `live` but still sounding: what it had mixed, less
+                // what is still queued behind it. As the ring drains this
+                // advances to the end of the passage on its own
+                // `[REQ-VIS-240]`.
+                .or_else(|| match self.draining {
+                    Some((id, at, since)) if id == entry.passage_id => {
+                        // Capped at the passage's own end: the clock must not
+                        // run past the music, however long it sits there.
+                        let moved = at + since.elapsed().as_millis() as u64;
+                        Some(moved.min(entry.duration_ms()))
+                    }
+                    _ => None,
+                });
             if let Some(p) = pos {
                 self.shown = Some((entry, p));
             }
@@ -1704,6 +1743,38 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// **The clock keeps running after the mixer has finished** `[REQ-VIS-240]`.
+    ///
+    /// A passage leaves `live` when its decoder is exhausted, a ring's depth
+    /// before its last sample is heard. The display used to stop there — about
+    /// fifteen seconds short of the end of every track.
+    #[test]
+    fn a_finished_passage_keeps_its_position_moving_while_it_is_heard() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(1_500);
+        let mut only = entry(91, wav.to_str().unwrap());
+        only.end_ms = 1_500;
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..400 {
+            e.tick();
+        }
+
+        // Mixed to the end and retired, but the listener is still hearing it.
+        assert_eq!(e.snapshot_live(), 0, "the mixer has finished with it");
+        let (id, _, _) = e.draining.expect("it is remembered as still sounding");
+        assert_eq!(id, 91);
+
+        let first = e.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        e.tick();
+        let later = e.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);
+
+        assert!(later >= first, "the position must not go backwards");
+        assert!(later <= 1_500, "and must not run past the music: {later}");
+        let _ = std::fs::remove_file(&wav);
+    }
     /// **Restarting the count moves a mark, it does not clear the counter**
     /// `[REQ-VIS-230]`.
     ///

@@ -491,6 +491,27 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-240]` The position runs to the end of the track, not to the end of
+the mixing.** *(Fixed 2026-08-23.)* The elapsed time and the progress bar stopped
+about fifteen seconds short of every track and sat there until the next one
+began.
+
+A passage leaves the mixer when its decoder is exhausted, which is a ring's
+depth — about 15 s here — before its last sample reaches the speaker. The
+display already knew it had to cover that window and kept the *title*; it looked
+the position up in the list of passages being mixed, which is the one place the
+passage had just been removed from, so the number stopped.
+
+**It is advanced by the clock, and that is the point.** The obvious measure —
+what was mixed, less what is still buffered — is wrong during a crossfade,
+because the incoming passage is filling that same ring and its depth says
+nothing about how much of the outgoing one is left. What is left is simply time,
+and audio plays at one second per second. Capped at the passage's own end, so
+the clock cannot run past the music however long it sits there.
+
+> Present since 2026-08-14 and reported by a listener, not by a test — the kind
+> of fault that is invisible from a terminal and obvious from a chair.
+
 **`[REQ-VIS-235]` The Vaino skin shows where the sound is actually coming
 from.** *(Requested 2026-08-23; not built.)* Immediately below the State and
 Underruns display: the **system path and filename** of the file being played,
