@@ -45,6 +45,12 @@ pub struct Capabilities {
     pub spans: bool,
     /// Can it apply per-passage gain `[SPEC-SC-040]`?
     pub gain: bool,
+    /// Can the listener move to a point inside the passage `[REQ-VIS-225]`?
+    ///
+    /// Declared rather than assumed, for the reason the rest of this type
+    /// exists `[SPEC-BK-040]`: a control that silently does nothing is worse
+    /// than one that is not offered.
+    pub seek: bool,
     /// Can it ramp in and out, or does a passage begin and end abruptly?
     pub ramps: bool,
     /// Can it say *what the passage is*?
@@ -65,13 +71,14 @@ pub struct Capabilities {
 
 impl Capabilities {
     /// Everything, which is what the built-in engine does.
-    pub const FULL: Self = Self { spans: true, gain: true, ramps: true, naming: true };
+    pub const FULL: Self =
+        Self { spans: true, gain: true, ramps: true, naming: true, seek: true };
     /// A whole-file backend: it plays what you name, start to end.
     ///
     /// OpenSubsonic as deployed. `stream` returns a song; HTTP range requests
     /// seek within the bytes, which is not the same as being told to stop.
     pub const WHOLE_FILE: Self =
-        Self { spans: false, gain: false, ramps: false, naming: false };
+        Self { spans: false, gain: false, ramps: false, naming: false, seek: false };
 
     /// **MPD, and the surprise of this investigation.**
     ///
@@ -82,7 +89,8 @@ impl Capabilities {
     /// trip to OpenSubsonic. `crossfade` exists but is global rather than
     /// per-passage, and ReplayGain is per-file rather than per-span, so gain
     /// and ramps are still lost.
-    pub const MPD: Self = Self { spans: true, gain: false, ramps: false, naming: false };
+    pub const MPD: Self =
+        Self { spans: true, gain: false, ramps: false, naming: false, seek: true };
 
     /// Would sending this passage to this backend play something other than
     /// what was chosen?
@@ -146,6 +154,13 @@ pub trait Playback {
     /// Begin the first queued passage at this offset, for a resumed session.
     fn resume_at(&mut self, position_ms: u64);
 
+    /// Move to a point inside the passage already sounding `[REQ-VIS-225]`.
+    ///
+    /// Distinct from `resume_at`, which places a passage that has not started
+    /// yet. A backend whose `capabilities().seek` is false may leave this
+    /// unimplemented; one that advertises it must not.
+    fn seek_to(&mut self, _position_ms: u64) {}
+
     /// Do a slice of work. For the local engine this mixes; for a remote
     /// backend it polls the server and reconciles.
     fn tick(&mut self) -> usize;
@@ -176,6 +191,9 @@ impl Playback for crate::engine::Engine {
     }
     fn resume_at(&mut self, position_ms: u64) {
         Engine::resume_at(self, position_ms)
+    }
+    fn seek_to(&mut self, position_ms: u64) {
+        Engine::seek_to(self, position_ms)
     }
     fn tick(&mut self) -> usize {
         Engine::tick(self)

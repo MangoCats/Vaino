@@ -8,6 +8,12 @@
   <input type="range" id="volume" min="0" max="1" step="any" value="1">
   <div class="elapsed" id="volnum">0.0 dB</div>
 
+  <!-- Full width under the volume reading, as the volume slider above it is
+       [REQ-VIS-225]. The original had no such control; a track position that
+       could only be read and not changed was the one thing MuLibPlay users
+       reached for and did not find. -->
+  <div id="bar" title="Click to move within the track"><div id="fill"></div></div>
+
   <!-- Front then back, side by side, both 200px tall and centred -- which
        is how the original emits them: two <img> in sequence for the
        now-playing track only, then a line break. -->

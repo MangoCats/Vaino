@@ -491,6 +491,31 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-225]` The progress bar is a control, not only a display.** Clicking
+anywhere along it moves to that point in the passage — the one thing a listener
+reaches for that MuLibPlay never had, and that the Vaino skin drew but did not
+answer.
+
+**Click only, deliberately.** Dragging would mean a continuous stream of seeks,
+and each one on the local engine costs a file open, a seek and a resampler
+build. A click is one of those; a drag is one every frame.
+
+**It lands alone.** Mid-crossfade both passages go and the sought one returns by
+itself, because resuming an overlap the listener has just left behind is not
+what they asked for.
+
+**Offered only where the live backend can honour it** `[SPEC-BK-040]`. The bar
+is marked as a control from the backend's own `seek` capability, so a side that
+cannot seek shows a plain display rather than a control that does nothing.
+
+**And seeking is not listening** `[SPEC-PLAY-012]`. The distance travelled earns
+no credit toward a play — the accounting had to change from position to time
+heard before this could be built at all.
+
+> Both skins get it: the Vaino skin's existing bar becomes clickable, and the
+> MuLibPlay skin gains one full width under the volume reading. The arithmetic
+> lives in `core.js`, so the two cannot drift.
+
 **`[REQ-VIS-220]` Vaino may write lyrics beside the audio, and only if asked.**
 A persisted setting, **off by default**, the fourth of this kind and the
 companion to the one below.

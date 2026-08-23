@@ -62,7 +62,13 @@
     $(wordId).hidden = !text;
   };
 
+  // Reads the same snapshot the display does, so a click can only act on
+  // the track actually shown [REQ-VIS-225].
+  let latest = null;
+  Vaino.seekable($('bar'), () => latest);
+
   Vaino.subscribe(s => {
+    latest = s;
     plain($('title'), s.title ?? '—');
     pair('byword', 'artist', s.artist);
     pair('fromword', 'album', s.album);
@@ -73,6 +79,9 @@
     Vaino.showBackArt($('artback'), s.passage_id);
     Vaino.showLyrics($('lyrics'), s.passage_id);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
+    $('fill').style.width =
+      s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
+    $('bar').classList.toggle('seekable', Boolean(s.can_seek && s.duration_ms));
     lit($('b-play'), s.playing);
     lit($('b-pause'), !s.playing);
     showVolume(s);

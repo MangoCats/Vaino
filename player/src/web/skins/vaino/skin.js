@@ -309,6 +309,10 @@
   let latest = null;
   const draw = () => { if (latest) render(latest); };
 
+  // The bar reads the same snapshot the display does, so a click can only
+  // ever act on the track actually shown [REQ-VIS-225].
+  Vaino.seekable($('bar'), () => latest);
+
   Vaino.subscribe(s => { latest = s; render(s); });
 
   function render(s) {
@@ -319,6 +323,8 @@
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
+    // Offered only where the live backend can honour it [SPEC-BK-040].
+    $('bar').classList.toggle('seekable', Boolean(s.can_seek && s.duration_ms));
     $('state').textContent = s.playing ? 'playing' : 'paused';
     // The ground shifts with it, so the state is legible without reading.
     $('devmode').hidden = !s.dev_mode;

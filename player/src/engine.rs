@@ -274,6 +274,19 @@ pub struct Engine {
     /// recorded. Judged as recorded the moment it becomes the head, so it
     /// earns neither a second play nor a rejection `[SPEC-BK-065]`.
     counted_elsewhere: Option<i64>,
+    /// How much of the sounding passage has actually been **heard**
+    /// `[SPEC-PLAY-012]`.
+    ///
+    /// Not its position. While playback only ever ran forwards the two were
+    /// the same number and the position was used directly; a seek separates
+    /// them, and using position would let a drag to the last chorus earn a
+    /// play nobody listened to.
+    heard_ms: u64,
+    /// The position at the previous sample, or `None` when there is no
+    /// previous position to measure from — a new passage, or the far side of
+    /// a seek. Time is credited from the gap between samples, so a `None`
+    /// here is what makes a jump cost nothing.
+    heard_from: Option<u64>,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -359,6 +372,8 @@ impl Engine {
             lyrics_sidecar: false,
             handing_over: false,
             counted_elsewhere: None,
+            heard_ms: 0,
+            heard_from: None,
             saved: None,
             recorded: false,
             head: None,
@@ -630,6 +645,17 @@ impl Engine {
         // now keeps the button honest [REQ-AUD-164].
         self.shown = self.live.first().map(|l| (l.entry.clone(), 0));
 
+        self.cut_ring_to_incoming(fade_samples, lead_samples);
+    }
+
+    /// Cut the ring back to the fade and overlay whatever is sounding now.
+    ///
+    /// **The reason a skip is heard within a second** rather than after a ring's
+    /// depth — about 14 s of already-mixed audio otherwise stands between the
+    /// listener and the change they asked for. Lifted out of `skip` when `seek`
+    /// turned out to need exactly it: both replace what is in the ring with a
+    /// different point in the music, and differ only in which point.
+    fn cut_ring_to_incoming(&mut self, fade_samples: usize, lead_samples: usize) {
         // How much of the outgoing survives the cut sets how much of the
         // incoming overlaps it. Asked before the cut, since afterwards the
         // answer is by definition the fade length.
@@ -654,6 +680,48 @@ impl Engine {
                 &overlay,
             );
         }
+    }
+
+    /// Move to a point inside the passage that is sounding `[REQ-VIS-225]`.
+    ///
+    /// **The same operation as `skip`, aimed at the same passage instead of the
+    /// next one**: clear what is sounding, open at the new point, cut the ring
+    /// back so the move is heard at once. Reusing that path rather than writing
+    /// a second one keeps a single place where this engine stops sounding one
+    /// thing and starts sounding another.
+    ///
+    /// **It lands alone.** Mid-crossfade, both passages go and the sought one
+    /// returns by itself — a seek into a passage that is still fading up under
+    /// another would otherwise resume an overlap the listener has left behind.
+    ///
+    /// The jump itself is not listening `[SPEC-PLAY-012]`: `heard_from` is
+    /// cleared so no part of the distance travelled is credited as heard.
+    pub fn seek_to(&mut self, position_ms: u64) {
+        let Some(head) = self.live.first() else { return };
+        let entry = head.entry.clone();
+        // A seek to the very end would open a decoder with nothing to decode.
+        let at = position_ms.min(entry.duration_ms().saturating_sub(1));
+        let opened = match self.open(&entry, at) {
+            Ok(l) => l,
+            // A file that will not re-open is not a reason to stop the music
+            // that is already sounding from it.
+            Err(e) => {
+                eprintln!("seek in {}: {e}", entry.path.display());
+                return;
+            }
+        };
+        let ch = self.out_channels.max(1);
+        let rate = self.out_rate as u64;
+        let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
+        let lead_samples = (self.skip_lead_ms * rate / 1000) as usize * ch;
+
+        self.live.clear();
+        self.live.push(opened);
+        // The listener is at the new point the moment they ask, not a ring's
+        // depth later `[REQ-AUD-164]`.
+        self.shown = self.live.first().map(|l| (l.entry.clone(), at));
+        self.heard_from = None;
+        self.cut_ring_to_incoming(fade_samples, lead_samples);
     }
 
     /// The passage sounding and how far into its span, for a handoff that must
@@ -1116,13 +1184,27 @@ impl Engine {
                 }
                 _ => false,
             };
+            // A new passage has been heard for none of itself, and there is
+            // no earlier position of it to measure the first gap from.
+            self.heard_ms = 0;
+            self.heard_from = None;
         }
 
-        let Some((id, mbid, heard_ms, span_ms)) = head_now else { return };
+        let Some((id, mbid, position_ms, span_ms)) = head_now else { return };
+
+        // **Credited from the gap between samples, never from the position.**
+        // Only forward movement counts, and only movement this sample saw:
+        // a seek clears `heard_from`, so the jump across contributes nothing
+        // and the next sample simply starts measuring again `[SPEC-PLAY-012]`.
+        if let Some(previous) = self.heard_from {
+            self.heard_ms += position_ms.saturating_sub(previous);
+        }
+        self.heard_from = Some(position_ms);
+
         if self.recorded {
             return;
         }
-        if !crate::scrobble::counts_as_play(heard_ms, span_ms) {
+        if !crate::scrobble::counts_as_play(self.heard_ms, span_ms) {
             return;
         }
         self.recorded = true;
@@ -1553,6 +1635,90 @@ mod tests {
         assert_eq!(plays(&st), 0, "and it did not earn a play either");
         let _ = std::fs::remove_file(&wav);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// **Seeking to the end must not earn a play** `[SPEC-PLAY-012]`.
+    ///
+    /// The whole reason the engine now measures heard time rather than reading
+    /// the position: a jump to the last chorus puts the position past any
+    /// threshold instantly, and nobody listened to the distance.
+    #[test]
+    fn seeking_past_the_threshold_does_not_earn_a_play() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let wav = wav_of(60_000);
+        let mut only = entry(81, wav.to_str().unwrap());
+        only.end_ms = 60_000;
+        only.mbid = Some("aaaaaaaa-0000-0000-0000-000000000081".into());
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..20 {
+            e.tick();
+        }
+
+        // Straight past the half-way mark, which is the threshold for a minute.
+        e.seek_to(55_000);
+        for _ in 0..40 {
+            e.tick();
+        }
+
+        assert_eq!(plays(&st), 0, "the distance was travelled, not heard");
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// And the seek itself lands where it was asked to, alone.
+    #[test]
+    fn a_seek_moves_the_passage_and_leaves_one_thing_sounding() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(60_000);
+        let mut only = entry(82, wav.to_str().unwrap());
+        only.end_ms = 60_000;
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..20 {
+            e.tick();
+        }
+
+        e.seek_to(30_000);
+
+        assert_eq!(e.snapshot_live(), 1, "it lands alone");
+        let (id, at) = e.head_position().expect("still playing");
+        assert_eq!(id, 82, "the same passage, moved");
+        assert!(at >= 30_000, "at the point asked for, not back at the start: {at}");
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// A seek past the end would open a decoder with nothing to decode.
+    #[test]
+    fn a_seek_beyond_the_span_is_clamped_inside_it() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(10_000);
+        let mut only = entry(83, wav.to_str().unwrap());
+        only.end_ms = 10_000;
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..20 {
+            e.tick();
+        }
+
+        e.seek_to(999_999);
+
+        assert_eq!(e.snapshot_live(), 1, "still sounding rather than ended");
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// Seeking with nothing playing is a no-op, not a panic.
+    #[test]
+    fn seeking_with_nothing_playing_does_nothing() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.seek_to(5_000);
+        assert_eq!(e.snapshot_live(), 0);
     }
 
     /// **A passage that arrives already counted is not counted again**

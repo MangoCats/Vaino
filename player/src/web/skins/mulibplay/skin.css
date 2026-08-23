@@ -71,6 +71,15 @@ body { background-color: black; color: #ccc; }
 .nowplaying { font-weight: bold; font-size: 1.15rem; margin: 1rem 0 .2rem; }
 .nowplaying i { font-weight: normal; color: #888; }
 .elapsed { color: #888; }
+/* Matches the volume slider's width above it, and carries the same padded
+   hit area the Vaino skin uses so a 6px line is still an easy target. */
+.mulib #bar { width: 80%; height: 6px; margin: .5rem auto .2rem; background: #333;
+              border-radius: 3px; background-clip: content-box;
+              padding: 9px 0; box-sizing: content-box; }
+.mulib #bar.seekable { cursor: pointer; }
+.mulib #fill { height: 6px; width: 0; background: #7ab7ff; border-radius: 3px;
+               transition: width .5s linear; }
+.mulib #bar.seekable:hover #fill { filter: brightness(1.2); }
 
 /* Two columns that reach the same floor, so Browse by and the autoselect
    checkbox sit at one level just above the rule. `margin-top: auto` on the

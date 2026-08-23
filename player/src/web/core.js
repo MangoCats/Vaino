@@ -548,6 +548,21 @@ const Vaino = (() => {
     artUrl: id => `/art/${id}`,
     command: name => post(`/command/${name}`),
     volume: db => post(`/volume/${db}`),
+    seek: ms => post(`/seek/${Math.max(0, Math.round(ms))}`),
+    // Wire a progress bar up as a control. Shared because both skins want
+    // the same arithmetic, and a second copy of it would drift.
+    seekable(bar, state) {
+      bar.addEventListener('click', e => {
+        const s = state();
+        if (!s || !s.can_seek || !s.duration_ms) return;
+        const box = bar.getBoundingClientRect();
+        if (box.width <= 0) return;
+        // Clamped: a click on the very edge of a padded hit area can land
+        // fractionally outside the bar itself.
+        const at = Math.min(Math.max((e.clientX - box.left) / box.width, 0), 1);
+        Vaino.seek(at * s.duration_ms);
+      });
+    },
     program: id => post(`/program/${id}`),
     skipFade: ms => post(`/skip/fade/${Math.round(ms)}`),
     skipLead: ms => post(`/skip/lead/${Math.round(ms)}`),

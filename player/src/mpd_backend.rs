@@ -24,6 +24,12 @@ use crate::playback::{Capabilities, Playback};
 use crate::queue::QueueEntry;
 use crate::scrobble::counts_as_play;
 
+/// How far short of the span's end a seek is allowed to land `[SPEC-BK-055]`.
+///
+/// MPD stops a song seeked past its span outright, and "past" includes the
+/// last instant of it. A second short is inaudible and cannot trip that.
+const SEEK_MARGIN_MS: u64 = 1_000;
+
 /// The URI MPD would use for a path, or `None` if it is outside MPD's tree.
 ///
 /// A free function because naming needs a root and a path and **not a socket**:
@@ -143,7 +149,16 @@ struct Offered {
     mbid: Option<String>,
     /// The span from Vaino, never MPD's estimate of it `[SPEC-MPD-092]`.
     span_ms: u64,
+    /// The furthest point reached, which is a **position** and is what says
+    /// whether the span has run out `[SPEC-MPD-096]`.
     furthest_ms: u64,
+    /// How much of it was actually **heard** `[SPEC-PLAY-012]`, credited from
+    /// the gap between samples. A seek moves the position without anyone
+    /// listening to the distance, so the two part company the moment the
+    /// listener touches the bar.
+    heard_ms: u64,
+    /// The position at the previous sample, for measuring that gap.
+    seen_at_ms: Option<u64>,
     /// False when MPD dropped the range end `[SPEC-MPD-096]`, so this backend
     /// must end the passage itself rather than let it run to end of file.
     span_honoured: bool,
@@ -332,7 +347,7 @@ impl MpdBackend {
         }
         // It sounded. Whether it *played* is `[SPEC-PLAY-010]`'s question, and
         // it is asked against Vaino's span rather than MPD's idea of one.
-        if counts_as_play(o.furthest_ms, o.span_ms) {
+        if counts_as_play(o.heard_ms, o.span_ms) {
             if let Some(s) = &self.store {
                 if let Err(e) = s.record_play(o.passage_id, o.mbid.as_deref()) {
                     eprintln!("record play: {e}");
@@ -404,6 +419,8 @@ impl MpdBackend {
                                 // span; there is no range to be relative to.
                                 span_ms: *file_ms,
                                 furthest_ms: 0,
+                                heard_ms: 0,
+                                seen_at_ms: None,
                                 span_honoured: true,
                                 was_current: true,
                             },
@@ -428,6 +445,14 @@ impl MpdBackend {
             if let Some(o) = self.ours.get_mut(id) {
                 o.was_current = true;
                 if self.playing {
+                    // Only forward movement, and only as much as one sample
+                    // could have covered: a jump longer than the interval is
+                    // a seek, and nobody heard the distance `[SPEC-PLAY-012]`.
+                    let step = self.interval.as_millis() as u64 * 2;
+                    if let Some(previous) = o.seen_at_ms {
+                        o.heard_ms += elapsed_ms.saturating_sub(previous).min(step);
+                    }
+                    o.seen_at_ms = Some(elapsed_ms);
                     o.furthest_ms = o.furthest_ms.max(elapsed_ms);
                 }
                 // MPD will play to end of file where it dropped the range end,
@@ -559,6 +584,8 @@ impl Playback for MpdBackend {
                                 mbid: entry.mbid.clone(),
                                 span_ms,
                                 furthest_ms: 0,
+                                heard_ms: 0,
+                                seen_at_ms: None,
                                 span_honoured: false,
                                 was_current: false,
                             },
@@ -597,6 +624,8 @@ impl Playback for MpdBackend {
                         mbid: entry.mbid.clone(),
                         span_ms,
                         furthest_ms: 0,
+            heard_ms: 0,
+            seen_at_ms: None,
                         span_honoured: added.span_honoured,
                         was_current: false,
                     },
@@ -638,6 +667,38 @@ impl Playback for MpdBackend {
         if let Some(id) = first {
             let _ = self.mpd.cmd(&format!("seekid {id} {:.3}", position_ms as f64 / 1000.0));
         }
+    }
+
+    /// Move inside the song MPD is playing now `[REQ-VIS-225]`.
+    ///
+    /// **Clamped, because MPD stops a song seeked past its span** — measured:
+    /// `seekid 70` into a 60-second range returned `state=stop` rather than
+    /// landing at the end `[SPEC-BK-055]`. The offset is already span-relative
+    /// on both sides, so it crosses unaltered.
+    ///
+    /// Addressed to the song that is *current*, not to the first this backend
+    /// offered: the listener may be on something they queued themselves
+    /// `[SPEC-MPD-115]`, and seeking the wrong song is worse than not seeking.
+    fn seek_to(&mut self, position_ms: u64) {
+        let Some((id, span)) = self
+            .head
+            .and_then(|(passage, _)| {
+                self.ours.iter().find(|(_, o)| o.passage_id == passage).map(|(id, o)| (id.clone(), o.span_ms))
+            })
+        else {
+            return;
+        };
+        let at = position_ms.min(span.saturating_sub(SEEK_MARGIN_MS));
+        if self.mpd.cmd(&format!("seekid {id} {:.3}", at as f64 / 1000.0)).is_err() {
+            return;
+        }
+        // The clock has moved without anyone listening to the distance. Reading
+        // it back on the next poll would otherwise credit the jump as heard
+        // `[SPEC-PLAY-012]`.
+        if let Some(o) = self.ours.get_mut(&id) {
+            o.seen_at_ms = None;
+        }
+        self.head = self.head.map(|(passage, _)| (passage, at));
     }
 
     fn tick(&mut self) -> usize {

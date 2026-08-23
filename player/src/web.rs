@@ -166,6 +166,9 @@ pub struct Snapshot {
     pub cue_status: Option<String>,
     /// `[REQ-VIS-210]`
     pub covers: bool,
+    /// Whether the live backend can move inside a passage `[REQ-VIS-225]`.
+    /// The bar is a control only where this is true.
+    pub can_seek: bool,
     pub covers_status: Option<String>,
     /// `[REQ-VIS-215]`
     pub lyrics_cache: bool,
@@ -264,6 +267,9 @@ impl From<&PlayerState> for Snapshot {
             programs: Vec::new(),
             cue_sheets: s.cue_sheets,
             covers: s.covers,
+            // Replaced below from the live backend; the engine cannot answer for
+            // a side that is not it.
+            can_seek: false,
             lyrics_cache: s.lyrics_cache,
             lyrics_sidecar: s.lyrics_sidecar,
             dev_mode: s.dev_mode,
@@ -301,6 +307,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/audio/speakers/:verb/:address", post(speaker_verb_on))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
+        .route("/seek/:ms", post(seek_to))
         .route("/skip/fade/:ms", post(set_skip_fade))
         .route("/skip/lead/:ms", post(set_skip_lead))
         .route("/resume/save/:ms", post(set_resume_save))
@@ -345,6 +352,22 @@ async fn set_volume(
 ) -> StatusCode {
     ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
     StatusCode::NO_CONTENT
+}
+
+/// Move to a point inside the passage that is sounding `[REQ-VIS-225]`.
+///
+/// **In milliseconds into the passage, not a fraction of it.** The browser
+/// knows where it clicked as a proportion of a bar, and could have sent that
+/// — but a fraction means nothing without the duration, and the two sides
+/// would then have to agree about which duration. The engine owns the span;
+/// the browser converts once, here, against the duration it was shown.
+async fn seek_to(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<u64>,
+) -> StatusCode {
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    c.seek_requested = Some(ms);
+    StatusCode::ACCEPTED
 }
 
 /// Browse the library by artist, album or track `[REQ-VIS-180]`.
@@ -900,6 +923,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.cue_status = c.cue_status.clone();
             snap.covers_status = c.covers_status.clone();
             snap.lyrics_status = c.lyrics_status.clone();
+            snap.can_seek = c.can_seek;
             snap.sidecar_status = c.sidecar_status.clone();
             snap.pool = c.pool;
             snap.programs = c

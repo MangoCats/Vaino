@@ -60,6 +60,11 @@ pub struct Controls {
     /// Whether a guest is attached at all. Without one the control is not
     /// offered, rather than offered and refused.
     pub guest_available: bool,
+    /// Whether the side now sounding can move inside a passage
+    /// `[REQ-VIS-225]`. Published from the live backend's own capabilities
+    /// each pass, so it follows a switch rather than describing whichever
+    /// side happened to start first `[SPEC-BK-040]`.
+    pub can_seek: bool,
     /// What the guest *is* — "MPD at 127.0.0.1:6600" rather than "MPD". An
     /// option naming a category tells a listener nothing about whether the
     /// thing behind it is the one they are looking at.
@@ -78,6 +83,15 @@ pub struct Controls {
     /// The same for the sidecar beside the audio `[REQ-VIS-220]`.
     pub sidecar_requested: Option<bool>,
     pub sidecar_status: Option<String>,
+
+    /// Where the listener asked to move to inside the current passage, in ms
+    /// `[REQ-VIS-225]`.
+    ///
+    /// An intent cell rather than a command, because a command reaches the
+    /// **local engine** and a seek has to reach whichever side is sounding.
+    /// The engine channel would have moved Vaino's own playback while MPD
+    /// carried on regardless.
+    pub seek_requested: Option<u64>,
 
     /// A request to change sides. The same intent-cell pattern as
     /// `reload_requested`, and for the same reason: the backends are not `Sync`

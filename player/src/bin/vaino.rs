@@ -452,6 +452,25 @@ fn engine_thread(
                 c.backend = Some(which);
             }
         }
+        // A seek asked for by the browser, applied to the side that is
+        // sounding `[REQ-VIS-225]`. Taken here for the same reason a switch is:
+        // the backends live on this thread and nowhere else.
+        let seek_ask = controls_for_switch.lock().ok().and_then(|mut c| c.seek_requested.take());
+        if let Some(ms) = seek_ask {
+            vaino_player::playback::Playback::seek_to(&mut backend, ms);
+        }
+
+        // What the side now sounding can do, published where the browser can
+        // read it `[SPEC-BK-040]`. Taken every pass rather than at a switch,
+        // so it is right even for the side the player started on.
+        {
+            let seekable = vaino_player::playback::Playback::capabilities(&backend).seek;
+            if let Ok(mut c) = controls_for_switch.lock() {
+                if c.can_seek != seekable {
+                    c.can_seek = seekable;
+                }
+            }
+        }
         session.refill(&mut backend, suppress);
         // Nothing submitted means the ring is comfortably full -- the engine
         // declines to mix less than a threshold's worth -- so there is time to

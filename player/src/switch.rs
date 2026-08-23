@@ -372,6 +372,9 @@ impl Playback for Switching {
     fn resume_at(&mut self, position_ms: u64) {
         self.live_mut().resume_at(position_ms)
     }
+    fn seek_to(&mut self, position_ms: u64) {
+        self.live_mut().seek_to(position_ms)
+    }
     fn tick(&mut self) -> usize {
         // **Both sides tick, not only the live one.** A guest that is not
         // sounding still has a server to reconcile with, and a local engine

@@ -32,6 +32,24 @@ service, and it does not apply to a private rotation ledger. Vaino's shortest
 radio passage is **12 seconds** `[SPEC-SA-090]`; one that played in full did
 play, and excluding it would suppress nothing but the truth.
 
+**`[SPEC-PLAY-012]` It is measured in time *heard*, not in position reached.**
+*(Settled 2026-08-22, when seeking was built `[REQ-VIS-225]`.)* While playback
+only ever ran forwards the two were the same number, and the engine read the
+position straight off the sounding passage. A seek separates them: a click
+three-quarters of the way along a bar puts the position past any threshold
+instantly, and **nobody listened to the distance**.
+
+So both backends now credit time from the **gap between samples** rather than
+from where the head is, and a seek clears the mark they measure from — the jump
+across contributes nothing and the next sample simply starts measuring again. A
+guest is credited at most one sampling interval per sample for the same reason:
+a longer jump in its clock is a seek, not listening `[SPEC-MPD-105]`.
+
+Two things fall out of it that were wrong before and are right now. Seeking
+forward earns nothing, which is the point. And a **resumed** passage is credited
+only with what is heard after the resume, where reading the position would have
+counted a passage resumed at its half-way mark as played the instant it started.
+
 **`[SPEC-PLAY-015]` An unknown length is never a play.** Half of zero is
 trivially reachable, so a passage that had not played at all passed the
 threshold — observed, in the MPD observer's first live run. Absent is not zero
