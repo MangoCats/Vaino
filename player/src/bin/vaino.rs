@@ -292,8 +292,12 @@ fn engine_thread(
         // The four folder-writing settings, run here rather than in a request
         // handler: each walks the library and writes into a folder Vaino does
         // not own `[REQ-VIS-205]`, which is not work to do while a browser
-        // waits. One loop because they differ only in which cell they read,
-        // which module they call and what they call the files.
+        // waits.
+        //
+        // **These four and the `writes_files!` arms in `web.rs` are one list in
+        // two places.** A setting with a route and no entry here is a checkbox
+        // that persists and does nothing; one with an entry and no route cannot
+        // be asked for. Change either and change both.
         run_generation(&db, &controls_for_switch, "cue sheets", "sheets",
             |c| c.cue_requested.take(), |c, s| c.cue_status = Some(s),
             |conn| vaino_player::cue::generate(conn, false).map(|r| (r, "cue sheet")));

@@ -799,61 +799,49 @@ async fn reload_library(State(ui): State<Ui>) -> StatusCode {
 /// Allow or forbid Vaino writing cue sheets into the music folder
 /// `[REQ-VIS-205]`.
 ///
-/// Turning it **on** is what asks for them to be written, and that happens on
-/// the engine thread rather than here: it walks the library and writes into a
-/// folder Vaino does not own, which is not work for a request handler to do
-/// while a browser waits.
-async fn set_cue_sheets(
-    State(ui): State<Ui>,
-    axum::extract::Path(on): axum::extract::Path<String>,
-) -> StatusCode {
-    let want = on == "on" || on == "true" || on == "1";
-    ui.handle.send(Command::SetCueSheets(want));
-    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
-    c.cue_requested = Some(want);
-    c.cue_status = Some(if want { "writing…".into() } else { "off".into() });
-    StatusCode::ACCEPTED
+/// The four settings that let Vaino write files outside its own storage.
+///
+/// **Written as one macro so that changing one is changing all four.** They are
+/// the same handler with a different flag: take `on`/`off`, tell the engine so
+/// the choice persists, and leave an intent for the loop to act on — because
+/// acting means walking the library and writing into a folder Vaino does not
+/// own, which is not work for a request handler to do while a browser waits.
+///
+/// The generation each one triggers is the matching table in `vaino.rs`; the two
+/// lists are the same four in the same order, and neither is complete without
+/// the other. Adding a fifth means an arm here, an entry there, a column of
+/// none — settings are rows now `[SPEC-SC-099]` — and a checkbox in the skin.
+macro_rules! writes_files {
+    ($($fn_name:ident => $cmd:ident, $asked:ident, $status:ident, $what:literal, $req:literal;)+) => {
+        $(
+            #[doc = concat!("Allow or forbid Vaino writing ", $what, " `", $req, "`.")]
+            ///
+            /// One of four; see [`writes_files`].
+            async fn $fn_name(
+                State(ui): State<Ui>,
+                axum::extract::Path(on): axum::extract::Path<String>,
+            ) -> StatusCode {
+                let want = on == "on" || on == "true" || on == "1";
+                ui.handle.send(Command::$cmd(want));
+                let Ok(mut c) = ui.controls.lock() else {
+                    return StatusCode::INTERNAL_SERVER_ERROR;
+                };
+                c.$asked = Some(want);
+                c.$status = Some(if want { "writing…".into() } else { "off".into() });
+                StatusCode::ACCEPTED
+            }
+        )+
+    };
 }
 
-/// Allow or forbid Vaino writing cover art into the music folder
-/// `[REQ-VIS-210]`.
-async fn set_covers(
-    State(ui): State<Ui>,
-    axum::extract::Path(on): axum::extract::Path<String>,
-) -> StatusCode {
-    let want = on == "on" || on == "true" || on == "1";
-    ui.handle.send(Command::SetCovers(want));
-    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
-    c.covers_requested = Some(want);
-    c.covers_status = Some(if want { "writing…".into() } else { "off".into() });
-    StatusCode::ACCEPTED
-}
-
-/// Allow or forbid Vaino writing per-song lyrics into a local client's cache
-/// `[REQ-VIS-215]`.
-async fn set_lyrics_cache(
-    State(ui): State<Ui>,
-    axum::extract::Path(on): axum::extract::Path<String>,
-) -> StatusCode {
-    let want = on == "on" || on == "true" || on == "1";
-    ui.handle.send(Command::SetLyricsCache(want));
-    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
-    c.lyrics_requested = Some(want);
-    c.lyrics_status = Some(if want { "writing…".into() } else { "off".into() });
-    StatusCode::ACCEPTED
-}
-
-/// Allow or forbid Vaino writing lyrics beside the audio `[REQ-VIS-220]`.
-async fn set_lyrics_sidecar(
-    State(ui): State<Ui>,
-    axum::extract::Path(on): axum::extract::Path<String>,
-) -> StatusCode {
-    let want = on == "on" || on == "true" || on == "1";
-    ui.handle.send(Command::SetLyricsSidecar(want));
-    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
-    c.sidecar_requested = Some(want);
-    c.sidecar_status = Some(if want { "writing…".into() } else { "off".into() });
-    StatusCode::ACCEPTED
+writes_files! {    set_cue_sheets => SetCueSheets, cue_requested, cue_status,
+        "cue sheets into the music folder", "[REQ-VIS-205]";
+    set_covers => SetCovers, covers_requested, covers_status,
+        "cover art into the music folder", "[REQ-VIS-210]";
+    set_lyrics_cache => SetLyricsCache, lyrics_requested, lyrics_status,
+        "per-song lyrics into a local client's cache", "[REQ-VIS-215]";
+    set_lyrics_sidecar => SetLyricsSidecar, sidecar_requested, sidecar_status,
+        "lyrics beside the audio", "[REQ-VIS-220]";
 }
 
 /// Ask for the other backend `[SPEC-BK-030]`.
