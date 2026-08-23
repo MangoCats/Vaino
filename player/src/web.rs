@@ -1246,7 +1246,9 @@ mod tests {
     /// compiles in empty would serve a blank page and fail nowhere else.
     #[test]
     fn every_registered_skin_is_complete() {
-        assert!(!SKINS.is_empty());
+        // A const array, so this is checked when it compiles rather than here;
+        // the assertion below is the one that can actually fail.
+        const _: () = assert!(!SKINS.is_empty());
         let mut seen = std::collections::HashSet::new();
         for s in SKINS {
             assert!(seen.insert(s.name), "duplicate skin name {}", s.name);

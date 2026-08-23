@@ -355,7 +355,7 @@ mod tests {
             .iter()
             .map(|v| {
                 let mut s = Stream::new(16, 2, Fade::none());
-                s.push(&mut vec![*v; 8]);
+                s.push(&mut [*v; 8]);
                 s.finished = true;
                 s
             })
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn exhausted_streams_are_dropped() {
         let mut s = Stream::new(8, 2, Fade::none());
-        s.push(&mut vec![1.0; 4]);
+        s.push(&mut [1.0; 4]);
         s.finished = true;
         let mut streams = vec![s];
         let mut out = [0.0; 8];

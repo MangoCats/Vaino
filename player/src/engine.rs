@@ -1456,7 +1456,7 @@ mod tests {
         const RATE: u32 = 44_100;
         const CH: u16 = 2;
         let frames = (RATE as u64 * ms / 1000) as u32;
-        let data = (frames * CH as u32 * 2) as u32;
+        let data = frames * CH as u32 * 2;
         let mut v = Vec::with_capacity(44 + data as usize);
         v.extend(b"RIFF");
         v.extend((36 + data).to_le_bytes());
@@ -1520,7 +1520,7 @@ mod tests {
         h.send(Command::Play);
         e.drain_commands();
 
-        assert!(tick_until(&mut e, |e| plays(&st) > 0), "a play should have been written");
+        assert!(tick_until(&mut e, |_| plays(&st) > 0), "a play should have been written");
         assert_eq!(plays(&st), 1, "and exactly one, however many ticks it took");
         let _ = std::fs::remove_file(&wav);
         let _ = std::fs::remove_file(&path);
@@ -1553,7 +1553,7 @@ mod tests {
         h.send(Command::Skip);
         e.drain_commands();
         assert!(
-            tick_until(&mut e, |e| {
+            tick_until(&mut e, |_| {
                 st.last_rejected(crate::db::Rejection::Skip).map(|m| !m.is_empty()).unwrap_or(false)
             }),
             "the abandoned passage should have been suppressed"

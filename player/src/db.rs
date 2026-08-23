@@ -1794,7 +1794,7 @@ mod tests {
             .unwrap();
         // A PNG magic number in front, so the sniffer has something to find.
         let mut png = vec![0x89u8, b'P', b'N', b'G'];
-        png.extend(std::iter::repeat(0u8).take(600));
+        png.extend(std::iter::repeat_n(0u8, 600));
         c.execute("INSERT INTO cover_art VALUES ('rel-1',?1,?2,'test','t')",
                   rusqlite::params![big.clone(), png])
             .unwrap();

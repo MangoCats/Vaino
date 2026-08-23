@@ -127,6 +127,12 @@ impl PassageDecoder {
     /// Decode the next packet. Returns interleaved f32 frames, or `None` at end
     /// of passage. The slice borrows internal scratch and is valid until the
     /// next call -- callers copy into their own ring buffer.
+    ///
+    /// **Not `Iterator::next`, and cannot be.** The item borrows `self`, which
+    /// a lending iterator would need and `Iterator` cannot express. Keeping the
+    /// name because it is the right verb, and saying here why it is not the
+    /// trait method it looks like.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<&[f32]>, DecodeError> {
         if let Some(limit) = self.frame_limit {
             if self.frames_emitted >= limit {

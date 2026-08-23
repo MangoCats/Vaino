@@ -356,7 +356,6 @@ impl Playback for Switching {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     /// A backend that records what it was told, and nothing else.
     #[derive(Default)]

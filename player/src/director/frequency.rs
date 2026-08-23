@@ -350,6 +350,12 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
         excluded: None,
     };
     // Strictly greater, as shipped: `if (weight > minWeightLimit)`.
+    //
+    // **Written as a negated `>` on purpose.** `weight <= MIN_WEIGHT` is not
+    // the same test: a NaN weight compares false against everything, so that
+    // form would let it through as though it had passed. This form excludes
+    // it, which is the answer a weight that is not a number deserves.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     if !(weight > MIN_WEIGHT) {
         w.weight = 0.0;
         w.excluded = Some(Exclusion::BelowMinWeight);

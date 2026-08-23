@@ -629,6 +629,9 @@ impl Director {
             .collect();
 
         let total: f64 = pool.iter().map(|x| x.3).sum();
+        // Negated `>` so a NaN total is refused rather than divided by; see
+        // the same shape in `frequency::weigh`.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(total > 0.0) {
             return None;
         }
@@ -811,7 +814,7 @@ fn load_occasions(conn: &Connection) -> Result<Occasions, DbError> {
 
     // Only characteristics that ARE occasions. `flavor` also holds 71
     // dimensions of musical flavor, and none of those are seasonal.
-    let mut values: HashMap<String, Vec<((String, String), f64)>> = HashMap::new();
+    let mut values: crate::director::occasion::SubjectValues = HashMap::new();
     if let Ok(mut stmt) = conn.prepare(
         "SELECT subject_id, characteristic, class, value FROM flavor \
          WHERE subject_kind = 'recording'",

@@ -200,7 +200,7 @@ fn seed_separation(conn: &rusqlite::Connection, idx: &FlavorIndex) {
     let mean = |v: &Vec<f64>| if v.is_empty() { f64::NAN } else { v.iter().sum::<f64>() / v.len() as f64 };
     let (mw, mc) = (mean(&within), mean(&cross));
 
-    println!("  {:<10} {:>6} {:>9}  {}", "programme", "seeds", "mean d", "vs library");
+    println!("  {:<10} {:>6} {:>9}  vs library", "programme", "seeds", "mean d");
     let mut rows: Vec<(f64, String, usize)> = Vec::new();
     for p in programs.all() {
         let Some(ds) = per_program.get(&p.id) else { continue };

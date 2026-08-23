@@ -126,20 +126,28 @@ fn wrap_days(a: u16, b: u16) -> f64 {
     }
 }
 
+/// What a characteristic is called, and which class of it this is.
+///
+/// `("season", "winter")` rather than a bare string, because a characteristic
+/// without its class is not a thing an occasion can be looked up by.
+pub type Trait = (String, String);
+
+/// Subject mbid → the occasion values recorded against it.
+///
+/// Named because the same shape is built in `director::library` and passed in
+/// here, and a type written out twice is a type that can drift once.
+pub type SubjectValues = HashMap<String, Vec<(Trait, f64)>>;
+
 /// Every registered occasion, and the per-subject values they apply to.
 #[derive(Debug, Default)]
 pub struct Occasions {
     /// (characteristic, class) → curve
-    curves: HashMap<(String, String), Curve>,
-    /// subject mbid → [((characteristic, class), value)]
-    values: HashMap<String, Vec<((String, String), f64)>>,
+    curves: HashMap<Trait, Curve>,
+    values: SubjectValues,
 }
 
 impl Occasions {
-    pub fn new(
-        curves: HashMap<(String, String), Curve>,
-        values: HashMap<String, Vec<((String, String), f64)>>,
-    ) -> Self {
+    pub fn new(curves: HashMap<Trait, Curve>, values: SubjectValues) -> Self {
         Self { curves, values }
     }
 

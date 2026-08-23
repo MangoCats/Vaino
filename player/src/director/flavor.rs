@@ -162,8 +162,8 @@ pub fn centroid(schema: &FlavorSchema, members: &[(&Flavor, f64)]) -> Option<Fla
             if !f.has(c) || *weight <= 0.0 {
                 continue;
             }
-            for k in 0..w {
-                acc[k] += f.values[o + k] as f64 * weight;
+            for (k, a) in acc.iter_mut().enumerate() {
+                *a += f.values[o + k] as f64 * weight;
             }
             total += weight;
         }

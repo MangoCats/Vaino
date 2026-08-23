@@ -53,7 +53,7 @@ impl Resampler {
         // exact: 44100:48000 reduces to 147:160, so any multiple of 147 works
         // (verified 0.000% error at 1029, 1470 and 2940).
         let base = (from_hz / gcd(from_hz, to_hz)) as usize;
-        let chunk = base * ((1024 + base - 1) / base).max(1); // >= ~1024 frames
+        let chunk = base * 1024usize.div_ceil(base).max(1); // >= ~1024 frames
         let inner = FftFixedIn::<f32>::new(from_hz as usize, to_hz as usize, chunk, 2, channels)
             .map_err(|e| format!("resampler {from_hz}->{to_hz}: {e}"))?;
         Ok(Self {

@@ -27,6 +27,10 @@ use rusqlite::Connection;
 
 use crate::report::Written;
 
+/// One line of a sheet: where the passage starts, what it is called, and who
+/// performs it. Named because four functions here take a slice of them.
+type Track = (i64, String, String);
+
 /// Why a capture might get no sheet.
 const ONE_PASSAGE: &str = "needed no sheet";
 const NOT_OURS: &str = "left as they were";
@@ -89,7 +93,7 @@ const MOSTLY: (usize, usize) = (3, 4);
 /// way — missing data is not evidence.
 ///
 /// `None` where no track names an artist: an absent field beats an invented one.
-fn album_performer(tracks: &[(i64, String, String)]) -> Option<String> {
+fn album_performer(tracks: &[Track]) -> Option<String> {
     let mut count: HashMap<&str, usize> = HashMap::new();
     for artist in tracks.iter().map(|t| t.2.trim()).filter(|a| !a.is_empty()) {
         *count.entry(artist).or_insert(0) += 1;
@@ -106,7 +110,7 @@ fn album_performer(tracks: &[(i64, String, String)]) -> Option<String> {
 }
 
 /// One capture's sheet, or `None` when there is nothing worth naming.
-fn sheet(file: &Path, album: &str, tracks: &[(i64, String, String)]) -> Option<String> {
+fn sheet(file: &Path, album: &str, tracks: &[Track]) -> Option<String> {
     // A file with one passage is already named by its own tags; a sheet would
     // add a layer and say nothing new.
     if tracks.len() < 2 {
@@ -143,7 +147,7 @@ fn sheet(file: &Path, album: &str, tracks: &[(i64, String, String)]) -> Option<S
 /// this twice touches nothing and a listener toggling the setting does not
 /// rewrite their folder.
 pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
-    let mut by_file: HashMap<String, (String, Vec<(i64, String, String)>)> = HashMap::new();
+    let mut by_file: HashMap<String, (String, Vec<Track>)> = HashMap::new();
     let mut q = conn
         .prepare(
             "SELECT f.path, \
@@ -214,7 +218,7 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
 mod tests {
     use super::*;
 
-    fn tracks() -> Vec<(i64, String, String)> {
+    fn tracks() -> Vec<Track> {
         vec![
             (5_030, "Test for Echo".into(), "Rush".into()),
             (361_586, "Driven".into(), "Rush".into()),
@@ -235,7 +239,7 @@ mod tests {
     /// escape for it.
     #[test]
     fn a_quote_in_a_title_cannot_break_the_field() {
-        let t = vec![
+        let t: Vec<Track> = vec![
             (0, "He said \"go\"".into(), "X".into()),
             (1_000, "b".into(), "X".into()),
         ];
@@ -291,7 +295,7 @@ mod tests {
     /// called the album a compilation on the strength of them.
     #[test]
     fn a_few_wrong_credits_do_not_make_a_solo_record_a_compilation() {
-        let mut tracks: Vec<(i64, String, String)> = (0..20)
+        let mut tracks: Vec<Track> = (0..20)
             .map(|i| (i * 1_000, format!("Song {i}"), "Elton John".to_string()))
             .collect();
         tracks[7].2 = "The Band Perry".into();
@@ -309,7 +313,7 @@ mod tests {
     #[test]
     fn a_dominant_composer_does_not_own_a_soundtrack() {
         // 61 of 100, as measured, with the rest spread over other names.
-        let mut tracks: Vec<(i64, String, String)> = (0..61)
+        let mut tracks: Vec<Track> = (0..61)
             .map(|i| (i * 1_000, format!("Cue {i}"), "Mark Mancina".to_string()))
             .collect();
         for i in 0..39 {
