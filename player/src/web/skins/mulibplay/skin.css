@@ -53,7 +53,8 @@ body { background-color: black; color: #ccc; }
   background: #ffffff; cursor: pointer;
 }
 
-/* The original showed its cover at 200px, centred, above the title line. */
+/* The original showed its cover at 200px, centred. It sat above the title
+   line there; here the title belongs to the bar and the cover follows. */
 /* A fixed box, always occupied: the mark sits under the cover, so the space
    is reserved whether or not a sleeve exists and the controls below stop
    jumping as tracks change `[REQ-VIS-127]`. The cost is that a non-square
@@ -68,12 +69,13 @@ body { background-color: black; color: #ccc; }
 /* Narrow screens stack rather than shrink: this layout exists to be read
    from a phone, and two 200px sleeves do not fit across one. */
 @media (max-width: 30rem) { #artback { margin-left: 0; } }
-.nowplaying { font-weight: bold; font-size: 1.15rem; margin: 1rem 0 .2rem; }
+.nowplaying { font-weight: bold; font-size: 1.15rem; margin: .2rem 0 .2rem; }
 .nowplaying i { font-weight: normal; color: #888; }
 .elapsed { color: #888; }
-/* Matches the volume slider's width above it, and carries the same padded
-   hit area the Vaino skin uses so a 6px line is still an easy target. */
-.mulib #bar { width: 80%; height: 6px; margin: .5rem auto .2rem; background: #333;
+/* The volume slider's own width, so the two read as one stack of controls,
+   and the same padded hit area the Vaino skin uses so a 6px line is still an
+   easy target. `content-box` keeps the padding outside the 100%. */
+.mulib #bar { width: 100%; height: 6px; margin: .2rem 0 0; background: #333;
               border-radius: 3px; background-clip: content-box;
               padding: 9px 0; box-sizing: content-box; }
 .mulib #bar.seekable { cursor: pointer; }

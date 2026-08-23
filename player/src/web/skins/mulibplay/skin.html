@@ -8,11 +8,22 @@
   <input type="range" id="volume" min="0" max="1" step="any" value="1">
   <div class="elapsed" id="volnum">0.0 dB</div>
 
-  <!-- Full width under the volume reading, as the volume slider above it is
-       [REQ-VIS-225]. The original had no such control; a track position that
-       could only be read and not changed was the one thing MuLibPlay users
-       reached for and did not find. -->
+  <!-- The same full width as the volume slider above it [REQ-VIS-225]. The
+       original had no such control; a track position that could be read and
+       not changed was the one thing MuLibPlay users reached for and did not
+       find. -->
   <div id="bar" title="Click to move within the track"><div id="fill"></div></div>
+
+  <!-- What is playing sits directly under the bar that measures it: the two
+       are one reading, and a sleeve between them made the position belong to
+       nothing in particular. The original put the cover first because it had
+       no bar to belong to. -->
+  <div class="nowplaying">
+    <span id="title">—</span>
+    <i id="byword" hidden> by </i><span id="artist"></span>
+    <i id="fromword" hidden> from </i><span id="album"></span>
+  </div>
+  <div class="elapsed"><span id="plays"></span> &nbsp; <span id="time">0:00 / 0:00</span></div>
 
   <!-- Front then back, side by side, both 200px tall and centred -- which
        is how the original emits them: two <img> in sequence for the
@@ -22,12 +33,6 @@
   <!-- A static block, as the original showed them `[SPEC-LYR-045]`. Absent for
        most passages, and hidden by itself rather than announcing a 404. -->
   <pre id="lyrics" hidden></pre>
-  <div class="nowplaying">
-    <span id="title">—</span>
-    <i id="byword" hidden> by </i><span id="artist"></span>
-    <i id="fromword" hidden> from </i><span id="album"></span>
-  </div>
-  <div class="elapsed"><span id="plays"></span> &nbsp; <span id="time">0:00 / 0:00</span></div>
 
   <div class="panes">
     <div class="leftcol">
