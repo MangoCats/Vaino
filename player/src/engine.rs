@@ -656,21 +656,6 @@ impl Engine {
         }
     }
 
-    /// Fade what is sounding down to silence and stop `[SPEC-BK-030]`.
-    ///
-    /// **This is `skip` with nothing to skip to**, which the skip path already
-    /// handles: emptying the queue first means `admit_due` promotes nothing, and
-    /// the transition it begins has no incoming audio to overlay — so the ring
-    /// fades out and stays out. `skip`'s own comment said as much long before a
-    /// handoff wanted it.
-    ///
-    /// Reusing it rather than writing a second fade is the point. There is one
-    /// place in this engine that takes the ring from sounding to not, and a
-    /// handoff has no business inventing another with its own idea of a curve.
-    ///
-    /// Returns whether an output was actually faded. With no ring — a silent
-    /// path, a failed device — there is nothing to fade and saying otherwise
-    /// would be the lie `[PI3-API-030]` refuses.
     /// The passage sounding and how far into its span, for a handoff that must
     /// not restart it `[SPEC-BK-065]`.
     ///
@@ -702,17 +687,32 @@ impl Engine {
     /// `[SPEC-PLAY-050]` — 156 hours by default. A passage that is still
     /// playing on the other side has not been declined, and suppressing it
     /// would punish the listener for changing rooms.
-    /// **A latch, not a flag around the call.** The fade is asked for here
-    /// and the head does not actually depart until it completes, several
-    /// ticks later; a flag cleared on the way out of this function would
-    /// already be false by the time the departure was judged. It is set only
-    /// when something is really sounding, so it cannot sit armed and swallow
-    /// the next genuine skip.
+    ///
+    /// **A latch, not a flag around the call.** The fade is asked for here and
+    /// the head does not depart until it completes, several ticks later; a flag
+    /// cleared on the way out of this function would already be false by the
+    /// time the departure was judged. It is set only when something is really
+    /// sounding, so it cannot sit armed and swallow the next genuine skip.
     pub fn hand_off_to_silence(&mut self, ms: u64) -> bool {
         self.handing_over = !self.live.is_empty();
         self.fade_to_silence(ms)
     }
 
+    /// Fade what is sounding down to silence and stop `[SPEC-BK-030]`.
+    ///
+    /// **This is `skip` with nothing to skip to**, which the skip path already
+    /// handles: emptying the queue first means `admit_due` promotes nothing, and
+    /// the transition it begins has no incoming audio to overlay — so the ring
+    /// fades out and stays out. `skip`'s own comment said as much long before a
+    /// handoff wanted it.
+    ///
+    /// Reusing it rather than writing a second fade is the point. There is one
+    /// place in this engine that takes the ring from sounding to not, and a
+    /// handoff has no business inventing another with its own idea of a curve.
+    ///
+    /// Returns whether an output was actually faded. With no ring — a silent
+    /// path, a failed device — there is nothing to fade and saying otherwise
+    /// would be the lie `[PI3-API-030]` refuses.
     pub fn fade_to_silence(&mut self, ms: u64) -> bool {
         // The queue goes first: the passages are already being rebuilt on the
         // other side, and one left here would be promoted into the fade.
