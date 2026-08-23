@@ -58,6 +58,33 @@ audio routes simply dropped them.
 which is the point: it is the path Vaino itself has always used, so both players
 still mix into one sink rather than contending for hardware `[SPEC-BK-030]`.
 
+**`[PI-CHR-100]` And it is not a free choice: the outputs that sound are the
+outputs that die on a seek.** Found when a listener seeked and the music stopped
+without advancing. Seven configurations, each on its own MPD, each judged at the
+speaker:
+
+| output | sounds | survives a seek |
+| :--- | :--- | :--- |
+| `alsa` / `default`, forced format | yes | **no** |
+| `alsa` / `default`, explicit buffer and period | yes | **no** |
+| `alsa` / `default`, no forced format | yes | **no** |
+| `alsa` / `default`, `use_mmap yes` | yes | **no** |
+| `alsa` / `pipewire` PCM | yes | **no** |
+| `pulse`, with and without an explicit sink | **no** | yes |
+| `pipewire`, native plugin | **no** | yes |
+
+Perfectly split, and it holds for `next` as well as `seekid` — any command that
+cancels the output mid-playback. `state` stays `play`, `elapsed` freezes, the
+speaker goes quiet. `pause 1` then `pause 0`, with no delay between them, brings
+it back; that is what `[SPEC-MPD-135]` now does.
+
+`mixer_type "software"` was tested as a possible cure and is not one — the wedge
+happens with and without it. It was kept for its own reasons `[SPEC-MPD-140]`.
+
+> **`close_on_pause` is not an MPD option**, whatever the internet says: it logs
+> `option 'close_on_pause' on line 35 was not recognized` and is ignored. That
+> variant was silently testing the baseline again until the log was read.
+
 > **The meter was checked before it was believed.** An RMS reading of zero is
 > also what a broken recorder produces. It was validated against known-good
 > audio first — Vaino playing, RMS 891 — and `pw-record --target` was found to
@@ -104,10 +131,13 @@ than from the report:
 | Vaino → MPD | *"resumed 10.3 s in after 176 ms"* | `play`, 6 queued | RMS **3,784** |
 | MPD → Vaino | *"resumed 124.3 s in after 1,042 ms"* | `stop` | RMS **507** |
 
-> **Handing *away* from MPD cuts rather than fades**, and says so. `mixer_type
-> "none"` is deliberate — volume is Vaino's business `[REQ-AUD-154]` — and
-> without a mixer there is no `setvol` to build a fade from `[SPEC-MPD-099]`.
-> The report reads `cut`, not `faded`, which is the whole point of reporting it.
+> **That `cut` was a symptom, not a setting.** The switch away from MPD reported
+> `cut` rather than `faded` because `mixer_type "none"` leaves no `setvol` to
+> build a fade from `[SPEC-MPD-099]`, and MPD's log filled with `exception: No
+> mixer` — six of them per switch, one per fade step. The same missing mixer is
+> why a guest client's volume slider did nothing. Both fixed by giving MPD a
+> software mixer `[SPEC-MPD-140]`; the switch now reports `faded`, and `setvol
+> 40` → `setvol 100` moved the speaker from RMS 964 to 5,847.
 
 Start latency, once the ALSA output was right: **95–128 ms** over five trials
 from `seekid` to audible position, median 103 ms — comfortably inside the

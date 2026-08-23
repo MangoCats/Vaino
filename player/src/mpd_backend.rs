@@ -261,6 +261,9 @@ pub struct MpdBackend {
     /// When the connection was first found dead, for deciding that MPD is not
     /// coming back rather than retrying for ever.
     lost_since: Option<Instant>,
+    /// The position at the last poll and when it was last seen to move, for
+    /// noticing an output that has stopped carrying samples `[SPEC-MPD-135]`.
+    stall: Option<(u64, Instant)>,
     /// The next moment worth trying again, so a machine with no MPD on it does
     /// not spend the session opening sockets.
     retry_at: Option<Instant>,
@@ -268,6 +271,14 @@ pub struct MpdBackend {
 
 /// How often a lost connection is retried.
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
+
+/// How long MPD may report playing without moving before its output is
+/// restarted `[SPEC-MPD-135]`.
+///
+/// Longer than a sample interval, so an unlucky pair of identical readings is
+/// not mistaken for a stall; short enough that a listener hears a gap rather
+/// than wondering whether the music stopped for good.
+const STALL_AFTER: Duration = Duration::from_secs(3);
 
 /// How long MPD may be away before this backend calls itself finished.
 ///
@@ -309,6 +320,7 @@ impl MpdBackend {
             counted_elsewhere: HashSet::new(),
             lost: false,
             lost_since: None,
+            stall: None,
             retry_at: None,
         })
     }
@@ -369,6 +381,7 @@ impl MpdBackend {
         self.order.clear();
         self.head = None;
         self.playing = false;
+        self.stall = None;
         self.queue_len = 0;
         self.lost = false;
         self.lost_since = None;
@@ -437,6 +450,60 @@ impl MpdBackend {
         self.stop_sounding();
         let _ = self.mpd.cmd(&format!("setvol {start}"));
         true
+    }
+
+    /// Make MPD's output start carrying samples again `[SPEC-MPD-135]`.
+    ///
+    /// **A workaround for something that is not Vaino's bug, kept here because
+    /// the listener's silence is Vaino's problem.** On the appliance, any MPD
+    /// command that cancels the output mid-playback — `seekid`, `next` — leaves
+    /// MPD reporting `state: play` with `elapsed` frozen and nothing at the
+    /// speaker. Measured across seven output configurations: every ALSA route
+    /// sounds and then dies this way, and every `pulse` or native `pipewire`
+    /// route never sounds at all `[PI-CHR-100]`. There is no configuration that
+    /// does both, so the choice is between a player that cannot seek and one
+    /// that carries this.
+    ///
+    /// `pause 1` immediately followed by `pause 0` brings it back — measured
+    /// with **no delay between them**, so this costs two round trips and no
+    /// sleep. The position moves by up to the output buffer; a couple of
+    /// seconds of the passage, against losing the rest of it.
+    fn restart_output(&mut self) {
+        let _ = self.mpd.cmd("pause 1");
+        let _ = self.mpd.cmd("pause 0");
+    }
+
+    /// Notice an output that has stopped carrying samples and restart it.
+    ///
+    /// **For the flushes Vaino did not cause.** A guest client is the whole
+    /// point of the MPD backend `[SPEC-MPD-050]`, and somebody seeking in
+    /// Cantata wedges the output exactly as Vaino's own seek does — with Vaino
+    /// nowhere in that conversation. What Vaino does have is the poll, so the
+    /// stall is caught there instead.
+    ///
+    /// Position, not heard time: a stalled output is precisely the case where
+    /// MPD says it is playing and the clock disagrees.
+    fn watch_for_stall(&mut self, position_ms: u64) {
+        if !self.playing {
+            self.stall = None;
+            return;
+        }
+        match self.stall {
+            Some((at, since)) if at == position_ms => {
+                if since.elapsed() >= STALL_AFTER {
+                    eprintln!(
+                        "mpd says playing at {position_ms} ms and has not moved for {:.1}s; \
+                         restarting its output",
+                        since.elapsed().as_secs_f32()
+                    );
+                    self.restart_output();
+                    // Restarted or not, the clock is measured afresh from here
+                    // rather than firing again on the next poll.
+                    self.stall = Some((position_ms, Instant::now()));
+                }
+            }
+            _ => self.stall = Some((position_ms, Instant::now())),
+        }
     }
 
     /// Stop sounding, without losing the connection.
@@ -516,6 +583,10 @@ impl MpdBackend {
             (Some(id), true) => self.ours.get(id).map(|o| (o.passage_id, elapsed_ms)),
             _ => None,
         };
+        // Before anything else is decided from this sample: an output that has
+        // stopped carrying samples reports a position that never changes
+        // `[SPEC-MPD-135]`.
+        self.watch_for_stall(elapsed_ms);
 
         // **A song this backend did not queue is still one the listener heard**
         // `[SPEC-MPD-115]`. Adopt it once, so its play is attributed and its
@@ -585,6 +656,10 @@ impl MpdBackend {
         }
         if overrun {
             let _ = self.mpd.cmd("next");
+            // `next` cancels the output exactly as a seek does, and leaves it
+            // silent `[SPEC-MPD-135]`. Measured: the clock froze and the
+            // speaker went quiet on the passage after an unhonoured span.
+            self.restart_output();
         }
 
         let order = match self.mpd.cmd("playlistinfo") {
@@ -849,6 +924,10 @@ impl Playback for MpdBackend {
         if self.mpd.cmd(&format!("seekid {id} {:.3}", at as f64 / 1000.0)).is_err() {
             return;
         }
+        // Immediately, rather than leaving it to the watchdog three seconds
+        // later: this is an interactive action and the listener is waiting on
+        // it `[SPEC-MPD-135]`.
+        self.restart_output();
         // The clock has moved without anyone listening to the distance. Reading
         // it back on the next poll would otherwise credit the jump as heard
         // `[SPEC-PLAY-012]`.
@@ -909,8 +988,13 @@ mod tests {
         /// Every command received, in order, so a test can assert what was
         /// *sent* rather than only what came back.
         seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-        /// What `status` should report, for standing in as a paused MPD.
+        /// What `status` should report, for standing in as a paused MPD or as
+        /// one whose clock has stopped moving.
         state: std::sync::Arc<std::sync::Mutex<String>>,
+        /// The position `status` reports. Fixed, so a stalled output is a
+        /// position that does not change between polls — which is exactly how
+        /// the real one presents `[SPEC-MPD-135]`.
+        elapsed: std::sync::Arc<std::sync::Mutex<f64>>,
     }
 
     impl FakeMpd {
@@ -925,8 +1009,9 @@ mod tests {
             let up = Arc::new(AtomicBool::new(true));
             let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
             let state = Arc::new(std::sync::Mutex::new("stop".to_string()));
+            let elapsed = Arc::new(std::sync::Mutex::new(0.0f64));
             let (g, u) = (generation.clone(), up.clone());
-            let (log, st) = (seen.clone(), state.clone());
+            let (log, st, el) = (seen.clone(), state.clone(), elapsed.clone());
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     let Ok(mut sock) = stream else { return };
@@ -935,7 +1020,7 @@ mod tests {
                     }
                     let mine = g.load(Ordering::SeqCst);
                     let (g, u) = (g.clone(), u.clone());
-                    let (log, st) = (log.clone(), st.clone());
+                    let (log, st, el) = (log.clone(), st.clone(), el.clone());
                     std::thread::spawn(move || {
                         if sock.write_all(b"OK MPD 0.23.5\n").is_err() {
                             return;
@@ -968,9 +1053,15 @@ mod tests {
                                 out.push_str("OK\n");
                                 out
                             } else if line == "status" {
+                                let song = queue
+                                    .first()
+                                    .map(|(id, _)| format!("songid: {id}\n"))
+                                    .unwrap_or_default();
                                 format!(
-                                    "state: {}\nplaylistlength: {}\nOK\n",
+                                    "state: {}\nelapsed: {:.3}\n{}playlistlength: {}\nOK\n",
                                     st.lock().unwrap(),
+                                    el.lock().unwrap(),
+                                    song,
                                     queue.len()
                                 )
                             } else {
@@ -983,12 +1074,18 @@ mod tests {
                     });
                 }
             });
-            FakeMpd { addr, generation, up, seen, state }
+            FakeMpd { addr, generation, up, seen, state, elapsed }
         }
 
         /// Come back paused, the way `restore_paused "yes"` does.
         fn paused(&self) {
             *self.state.lock().unwrap() = "pause".to_string();
+        }
+
+        /// Report playing, at a position that never moves — a wedged output.
+        fn stuck_at(&self, seconds: f64) {
+            *self.state.lock().unwrap() = "play".to_string();
+            *self.elapsed.lock().unwrap() = seconds;
         }
 
         fn commands(&self) -> Vec<String> {
@@ -1112,6 +1209,76 @@ mod tests {
             sent[seek..].iter().any(|c| c == "pause 0"),
             "and then says play, or the handoff lands silently: {sent:?}"
         );
+    }
+
+    /// **A seek wedges MPD's output on the appliance, so the seek restarts it**
+    /// `[SPEC-MPD-135]`.
+    ///
+    /// Not a hypothetical: measured across seven output configurations, every
+    /// one that carries sound at all stops carrying it after a `seekid`, while
+    /// reporting `state: play` `[PI-CHR-100]`.
+    #[test]
+    fn a_seek_restarts_the_output_it_just_wedged() {
+        let mpd = FakeMpd::start();
+        mpd.stuck_at(5.0);
+        let mut b = mpd.backend();
+        b.enqueue(queued(7));
+        b.tick(); // a poll, so the backend knows what is current
+        b.seek_to(10_000);
+
+        let sent = mpd.commands();
+        let seek = sent.iter().rposition(|c| c.starts_with("seekid")).expect("it seeks");
+        let after = &sent[seek..];
+        assert!(after.iter().any(|c| c == "pause 1") && after.iter().any(|c| c == "pause 0"),
+                "the output is restarted after the seek: {after:?}");
+    }
+
+    /// **And a seek somebody made in their own client wedges it just the same**
+    /// `[SPEC-MPD-135]`.
+    ///
+    /// Vaino is not in that conversation — a guest client is the point of this
+    /// backend `[SPEC-MPD-050]` — so the stall is caught at the poll instead.
+    #[test]
+    fn an_output_that_stops_moving_is_restarted_without_being_asked() {
+        let mpd = FakeMpd::start();
+        mpd.stuck_at(30.0);
+        let mut b = mpd.backend();
+        b.enqueue(queued(7));
+
+        b.tick();
+        assert!(b.stall.is_some(), "the position is being watched");
+        let before = mpd.commands().len();
+        b.tick();
+        assert_eq!(mpd.commands()[before..].iter().filter(|c| *c == "pause 0").count(), 0,
+                   "not on a second identical reading -- that is only two samples");
+
+        // Now with the clock genuinely stopped for longer than a listener
+        // should be asked to sit through.
+        b.stall = b.stall.map(|(at, _)| (at, Instant::now() - STALL_AFTER - Duration::from_secs(1)));
+        let before = mpd.commands().len();
+        b.tick();
+        let after = &mpd.commands()[before..];
+        assert!(after.iter().any(|c| c == "pause 1") && after.iter().any(|c| c == "pause 0"),
+                "a stalled output is restarted: {after:?}");
+    }
+
+    /// A player that is merely **paused** is not a stalled one, and must be
+    /// left alone — restarting its output would resume playback nobody asked
+    /// to resume.
+    #[test]
+    fn a_paused_mpd_is_not_mistaken_for_a_stalled_one() {
+        let mpd = FakeMpd::start();
+        mpd.paused();
+        let mut b = mpd.backend();
+        b.enqueue(queued(7));
+        b.tick();
+        assert!(b.stall.is_none(), "nothing to watch: it is not playing");
+
+        let before = mpd.commands().len();
+        b.tick();
+        b.tick();
+        assert!(!mpd.commands()[before..].iter().any(|c| c == "pause 0"),
+                "a paused player is left paused");
     }
 
     /// **What MPD remembers across its own restart is not ours to assume.**

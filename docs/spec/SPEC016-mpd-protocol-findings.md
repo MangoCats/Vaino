@@ -234,8 +234,55 @@ from `state_file`, but song **ids** are freshly assigned, so entries held under
 the old ones are released as dropped — un-counted by the Director
 `[REQ-PD-112]` — rather than retired as plays or skips nobody observed.
 
+**`[SPEC-MPD-135]` Cancelling MPD's output leaves it silent, so it is restarted
+deliberately.** *(Measured 2026-08-23 on the appliance.)* Any command that
+cancels the output mid-playback — `seekid`, `next` — leaves MPD reporting
+`state: play` with `elapsed` frozen and nothing at the speaker. `pause 1`
+immediately followed by `pause 0` brings it back, with **no delay needed**
+between them.
+
+This is not Vaino's bug, and it is Vaino's problem: the listener's silence is.
+It is carried in two places, because a seek has two origins:
+
+- **Vaino's own seek does it inline**, rather than waiting to be noticed. The
+  listener is sitting there.
+- **A guest client's seek is caught at the poll.** Somebody seeking in Cantata
+  wedges the output identically with Vaino nowhere in that conversation
+  `[SPEC-MPD-050]`, so a position that has not moved for three seconds while
+  MPD claims to be playing is treated as a stall and restarted.
+
+A **paused** player is not a stalled one and is left alone; restarting its
+output would resume playback nobody asked to resume.
+
+> **No configuration avoids it.** Seven were measured in `[PI-CHR-100]`, and
+> they split perfectly: every output that carries sound at all dies this way,
+> and every one that survives a seek never sounds. The choice was between a
+> player that cannot seek and one that carries this.
+
+**`[SPEC-MPD-140]` MPD needs a mixer, because otherwise nothing can change the
+volume while it plays.** *(Settled 2026-08-23, reversing an earlier decision.)*
+`mixer_type "none"` was chosen on the reasoning that volume is Vaino's business
+`[REQ-AUD-154]` and a second mixer would be a second idea of loudness.
+
+That was wrong, and only the appliance showed it. **Vaino applies its fader as
+gain inside its own output ring**, and MPD's audio never passes through that
+code — so with no mixer, MPD played at whatever level it liked and neither
+Vaino's fader nor a guest's slider could touch it. A client's volume control
+reported "no mixer" and did nothing.
+
+It also cost the fade. `[SPEC-MPD-099]`'s fade is built from `setvol` steps, and
+`setvol` is refused outright without a mixer — so **every** switch away from MPD
+cut rather than faded, while `[SPEC-MPD-099]` was written as though the
+deployment decided it. Measured after the change: the switch reports `faded`,
+and the listener's volume is given back.
+
+> Still open: Vaino's own fader does not yet drive MPD's. A guest client can set
+> the volume and Vaino's slider cannot, which is the mirror of the old problem
+> and a smaller one. It wants a `set_volume` on the backend trait.
+
 ---
 
 **Traceability:** `[SPEC-MPD-092]`, `[SPEC-MPD-094]`, `[SPEC-MPD-096]`,
-`[SPEC-MPD-098]`, `[SPEC-MPD-130]` · measured by `[IMPL-MPD-010..030]` · design
-in [SPEC015](SPEC015-mpd-director.md) · ranking discipline `[GOV-SRC-010]`
+`[SPEC-MPD-098]`, `[SPEC-MPD-130]`, `[SPEC-MPD-135]`, `[SPEC-MPD-140]` ·
+measured by `[IMPL-MPD-010..030]` and `[PI-CHR-100]` · design in
+[SPEC015](SPEC015-mpd-director.md) · ranking discipline `[GOV-SRC-010]`
