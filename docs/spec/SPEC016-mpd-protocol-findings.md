@@ -128,6 +128,40 @@ and lose both. Measured on the queue: cue start 1324.7 s against a radio start
 of 1324.7 s — exact — and a cue end 3.8 s late, which the sampler ends itself
 `[SPEC-MPD-096]` rather than accepting.
 
+**`[SPEC-MPD-058]` The album's performer is whoever performs most of it, not
+whoever performs track one.** *(Fixed 2026-08-22.)* A cue sheet's disc-level
+`PERFORMER` becomes `AlbumArtist` for **every** track in it. Taking it from the
+first track gave `Various/Moana.cue` — 22 artists over 80 passages — an
+`AlbumArtist` of *Olivia Foaʻi* throughout, so a client keyed on the album artist
+showed one singer's picture and biography for the whole soundtrack while the
+titles underneath kept changing.
+
+Both obvious rules then failed, in opposite directions. **Unanimity** called
+*Goodbye Yellow Brick Road* a compilation, on the strength of a few passages
+linked to the wrong recording. **A simple majority** called *Moana* a Mark
+Mancina record, because his score cues outnumber its songs. So the threshold was
+measured across all 191 captures, where the dominant share is almost never in
+doubt — **182 are unanimous** — and only five sit between:
+
+| share | artists | capture | is really |
+| ---: | ---: | :--- | :--- |
+| 44% | 3 | Caddyshack | a compilation |
+| 61% | 14 | Moana | a compilation |
+| 83% | 9 | Goodbye Yellow Brick Road | one artist's |
+| 88% | 3 | Exodus 40 | one artist's |
+| 93% | 2 | Frampton Comes Alive | one artist's |
+
+Any threshold above 61% and at or below 83% separates them; **three quarters**
+sits mid-gap. A record nobody performs three quarters of is `Various Artists` —
+the literal string, because a client matches it literally, and saying it is what
+puts a compilation on the lookup path that follows each *track's* artist.
+Applied to the library: **186 named for one artist, 5 compilations**, and those
+five are Caddyshack, Guardians of the Galaxy, Moana, Native American Flute
+Lullabies and Tomb Raider.
+
+> Tracks naming nobody are counted on neither side. Missing data is not evidence
+> of anything, and an absent `PERFORMER` beats an invented one.
+
 What follows is why the *default* is off, not why it was declined:
 it means writing files into the listener's music tree, and Vaino's passages are
 not always a CD's tracks — a radio span trims what an album span keeps
