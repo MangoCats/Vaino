@@ -707,9 +707,28 @@ impl PlayerStore {
         // Created here because this is the player's only writable handle, and
         // on every start rather than behind a scan, for the same reason the
         // columns above are `[REQ-VIS-180]`.
+        // **And the sort after it, which the single-column index did not**
+        // `[PI-CHR-065]`. Measured on the appliance against the real library:
+        // `browse_albums` picks the chosen release per recording, so it runs
+        // `ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1` once
+        // per passage over some thirty-six releases each. Finding the rows was
+        // already cheap; ordering them was 18.05 s of a 25.7 s page.
+        //
+        // Carrying `chosen` and `release_mbid` in the index lets SQLite take the
+        // first row instead of sorting them: **0.93 s for the same 694 albums**,
+        // built once in 4.4 s. The sort cannot simply be dropped — without it
+        // the answer is 1,698 albums, because then any release will do.
+        //
+        // Created after `chosen` exists, which the ALTER above guarantees. That
+        // is why this lives here and not in `schema.sql`: that file describes
+        // the table as it is before the column this sorts on is added to it.
         let _ = conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_release_recordings_mbid \
-               ON release_recordings(mbid)", []);
+            "CREATE INDEX IF NOT EXISTS idx_release_recordings_chosen \
+               ON release_recordings(mbid, chosen DESC, release_mbid)", []);
+        // Redundant once the covering one exists — `mbid` leads both, so
+        // anything the old index served the new one serves too. Dropped after
+        // it and never before, so there is no moment with neither.
+        let _ = conn.execute("DROP INDEX IF EXISTS idx_release_recordings_mbid", []);
         Ok(Self { conn })
     }
 
