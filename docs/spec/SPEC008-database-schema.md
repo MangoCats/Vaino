@@ -182,6 +182,12 @@ Deliberately **not** `listener_`-prefixed. It is operational state, not listener
 
 `playing` is a boolean because playback has exactly two states `[REQ-AUD-142]`. Pausing halts the consumer only; producers keep filling buffers, so there is no third "stopped" mode to represent.
 
+**`[SPEC-SC-099]` Settings are rows in `player_settings`, not columns beside the resume point.** *(Changed 2026-08-22.)* They began as columns on `player_state`, one added by `ALTER` as each was invented, and read back **by position** — `?11` in the insert, `r.get(10)` in the select. Adding a setting meant renumbering both lists and the `ALTER` list beside them, and getting it wrong loaded the wrong value **silently** rather than failing.
+
+`player_settings(key, value, updated_at)` removes the positions. One list of keys is the source, and a round-trip test asserts that what is written is what is read, so a setting added to the struct and forgotten in the reader fails a test instead of losing itself at the next restart.
+
+The keys keep the old column names, so a database written before this carries over without a translation table — done once, on open, and skipped forever after.
+
 ---
 
 ## 7. Visibility

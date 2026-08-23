@@ -525,6 +525,88 @@ pub struct Settings {
     pub lyrics_sidecar: bool,
 }
 
+impl Settings {
+    /// Every persisted setting, by the name it is stored under
+    /// `[SPEC-SC-099]`.
+    ///
+    /// **The names are the old column names on purpose**, so a database written
+    /// before this carries over without a translation table, and so anyone
+    /// reading `player_settings` sees what they expect.
+    ///
+    /// This list is the single source: `value_of` and `set` are both matched
+    /// against it by `every_setting_survives_a_round_trip`, so a field added to
+    /// one and forgotten in the other fails a test rather than silently losing
+    /// itself on the next restart.
+    pub const KEYS: [&'static str; 12] = [
+        "volume",
+        "skip_fade_ms",
+        "skip_lead_ms",
+        "resume_save_ms",
+        "skip_suppress_h",
+        "dequeue_suppress_h",
+        "queue_depth",
+        "sample_interval_ms",
+        "cue_sheets",
+        "covers",
+        "lyrics_cache",
+        "lyrics_sidecar",
+    ];
+
+    /// What to store under `key`, or `None` if this is not a setting.
+    fn value_of(&self, key: &str) -> Option<String> {
+        Some(match key {
+            "volume" => self.volume.to_string(),
+            "skip_fade_ms" => self.skip_fade_ms.to_string(),
+            "skip_lead_ms" => self.skip_lead_ms.to_string(),
+            "resume_save_ms" => self.resume_save_ms.to_string(),
+            "skip_suppress_h" => self.skip_suppress_h.to_string(),
+            "dequeue_suppress_h" => self.dequeue_suppress_h.to_string(),
+            "queue_depth" => self.queue_depth.to_string(),
+            "sample_interval_ms" => self.sample_interval_ms.to_string(),
+            "cue_sheets" => (self.cue_sheets as i64).to_string(),
+            "covers" => (self.covers as i64).to_string(),
+            "lyrics_cache" => (self.lyrics_cache as i64).to_string(),
+            "lyrics_sidecar" => (self.lyrics_sidecar as i64).to_string(),
+            _ => return None,
+        })
+    }
+
+    /// Take one stored value. Anything unreadable leaves the field alone, so a
+    /// corrupted row costs that setting and not the rest of them.
+    fn set(&mut self, key: &str, value: &str) {
+        // Booleans were written as 0/1 by the old columns and still are.
+        let flag = || matches!(value, "1" | "true");
+        match key {
+            "volume" => {
+                if let Ok(v) = value.parse() {
+                    self.volume = v;
+                }
+            }
+            "skip_fade_ms" => set_u64(&mut self.skip_fade_ms, value),
+            "skip_lead_ms" => set_u64(&mut self.skip_lead_ms, value),
+            "resume_save_ms" => set_u64(&mut self.resume_save_ms, value),
+            "skip_suppress_h" => set_u64(&mut self.skip_suppress_h, value),
+            "dequeue_suppress_h" => set_u64(&mut self.dequeue_suppress_h, value),
+            "queue_depth" => {
+                if let Ok(v) = value.parse() {
+                    self.queue_depth = v;
+                }
+            }
+            "sample_interval_ms" => set_u64(&mut self.sample_interval_ms, value),
+            "cue_sheets" => self.cue_sheets = flag(),
+            "covers" => self.covers = flag(),
+            "lyrics_cache" => self.lyrics_cache = flag(),
+            "lyrics_sidecar" => self.lyrics_sidecar = flag(),
+            _ => {}
+        }
+    }
+}
+
+fn set_u64(field: &mut u64, value: &str) {
+    if let Ok(v) = value.parse() {
+        *field = v;
+    }
+}
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -593,16 +675,19 @@ impl PlayerStore {
         // was already complete never reached it and browsing died on a missing
         // column. A query naming a column that does not exist fails outright;
         // it does not return nothing.
-        for column in ["skip_fade_ms INTEGER", "skip_lead_ms INTEGER",
-                       "resume_save_ms INTEGER", "skip_suppress_h INTEGER",
-                       "dequeue_suppress_h INTEGER", "queue_depth INTEGER",
-                       "sample_interval_ms INTEGER",
-                       "cue_sheets INTEGER", "covers INTEGER",
-                       "lyrics_cache INTEGER",
-                       "lyrics_sidecar INTEGER"] {
-            let _ = conn.execute(
-                &format!("ALTER TABLE player_state ADD COLUMN {column}"), []);
-        }
+        // Settings live in `player_settings`, one row each `[SPEC-SC-099]`.
+        // They used to be columns on `player_state`, added by ALTER as each was
+        // invented, and read back by position -- `?11` here, `r.get(10)` there.
+        // Adding one meant renumbering both, and getting it wrong loaded the
+        // wrong value silently rather than failing.
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS player_settings (
+                 key        TEXT PRIMARY KEY,
+                 value      TEXT NOT NULL,
+                 updated_at TEXT NOT NULL)",
+            [],
+        );
+        Self::adopt_old_settings_columns(&conn);
         for column in ["chosen INTEGER DEFAULT 0", "position INTEGER", "disc INTEGER"] {
             let _ = conn.execute(
                 &format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
@@ -736,90 +821,86 @@ impl PlayerStore {
     /// resume point saved position and playing state and quietly left the
     /// level behind, so it came back at full scale every start.
     pub fn save_settings(&self, s: &Settings) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT INTO player_state
-                     (id, volume, skip_fade_ms, skip_lead_ms, resume_save_ms,
-                      skip_suppress_h, dequeue_suppress_h, queue_depth,
-                      sample_interval_ms, cue_sheets, covers, lyrics_cache,
-                      lyrics_sidecar, updated_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                         datetime('now'))
-                 ON CONFLICT(id) DO UPDATE SET
-                     volume = excluded.volume,
-                     skip_fade_ms = excluded.skip_fade_ms,
-                     skip_lead_ms = excluded.skip_lead_ms,
-                     resume_save_ms = excluded.resume_save_ms,
-                     skip_suppress_h = excluded.skip_suppress_h,
-                     dequeue_suppress_h = excluded.dequeue_suppress_h,
-                     queue_depth = excluded.queue_depth,
-                     sample_interval_ms = excluded.sample_interval_ms,
-                     cue_sheets = excluded.cue_sheets,
-                     covers = excluded.covers,
-                     lyrics_cache = excluded.lyrics_cache,
-                     lyrics_sidecar = excluded.lyrics_sidecar,
-                     updated_at = excluded.updated_at",
-                rusqlite::params![
-                    s.volume as f64,
-                    s.skip_fade_ms as i64,
-                    s.skip_lead_ms as i64,
-                    s.resume_save_ms as i64,
-                    s.skip_suppress_h as i64,
-                    s.dequeue_suppress_h as i64,
-                    s.queue_depth as i64,
-                    s.sample_interval_ms as i64,
-                    s.cue_sheets as i64,
-                    s.covers as i64,
-                    s.lyrics_cache as i64,
-                    s.lyrics_sidecar as i64,
-                ],
-            )
-            .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+        for key in Settings::KEYS {
+            let Some(value) = s.value_of(key) else { continue };
+            self.conn
+                .execute(
+                    "INSERT INTO player_settings (key, value, updated_at)
+                     VALUES (?1, ?2, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET
+                         value = excluded.value, updated_at = excluded.updated_at",
+                    rusqlite::params![key, value],
+                )
+                .map_err(|e| DbError::Query(e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// The settings as they were left.
     ///
-    /// Absent columns and absent rows both mean "never saved", which is a first
-    /// run and not a fault: each field falls back to its own default rather
-    /// than the whole read failing.
+    /// A key that is absent, or holds something unreadable, falls back to its
+    /// **own** default rather than failing the whole read: an absent key is a
+    /// setting never touched, which is a first run and not a fault.
     pub fn load_settings(&self) -> Option<Settings> {
-        let d = Settings::default();
-        self.conn
-            .query_row(
-                "SELECT volume, skip_fade_ms, skip_lead_ms, resume_save_ms, skip_suppress_h,                         dequeue_suppress_h, queue_depth, sample_interval_ms,                         cue_sheets, covers, lyrics_cache, lyrics_sidecar FROM player_state WHERE id = 1",
-                [],
-                |r| {
-                    Ok(Settings {
-                        volume: r.get::<_, Option<f64>>(0)?.unwrap_or(d.volume as f64) as f32,
-                        skip_fade_ms: r.get::<_, Option<i64>>(1)?.unwrap_or(d.skip_fade_ms as i64)
-                            as u64,
-                        skip_lead_ms: r.get::<_, Option<i64>>(2)?.unwrap_or(d.skip_lead_ms as i64)
-                            as u64,
-                        resume_save_ms: r.get::<_, Option<i64>>(3)?
-                            .unwrap_or(d.resume_save_ms as i64)
-                            as u64,
-                        skip_suppress_h: r.get::<_, Option<i64>>(4)?
-                            .unwrap_or(d.skip_suppress_h as i64)
-                            as u64,
-                        dequeue_suppress_h: r.get::<_, Option<i64>>(5)?
-                            .unwrap_or(d.dequeue_suppress_h as i64)
-                            as u64,
-                        queue_depth: r.get::<_, Option<i64>>(6)?.unwrap_or(d.queue_depth as i64)
-                            as usize,
-                        sample_interval_ms: r.get::<_, Option<i64>>(7)?
-                            .unwrap_or(d.sample_interval_ms as i64)
-                            as u64,
-                        cue_sheets: r.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
-                        covers: r.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
-                        lyrics_cache: r.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
-                        lyrics_sidecar: r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
-                    })
-                },
-            )
-            .ok()
+        let mut out = Settings::default();
+        let mut q = self.conn.prepare("SELECT key, value FROM player_settings").ok()?;
+        let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).ok()?;
+        let mut any = false;
+        for (key, value) in rows.flatten() {
+            out.set(&key, &value);
+            any = true;
+        }
+        // **`None` means never saved**, which is what a caller distinguishes a
+        // first run by. Returning the defaults instead would be the same values
+        // wearing a claim that somebody chose them.
+        any.then_some(out)
     }
 
+    /// Bring settings over from the columns they used to live in.
+    ///
+    /// Runs once: after the first save every key is present and the copy is
+    /// skipped. A library from before the columns existed fails the read and
+    /// keeps its defaults, which is the same answer by a shorter road.
+    fn adopt_old_settings_columns(conn: &Connection) {
+        let already: i64 = conn
+            .query_row("SELECT COUNT(*) FROM player_settings", [], |r| r.get(0))
+            .unwrap_or(0);
+        if already > 0 {
+            return;
+        }
+        let mut moved = 0;
+        for key in Settings::KEYS {
+            // One column at a time, because a database part-way through the old
+            // sequence of ALTERs has some of them and not others.
+            // As `Value`, not as `String`: `volume` is REAL and the rest are
+            // INTEGER, and asking SQLite for a number as text fails the read
+            // rather than converting it.
+            let got: Option<rusqlite::types::Value> = conn
+                .query_row(
+                    &format!("SELECT {key} FROM player_state WHERE id = 1"),
+                    [],
+                    |r| r.get::<_, rusqlite::types::Value>(0),
+                )
+                .ok();
+            let text = match got {
+                Some(rusqlite::types::Value::Integer(i)) => Some(i.to_string()),
+                Some(rusqlite::types::Value::Real(f)) => Some(f.to_string()),
+                Some(rusqlite::types::Value::Text(t)) => Some(t),
+                _ => None,
+            };
+            if let Some(value) = text {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO player_settings (key, value, updated_at)
+                     VALUES (?1, ?2, datetime('now'))",
+                    rusqlite::params![key, value],
+                );
+                moved += 1;
+            }
+        }
+        if moved > 0 {
+            println!("settings: {moved} carried over from the old columns");
+        }
+    }
     pub fn save(&self, passage_id: Option<i64>, position_ms: u64, playing: bool)
         -> Result<(), DbError>
     {
@@ -1940,6 +2021,53 @@ mod tests {
     /// lands on the appliance's most volatile partition `[PI-C-010]`, so the
     /// setting that governs how many there are must not be settable to zero by
     /// a corrupted row.
+    /// **Every setting survives a save and a load** `[SPEC-SC-099]`.
+    ///
+    /// This is what makes `Settings::KEYS` the single source rather than one of
+    /// three lists that have to agree. A field added to the struct and to
+    /// `value_of` but forgotten in `set` loses itself on the next restart, and
+    /// silently — which is exactly what the old positional `?11` / `r.get(10)`
+    /// pairing did whenever a column was added in the wrong place.
+    #[test]
+    fn every_setting_survives_a_round_trip() {
+        // Deliberately unlike the defaults in every field, so a setting that
+        // quietly falls back to its default fails here rather than passing by
+        // coincidence.
+        let want = Settings {
+            volume: 0.375,
+            skip_fade_ms: 1_234,
+            skip_lead_ms: 321,
+            resume_save_ms: 7_000,
+            skip_suppress_h: 99,
+            dequeue_suppress_h: 7,
+            queue_depth: 9,
+            sample_interval_ms: 1_500,
+            cue_sheets: true,
+            covers: true,
+            lyrics_cache: true,
+            lyrics_sidecar: true,
+        };
+
+        let mut got = Settings::default();
+        for key in Settings::KEYS {
+            let value =
+                want.value_of(key).unwrap_or_else(|| panic!("{key} has no value to store"));
+            got.set(key, &value);
+        }
+
+        assert_eq!(got, want, "a setting was written but not read back");
+    }
+
+    /// The other direction: a key listed with no field behind it.
+    #[test]
+    fn the_key_list_covers_the_whole_struct() {
+        let s = Settings::default();
+        for key in Settings::KEYS {
+            assert!(s.value_of(key).is_some(), "{key} is listed but stores nothing");
+        }
+        assert!(s.value_of("invented").is_none(), "and an unknown key stores nothing");
+    }
+
     #[test]
     fn the_resume_interval_persists_and_is_clamped() {
         let tmp = std::env::temp_dir().join(format!("vaino-rs2-{}.db", std::process::id()));
@@ -1977,7 +2105,10 @@ mod tests {
         // A library written before a column existed reads as THAT field's
         // default, not as zero, and not by failing the whole read.
         let d = Settings::default();
-        for (col, expect) in [
+        // A setting that is not stored falls back to **its own** default, not
+        // to zero and not by failing the whole read. Under the old columns this
+        // was a NULL; now it is simply a key that is not there.
+        for (key, expect) in [
             ("resume_save_ms", d.resume_save_ms),
             ("skip_suppress_h", d.skip_suppress_h),
             ("dequeue_suppress_h", d.dequeue_suppress_h),
@@ -1985,19 +2116,28 @@ mod tests {
         ] {
             store
                 .conn
-                .execute(&format!("UPDATE player_state SET {col} = NULL"), [])
+                .execute("DELETE FROM player_settings WHERE key = ?1", [key])
                 .unwrap();
             let got = store.load_settings().unwrap();
-            let actual = match col {
+            let actual = match key {
                 "resume_save_ms" => got.resume_save_ms,
                 "skip_suppress_h" => got.skip_suppress_h,
                 "dequeue_suppress_h" => got.dequeue_suppress_h,
                 _ => got.sample_interval_ms,
             };
-            assert_eq!(actual, expect, "{col} must fall back to its own default");
+            assert_eq!(actual, expect, "{key} must fall back to its own default");
         }
-        store.conn.execute("UPDATE player_state SET queue_depth = NULL", []).unwrap();
+        store.conn.execute("DELETE FROM player_settings WHERE key = 'queue_depth'", []).unwrap();
         assert_eq!(store.load_settings().unwrap().queue_depth, d.queue_depth);
+
+        // And an unreadable value costs that setting only.
+        store
+            .conn
+            .execute("UPDATE player_settings SET value = 'nonsense' WHERE key = 'skip_fade_ms'", [])
+            .unwrap();
+        let got = store.load_settings().unwrap();
+        assert_eq!(got.skip_fade_ms, d.skip_fade_ms, "unreadable falls back");
+        assert_eq!(got.skip_lead_ms, 500, "and the rest still load");
 
         let _ = std::fs::remove_file(&tmp);
     }
