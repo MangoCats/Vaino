@@ -62,8 +62,16 @@ fn main() {
 
     let hash = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
 
-    // `--porcelain` prints one line per changed path and nothing at all for a
-    // clean tree, which is the whole test.
+    // **A diff, not a status, and line endings do not count as a difference.**
+    // The appliance binary is cross-compiled in a Linux container against a
+    // bind-mounted Windows checkout, where the worktree is CRLF and the
+    // container's git has no `autocrlf` to undo it: `status --porcelain` there
+    // reports 104 phantom modifications, so every appliance build stamped
+    // `+dirty` no matter how clean the tree was. A stamp that always says
+    // `+dirty` says nothing, and it said it on the one machine where nobody can
+    // check by looking.
+    //
+    // `--ignore-cr-at-eol` agrees with the Windows host, which is the test.
     //
     // It answers for the **repository**, while what is watched above is this
     // package. An edit to something the player does not compile — a document,
@@ -72,11 +80,10 @@ fn main() {
     // right way round: the stamp describes the sources the binary was built
     // from, and those have not changed.
     let dirty = Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .output()
+        .args(["diff", "--quiet", "--ignore-cr-at-eol", "HEAD"])
+        .status()
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| !o.stdout.is_empty())
+        .map(|st| !st.success())
         .unwrap_or(false);
 
     let stamp = if dirty { format!("{hash}+dirty") } else { hash };
