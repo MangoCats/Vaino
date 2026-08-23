@@ -491,6 +491,40 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-230]` The underrun count can be restarted, and says what it counts
+from.** *(Requested 2026-08-23; not built.)* A **Restart** button beside the
+Underruns label in the Vaino skin, and **"since {date time}"** to the right of
+the count. Clicking it zeroes the displayed count and captures the moment.
+
+**Why it is wanted.** The count is cumulative for the life of the process, so it
+answers "has this ever glitched" and cannot answer "is it glitching *now*". A
+number that only ever grows stops being read: after a rough hour, a clean day
+looks identical to another rough one. Restarting it turns the display into a
+question about the present, which is the question a listener actually has.
+
+Three things fall out of the shape, and are the reason this is written down
+before it is built rather than discovered during:
+
+* **The underlying counter is not reset.** It keeps running, per process, as it
+  does today — the button moves a **baseline**, and the display shows the
+  difference. Resetting the real counter would throw away the one number that
+  answers the other question, and would mean the diagnostic lied to whoever was
+  not looking at the button.
+* **"Since" has an answer before anyone clicks.** It starts as the moment the
+  process began, so a fresh player reads *since 09:14* rather than *since
+  never*. That is also the honest label for the count it is showing.
+* **A baseline cannot outlive its process.** The counter starts at zero on every
+  start, so a baseline persisted across a restart would subtract a number that
+  no longer exists and show a negative or absurd figure. It is therefore held in
+  memory and re-seeded at startup — deliberately *not* in `player_settings`
+  `[SPEC-SC-099]`, which is where a setting would otherwise go.
+
+> **Startup is not a fault.** The count includes the ring filling for the first
+> time as the device opens — 346,674 samples within seconds of launch, measured
+> on the appliance `[PI-CHR-050]`. A restart button is also the cure for that:
+> one click after startup and the display describes listening rather than
+> booting.
+
 **`[REQ-VIS-225]` The progress bar is a control, not only a display.** Clicking
 anywhere along it moves to that point in the passage — the one thing a listener
 reaches for that MuLibPlay never had, and that the Vaino skin drew but did not
