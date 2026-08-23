@@ -1433,6 +1433,7 @@ mod tests {
             path: PathBuf::from(path),
             start_ms: 0,
             end_ms: 5_000,
+            file_ms: 0,
             lead_in_ms: 0,
             lead_out_ms: 0,
             gain_db: 0.0,

@@ -207,7 +207,7 @@ pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
-pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, \
+pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.duration_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                                (SELECT pr.mbid FROM passage_recordings pr \
                                 WHERE pr.passage_id = p.passage_id \
@@ -221,16 +221,20 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         path: PathBuf::from(row.get::<_, String>(1)?),
         start_ms: row.get::<_, i64>(2)? as u64,
         end_ms: row.get::<_, i64>(3)? as u64,
+        // The file's own length `[REQ-VIS-235]`. NULL where a file was never
+        // probed, which is a gap in knowledge rather than a zero-length file;
+        // the interface shows it as unknown rather than as 0:00.
+        file_ms: row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64,
         // NULL lead means "not analysed": treat as no fade rather than
         // inventing one. overlap_ms then yields zero and the handover is
         // gapless, which is the safe default [XFD-OV-010].
-        lead_in_ms: row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64,
-        lead_out_ms: row.get::<_, Option<i64>>(5)?.unwrap_or(0).max(0) as u64,
-        gain_db: row.get::<_, Option<f64>>(6)?.unwrap_or(0.0) as f32,
+        lead_in_ms: row.get::<_, Option<i64>>(5)?.unwrap_or(0).max(0) as u64,
+        lead_out_ms: row.get::<_, Option<i64>>(6)?.unwrap_or(0).max(0) as u64,
+        gain_db: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0) as f32,
         // A scalar subquery rather than a join: a passage may legally hold a
         // medley of several recordings `[SPEC-SC-*]`, and a join would silently
         // return that passage twice. Highest weight wins, mbid breaks ties.
-        mbid: row.get::<_, Option<String>>(7)?,
+        mbid: row.get::<_, Option<String>>(8)?,
         naming: Naming::default(),
     })
 }

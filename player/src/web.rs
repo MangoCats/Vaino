@@ -190,6 +190,16 @@ pub struct Snapshot {
     /// baseline was taken `[REQ-VIS-230]`.
     pub underruns_since_reset: u64,
     pub underruns_since: i64,
+    /// Where the sound is actually coming from `[REQ-VIS-235]`: the file, and
+    /// the passage's place in it.
+    ///
+    /// **Local only.** This names the listener's filesystem, and it belongs in
+    /// the snapshot a local browser reads and nowhere that travels
+    /// `[SPEC-DF-055]`.
+    pub file_path: Option<String>,
+    pub file_start_ms: u64,
+    pub file_end_ms: u64,
+    pub file_ms: u64,
     /// Output-lock contention `[REQ-VIS-140]`. Non-zero means the callback was
     /// kept waiting, which sounds like a click rather than a gap.
     pub lock_failures: u64,
@@ -280,6 +290,10 @@ impl From<&PlayerState> for Snapshot {
             underrun_samples: s.underrun_samples,
             underruns_since_reset: s.underruns_since_reset,
             underruns_since: s.underruns_since,
+            file_path: s.current.as_ref().map(|e| e.path.to_string_lossy().to_string()),
+            file_start_ms: s.current.as_ref().map_or(0, |e| e.start_ms),
+            file_end_ms: s.current.as_ref().map_or(0, |e| e.end_ms),
+            file_ms: s.current.as_ref().map_or(0, |e| e.file_ms),
             lock_failures: s.lock_failures,
             out_recoveries: s.out_recoveries,
             why: None,
@@ -1233,6 +1247,7 @@ mod tests {
             path: PathBuf::from(format!("/music/{title}.mp3")),
             start_ms: 0,
             end_ms: 200_000,
+            file_ms: 0,
             lead_in_ms: 0,
             lead_out_ms: 0,
             gain_db: 0.0,

@@ -25,6 +25,13 @@
   #bar.seekable:hover #fill { filter: brightness(1.25); }
   #fill { height: 4px; width: 0; background: currentColor; border-radius: 2px;
           transition: width .5s linear; }
+  /* Monospaced, because a path and two timecodes are read by scanning for a
+     difference, not by reading prose. Wraps rather than truncates: a path
+     cut short is the half a listener does not need. */
+  .source { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: .75rem; color: var(--dim); line-height: 1.45;
+            margin: .35rem 0 .1rem; overflow-wrap: anywhere; }
+  #srcspan { opacity: .85; }
   /* Small and quiet: it sits beside a diagnostic, not beside the music. */
   .restart { font-size: .6875rem; padding: .05rem .35rem; margin: 0 .25rem 0 .1rem;
              border: 1px solid var(--line); border-radius: 3px;

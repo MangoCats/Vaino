@@ -46,6 +46,13 @@ pub struct QueueEntry {
     pub path: PathBuf,
     pub start_ms: u64,
     pub end_ms: u64,
+    /// How long the **file** is, which is not how long the passage is
+    /// `[REQ-VIS-235]`. Zero where the library does not know.
+    ///
+    /// Carried on the entry rather than looked up beside it because the entry is
+    /// what crosses to a backend `[SPEC-BK-030]`: a length it does not hold is a
+    /// length the far side cannot show either.
+    pub file_ms: u64,
     /// Silence-to-full at the start; 0 means begin at full level.
     pub lead_in_ms: u64,
     /// Full-to-silence at the end; 0 means end abruptly.
@@ -518,6 +525,7 @@ mod tests {
             path: PathBuf::from("x.mp3"),
             start_ms: 0,
             end_ms: dur_ms,
+            file_ms: 0,
             lead_in_ms: lead_in,
             lead_out_ms: lead_out,
             gain_db: 0.0,

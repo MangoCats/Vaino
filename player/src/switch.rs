@@ -442,6 +442,7 @@ mod tests {
             path: std::path::PathBuf::from("x.mp3"),
             start_ms: 0,
             end_ms: 1000,
+            file_ms: 0,
             lead_in_ms: 0,
             lead_out_ms: 0,
             gain_db: 0.0,

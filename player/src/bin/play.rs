@@ -41,6 +41,7 @@ fn main() {
                 path: PathBuf::from(path),
                 start_ms: start,
                 end_ms: end,
+                file_ms: 0,
                 lead_in_ms: lin,
                 lead_out_ms: lout,
                 gain_db: 0.0,

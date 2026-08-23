@@ -95,6 +95,21 @@
 
   $('underreset').onclick = () => Vaino.restartUnderruns();
 
+  // Where the sound is coming from, in the file's own terms [REQ-VIS-235].
+  // Hidden entirely when nothing is playing, rather than showing empty rows.
+  function showSource(s) {
+    const box = $('source');
+    if (!s.file_path) { box.hidden = true; return; }
+    box.hidden = false;
+    $('srcpath').textContent = s.file_path;
+    const t = ms => Vaino.fmt.clock(ms);
+    // The file's length is unknown where it was never probed, which is not
+    // the same as a file of no length.
+    const whole = s.file_ms ? t(s.file_ms) : 'unknown length';
+    $('srcspan').textContent =
+      `${t(s.file_start_ms)} – ${t(s.file_end_ms)} of ${whole}`;
+  }
+
   const backendSel = $('backend');
   backendSel.onchange = () => Vaino.switchBackend(backendSel.value);
 
@@ -334,6 +349,7 @@
     $('under').textContent = s.underruns_since_reset ?? s.underrun_samples;
     const since = Vaino.since(s.underruns_since);
     $('undersince').textContent = since ? `since ${since}` : '';
+    showSource(s);
     showQueue(s);
     showProgram(s);
     showVolume(s);
