@@ -1,4 +1,4 @@
-# PI008: What Is on `bose` Today
+# BOSE001: What Is on `bose` Today
 
 **Measurement — Tier 1 · surveyed read-only on `pi@bose`, 2026-08-23**
 
@@ -8,11 +8,11 @@ it. Nothing here was changed; every figure was read from the running machine.
 `bose` is not a smaller `vainopi`. It is a **Pi 4 with a real DAC**, twice the
 memory, a 44 GB library already on it, and MuLibPlay still playing — and it is
 running a 32-bit OS with its root overlay in RAM. Those four facts decide most
-of [IMPL006](IMPL006-bose-image-build.md).
+of [BOSE002](BOSE002-image-build.md) and [BOSE003](BOSE003-build-procedure.md).
 
-> **Related:** [PI001](PI001-image-and-partitions.md) for the A/B/C partition
-> design this applies · [PI006](PI006-appliance-characterisation.md) and
-> [PI007](PI007-mpd-on-the-appliance.md) for what the same software costs on
+> **Related:** [PI001](../VainoPi/PI001-image-and-partitions.md) for the A/B/C partition
+> design this applies · [PI006](../VainoPi/PI006-appliance-characterisation.md) and
+> [PI007](../VainoPi/PI007-mpd-on-the-appliance.md) for what the same software costs on
 > `vainopi`
 
 ---
@@ -188,5 +188,6 @@ the current EEPROM config, so a USB-boot layout is not assumed.
 
 **Traceability:** `[PI-BOS-010..060]` · supplies the RAM figure `[PI-A-020]`
 predicted · retires `[PI-IMG-030]` · plan in
-[IMPL006](IMPL006-bose-image-build.md) · design in
-[PI001](PI001-image-and-partitions.md)
+[BOSE002](BOSE002-image-build.md), procedure in [BOSE003](BOSE003-build-procedure.md) ·
+design in
+[PI001](../VainoPi/PI001-image-and-partitions.md)
