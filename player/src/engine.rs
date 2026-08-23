@@ -267,6 +267,13 @@ pub struct Engine {
     lyrics_cache: bool,
     /// `[REQ-VIS-220]`
     lyrics_sidecar: bool,
+    /// Set only while a handoff's fade is running, so the departing head is
+    /// not written down as a rejection `[SPEC-BK-065]`.
+    handing_over: bool,
+    /// A passage arriving mid-play whose play another backend has already
+    /// recorded. Judged as recorded the moment it becomes the head, so it
+    /// earns neither a second play nor a rejection `[SPEC-BK-065]`.
+    counted_elsewhere: Option<i64>,
     saved: Option<(i64, bool)>,
     /// The last passage written to play history, so a passage is recorded
     /// once however many ticks it sounds for.
@@ -350,6 +357,8 @@ impl Engine {
             covers: false,
             lyrics_cache: false,
             lyrics_sidecar: false,
+            handing_over: false,
+            counted_elsewhere: None,
             saved: None,
             recorded: false,
             head: None,
@@ -662,6 +671,48 @@ impl Engine {
     /// Returns whether an output was actually faded. With no ring — a silent
     /// path, a failed device — there is nothing to fade and saying otherwise
     /// would be the lie `[PI3-API-030]` refuses.
+    /// The passage sounding and how far into its span, for a handoff that must
+    /// not restart it `[SPEC-BK-065]`.
+    ///
+    /// **The audible position, not the decoded one.** `audible_ms` subtracts
+    /// what is sitting in the output ring; `played_ms` would be ahead by the
+    /// buffer depth, and handing that over would start the other side a ring's
+    /// worth into the future — about 14 s here, which is not a seam but a jump.
+    pub fn head_position(&self) -> Option<(i64, u64)> {
+        self.live.first().map(|l| (l.entry.passage_id, self.audible_ms(l)))
+    }
+
+    /// Whether the sounding passage's play is already in the history
+    /// `[SPEC-BK-065]`.
+    pub fn head_counted(&self) -> bool {
+        self.recorded && !self.live.is_empty()
+    }
+
+    /// Adopt a passage another backend already counted, so this one will not
+    /// count it again when it arrives `[SPEC-BK-065]`.
+    pub fn adopt_counted(&mut self, passage_id: i64) {
+        self.counted_elsewhere = Some(passage_id);
+    }
+
+    /// Fade out because the passage is being handed to another backend, which
+    /// is **not** the listener declining it `[SPEC-BK-065]`.
+    ///
+    /// Same fade, different meaning. `fade_to_silence` goes through `skip`, and
+    /// a skip that leaves before the threshold earns a suppression window
+    /// `[SPEC-PLAY-050]` — 156 hours by default. A passage that is still
+    /// playing on the other side has not been declined, and suppressing it
+    /// would punish the listener for changing rooms.
+    /// **A latch, not a flag around the call.** The fade is asked for here
+    /// and the head does not actually depart until it completes, several
+    /// ticks later; a flag cleared on the way out of this function would
+    /// already be false by the time the departure was judged. It is set only
+    /// when something is really sounding, so it cannot sit armed and swallow
+    /// the next genuine skip.
+    pub fn hand_off_to_silence(&mut self, ms: u64) -> bool {
+        self.handing_over = !self.live.is_empty();
+        self.fade_to_silence(ms)
+    }
+
     pub fn fade_to_silence(&mut self, ms: u64) -> bool {
         // The queue goes first: the passages are already being rebuilt on the
         // other side, and one left here would be promoted into the fade.
@@ -1046,13 +1097,25 @@ impl Engine {
         if self.head != id_now {
             // The outgoing passage left without reaching the threshold: it did
             // not play, and it is not forgotten either `[SPEC-PLAY-050]`.
-            if let (Some(prev), false) = (self.head, self.recorded) {
+            // A handoff is a departure without a rejection: the passage did
+            // not stop, it moved to the other backend `[SPEC-BK-065]`. Taken
+            // rather than read, so it covers exactly one departure.
+            let handoff = std::mem::take(&mut self.handing_over);
+            if let (Some(prev), false, false) = (self.head, self.recorded, handoff) {
                 let prev_mbid = self.head_mbid.take();
                 self.note_rejection(crate::db::Rejection::Skip, prev, prev_mbid.as_deref());
             }
             self.head = id_now;
             self.head_mbid = head_now.as_ref().and_then(|(_, m, ..)| m.clone());
-            self.recorded = false;
+            // A passage that arrives already counted starts its life here as
+            // recorded, which is what stops it being counted twice.
+            self.recorded = match (id_now, self.counted_elsewhere) {
+                (Some(now), Some(already)) if now == already => {
+                    self.counted_elsewhere = None;
+                    true
+                }
+                _ => false,
+            };
         }
 
         let Some((id, mbid, heard_ms, span_ms)) = head_now else { return };
@@ -1453,6 +1516,144 @@ mod tests {
         assert_eq!(plays(&st), 0);
         let _ = std::fs::remove_file(&wav);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A handoff is not a rejection** `[SPEC-BK-065]`.
+    ///
+    /// The fade is the same one a skip uses, so without the distinction the
+    /// passage the listener is *still hearing on the other backend* would earn
+    /// a 156-hour suppression for the crime of changing rooms.
+    #[test]
+    fn handing_a_passage_over_does_not_suppress_it() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let wav = wav_of(30_000);
+        let mut only = entry(51, wav.to_str().unwrap());
+        only.end_ms = 30_000;
+        only.mbid = Some("aaaaaaaa-0000-0000-0000-000000000051".into());
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..40 {
+            e.tick();
+        }
+        assert!(e.head_position().is_some(), "something is playing to hand over");
+
+        e.hand_off_to_silence(600);
+        for _ in 0..40 {
+            e.tick();
+        }
+
+        assert!(
+            st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
+            "it moved backends; it was not declined"
+        );
+        assert_eq!(plays(&st), 0, "and it did not earn a play either");
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **A passage that arrives already counted is not counted again**
+    /// `[SPEC-BK-065]`.
+    ///
+    /// `[SPEC-BK-037]` named this hazard before there was code to have it: a
+    /// passage crossing mid-play can be judged by both sides. It earns neither a
+    /// second play nor — the worse failure — a rejection for a passage that
+    /// played.
+    #[test]
+    fn a_passage_adopted_mid_play_is_not_counted_twice() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let wav = wav_of(2_000);
+        let mut only = entry(61, wav.to_str().unwrap());
+        only.end_ms = 2_000;
+        only.mbid = Some("aaaaaaaa-0000-0000-0000-000000000061".into());
+        e.enqueue(only);
+        // The other backend already wrote this one's play.
+        e.adopt_counted(61);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..400 {
+            e.tick();
+        }
+
+        assert_eq!(plays(&st), 0, "its play is already in the history, written by the other side");
+        assert!(
+            st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
+            "and it must not be suppressed either -- it played"
+        );
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The adoption is for **one** passage, not a standing amnesty. The next one
+    /// is judged normally, or a single handoff would silence accounting for the
+    /// rest of the session.
+    #[test]
+    fn adopting_one_passage_does_not_excuse_the_next() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.adopt_counted(70);
+        assert!(!e.head_counted(), "nothing is playing yet");
+        // A different passage arriving must not consume the adoption.
+        e.enqueue(entry(71, "b.mp3"));
+        assert!(!e.head_counted());
+    }
+
+    /// The same fade, asked for the other way, still suppresses — or the
+    /// distinction above would have quietly disabled skip suppression.
+    #[test]
+    fn an_ordinary_fade_to_silence_still_suppresses() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let wav = wav_of(30_000);
+        let mut only = entry(52, wav.to_str().unwrap());
+        only.end_ms = 30_000;
+        only.mbid = Some("aaaaaaaa-0000-0000-0000-000000000052".into());
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..40 {
+            e.tick();
+        }
+
+        e.fade_to_silence(600);
+        let judged = tick_until(&mut e, |_| {
+            st.last_rejected(crate::db::Rejection::Skip).map(|m| !m.is_empty()).unwrap_or(false)
+        });
+
+        assert!(judged, "a fade that is not a handoff is still the listener leaving");
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The position that crosses is the **audible** one `[SPEC-BK-065]`.
+    ///
+    /// `played_ms` runs ahead by whatever is sitting in the output ring — about
+    /// 14 s here — and handing that over would start the other side that far
+    /// into the future.
+    #[test]
+    fn the_position_handed_over_is_the_one_being_heard() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(30_000);
+        let mut only = entry(53, wav.to_str().unwrap());
+        only.end_ms = 30_000;
+        e.enqueue(only);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..40 {
+            e.tick();
+        }
+
+        let (id, pos) = e.head_position().expect("something is playing");
+        assert_eq!(id, 53);
+        assert!(pos < 30_000, "inside the span it is playing, not past it");
+        let _ = std::fs::remove_file(&wav);
     }
 
     /// A fade to silence empties the engine, so a handoff leaves nothing

@@ -200,6 +200,19 @@ impl Playback for crate::engine::Engine {
 /// `[REQ-VIS-100]`, so a sticker would be a second copy of something it already
 /// has, kept somewhere it never looks. Publishing exists for *guests*, whose
 /// clients have no other way to learn why a track was chosen `[SPEC-MPD-050]`.
+/// The engine is the clock, so there is nothing to refresh.
+impl crate::switch::Progress for Engine {
+    fn head_position(&self) -> Option<(i64, u64)> {
+        Engine::head_position(self)
+    }
+    fn head_counted(&self) -> bool {
+        Engine::head_counted(self)
+    }
+    fn adopt_counted(&mut self, passage_id: i64) {
+        Engine::adopt_counted(self, passage_id)
+    }
+}
+
 impl crate::switch::Publish for Engine {
     fn publish(&mut self, _p: &crate::switch::Published<'_>) {}
 }
@@ -207,6 +220,16 @@ impl crate::switch::Publish for Engine {
 impl crate::switch::FadeOut for Engine {
     fn fade_out(&mut self, ms: u64) -> crate::switch::Stopped {
         if self.fade_to_silence(ms) {
+            crate::switch::Stopped::Faded
+        } else {
+            crate::switch::Stopped::Cut
+        }
+    }
+
+    /// The same fade, minus the suppression a skip would earn
+    /// `[SPEC-BK-065]`.
+    fn hand_off(&mut self, ms: u64) -> crate::switch::Stopped {
+        if self.hand_off_to_silence(ms) {
             crate::switch::Stopped::Faded
         } else {
             crate::switch::Stopped::Cut

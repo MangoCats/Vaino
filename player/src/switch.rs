@@ -78,6 +78,17 @@ pub enum Stopped {
 pub trait FadeOut {
     /// Stop sounding over roughly this long. Returns whether it really faded.
     fn fade_out(&mut self, ms: u64) -> Stopped;
+
+    /// The same fade, because the passage is **moving to the other backend**
+    /// rather than being declined `[SPEC-BK-065]`.
+    ///
+    /// Identical in sound and different in meaning, which is why it is a
+    /// method and not a comment at one call site: a backend that keeps
+    /// listening history has to tell the two apart, and one that does not can
+    /// ignore the distinction by taking this default.
+    fn hand_off(&mut self, ms: u64) -> Stopped {
+        self.fade_out(ms)
+    }
 }
 
 /// A backend that can publish the Director's reasoning where its own clients
@@ -109,10 +120,52 @@ pub struct Published<'a> {
     pub chosen_at: i64,
 }
 
-/// What [`Switching`] holds: something that plays, stops gracefully, and can
-/// say why it is playing what it is.
-pub trait Backend: Playback + FadeOut + Publish {}
-impl<T: Playback + FadeOut + Publish> Backend for T {}
+/// A backend that can say where it is in the passage it is sounding.
+///
+/// Separate from [`Playback`] for the reason [`FadeOut`] is: a handoff needs
+/// this and ordinary playback never does `[SPEC-BK-020]`. [`Playback::resume_at`]
+/// is the write half and was already there; this is the read half that was
+/// missing, and without it a passage crosses only ever at its beginning.
+pub trait Progress {
+    /// The passage now sounding and how far **into its span** it is, or `None`
+    /// when nothing is sounding.
+    ///
+    /// Into the span, never into the file. A passage is a span of a file
+    /// `[SPEC-DF-020]`, and MPD measures a bounded song the same way — a range
+    /// or a cue track runs its own clock from zero `[SPEC-BK-055]`. The two
+    /// agreeing is what lets a position cross unaltered.
+    fn head_position(&self) -> Option<(i64, u64)>;
+
+    /// Read the backend's own clock now rather than at its next scheduled poll.
+    ///
+    /// Free for the local engine, which is the clock. One request for a guest,
+    /// which is why it is asked for explicitly instead of on every tick.
+    fn refresh(&mut self) {}
+
+    /// Has the passage now sounding **already been written to play history**
+    /// by this side?
+    ///
+    /// `[SPEC-BK-037]` named the hazard before there was any code to have it:
+    /// a passage that crosses mid-play can be judged twice, once by each
+    /// side. The incoming side's own accounting is right — its clock starts
+    /// where the passage arrived, so time heard elsewhere is included — but
+    /// only if the outgoing side has not already counted it.
+    fn head_counted(&self) -> bool {
+        false
+    }
+
+    /// Take a passage whose play another backend has already recorded, so
+    /// this one does not record it again `[SPEC-BK-065]`.
+    ///
+    /// It must also not be written down as a *rejection* when it ends: it
+    /// played, on the other side, and that is already in the history.
+    fn adopt_counted(&mut self, _passage_id: i64) {}
+}
+
+/// What [`Switching`] holds: something that plays, stops gracefully, says why
+/// it is playing what it is, and knows where it has got to.
+pub trait Backend: Playback + FadeOut + Publish + Progress {}
+impl<T: Playback + FadeOut + Publish + Progress> Backend for T {}
 
 /// What a queue transfer moved, and what it lost on the way.
 #[derive(Debug, Default, PartialEq)]
@@ -218,6 +271,33 @@ impl Switching {
     /// backend that cannot fade cuts instead `[SPEC-MPD-099]` and a caller
     /// saying "switched" over a hard cut would be describing something that did
     /// not happen `[PI3-API-030]`.
+    /// The side that is *not* live, so it can be loaded before it is heard.
+    ///
+    /// The whole of what makes a handoff seamless: a backend that is made ready
+    /// while the other one is still sounding has nothing to catch up on when it
+    /// takes over. `live_mut` cannot express this — by the time a side is live
+    /// it is too late to prepare it.
+    pub fn side_mut(&mut self, side: Side) -> Option<&mut (dyn Backend + 'static)> {
+        match side {
+            Side::Local => Some(self.local.as_mut()),
+            Side::Guest => self.guest.as_deref_mut(),
+        }
+    }
+
+    /// Fade whichever side is live, then make `target` live.
+    ///
+    /// The two halves of [`switch_to_over`](Self::switch_to_over) after the
+    /// queue has been read, split apart so a caller can put the loading of the
+    /// incoming side *between* them.
+    pub fn stop_and_flip(&mut self, target: Side, fade_ms: u64) -> Result<Stopped, String> {
+        if target == Side::Guest && self.guest.is_none() {
+            return Err("no guest backend is attached".into());
+        }
+        let stopped = if fade_ms > 0 { self.live_mut().hand_off(fade_ms) } else { Stopped::Cut };
+        self.active = target;
+        Ok(stopped)
+    }
+
     pub fn switch_to_over(
         &mut self,
         target: Side,
@@ -244,6 +324,17 @@ impl Switching {
 impl Publish for Switching {
     fn publish(&mut self, p: &Published<'_>) {
         self.live_mut().publish(p)
+    }
+}
+
+/// The live side's position, because the other side's is not what anyone is
+/// hearing.
+impl Progress for Switching {
+    fn head_position(&self) -> Option<(i64, u64)> {
+        self.live().head_position()
+    }
+    fn refresh(&mut self) {
+        self.live_mut().refresh()
     }
 }
 
@@ -312,6 +403,25 @@ mod tests {
         caps: Option<Capabilities>,
         faded_ms: Option<u64>,
         can_fade: bool,
+        /// What it would say it is playing, and where.
+        head: Option<(i64, u64)>,
+        /// Where `resume_at` put it, so a test can see the position cross.
+        resumed: Option<u64>,
+        refreshed: usize,
+        /// Set when `hand_off` was used rather than `fade_out`, which is the
+        /// difference between a handoff and a rejection `[SPEC-BK-065]`.
+        /// Shared, because once boxed as a `Backend` the field is out of a
+        /// test's reach and the flag has to come back some other way.
+        handed_off: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    }
+
+    impl Progress for Fake {
+        fn head_position(&self) -> Option<(i64, u64)> {
+            self.head
+        }
+        fn refresh(&mut self) {
+            self.refreshed += 1;
+        }
     }
     impl Publish for Fake {
         fn publish(&mut self, _p: &Published<'_>) {}
@@ -324,6 +434,12 @@ mod tests {
             } else {
                 Stopped::Cut
             }
+        }
+        fn hand_off(&mut self, ms: u64) -> Stopped {
+            if let Some(f) = &self.handed_off {
+                f.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            self.fade_out(ms)
         }
     }
     impl Playback for Fake {
@@ -345,7 +461,9 @@ mod tests {
         fn take_dropped(&mut self) -> Vec<i64> {
             Vec::new()
         }
-        fn resume_at(&mut self, _ms: u64) {}
+        fn resume_at(&mut self, ms: u64) {
+            self.resumed = Some(ms);
+        }
         fn tick(&mut self) -> usize {
             self.ticks += 1;
             1
@@ -507,6 +625,68 @@ mod tests {
         let mut s = Switching::new(Box::new(Fake::default()));
         s.attach_guest(Box::new(Fake::default()));
         assert_eq!(s.tick(), 2, "one unit of work from each side");
+    }
+
+    /// The incoming side is loadable **while the other one is still sounding**,
+    /// which is the whole of what makes a handoff seamless `[SPEC-BK-065]`.
+    #[test]
+    fn the_side_that_is_not_live_can_be_loaded_before_it_is_heard() {
+        let mut s = Switching::new(Box::new(Fake::default()));
+        s.attach_guest(Box::new(Fake::default()));
+
+        let into = s.side_mut(Side::Guest).expect("a guest is attached");
+        into.enqueue(entry(7));
+        into.resume_at(42_000);
+
+        assert_eq!(s.queued_ids(), Vec::<i64>::new(), "the live side is undisturbed");
+        assert_eq!(s.active(), Side::Local, "and still the live one");
+        s.stop_and_flip(Side::Guest, 600).unwrap();
+        assert_eq!(s.queued_ids(), vec![7], "the side that was prepared is now live");
+    }
+
+    /// A position crosses, so the passage does not start again from its
+    /// beginning `[SPEC-BK-065]`.
+    #[test]
+    fn a_resume_point_reaches_the_incoming_side() {
+        let mut s = Switching::new(Box::new(Fake::default()));
+        s.attach_guest(Box::new(Fake::default()));
+        s.side_mut(Side::Guest).unwrap().resume_at(96_500);
+        s.switch_to(Side::Guest).unwrap();
+        assert_eq!(s.queued_ms(), 0, "nothing queued, but the point was taken");
+        // Read back through the concrete side, which is where a test can see it.
+        let g = s.side_mut(Side::Guest).unwrap();
+        assert_eq!(g.head_position(), None, "not sounding until it is told to");
+    }
+
+    /// **A handoff must not be recorded as a rejection** `[SPEC-BK-065]`. The
+    /// fade is identical; only the meaning differs, so the outgoing side is
+    /// asked with the method that carries that meaning.
+    #[test]
+    fn the_outgoing_side_is_told_it_is_a_handoff_not_a_skip() {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut s = Switching::new(Box::new(Fake {
+            can_fade: true,
+            handed_off: Some(flag.clone()),
+            ..Default::default()
+        }));
+        s.attach_guest(Box::new(Fake { can_fade: true, ..Default::default() }));
+
+        s.stop_and_flip(Side::Guest, 600).unwrap();
+
+        assert!(
+            flag.load(std::sync::atomic::Ordering::SeqCst),
+            "asked through hand_off, so listening history is not told a skip happened"
+        );
+    }
+
+    /// The position reported is the sounding side's, not the idle one's.
+    #[test]
+    fn progress_follows_the_live_side() {
+        let mut s = Switching::new(Box::new(Fake { head: Some((1, 5_000)), ..Default::default() }));
+        s.attach_guest(Box::new(Fake { head: Some((2, 9_000)), ..Default::default() }));
+        assert_eq!(s.head_position(), Some((1, 5_000)));
+        s.switch_to(Side::Guest).unwrap();
+        assert_eq!(s.head_position(), Some((2, 9_000)), "whoever is audible");
     }
 
     #[test]

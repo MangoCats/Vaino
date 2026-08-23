@@ -13,6 +13,7 @@ use crate::db::{DbError, Library, PlayerStore};
 use crate::director::library::{Director, Explanation, Rng};
 use crate::engine::Engine;
 use crate::playback::Playback;
+use crate::switch::Progress;
 
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
@@ -96,6 +97,37 @@ pub struct Controls {
 }
 
 pub type SharedControls = Arc<Mutex<Controls>>;
+
+/// A passage with less than this left is not carried across a handoff.
+///
+/// It would arrive with a second or two to run, and MPD stops a song seeked
+/// past the end of its span outright `[SPEC-BK-055]`. Starting the incoming
+/// side at the next passage is the better answer, and the report says so.
+const TAIL_NOT_WORTH_CARRYING_MS: u64 = 2_000;
+
+/// How long a handoff will wait for the incoming side to be heard.
+///
+/// MPD was measured at 14-27 ms `[SPEC-BK-055]`, so this is not a budget but
+/// a backstop: a guest that has died should not hold the loop, and the ring
+/// holds about 14 s, which is two orders of magnitude more than this.
+const SOUNDING_WAIT_MS: u64 = 1_500;
+
+/// What a seamless handoff did, in enough detail to say it honestly
+/// `[PI3-API-030]`.
+#[derive(Debug, Default)]
+pub struct Handoff {
+    pub carried: crate::switch::Carried,
+    /// How the outgoing side stopped. `None` when there was nothing to stop
+    /// because the session was already on the side asked for — which is not
+    /// a fade and must not be reported as one `[PI3-API-030]`.
+    pub stopped: Option<crate::switch::Stopped>,
+    /// The passage that crossed mid-play, and the position it resumed at.
+    /// `None` when nothing was sounding, or when too little was left of it.
+    pub resumed: Option<(i64, u64)>,
+    /// How long the incoming side took to become audible. `None` means it
+    /// never did within the backstop, and the changeover had a gap.
+    pub took_ms: Option<u64>,
+}
 
 /// How much queued audio must be in hand before a live Director rebuild starts
 /// `[IMPL-SUI-075]`.
@@ -599,6 +631,114 @@ impl Session {
         }
         out.moved.dedup();
         Ok((out, stopped))
+    }
+
+    /// Hand over **without restarting the passage that is playing**
+    /// `[SPEC-BK-065]`.
+    ///
+    /// [`hand_over_over`](Self::hand_over_over) carries the queue, which is what
+    /// is *waiting*; the passage actually sounding lives elsewhere on the local
+    /// engine and never crossed at all. So a switch mid-song lost the song. This
+    /// carries it, at the position it had reached, and orders the two sides so
+    /// there is no silence between them:
+    ///
+    /// 1. read the outgoing side's head **and** its queue;
+    /// 2. build them into the incoming side while the outgoing one still sounds;
+    /// 3. tell the incoming side where to start;
+    /// 4. wait until it is actually sounding — measured at 14–27 ms for MPD;
+    /// 5. only then fade the outgoing side out.
+    ///
+    /// **Step 4 is why this blocks.** The alternative is to spread the stages
+    /// over several passes of the caller's loop, which buys nothing: the ring
+    /// holds about 14 seconds and the wait is capped two orders of magnitude
+    /// inside that. A handoff that returns before the other side is audible
+    /// would be reporting something that has not happened `[PI3-API-030]`.
+    ///
+    /// **`lead_ms` is added to the position**, because the incoming side starts
+    /// in a moment rather than now. Two independent players are not sample
+    /// aligned and this does not pretend to be — the promise is that no music is
+    /// repeated and none is skipped, not that the seam is inaudible.
+    pub fn hand_over_seamless(
+        &mut self,
+        sw: &mut crate::switch::Switching,
+        target: crate::switch::Side,
+        fade_ms: u64,
+        lead_ms: u64,
+    ) -> Result<Handoff, String> {
+        use crate::switch::Side;
+        if target == sw.active() {
+            return Ok(Handoff::default());
+        }
+        if target == Side::Guest && !sw.has_guest() {
+            return Err("no guest backend is attached".into());
+        }
+
+        sw.refresh();
+        let head = sw.head_position();
+        // Whether the outgoing side has already written this passage's play,
+        // so the incoming one does not write a second `[SPEC-BK-065]`.
+        let counted = sw.head_counted();
+        // The sounding passage goes first, then what was waiting behind it.
+        let sounding = head.map(|(id, _)| id);
+        let mut ids: Vec<i64> = sounding.into_iter().collect();
+        ids.extend(sw.queued_ids().into_iter().filter(|id| Some(*id) != sounding));
+
+        let lib = &self.lib;
+        let build = |id: i64| {
+            lib.passage(id)
+                .map(|mut e| {
+                    lib.describe(&mut e);
+                    e
+                })
+                .ok()
+        };
+        // A passage with almost nothing left is not worth carrying: it would
+        // arrive already over, and MPD ends a song seeked past its span
+        // `[SPEC-BK-055]`. Dropping it starts the handoff at the next one.
+        let resume = match head {
+            Some((id, pos)) => build(id).and_then(|e| {
+                let span = e.end_ms.saturating_sub(e.start_ms);
+                let at = pos + lead_ms;
+                (at + TAIL_NOT_WORTH_CARRYING_MS < span).then_some((id, at))
+            }),
+            None => None,
+        };
+        if head.is_some() && resume.is_none() {
+            ids.remove(0);
+        }
+
+        let Some(into) = sw.side_mut(target) else {
+            return Err("no guest backend is attached".into());
+        };
+        let mut carried = crate::switch::carry_queue(&ids, into, build);
+        carried.moved.dedup();
+        if let Some((id, at)) = resume {
+            into.resume_at(at);
+            if counted {
+                into.adopt_counted(id);
+            }
+        }
+
+        // Wait for the incoming side to be audible, then stop the outgoing one.
+        let began = std::time::Instant::now();
+        let mut took_ms = None;
+        while began.elapsed() < std::time::Duration::from_millis(SOUNDING_WAIT_MS) {
+            into.tick();
+            into.refresh();
+            if into.head_position().is_some() {
+                took_ms = Some(began.elapsed().as_millis() as u64);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let stopped = sw.stop_and_flip(target, fade_ms)?;
+
+        for id in &carried.lost {
+            if let (Some(note), Some(d)) = (self.notes.remove(id), self.director.as_mut()) {
+                d.forget_queued(note);
+            }
+        }
+        Ok(Handoff { carried, stopped: Some(stopped), resumed: resume, took_ms })
     }
 
     /// How the pool looks right now — for the panel, and for diagnosing a

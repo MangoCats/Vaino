@@ -23,6 +23,18 @@ use vaino_player::session::{Explanations, Session, SharedControls};
 use vaino_player::web;
 use vaino_player::BUFFER_FRAMES;
 
+/// How far ahead of the outgoing side the incoming one is told to start
+/// `[SPEC-BK-065]`.
+///
+/// It begins in a moment rather than now, so handing it the position as of
+/// *now* would replay that moment. MPD was measured at 14-27 ms from the
+/// command to its first frame `[SPEC-BK-055]`; the rest of this is the fade
+/// the outgoing side is still running through. Small enough that being wrong
+/// by all of it is a fraction of a second of music, in one direction or the
+/// other, once.
+const HANDOFF_LEAD_MS: u64 = 250;
+
+
 /// A string-valued flag, absent when not given.
 fn text_flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -398,19 +410,39 @@ fn engine_thread(
             } else {
                 vaino_player::switch::Side::Local
             };
-            let said = match session.hand_over_over(&mut backend, target, 600) {
-                Ok((carried, stopped)) => {
-                    let how = match stopped {
-                        vaino_player::switch::Stopped::Faded => "faded",
-                        vaino_player::switch::Stopped::Cut => "cut",
+            // Seamless: the passage that is playing crosses at the position it
+            // has reached, and the outgoing side is not silenced until the
+            // incoming one is audible `[SPEC-BK-065]`.
+            let said = match session.hand_over_seamless(&mut backend, target, 600, HANDOFF_LEAD_MS)
+            {
+                Ok(h) => {
+                    let how = match h.stopped {
+                        Some(vaino_player::switch::Stopped::Faded) => "faded",
+                        Some(vaino_player::switch::Stopped::Cut) => "cut",
+                        None => "already there",
                     };
-                    let lost = if carried.lost.is_empty() {
+                    let lost = if h.carried.lost.is_empty() {
                         String::new()
                     } else {
-                        format!(", {} could not be carried", carried.lost.len())
+                        format!(", {} could not be carried", h.carried.lost.len())
                     };
-                    format!("now on {which} ({how}, {} passage(s) carried{lost})",
-                            carried.moved.len())
+                    // Said rather than assumed: a handoff that found nothing
+                    // playing, or one the other side never answered, is a
+                    // different event from a seamless one `[PI3-API-030]`.
+                    let seam = match (h.resumed, h.took_ms) {
+                        (Some((_, at)), Some(ms)) => {
+                            format!(", resumed {:.1}s in after {ms} ms", at as f64 / 1000.0)
+                        }
+                        (Some((_, at)), None) => format!(
+                            ", resumed {:.1}s in but the other side never sounded",
+                            at as f64 / 1000.0
+                        ),
+                        (None, _) => ", nothing was playing to carry".to_string(),
+                    };
+                    format!(
+                        "now on {which} ({how}, {} passage(s) carried{lost}{seam})",
+                        h.carried.moved.len()
+                    )
                 }
                 Err(e) => format!("refused: {e}"),
             };

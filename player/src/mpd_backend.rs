@@ -173,6 +173,15 @@ pub struct MpdBackend {
     cues: HashMap<i64, String>,
     /// Reported once each, so a log is not a stream of the same complaint.
     unnameable: HashSet<String>,
+    /// The passage sounding at the last poll and how far into its span
+    /// `[SPEC-BK-065]`. Remembered rather than asked for on demand: a
+    /// handoff wants it at a moment when a round trip is the wrong thing to
+    /// be doing.
+    head: Option<(i64, u64)>,
+    /// Passages that arrived mid-play with their play already in the
+    /// history. Neither counted again nor written down as a rejection when
+    /// they end `[SPEC-BK-065]`.
+    counted_elsewhere: HashSet<i64>,
     lost: bool,
 }
 
@@ -202,6 +211,8 @@ impl MpdBackend {
             names: HashMap::new(),
             cues: HashMap::new(),
             unnameable: HashSet::new(),
+            head: None,
+            counted_elsewhere: HashSet::new(),
             lost: false,
         })
     }
@@ -312,6 +323,13 @@ impl MpdBackend {
             self.write(Rejection::Dequeue, o.passage_id, o.mbid.as_deref());
             return;
         }
+        // A passage handed over mid-play brought its play with it. Asking the
+        // question again could only answer it a second time, and answering
+        // `no` would be worse still: a rejection for a passage that played
+        // `[SPEC-BK-065]`.
+        if self.counted_elsewhere.remove(&o.passage_id) {
+            return;
+        }
         // It sounded. Whether it *played* is `[SPEC-PLAY-010]`'s question, and
         // it is asked against Vaino's span rather than MPD's idea of one.
         if counts_as_play(o.furthest_ms, o.span_ms) {
@@ -353,6 +371,15 @@ impl MpdBackend {
             .and_then(|v| v.parse::<f64>().ok())
             .map(|s| (s * 1000.0).round() as u64)
             .unwrap_or(0);
+        // **MPD's clock on a bounded song runs from the start of the span**,
+        // measured rather than assumed `[SPEC-BK-055]`: a `rangeid` range
+        // reports `duration` as the range's and `elapsed` from zero, and a cue
+        // track does the same. So this is already a position within the
+        // passage and needs no adjusting.
+        self.head = match (&current, self.playing) {
+            (Some(id), true) => self.ours.get(id).map(|o| (o.passage_id, elapsed_ms)),
+            _ => None,
+        };
 
         // **A song this backend did not queue is still one the listener heard**
         // `[SPEC-MPD-115]`. Adopt it once, so its play is attributed and its
@@ -440,6 +467,25 @@ impl MpdBackend {
 /// has never heard of Vaino is unaffected, and one that shows stickers gains a
 /// "why this track" panel without a line of code changing. Nothing is added to
 /// MPD to make it work.
+/// Where MPD says it is, from the last poll — and able to ask again now,
+/// because a handoff cannot wait for the next scheduled one `[SPEC-BK-065]`.
+impl crate::switch::Progress for MpdBackend {
+    fn head_position(&self) -> Option<(i64, u64)> {
+        self.head
+    }
+
+    fn adopt_counted(&mut self, passage_id: i64) {
+        self.counted_elsewhere.insert(passage_id);
+    }
+
+    fn refresh(&mut self) {
+        if !self.lost {
+            self.last_poll = Some(Instant::now());
+            self.poll();
+        }
+    }
+}
+
 impl crate::switch::Publish for MpdBackend {
     fn publish(&mut self, p: &crate::switch::Published<'_>) {
         let Some(uri) = self

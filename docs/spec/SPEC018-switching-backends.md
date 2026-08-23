@@ -171,17 +171,11 @@ holding three Director-selected passages, `hand_over` to the local side, all
 three rebuilt and queued there, and the reported capabilities flipping from
 `gain false ramps false` to `gain true ramps true` in the same breath.
 
-**`[SPEC-BK-035]` Position and queue transfer, as far as they can.**
-
-| moving | the current passage | the rest of the queue |
-| :--- | :--- | :--- |
-| **Vaino → MPD** | `addid` + `rangeid`, then `seekid` to the audible position | re-offered as spans; exact |
-| **MPD → Vaino** | resolved by URI, then played from position | adopted where nameable |
-
-Vaino → MPD is exact because Vaino knows what it holds. **MPD → Vaino is not,
-and must not pretend to be**: 191 of 5,709 files carry more than one radio
-passage, and a whole-file entry could be any of up to forty of them. Those are
-reported, never guessed `[SPEC-MPD-060]`.
+**`[SPEC-BK-035]` Position and queue transfer, as far as they can.** Both now
+do, in both directions `[SPEC-BK-065]`. **Vaino → MPD is exact** because Vaino
+knows what it holds; **MPD → Vaino is not, and must not pretend to be**: 191 of
+5,709 files carry more than one radio passage, and a whole-file entry could be
+any of up to forty of them. Those are reported, never guessed `[SPEC-MPD-060]`.
 
 **`[SPEC-BK-045]` An MPD entry Vaino cannot name is dropped from the switch,
 not blocked by it.** *(Settled 2026-08-21.)* 191 of 5,709 files carry more than
@@ -207,24 +201,68 @@ as a skip is.** *(Settled 2026-08-21.)* No new rule, and that is the finding:
 another way for a passage to stop being heard. It is judged once, by the side
 it was sounding on, against what that side observed.
 
-This is only simple because **the sounding passage does not cross**. What
-crosses is the queue `[SPEC-BK-032]`, and a queue does not include what is
-already playing. Carrying the current passage as well would make it possible to
-judge it twice — once as it stopped on one side, once as it ended on the other —
-and the fix for that is not to carry it but to hand over what was already heard
-along with it. That is the price of true mid-passage seamlessness, and it is not
-paid here.
-
-> **So a handoff costs the remainder of one passage**, and the crossfade is
-> between that passage and the next one rather than within it. For MPD → Vaino
-> this was named as acceptable. For Vaino → MPD it is the open edge of the
-> design, and the honest version of "seamless" that is built today.
+This was written when **the sounding passage did not cross**: what crossed was
+the queue `[SPEC-BK-032]`, and a queue does not include what is already playing.
+It named the price of doing better — "the fix is not to carry it but to hand over
+what was already heard along with it" — and that price has since been paid
+`[SPEC-BK-065]`. The passage now crosses, with its position, and the two-sided
+judgement it warned about is settled below rather than avoided.
 
 **`[SPEC-BK-040]` What a listener loses by moving to MPD is stated before they
 move, not discovered after.** `Capabilities::MPD` drops `gain` and `ramps`: per
 passage gain cannot be expressed at all, and lead-in/lead-out degrade to one
 global crossfade number against a median lead-out of 946 ms `[SPEC-SC-043]`. The
 control that offers the switch says so, once, in those terms.
+
+**`[SPEC-BK-055]` MPD's clock on a bounded song runs from the start of the
+span, not of the file.** *(Measured 2026-08-22, MPD 0.24.0.)* This decides what
+a position means as it crosses, and the two conventions differ by minutes, so it
+was asked rather than assumed:
+
+| set up | `duration` | `elapsed` after `play` | after `seekid 5` |
+| :--- | ---: | ---: | ---: |
+| plain file, no range | 295.750 | 1.140 | — |
+| same file, `rangeid 60:120` | **60.000** | **1.163** | **5.775** |
+| cue track (`Range 417.8–658.7`) | **240.827** | **1.140** | **20.775** after `seekid 20` |
+
+**So a range and a cue track both run their own clock from zero**, exactly as a
+Vaino passage does — a position is a position within the span on both sides, and
+crosses unaltered. And **seeking past the span stops the song**: `seekid 70` into
+a 60-second range returned `state=stop`, so a carried position must be bounded
+rather than merely sent. Starting is quick enough for an overlap to be worth
+having: `addid` to first frame past the seek is **14–27 ms, median 17** over
+eight trials — a floor, being a null output, but far inside the ring either way.
+
+**`[SPEC-BK-065]` A passage crosses mid-play, and the incoming side is audible
+before the outgoing one is silenced.** *(Built 2026-08-22.)* The order is the
+whole of it: read the outgoing head **and** queue, build them into the incoming
+side while the other still sounds, say where to start, wait until it really
+sounds, and only then fade — fading first would be silent for as long as the
+other side took to load. Three things this had to get right:
+
+* **A handoff is not a rejection.** The local fade *is* `skip` (`[SPEC-BK-033]`
+  above), and a skip below the threshold earns a 156-hour suppression
+  `[SPEC-PLAY-050]` — so uncorrected, changing rooms would suppress the song
+  still playing in the other one. `FadeOut::hand_off` carries the
+  distinction, as a latch consumed at the departure: the head does not leave
+  until the fade finishes, several ticks later.
+* **Nor is it a second play**, which `[SPEC-BK-037]` predicted. The incoming
+  side's accounting is right unaided — its clock starts where the passage
+  arrived, so time heard elsewhere is included — but only if the outgoing side
+  has not already recorded it. When it has, the passage is adopted as counted
+  and earns neither another play nor a rejection.
+* **A passage nearly over is not carried**, under two seconds left. It would
+  arrive already finished, so the handoff starts at the next one and says so.
+
+**Measured end to end, both directions**, MPD 0.24.0 against the live library:
+Vaino → MPD resumed a cue track *inside a capture* at **30.4 s into its own
+span**, playing and advancing; MPD → Vaino at **46.8 s after 249 ms**. Six
+passages carried each way; no rejection and no play written by either crossing.
+
+> **Continuity is the promise, not sample alignment.** Two independent players
+> share no clock. The incoming side starts 250 ms ahead, covering its own start
+> and the outgoing fade, so nothing is repeated and nothing is skipped. Being
+> wrong by all of it is a fraction of a second, once.
 
 ---
 
@@ -249,12 +287,12 @@ be driven by MPD clients. Three problems that plan carried simply do not arise:
 
 ## 5. Open
 
-1. **`[SPEC-BK-060]` Whether MPD runs resident or on demand.** MPD is not
-   installed on the appliance today. Resident costs memory that measurement says
-   is tight; on-demand costs an indexing pass at switch time. Measure the index
-   over 5,705 files before choosing.
-2. *(Settled — moved to `[SPEC-BK-037]` below.)*
-3. *(Settled — moved to `[SPEC-BK-045]` below.)*
+**`[SPEC-BK-060]` Whether MPD runs resident or on demand** is the one left. MPD
+is not installed on the appliance today. Resident costs memory that measurement
+says is tight; on-demand costs an indexing pass at switch time. Measure the index
+over 5,705 files before choosing.
+
+*(The other two are settled: `[SPEC-BK-037]` with `[SPEC-BK-065]`, and `[SPEC-BK-045]`.)*
 
 ---
 
