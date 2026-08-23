@@ -549,6 +549,17 @@ const Vaino = (() => {
     command: name => post(`/command/${name}`),
     volume: db => post(`/volume/${db}`),
     seek: ms => post(`/seek/${Math.max(0, Math.round(ms))}`),
+    restartUnderruns: () => post('/underruns/restart'),
+    // A unix second to something a person reads. Local time, because the
+    // listener is standing in it.
+    since(unix) {
+      if (!unix) return '';
+      const d = new Date(unix * 1000);
+      const today = new Date();
+      const sameDay = d.toDateString() === today.toDateString();
+      const clock = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return sameDay ? clock : `${d.toLocaleDateString()} ${clock}`;
+    },
     // Wire a progress bar up as a control. Shared because both skins want
     // the same arithmetic, and a second copy of it would drift.
     seekable(bar, state) {

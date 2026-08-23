@@ -93,6 +93,8 @@
   const sidecarBox = $('lyricssidecar');
   sidecarBox.onchange = () => Vaino.lyricsSidecar(sidecarBox.checked);
 
+  $('underreset').onclick = () => Vaino.restartUnderruns();
+
   const backendSel = $('backend');
   backendSel.onchange = () => Vaino.switchBackend(backendSel.value);
 
@@ -329,7 +331,9 @@
     // The ground shifts with it, so the state is legible without reading.
     $('devmode').hidden = !s.dev_mode;
     document.body.classList.toggle('dev', Boolean(s.dev_mode));
-    $('under').textContent = s.underrun_samples;
+    $('under').textContent = s.underruns_since_reset ?? s.underrun_samples;
+    const since = Vaino.since(s.underruns_since);
+    $('undersince').textContent = since ? `since ${since}` : '';
     showQueue(s);
     showProgram(s);
     showVolume(s);

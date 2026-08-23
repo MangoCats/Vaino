@@ -186,6 +186,10 @@ pub struct Snapshot {
     /// Pi's privileged helper, and the player only reports what it is told.
     pub dev_mode: bool,
     pub underrun_samples: u64,
+    /// What the interface shows: the count since the baseline, and when that
+    /// baseline was taken `[REQ-VIS-230]`.
+    pub underruns_since_reset: u64,
+    pub underruns_since: i64,
     /// Output-lock contention `[REQ-VIS-140]`. Non-zero means the callback was
     /// kept waiting, which sounds like a click rather than a gap.
     pub lock_failures: u64,
@@ -274,6 +278,8 @@ impl From<&PlayerState> for Snapshot {
             lyrics_sidecar: s.lyrics_sidecar,
             dev_mode: s.dev_mode,
             underrun_samples: s.underrun_samples,
+            underruns_since_reset: s.underruns_since_reset,
+            underruns_since: s.underruns_since,
             lock_failures: s.lock_failures,
             out_recoveries: s.out_recoveries,
             why: None,
@@ -308,6 +314,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/seek/:ms", post(seek_to))
+        .route("/underruns/restart", post(restart_underruns))
         .route("/skip/fade/:ms", post(set_skip_fade))
         .route("/skip/lead/:ms", post(set_skip_lead))
         .route("/resume/save/:ms", post(set_resume_save))
@@ -351,6 +358,17 @@ async fn set_volume(
     axum::extract::Path(db): axum::extract::Path<f32>,
 ) -> StatusCode {
     ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
+    StatusCode::NO_CONTENT
+}
+
+/// Start the underrun count again from now `[REQ-VIS-230]`.
+///
+/// **The counter itself is not reset.** The engine moves a baseline and
+/// reports the difference, so whatever wants the whole-process figure can
+/// still have it — and a display that has been restarted does not make the
+/// player forget it ever glitched.
+async fn restart_underruns(State(ui): State<Ui>) -> StatusCode {
+    ui.handle.send(Command::RestartUnderruns);
     StatusCode::NO_CONTENT
 }
 

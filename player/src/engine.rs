@@ -79,6 +79,14 @@ pub struct PlayerState {
     pub dev_mode: bool,
     pub active_streams: usize,
     pub underrun_samples: u64,
+    /// The count **since the baseline**, which is what the interface shows
+    /// `[REQ-VIS-230]`. `underrun_samples` stays cumulative for the life of
+    /// the process, because that answers a different question and something
+    /// should still be able to ask it.
+    pub underruns_since_reset: u64,
+    /// When that baseline was taken, as a unix time. The process start until
+    /// somebody asks for a new one.
+    pub underruns_since: i64,
     /// Times the callback could not take the output lock at all. Distinct from
     /// an underrun because the remedy differs: contention argues for a
     /// lock-free ring, starvation for more buffering. Surfaced rather than
@@ -149,6 +157,8 @@ pub enum Command {
     SetLyricsSidecar(bool),
     /// How often a guest backend samples `status`, in ms `[SPEC-MPD-105]`.
     SetSampleInterval(u64),
+    /// Start the underrun count again from here `[REQ-VIS-230]`.
+    RestartUnderruns,
     Enqueue(QueueEntry),
     /// Put a passage next rather than last, for a browsed choice
     /// `[REQ-VIS-180]`.
@@ -312,7 +322,23 @@ pub struct Engine {
     /// forever -- counting those would bury the fault this number exists to
     /// expose [REQ-AUD-142].
     underruns_playing: u64,
+    /// What `underruns_playing` read when the count was last restarted, and
+    /// when that was `[REQ-VIS-230]`.
+    ///
+    /// **In memory, never persisted.** The cumulative counter starts at zero
+    /// in every process, so a baseline restored from a previous one would be
+    /// subtracting a number that no longer exists.
+    underrun_baseline: u64,
+    underrun_since: i64,
     last_raw_underruns: u64,
+}
+
+/// Seconds since the epoch, for stamping when a count was restarted.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 impl Engine {
@@ -382,6 +408,11 @@ impl Engine {
             shown: None,
             dropped: Vec::new(),
             underruns_playing: 0,
+            underrun_baseline: 0,
+            // Seeded now, so a fresh player reads "since 09:14" rather than
+            // "since never" -- and that is the honest label for the count it
+            // is already showing.
+            underrun_since: unix_now(),
             last_raw_underruns: 0,
         };
         (engine, EngineHandle { tx: Mutex::new(tx), state })
@@ -506,6 +537,11 @@ impl Engine {
                 Ok(Command::SetLyricsSidecar(on)) => {
                     self.lyrics_sidecar = on;
                     self.remember_settings();
+                }
+                Ok(Command::RestartUnderruns) => {
+                    // The real counter is untouched; only the mark moves.
+                    self.underrun_baseline = self.underruns_playing;
+                    self.underrun_since = unix_now();
                 }
                 Ok(Command::SetSampleInterval(ms)) => {
                     self.sample_interval_ms =
@@ -1363,6 +1399,9 @@ impl Engine {
             s.lyrics_sidecar = self.lyrics_sidecar;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
+            s.underruns_since_reset =
+                self.underruns_playing.saturating_sub(self.underrun_baseline);
+            s.underruns_since = self.underrun_since;
             s.lock_failures = self.path.ring.as_ref().map_or(0, |r| r.diagnostics().1);
             s.out_recoveries = self.path.recoveries();
             s.output_buffered =
@@ -1664,6 +1703,37 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// **Restarting the count moves a mark, it does not clear the counter**
+    /// `[REQ-VIS-230]`.
+    ///
+    /// The cumulative figure answers "has this ever glitched" and must survive
+    /// somebody restarting the display, which answers "is it glitching now".
+    #[test]
+    fn restarting_the_underrun_count_keeps_the_cumulative_one() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.underruns_playing = 4_096;
+        let before = e.underrun_since;
+
+        h.send(Command::RestartUnderruns);
+        e.drain_commands();
+
+        assert_eq!(e.underruns_playing, 4_096, "the counter itself is untouched");
+        assert_eq!(e.underrun_baseline, 4_096, "the mark moved to where it was");
+        assert!(e.underrun_since >= before, "and the moment was taken");
+
+        // More arrive after the restart, and only those are shown.
+        e.underruns_playing += 500;
+        assert_eq!(e.underruns_playing - e.underrun_baseline, 500);
+    }
+
+    /// A player that has never been asked still says when it started counting,
+    /// rather than leaving the label empty `[REQ-VIS-230]`.
+    #[test]
+    fn the_count_knows_when_it_started_without_being_asked() {
+        let (e, _h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        assert!(e.underrun_since > 0, "seeded at construction, not at first reset");
+        assert_eq!(e.underrun_baseline, 0);
+    }
     /// **Seeking to the end must not earn a play** `[SPEC-PLAY-012]`.
     ///
     /// The whole reason the engine now measures heard time rather than reading

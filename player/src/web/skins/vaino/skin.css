@@ -25,6 +25,12 @@
   #bar.seekable:hover #fill { filter: brightness(1.25); }
   #fill { height: 4px; width: 0; background: currentColor; border-radius: 2px;
           transition: width .5s linear; }
+  /* Small and quiet: it sits beside a diagnostic, not beside the music. */
+  .restart { font-size: .6875rem; padding: .05rem .35rem; margin: 0 .25rem 0 .1rem;
+             border: 1px solid var(--line); border-radius: 3px;
+             background: transparent; color: var(--dim); cursor: pointer; }
+  .restart:hover { color: inherit; border-color: currentColor; }
+  #undersince { color: var(--dim); font-size: .75rem; margin-left: .3rem; }
   #time { font-variant-numeric: tabular-nums; color: var(--dim); font-size: .875rem; }
   .controls { display: flex; gap: .5rem; margin: 1.5rem 0; }
   button { font: inherit; padding: .5rem 1.1rem; border: 1px solid var(--line);
