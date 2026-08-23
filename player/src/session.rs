@@ -608,53 +608,15 @@ impl Session {
     /// Returns what did not make it, by name. A passage the library has
     /// renumbered away since the queue was built is skipped rather than allowed
     /// to refuse the switch, for the same reason an unnameable guest entry is
-    /// `[SPEC-BK-045]`.
-    pub fn hand_over(
-        &mut self,
-        sw: &mut crate::switch::Switching,
-        target: crate::switch::Side,
-    ) -> Result<crate::switch::Carried, String> {
-        self.hand_over_over(sw, target, 0).map(|(c, _)| c)
-    }
-
-    /// The same, fading the outgoing side out first `[SPEC-BK-030]`.
-    pub fn hand_over_over(
-        &mut self,
-        sw: &mut crate::switch::Switching,
-        target: crate::switch::Side,
-        fade_ms: u64,
-    ) -> Result<(crate::switch::Carried, crate::switch::Stopped), String> {
-        let (carried, stopped) = sw.switch_to_over(target, fade_ms)?;
-        let lib = &self.lib;
-        let mut out = crate::switch::carry_queue(&carried, sw, |id| {
-            lib.passage(id)
-                .map(|mut e| {
-                    lib.describe(&mut e);
-                    e
-                })
-                .ok()
-        });
-        // Anything the Director had marked as queued but which did not survive
-        // the crossing never played, so it must not go on counting as though it
-        // had `[REQ-PD-112]` — the same place a file that would not open ends
-        // up, reached by a different road.
-        for id in &out.lost {
-            if let (Some(note), Some(d)) = (self.notes.remove(id), self.director.as_mut()) {
-                d.forget_queued(note);
-            }
-        }
-        out.moved.dedup();
-        Ok((out, stopped))
-    }
-
-    /// Hand over **without restarting the passage that is playing**
+     /// Hand over **without restarting the passage that is playing**
     /// `[SPEC-BK-065]`.
     ///
-    /// [`hand_over_over`](Self::hand_over_over) carries the queue, which is what
-    /// is *waiting*; the passage actually sounding lives elsewhere on the local
-    /// engine and never crossed at all. So a switch mid-song lost the song. This
-    /// carries it, at the position it had reached, and orders the two sides so
-    /// there is no silence between them:
+    /// **The only handoff there is.** There was a queue-only one beside it until
+    /// this shipped, and it was the wrong answer kept alive: a queue is what is
+    /// *waiting*, while the passage actually sounding lives elsewhere and never
+    /// crossed at all, so a switch mid-song lost the song. This carries it, at
+    /// the position it had reached, and orders the two sides so there is no
+    /// silence between them:
     ///
     /// 1. read the outgoing side's head **and** its queue;
     /// 2. build them into the incoming side while the outgoing one still sounds;

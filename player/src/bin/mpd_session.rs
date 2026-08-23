@@ -142,18 +142,34 @@ handing MPD -> Vaino");
     let before = sw.queued_ids();
 
     println!("  MPD was holding {} passage(s): {:?}", before.len(), before);
-    match session.hand_over_over(&mut sw, Side::Local, 600) {
-        Ok((c, stopped)) => {
+    // The same call `vaino` makes `[SPEC-BK-065]`. It was the queue-only one
+    // until the seamless path shipped, which meant this program demonstrated a
+    // handoff nobody performs any more -- and demonstrated it dropping the
+    // passage that was playing.
+    match session.hand_over_seamless(&mut sw, Side::Local, 600, 250) {
+        Ok(h) => {
             println!(
                 "  MPD {}",
-                match stopped {
-                    Stopped::Faded => "faded out over 600ms",
-                    Stopped::Cut => "CUT -- no mixer on its output, so no fade was possible",
+                match h.stopped {
+                    Some(Stopped::Faded) => "faded out over 600ms",
+                    Some(Stopped::Cut) => "CUT -- no mixer on its output, so no fade was possible",
+                    None => "was already the side that was not playing",
                 }
             );
-            println!("  carried {} passage(s) to the local engine: {:?}", c.moved.len(), c.moved);
-            if !c.lost.is_empty() {
-                println!("  the library could no longer build: {:?}", c.lost);
+            match (h.resumed, h.took_ms) {
+                (Some((id, at)), Some(ms)) => println!(
+                    "  passage {id} crossed mid-play at {:.1}s; the local engine was audible after {ms} ms",
+                    at as f64 / 1000.0
+                ),
+                (Some((id, at)), None) => println!(
+                    "  passage {id} was handed over at {:.1}s but the local engine never sounded",
+                    at as f64 / 1000.0
+                ),
+                (None, _) => println!("  nothing was playing to carry"),
+            }
+            println!("  carried {} passage(s) to the local engine: {:?}", h.carried.moved.len(), h.carried.moved);
+            if !h.carried.lost.is_empty() {
+                println!("  the library could no longer build: {:?}", h.carried.lost);
             }
         }
         Err(e) => println!("  refused: {e}"),
