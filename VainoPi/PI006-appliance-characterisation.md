@@ -249,6 +249,15 @@ here could have shown it.
 - **The skip dropout's cause** `[PI-CHR-075]`, which is measured but not
   diagnosed.
 
+> **A soak that presses skip is not a read-only measurement.** The disturbance
+> runs above wrote **ten skip rejections** into `listener_rejections`, each
+> suppressing its recording for 156 hours `[SPEC-PLAY-050]` — a script on a
+> fixed timer standing in for a listener declining a song, which none of them
+> were. Left in the record this time, by the listener's decision. A future run
+> should either work against a copy of the library or undo its own suppressions,
+> because the alternative is remembering, and this one was not noticed until
+> somebody asked whether the appliance was in a normal state.
+
 ---
 
 **Traceability:** `[PI-CHR-010..065]` · confirms `[REQ-VIS-200]`'s stamp and
