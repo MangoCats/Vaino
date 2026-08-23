@@ -187,15 +187,67 @@ cost paid once.
 
 ---
 
-## 6. What was not measured
+## 6. Over Bluetooth
+
+Middleton (`20:64:DE:CF:F3:AD`) attached as a bonded, trusted device — a
+reconnect rather than a pairing — and PipeWire routed the player's stream to it:
+`PipeWire ALSA [vaino] → MIDDLETON:playback_FL/FR`, both active.
+
+**`[PI-CHR-070]` The wireless hop costs nothing measurable.** Two minutes of
+undisturbed playback including a crossfade: **zero underruns**, CPU 4.3% median
+and 6.5% at the crossfade, 42.9 °C — indistinguishable from the wired figures in
+§3. A2DP encoding and the radio link are free at this scale.
+
+**`[PI-CHR-075]` A skip loses about a second and a quarter of audio, roughly one
+time in seven.** The finding the undisturbed soaks could not have made, because
+neither skipped anything.
+
+| what a listener does | lost audio |
+| :--- | ---: |
+| seek | **0 of 7** |
+| skip | **1 of 7**, and then 1,297 ms |
+
+Two independent runs agree on the size: 110,320 interleaved samples in one
+(1,251 ms at 44.1 kHz stereo) and 1,297 ms in the other. It is intermittent, not
+progressive — once it happens, the count stays where it is for the rest of the
+run. **Seeks never did it**, which is the useful half of the result: the path
+that rebuilds a decoder on demand `[REQ-VIS-225]` is not the path that drops
+audio, so the cause is somewhere in what `skip` does differently — most likely
+whether the passage being skipped *to* was the one already prepared.
+
+Not chased further here. It is a real audible defect and it deserves its own
+sitting.
+
+---
+
+## 7. An operational lesson that cost an hour
+
+**`[PI-CHR-080]` A Bluetooth speaker can be taken by another device, and the
+appliance cannot see it happen.** Mid-measurement the listener heard content
+that was not in the library at all — *Hey Jude*, which this library has **zero**
+recordings of, and talk programming, which the captures do not contain (their
+passages claim 243 of 244 minutes).
+
+Everything on the Pi looked correct throughout: the player was playing Genesis,
+advancing steadily, and its stream was the only one on the sink. It was correct.
+Middleton supports multipoint, another paired device had taken it, and
+`bluetoothctl` on the Pi only ever sees **its own** link — so no command run
+here could have shown it.
+
+> Worth knowing before diagnosing an appliance that "plays the wrong thing":
+> confirm the speaker is listening to *this* machine before suspecting the
+> library. Pausing the player for twenty seconds settles it in one step.
+
+---
+
+## 8. What was not measured
 
 - **MPD is not installed here**, so nothing in `[SPEC-BK-060]` moved. Every
   MPD measurement in `[SPEC020]` remains a Windows measurement.
-- **No Bluetooth speaker was attached** for this run; the output was the
-  default sink. Ramp and underrun behaviour over Bluetooth is `[PI004]`'s
-  subject and is not re-measured here.
-- **Nothing ran for longer than five minutes.** Memory is flat over that
+- **Nothing ran for longer than eight minutes.** Memory is flat over that
   window; a leak with a slower period would not have shown.
+- **The skip dropout's cause** `[PI-CHR-075]`, which is measured but not
+  diagnosed.
 
 ---
 
