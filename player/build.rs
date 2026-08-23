@@ -14,28 +14,63 @@
 //! version still exists; the hash becomes `unknown`, which is honest and lets
 //! the build proceed.
 
+use std::path::Path;
 use std::process::Command;
 
-fn main() {
-    // Rerun when HEAD moves. Without this the stamp is baked once and then
-    // quietly lies for every later build.
-    for p in [".git/HEAD", ".git/index", "../.git/HEAD", "../.git/index"] {
-        if std::path::Path::new(p).exists() {
-            println!("cargo:rerun-if-changed={p}");
-        }
-    }
-
-    let hash = Command::new("git")
-        .args(["rev-parse", "--short=12", "HEAD"])
+/// Ask git something, or `None` if git or the repository is absent.
+fn git(args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .args(args)
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "unknown".into());
+        .filter(|s| !s.is_empty())
+}
+
+fn watch(p: &Path) {
+    if p.exists() {
+        println!("cargo:rerun-if-changed={}", p.display());
+    }
+}
+
+fn main() {
+    // **Naming any input replaces cargo's default**, which is to re-run this
+    // whenever a file in the package changes. That default is what kept the
+    // dirty marker true, so listing only the git files silently traded one kind
+    // of staleness for another: HEAD was watched, the working tree was not, and
+    // a build from edited sources went on reporting a clean tree. Both halves
+    // have to be named now that either is.
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=build.rs");
+
+    // Asked for rather than guessed at: the repository is a directory up from
+    // this crate today, but a worktree or a submodule puts it somewhere else
+    // entirely, and a guess that misses simply stops watching without saying so.
+    if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
+        let git_dir = Path::new(&dir);
+        // HEAD moves on checkout; the branch's own ref file moves on commit;
+        // the index moves on both. Watching all three covers every way the
+        // answer below can change without a source file changing.
+        watch(&git_dir.join("HEAD"));
+        watch(&git_dir.join("index"));
+        if let Some(head_ref) = git(&["rev-parse", "--symbolic-full-name", "HEAD"]) {
+            watch(&git_dir.join(head_ref));
+        }
+    }
+
+    let hash = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
 
     // `--porcelain` prints one line per changed path and nothing at all for a
     // clean tree, which is the whole test.
+    //
+    // It answers for the **repository**, while what is watched above is this
+    // package. An edit to something the player does not compile — a document,
+    // another crate — therefore marks the tree dirty without rebuilding this
+    // binary, and the stamp will say so only at the next rebuild. That is the
+    // right way round: the stamp describes the sources the binary was built
+    // from, and those have not changed.
     let dirty = Command::new("git")
         .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
