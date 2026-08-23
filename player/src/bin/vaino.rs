@@ -318,6 +318,59 @@ fn engine_thread(
                 Some(dir) => vaino_player::lyrics_cache::generate(conn, &dir, false)
                     .map(|r| (r, "song")),
             });
+        // A switch asked for by the browser happens here, where the backends
+        // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
+        // topped up rather than the outgoing one.
+        let asked = controls_for_switch.lock().ok().and_then(|mut c| c.switch_requested.take());
+        if let Some(which) = asked {
+            let target = if which == "mpd" {
+                vaino_player::switch::Side::Guest
+            } else {
+                vaino_player::switch::Side::Local
+            };
+            // Seamless: the passage that is playing crosses at the position it
+            // has reached, and the outgoing side is not silenced until the
+            // incoming one is audible `[SPEC-BK-065]`.
+            let said = match session.hand_over_seamless(&mut backend, target, 600, HANDOFF_LEAD_MS)
+            {
+                Ok(h) => {
+                    let how = match h.stopped {
+                        Some(vaino_player::switch::Stopped::Faded) => "faded",
+                        Some(vaino_player::switch::Stopped::Cut) => "cut",
+                        None => "already there",
+                    };
+                    let lost = if h.carried.lost.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} could not be carried", h.carried.lost.len())
+                    };
+                    // Said rather than assumed: a handoff that found nothing
+                    // playing, or one the other side never answered, is a
+                    // different event from a seamless one `[PI3-API-030]`.
+                    let seam = match (h.resumed, h.took_ms) {
+                        (Some((_, at)), Some(ms)) => {
+                            format!(", resumed {:.1}s in after {ms} ms", at as f64 / 1000.0)
+                        }
+                        (Some((_, at)), None) => format!(
+                            ", resumed {:.1}s in but the other side never sounded",
+                            at as f64 / 1000.0
+                        ),
+                        (None, _) => ", nothing was playing to carry".to_string(),
+                    };
+                    format!(
+                        "now on {which} ({how}, {} passage(s) carried{lost}{seam})",
+                        h.carried.moved.len()
+                    )
+                }
+                Err(e) => format!("refused: {e}"),
+            };
+            println!("switch: {said}");
+            if let Ok(mut c) = controls_for_switch.lock() {
+                c.switch_status = Some(said);
+                c.backend = Some(which);
+            }
+        }
+
         // A seek asked for by the browser, applied to the side that is
         // sounding `[REQ-VIS-225]`. Taken here for the same reason a switch is:
         // the backends live on this thread and nowhere else.
