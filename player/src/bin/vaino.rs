@@ -289,169 +289,31 @@ fn engine_thread(
             .lock()
             .map(|s| (s.skip_suppress_h, s.dequeue_suppress_h))
             .unwrap_or((vaino_player::SKIP_SUPPRESS_H, vaino_player::DEQUEUE_SUPPRESS_H));
-        // Writing cue sheets happens here, not in the request handler: it walks
-        // the library and writes into a folder Vaino does not own
-        // `[REQ-VIS-205]`, which is not work to do while a browser waits.
-        let cue_ask = controls_for_switch.lock().ok().and_then(|mut c| c.cue_requested.take());
-        if let Some(on) = cue_ask {
-            let said = if !on {
-                // Turning it off leaves what was written. Deleting files from
-                // someone's music folder is a larger act than declining to add
-                // more, and is not what unticking a box asked for.
-                "off; sheets already written are left alone".to_string()
-            } else {
-                match rusqlite::Connection::open(&db)
-                    .map_err(|e| e.to_string())
-                    .and_then(|c| vaino_player::cue::generate(&c, false))
-                {
-                    Ok(rep) => {
-                        for f in &rep.failed {
-                            eprintln!("cue: {f}");
-                        }
-                        rep.summary("cue sheet")
-                    }
-                    Err(e) => format!("failed: {e}"),
-                }
-            };
-            println!("cue sheets: {said}");
-            if let Ok(mut c) = controls_for_switch.lock() {
-                c.cue_status = Some(said);
-            }
-        }
-
-        let covers_ask =
-            controls_for_switch.lock().ok().and_then(|mut c| c.covers_requested.take());
-        if let Some(on) = covers_ask {
-            let said = if !on {
-                "off; covers already written are left alone".to_string()
-            } else {
-                match rusqlite::Connection::open(&db)
-                    .map_err(|e| e.to_string())
-                    .and_then(|c| vaino_player::covers::generate(&c, false))
-                {
-                    Ok(rep) => {
-                        for f in &rep.failed {
-                            eprintln!("cover: {f}");
-                        }
-                        rep.summary("cover")
-                    }
-                    Err(e) => format!("failed: {e}"),
-                }
-            };
-            println!("cover art: {said}");
-            if let Ok(mut c) = controls_for_switch.lock() {
-                c.covers_status = Some(said);
-            }
-        }
-
-        let lyrics_ask =
-            controls_for_switch.lock().ok().and_then(|mut c| c.lyrics_requested.take());
-        if let Some(on) = lyrics_ask {
-            let said = if !on {
-                "off; files already written are left alone".to_string()
-            } else {
-                match vaino_player::lyrics_cache::cache_dir() {
-                    // No cache directory is a machine the client has never run
-                    // on, and there is nothing useful to write there
-                    // `[SPEC-LYR-075]`.
-                    None => "no client cache on this machine; nothing written".to_string(),
-                    Some(dir) => match rusqlite::Connection::open(&db)
-                        .map_err(|e| e.to_string())
-                        .and_then(|c| vaino_player::lyrics_cache::generate(&c, &dir, false))
-                    {
-                        Ok(rep) => {
-                            for f in &rep.failed {
-                                eprintln!("lyrics: {f}");
-                            }
-                            rep.summary("song")
-                        }
-                        Err(e) => format!("failed: {e}"),
-                    },
-                }
-            };
-            println!("lyrics cache: {said}");
-            if let Ok(mut c) = controls_for_switch.lock() {
-                c.lyrics_status = Some(said);
-            }
-        }
-
-        let sidecar_ask =
-            controls_for_switch.lock().ok().and_then(|mut c| c.sidecar_requested.take());
-        if let Some(on) = sidecar_ask {
-            let said = if !on {
-                "off; files already written are left alone".to_string()
-            } else {
-                match rusqlite::Connection::open(&db)
-                    .map_err(|e| e.to_string())
-                    .and_then(|c| vaino_player::lyrics_sidecar::generate(&c, false))
-                {
-                    Ok(rep) => {
-                        for f in &rep.failed {
-                            eprintln!("sidecar: {f}");
-                        }
-                        rep.summary("file")
-                    }
-                    Err(e) => format!("failed: {e}"),
-                }
-            };
-            println!("lyrics sidecar: {said}");
-            if let Ok(mut c) = controls_for_switch.lock() {
-                c.sidecar_status = Some(said);
-            }
-        }
-
-        // A switch asked for by the browser happens here, where the backends
-        // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
-        // topped up rather than the outgoing one.
-        let asked = controls_for_switch.lock().ok().and_then(|mut c| c.switch_requested.take());
-        if let Some(which) = asked {
-            let target = if which == "mpd" {
-                vaino_player::switch::Side::Guest
-            } else {
-                vaino_player::switch::Side::Local
-            };
-            // Seamless: the passage that is playing crosses at the position it
-            // has reached, and the outgoing side is not silenced until the
-            // incoming one is audible `[SPEC-BK-065]`.
-            let said = match session.hand_over_seamless(&mut backend, target, 600, HANDOFF_LEAD_MS)
-            {
-                Ok(h) => {
-                    let how = match h.stopped {
-                        Some(vaino_player::switch::Stopped::Faded) => "faded",
-                        Some(vaino_player::switch::Stopped::Cut) => "cut",
-                        None => "already there",
-                    };
-                    let lost = if h.carried.lost.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", {} could not be carried", h.carried.lost.len())
-                    };
-                    // Said rather than assumed: a handoff that found nothing
-                    // playing, or one the other side never answered, is a
-                    // different event from a seamless one `[PI3-API-030]`.
-                    let seam = match (h.resumed, h.took_ms) {
-                        (Some((_, at)), Some(ms)) => {
-                            format!(", resumed {:.1}s in after {ms} ms", at as f64 / 1000.0)
-                        }
-                        (Some((_, at)), None) => format!(
-                            ", resumed {:.1}s in but the other side never sounded",
-                            at as f64 / 1000.0
-                        ),
-                        (None, _) => ", nothing was playing to carry".to_string(),
-                    };
-                    format!(
-                        "now on {which} ({how}, {} passage(s) carried{lost}{seam})",
-                        h.carried.moved.len()
-                    )
-                }
-                Err(e) => format!("refused: {e}"),
-            };
-            println!("switch: {said}");
-            if let Ok(mut c) = controls_for_switch.lock() {
-                c.switch_status = Some(said);
-                c.backend = Some(which);
-            }
-        }
+        // The four folder-writing settings, run here rather than in a request
+        // handler: each walks the library and writes into a folder Vaino does
+        // not own `[REQ-VIS-205]`, which is not work to do while a browser
+        // waits. One loop because they differ only in which cell they read,
+        // which module they call and what they call the files.
+        run_generation(&db, &controls_for_switch, "cue sheets", "sheets",
+            |c| c.cue_requested.take(), |c, s| c.cue_status = Some(s),
+            |conn| vaino_player::cue::generate(conn, false).map(|r| (r, "cue sheet")));
+        run_generation(&db, &controls_for_switch, "cover art", "covers",
+            |c| c.covers_requested.take(), |c, s| c.covers_status = Some(s),
+            |conn| vaino_player::covers::generate(conn, false).map(|r| (r, "cover")));
+        run_generation(&db, &controls_for_switch, "lyrics sidecar", "files",
+            |c| c.sidecar_requested.take(), |c, s| c.sidecar_status = Some(s),
+            |conn| vaino_player::lyrics_sidecar::generate(conn, false).map(|r| (r, "file")));
+        // The odd one out: it writes into a client's cache rather than the
+        // music folder, so it has somewhere to fail to find.
+        run_generation(&db, &controls_for_switch, "lyrics cache", "files",
+            |c| c.lyrics_requested.take(), |c, s| c.lyrics_status = Some(s),
+            |conn| match vaino_player::lyrics_cache::cache_dir() {
+                // Not a failure: a machine the client has never run on has
+                // nothing useful to write there `[SPEC-LYR-075]`.
+                None => Err("no client cache on this machine; nothing written".to_string()),
+                Some(dir) => vaino_player::lyrics_cache::generate(conn, &dir, false)
+                    .map(|r| (r, "song")),
+            });
         // A seek asked for by the browser, applied to the side that is
         // sounding `[REQ-VIS-225]`. Taken here for the same reason a switch is:
         // the backends live on this thread and nowhere else.
@@ -481,5 +343,47 @@ fn engine_thread(
         if submitted == 0 {
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+/// Run one folder-writing setting when the browser has asked for it.
+///
+/// The four of them `[REQ-VIS-205]`, `[REQ-VIS-210]`, `[REQ-VIS-215]`,
+/// `[REQ-VIS-220]` differ only in which intent cell they read, which module
+/// they call and what they call the files. Written four times they drifted --
+/// one of them was pasted with the wrong status field and reported into another
+/// setting's line -- so they are written once.
+///
+/// **Turning one off leaves what was written.** Deleting files from someone's
+/// music folder is a larger act than declining to add more, and is not what
+/// unticking a box asked for; `off_noun` names what stays.
+fn run_generation(
+    db: &std::path::Path,
+    controls: &SharedControls,
+    label: &str,
+    off_noun: &str,
+    take: impl Fn(&mut vaino_player::session::Controls) -> Option<bool>,
+    status: impl Fn(&mut vaino_player::session::Controls, String),
+    run: impl Fn(
+        &rusqlite::Connection,
+    ) -> Result<(vaino_player::report::Written, &'static str), String>,
+) {
+    let Some(asked) = controls.lock().ok().and_then(|mut c| take(&mut c)) else { return };
+    let said = if !asked {
+        format!("off; {off_noun} already written are left alone")
+    } else {
+        match rusqlite::Connection::open(db).map_err(|e| e.to_string()).and_then(|c| run(&c)) {
+            Ok((rep, noun)) => {
+                for f in &rep.failed {
+                    eprintln!("{label}: {f}");
+                }
+                rep.summary(noun)
+            }
+            Err(e) => e,
+        }
+    };
+    println!("{label}: {said}");
+    if let Ok(mut c) = controls.lock() {
+        status(&mut c, said);
     }
 }
