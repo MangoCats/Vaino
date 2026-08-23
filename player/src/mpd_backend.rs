@@ -700,8 +700,24 @@ impl Playback for MpdBackend {
     /// picked an arbitrary one of them, so a handoff could seek — and so start
     /// — a passage from the middle of the queue rather than the one being
     /// handed over.
+    ///
+    /// `order` is appended to by `enqueue` rather than waiting for the next
+    /// poll, because a handoff enqueues and seeks in the same breath: read
+    /// from a poll-stale order this found nothing, sent no seek, and left the
+    /// guest holding a full queue and not playing `[SPEC-BK-065]`.
     fn resume_at(&mut self, position_ms: u64) {
-        let first = self.order.iter().find(|(id, _)| self.ours.contains_key(id)).map(|(id, _)| id.clone());
+        let head_of_ours = |b: &Self| {
+            b.order.iter().find(|(id, _)| b.ours.contains_key(id)).map(|(id, _)| id.clone())
+        };
+        // A handoff enqueues and resumes in the same breath, so the order read
+        // at the last poll predates everything just added and matches nothing.
+        // Read it again rather than seek blindly: sending no seek left the guest
+        // holding a full queue and silent, which is what this looked like on the
+        // appliance `[SPEC-BK-065]`.
+        let first = head_of_ours(self).or_else(|| {
+            self.poll();
+            head_of_ours(self)
+        });
         if let Some(id) = first {
             let _ = self.mpd.cmd(&format!("seekid {id} {:.3}", position_ms as f64 / 1000.0));
         }
