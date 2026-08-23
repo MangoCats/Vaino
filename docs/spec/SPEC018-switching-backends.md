@@ -134,14 +134,11 @@ silence the side just arrived at — and returns `Faded` or `Cut`.
 **`[SPEC-BK-033]` The local fade is `skip` with nothing to skip to.** *(Built
 2026-08-21.)* Emptying the queue first means `admit_due` promotes nothing and
 the transition has no incoming audio to overlay, so the ring fades out and stays
-out. `skip`'s own comment had said exactly this — *"without one this degrades to
-a plain fade to silence"* — years before a handoff wanted it.
-
-Reusing that path rather than writing a second fade is the decision, not an
-economy. There is **one** place in this engine that takes the ring from sounding
-to not, with one curve `[REQ-AUD-158]` and one set of accounting
-`[XFD-ORTH-020]`, and a handoff has no business owning a second idea of what a
-fade is.
+out — `skip`'s own comment had said as much long before a handoff wanted it.
+Reusing that path is the decision, not an economy: there is **one** place in this
+engine that takes the ring from sounding to not, with one curve `[REQ-AUD-158]`
+and one set of accounting `[XFD-ORTH-020]`, and a handoff has no business owning
+a second idea of what a fade is.
 
 | side | fades when |
 | :--- | :--- |
@@ -172,10 +169,10 @@ three rebuilt and queued there, and the reported capabilities flipping from
 `gain false ramps false` to `gain true ramps true` in the same breath.
 
 **`[SPEC-BK-035]` Position and queue transfer, as far as they can.** Both now
-do, in both directions `[SPEC-BK-065]`. **Vaino → MPD is exact** because Vaino
-knows what it holds; **MPD → Vaino is not, and must not pretend to be**: 191 of
-5,709 files carry more than one radio passage, and a whole-file entry could be
-any of up to forty of them. Those are reported, never guessed `[SPEC-MPD-060]`.
+do, in both directions `[SPEC-BK-065]`. **Vaino → MPD is exact**; **MPD → Vaino
+is not, and must not pretend to be**: 191 of 5,709 files carry more than one
+radio passage, and a whole-file entry could be any of up to forty of them. Those
+are reported, never guessed `[SPEC-MPD-060]`.
 
 **`[SPEC-BK-045]` An MPD entry Vaino cannot name is dropped from the switch,
 not blocked by it.** *(Settled 2026-08-21.)* 191 of 5,709 files carry more than
@@ -184,16 +181,28 @@ the listener. Letting those veto a handoff would put a rare and invisible
 property of the *library* in charge of an action a person just asked for.
 
 The handoff therefore takes what it can name and leaves the rest behind,
-**saying which** — a dropped entry is reported, because silently shortening
+**saying which** — a dropped entry is reported once, because silently shortening
 someone's queue is the kind of quiet wrongness `[PI3-API-030]` exists to
 refuse. What is dropped is dropped from the *queue*, not from the library: the
 passage is as playable as it ever was, and the next thing that names it will
 get it.
 
+**The rule lives in the guest, where the names are** *(corrected 2026-08-22)*.
+An earlier draft described a `switch::adopt_queue` the handoff called on the way
+past; it was written and never wired to anything, because the resolution needs
+the URI → passage map, which belongs to the backend. `MpdBackend::queued_ids`
+now resolves MPD's whole queue — read per poll from `playlistinfo`, already being
+called to find departures — through the same `names` map that adopts a person's
+own additions `[SPEC-MPD-115]`. `adopt_queue` is deleted.
+
+**Order is part of the rule.** `playlistinfo` returns the queue in the
+listener's order, and that order is what `carry_queue` re-enqueues in. It was
+being read out of a `HashMap` and arrived shuffled, so moving back to Vaino
+rearranged what was coming up — fixed with the same change.
+
 > **This asymmetry matches what is asked of it.** Seamlessness is wanted
-> Vaino → MPD and merely desirable MPD → Vaino, which is the direction that
-> cannot be exact. The requirement and the constraint agree, which is luck worth
-> noticing rather than design.
+> Vaino → MPD and merely desirable MPD → Vaino — the direction that cannot be
+> exact. Requirement and constraint agree, which is luck rather than design.
 
 **`[SPEC-BK-037]` The passage that was sounding is judged as it stops, exactly
 as a skip is.** *(Settled 2026-08-21.)* No new rule, and that is the finding:

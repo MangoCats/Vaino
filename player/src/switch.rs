@@ -22,43 +22,6 @@ pub enum Side {
     Guest,
 }
 
-/// What a handoff managed to carry, and what it could not.
-///
-/// Reported rather than summarised. A shortened queue that says nothing about
-/// having been shortened is the quiet wrongness `[PI3-API-030]` exists to
-/// refuse, and a count is not a report — the caller is given the names.
-#[derive(Debug, Default, PartialEq)]
-pub struct Adopted {
-    /// Passages the incoming backend will be given, in order.
-    pub passages: Vec<i64>,
-    /// Entries left behind because nothing could name them `[SPEC-BK-045]`.
-    pub dropped: Vec<String>,
-}
-
-/// Turn a guest's queue into passages, dropping what cannot be named.
-///
-/// **The rule is `[SPEC-BK-045]`: drop, do not block.** An entry is unnameable
-/// when its file carries more than one radio passage — 191 of 5,709 here — and
-/// a whole-file entry could be any of up to forty of them. Guessing would
-/// attribute a play to a passage nobody heard `[SPEC-MPD-060]`; refusing the
-/// whole handoff would let a rare property of the library veto something a
-/// person just asked for.
-///
-/// Order is preserved, because it is the listener's order.
-pub fn adopt_queue<F>(entries: &[String], resolve: F) -> Adopted
-where
-    F: Fn(&str) -> Option<i64>,
-{
-    let mut out = Adopted::default();
-    for e in entries {
-        match resolve(e) {
-            Some(id) => out.passages.push(id),
-            None => out.dropped.push(e.clone()),
-        }
-    }
-    out
-}
-
 /// How the outgoing side stopped, so a caller can say `[PI3-API-030]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stopped {
@@ -254,9 +217,6 @@ impl Switching {
     /// library, builds entries and enqueues them into the new side — where the
     /// spans are re-derived, because a span belongs to the passage and not to
     /// whichever backend last played it.
-    ///
-    /// A guest's queue is not ids to begin with, so it goes through
-    /// [`adopt_queue`] first and arrives shorter `[SPEC-BK-045]`.
     ///
     /// **Audio is not crossfaded here yet.** `[SPEC-BK-030]` wants both sides
     /// sounding briefly, which the appliance measurement showed is possible;
@@ -489,30 +449,6 @@ mod tests {
             mbid: None,
             naming: Default::default(),
         }
-    }
-
-    /// The settled rule `[SPEC-BK-045]`: what cannot be named is dropped, the
-    /// rest goes through, and the listener's order is kept.
-    #[test]
-    fn an_unnameable_entry_is_dropped_and_the_rest_goes_through() {
-        let known: HashMap<&str, i64> =
-            [("a.mp3", 10), ("c.mp3", 30)].into_iter().collect();
-        let queue: Vec<String> =
-            ["a.mp3", "capture.mp3", "c.mp3"].iter().map(|s| s.to_string()).collect();
-
-        let got = adopt_queue(&queue, |u| known.get(u).copied());
-
-        assert_eq!(got.passages, vec![10, 30], "named entries survive, in order");
-        assert_eq!(got.dropped, vec!["capture.mp3"], "and the rest is named, not counted");
-    }
-
-    /// Dropping must never become blocking, even when nothing is nameable.
-    #[test]
-    fn a_wholly_unnameable_queue_still_hands_over() {
-        let queue: Vec<String> = ["x.mp3", "y.mp3"].iter().map(|s| s.to_string()).collect();
-        let got = adopt_queue(&queue, |_| None);
-        assert!(got.passages.is_empty());
-        assert_eq!(got.dropped.len(), 2, "reported, and the switch still proceeds");
     }
 
     /// A queue crosses as ids, and arrives rebuilt from the library

@@ -140,6 +140,53 @@ pub fn cue_uris(
     Ok(out)
 }
 
+/// The passages this backend is holding, **in the listener's order**.
+///
+/// A free function because it is a question about two data structures and not
+/// about a socket: testing it through a connected backend would have meant
+/// faking a TCP stream to check an ordering.
+///
+/// Order matters because this is what crosses a handoff `[SPEC-BK-030]`, and
+/// `carry_queue` re-enqueues in the order it is given. Reading it out of a
+/// `HashMap` shuffled the queue every time a listener moved back to Vaino.
+fn in_queue_order(
+    order: &[(String, String)],
+    ours: &HashMap<String, Offered>,
+    names: &HashMap<String, Nameable>,
+) -> Vec<i64> {
+    order
+        .iter()
+        .filter_map(|(id, uri)| match ours.get(id) {
+            Some(o) => Some(o.passage_id),
+            // Not offered by Vaino, so it is the listener's own. Named where
+            // the library can name it, and passed over where it cannot -- which
+            // is `[SPEC-BK-045]`'s rule, applied where the names actually live.
+            None => match names.get(uri) {
+                Some(Some((pid, ..))) => Some(*pid),
+                _ => None,
+            },
+        })
+        .collect()
+}
+
+/// `playlistinfo` as `(songid, uri)` pairs, in MPD's order.
+///
+/// One song's fields arrive as a run of lines beginning with `file:`, so a
+/// `file:` opens an entry and the `Id:` that follows belongs to it.
+fn queue_of(lines: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in lines {
+        if let Some(uri) = line.strip_prefix("file: ") {
+            out.push((String::new(), uri.to_string()));
+        } else if let Some(id) = line.strip_prefix("Id: ") {
+            if let Some(last) = out.last_mut() {
+                last.0 = id.to_string();
+            }
+        }
+    }
+    out
+}
+
 /// A passage handed to MPD, and what has become of it.
 struct Offered {
     passage_id: i64,
@@ -177,6 +224,13 @@ pub struct MpdBackend {
     last_poll: Option<Instant>,
     /// songid → what we offered under it.
     ours: HashMap<String, Offered>,
+    /// MPD's queue as of the last poll: `(songid, uri)`, in MPD's order.
+    ///
+    /// **`ours` is a map and a map has no order**, so the listener's order has
+    /// to be kept somewhere. `playlistinfo` returns both for one round trip —
+    /// the same trip `playlistid` was making to find departures, and it was
+    /// throwing the order away into a set on the way past.
+    order: Vec<(String, String)>,
     /// MPD's whole queue length at the last poll, ours and the listener's both.
     queue_len: usize,
     playing: bool,
@@ -219,6 +273,7 @@ impl MpdBackend {
             interval: Duration::from_millis(interval_ms),
             last_poll: None,
             ours: HashMap::new(),
+            order: Vec::new(),
             queue_len: 0,
             playing: false,
             dropped: Vec::new(),
@@ -251,27 +306,6 @@ impl MpdBackend {
 
     fn uri_for(&self, e: &QueueEntry) -> Option<String> {
         uri_under(&self.root, &e.path)
-    }
-
-    /// Every URI in MPD's queue, in play order — **including what a person
-    /// added by hand**.
-    ///
-    /// Not on the trait, because only a handoff wants it. `queued_ids` reports
-    /// what the Director offered; this reports what the *listener* would see,
-    /// and the difference is exactly the songs Vaino did not choose. Carrying
-    /// only our own would silently discard theirs `[SPEC-BK-045]`.
-    pub fn queue_uris(&mut self) -> Vec<String> {
-        match self.mpd.cmd("playlistinfo") {
-            Ok(lines) => lines
-                .iter()
-                .filter_map(|l| l.strip_prefix("file: "))
-                .map(|s| s.to_string())
-                .collect(),
-            Err(e) => {
-                eprintln!("mpd playlistinfo: {e}");
-                Vec::new()
-            }
-        }
     }
 
     /// Fade out and stop, returning whether the fade was real.
@@ -466,20 +500,18 @@ impl MpdBackend {
             let _ = self.mpd.cmd("next");
         }
 
-        let live: HashSet<String> = match self.mpd.cmd("playlistid") {
-            Ok(lines) => lines
-                .iter()
-                .filter_map(|l| l.strip_prefix("Id: "))
-                .map(|s| s.to_string())
-                .collect(),
+        let order = match self.mpd.cmd("playlistinfo") {
+            Ok(lines) => queue_of(&lines),
             Err(e) => {
-                eprintln!("mpd playlistid: {e}");
+                eprintln!("mpd playlistinfo: {e}");
                 self.lost = true;
                 return;
             }
         };
+        let live: HashSet<&str> = order.iter().map(|(id, _)| id.as_str()).collect();
         let gone: Vec<String> =
-            self.ours.keys().filter(|id| !live.contains(*id)).cloned().collect();
+            self.ours.keys().filter(|id| !live.contains(id.as_str())).cloned().collect();
+        self.order = order;
         for id in gone {
             if let Some(o) = self.ours.remove(&id) {
                 self.retire(o);
@@ -640,7 +672,7 @@ impl Playback for MpdBackend {
     }
 
     fn queued_ids(&self) -> Vec<i64> {
-        self.ours.values().map(|o| o.passage_id).collect()
+        in_queue_order(&self.order, &self.ours, &self.names)
     }
 
     fn queued_ms(&self) -> u64 {
@@ -662,8 +694,14 @@ impl Playback for MpdBackend {
         std::mem::take(&mut self.dropped)
     }
 
+    /// Begin the **first** queued song at this offset.
+    ///
+    /// First in MPD's order, not first out of a hash map. `ours.keys().next()`
+    /// picked an arbitrary one of them, so a handoff could seek — and so start
+    /// — a passage from the middle of the queue rather than the one being
+    /// handed over.
     fn resume_at(&mut self, position_ms: u64) {
-        let first = self.ours.keys().next().cloned();
+        let first = self.order.iter().find(|(id, _)| self.ours.contains_key(id)).map(|(id, _)| id.clone());
         if let Some(id) = first {
             let _ = self.mpd.cmd(&format!("seekid {id} {:.3}", position_ms as f64 / 1000.0));
         }
@@ -719,6 +757,95 @@ impl Playback for MpdBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn offered(passage_id: i64) -> Offered {
+        Offered {
+            passage_id,
+            uri: String::new(),
+            mbid: None,
+            span_ms: 1_000,
+            furthest_ms: 0,
+            heard_ms: 0,
+            seen_at_ms: None,
+            span_honoured: true,
+            was_current: false,
+        }
+    }
+
+    /// **The listener's order, not a hash map's** `[SPEC-BK-030]`.
+    ///
+    /// What this returns is what crosses a handoff, and `carry_queue` re-enqueues
+    /// in the order it is handed. Read straight out of `ours` it came back
+    /// shuffled, so moving back to Vaino rearranged what was coming up.
+    #[test]
+    fn the_queue_crosses_in_the_order_mpd_holds_it() {
+        let mut ours = HashMap::new();
+        // Deliberately inserted in a different order from the queue's, which is
+        // what a map would report and what the bug did report.
+        ours.insert("30".to_string(), offered(300));
+        ours.insert("10".to_string(), offered(100));
+        ours.insert("20".to_string(), offered(200));
+
+        let order = [
+            ("10".to_string(), "a.mp3".to_string()),
+            ("20".to_string(), "b.mp3".to_string()),
+            ("30".to_string(), "c.mp3".to_string()),
+        ];
+
+        assert_eq!(in_queue_order(&order, &ours, &HashMap::new()), vec![100, 200, 300]);
+    }
+
+    /// **The settled rule `[SPEC-BK-045]`: what cannot be named is dropped, and
+    /// the rest goes through in the listener's order.**
+    ///
+    /// A song Vaino never offered is the listener's own addition. Named where
+    /// the library can name it, passed over where it cannot — an entry is
+    /// unnameable when its file carries more than one radio passage, and a
+    /// whole-file entry could be any of up to forty of them.
+    #[test]
+    fn what_the_listener_queued_crosses_too_and_what_cannot_be_named_does_not() {
+        let mut ours = HashMap::new();
+        ours.insert("10".to_string(), offered(100));
+
+        let mut names: HashMap<String, Nameable> = HashMap::new();
+        names.insert("mine.mp3".into(), Some((200, None, 1_000)));
+        // In the library, but a capture: it could be any of its passages.
+        names.insert("capture.mp3".into(), None);
+
+        let order = [
+            ("10".to_string(), "ours.mp3".to_string()),
+            ("20".to_string(), "mine.mp3".to_string()),
+            ("30".to_string(), "capture.mp3".to_string()),
+            ("40".to_string(), "unknown.mp3".to_string()),
+        ];
+
+        assert_eq!(
+            in_queue_order(&order, &ours, &names),
+            vec![100, 200],
+            "ours, then theirs; the ambiguous and the unknown are left behind"
+        );
+    }
+
+    /// `playlistinfo` interleaves each song's fields, so the `Id:` after a
+    /// `file:` is the one that belongs to it.
+    #[test]
+    fn the_queue_is_read_as_pairs_in_order() {
+        let lines: Vec<String> = [
+            "file: a.mp3", "Last-Modified: x", "Time: 100", "Pos: 0", "Id: 7",
+            "file: b.mp3", "Time: 200", "Pos: 1", "Id: 9",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(
+            queue_of(&lines),
+            vec![
+                ("7".to_string(), "a.mp3".to_string()),
+                ("9".to_string(), "b.mp3".to_string())
+            ]
+        );
+    }
 
     /// A URI is the path with the music directory taken off the front — rung 1
     /// of the ladder `[SPEC-MPD-060]`, and the only rung this backend uses when
