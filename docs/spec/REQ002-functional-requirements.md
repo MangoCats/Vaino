@@ -491,6 +491,43 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-235]` The Vaino skin shows where the sound is actually coming
+from.** *(Requested 2026-08-23; not built.)* Immediately below the State and
+Underruns display: the **system path and filename** of the file being played,
+with the passage's **start offset**, **end offset**, and the **total audio
+length of the file**.
+
+**Why it is worth the space.** Everything else on that page names what Vaino
+*believes* it is playing — title, artist, album, all resolved through
+MusicBrainz. None of it names the bytes. When a listener hears something other
+than what the page says, the first question is whether the player is wrong about
+the metadata or about the file, and there is currently nothing on screen that
+separates the two. That question cost an hour on 2026-08-23 `[PI-CHR-080]`:
+the audio was Genesis exactly as displayed, and the speaker was listening to
+another device entirely — a fact a path on screen would not have proved, but a
+start offset inside a 244-minute capture would have made the alternative
+explanations checkable in seconds.
+
+**Start and end matter as much as the name.** A third of this library is
+passages inside long captures `[SPEC-MPD-052]`, where "playing Aqualung.mp3" is
+almost no information: the same file holds fourteen passages across 64 minutes.
+`2552 s → 2710 s of 3840 s` says where in it the needle is, and makes a
+mis-trimmed span visible as a number rather than as a listening complaint.
+
+**Three of the four are already in hand.** `QueueEntry` carries `path`,
+`start_ms` and `end_ms`. The file's own length is **not** on it —
+`QueueEntry::duration_ms()` is the passage span, and the file's is
+`files.duration_ms` in the library. Carrying it means widening the entry where
+`Library::passage` builds it, which is the honest place: the queue entry is what
+crosses to a backend `[SPEC-BK-030]`, and a length it does not carry is a length
+the far side cannot show either.
+
+> **The path names the listener's filesystem**, and it should stay as local as
+> the browser it is drawn in. It belongs in the snapshot the local UI reads and
+> nowhere that travels `[SPEC-DF-055]` — a file path is already the weakest of
+> the three identities `[SPEC-DF-030]` and the only one that is nobody else's
+> business.
+
 **`[REQ-VIS-230]` The underrun count can be restarted, and says what it counts
 from.** *(Requested 2026-08-23; not built.)* A **Restart** button beside the
 Underruns label in the Vaino skin, and **"since {date time}"** to the right of
