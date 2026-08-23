@@ -240,7 +240,38 @@ here could have shown it.
 
 ---
 
-## 8. What was not measured
+## 8. MPD, installed
+
+**`[PI-CHR-085]` MPD must run as the user that owns the sound.** *(Installed
+2026-08-23, MPD 0.23.12.)* PipeWire lives in `pi`'s session with its socket in
+`/run/user/1000`; Debian's packaged unit runs MPD as the `mpd` user, which
+cannot reach it. MPD would have started, found no output, and played silently
+into nothing while reporting itself healthy — the failure `[IMPL-AUD-010]`
+describes for a missing device, arrived at by a different road.
+
+A drop-in gives it `User=pi` and the same two environment lines
+`vaino.service` already carries, and the output plugin is `pipewire` rather than
+`alsa` so both players reach the same sink instead of contending for the device.
+`mpd.socket` is masked: socket activation would start MPD outside the drop-in
+and undo all of it.
+
+**What it costs, which settles `[SPEC-BK-060]`:** 100.8 MB resident beside
+Vaino's 43.4, leaving 264 MB of 464 free; 242 s to index 5,758 songs from
+nothing, and 2.9–4.0 s to start with the database already built. Resident, on
+that evidence.
+
+**Verified end to end on the appliance**, both directions: to MPD *"resumed
+165.1 s in after 92 ms"* with MPD playing at 174.1 s, and back to Vaino
+*"resumed 180.7 s in after 265 ms"*.
+
+> **Track names inside captures need cue sheets, which are off here.** MPD read
+> the handed-over passage as `Flora Purim — (no title)`, because a capture
+> carries one set of album tags `[SPEC-MPD-052]`. `[REQ-VIS-205]` is the cure
+> and it writes into the music folder, so it stays off until asked for.
+
+---
+
+## 9. What was not measured
 
 - **MPD is not installed here**, so nothing in `[SPEC-BK-060]` moved. Every
   MPD measurement in `[SPEC020]` remains a Windows measurement.

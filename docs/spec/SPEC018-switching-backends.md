@@ -155,14 +155,40 @@ be driven by MPD clients. Three problems that plan carried simply do not arise:
 
 ---
 
-## 5. Open
+## 5. Settled: resident
 
-**`[SPEC-BK-060]` Whether MPD runs resident or on demand** is the one left. MPD
-is not installed on the appliance today. Resident costs memory that measurement
-says is tight; on-demand costs an indexing pass at switch time. Measure the index
-over 5,705 files before choosing.
+**`[SPEC-BK-060]` MPD runs resident.** *(Measured on the appliance 2026-08-23,
+MPD 0.23.12.)* The question was whether memory or an indexing pass was the worse
+price. Both were measured rather than argued:
 
-*(The other two are settled: `[SPEC-BK-037]` with `[SPEC-BK-065]`, and `[SPEC-BK-045]`.)*
+| | |
+| :--- | ---: |
+| MPD resident | **100.8 MB** |
+| Vaino beside it | 43.4 MB |
+| Available with both running | **264 MB of 464** |
+| First index, from nothing | **242 s** for 5,758 songs |
+| Start with the database already built | **2.9–4.0 s** |
+
+**Resident, because the memory is affordable and a switch should be immediate.**
+264 MB spare is not tight; 101 MB buys an instant handover.
+
+**The 242 seconds is the number that matters, and it is a trap rather than a
+cost.** It is only paid when the database is discarded — a warm start is three
+or four seconds. So on-demand is a real option if memory is ever wanted back,
+*provided the database is kept*; an on-demand MPD that rebuilt its index at each
+switch would take four minutes to answer a button.
+
+> **MPD 0.23.12 here against 0.24.0 on the development machine.** Every protocol
+> finding in [SPEC020](SPEC020-the-handoff.md) was measured on the newer one.
+> `seekid` starting playback from `stop` was re-checked on 0.23.12 and behaves
+> the same; the rest has not been re-measured.
+
+It runs as `pi`, not as the packaged `mpd` user, because PipeWire lives in that
+session `[PI-CHR-085]` — and it feeds PipeWire rather than ALSA, so both players
+reach the same sink instead of fighting for the device.
+
+*(The other two open items are settled: `[SPEC-BK-037]` with `[SPEC-BK-065]`, and
+`[SPEC-BK-045]`.)*
 
 ---
 
