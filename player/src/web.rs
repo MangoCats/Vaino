@@ -972,22 +972,6 @@ async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
     axum::Json(crate::sink::current())
 }
 
-/// Shut the appliance down gracefully `[PI5-PWR-010]`.
-///
-/// An appliance whose only interface is a web page has no other way to be
-/// turned off, and pulling its power is how an SD card is corrupted and how a
-/// database is left mid-write. This exists so that stops being the only option.
-///
-/// Three steps, in order, and the first is the one a bare `poweroff` misses:
-///
-/// 1. **Write the resume point now.** It is otherwise saved on an interval
-///    `[REQ-VIS-155]`, so a deliberate shutdown would still lose up to that
-///    much position -- in exactly the case someone took care over.
-/// 2. **Hand off to systemd**, which stops the services and unmounts, rather
-///    than cutting power under a live filesystem.
-/// 3. **Answer 202, not 204.** The request is accepted; whether the machine
-///    completes it is not something this reply can honestly claim, since the
-///    process making it is about to be stopped.
 /// Restart the player, without restarting the machine `[REQ-VIS-245]`.
 ///
 /// **Several settings only take effect at startup**, because what they change
@@ -1030,6 +1014,22 @@ async fn restart_player(State(ui): State<Ui>) -> Response {
     }
 }
 
+/// Shut the appliance down gracefully `[PI5-PWR-010]`.
+///
+/// An appliance whose only interface is a web page has no other way to be
+/// turned off, and pulling its power is how an SD card is corrupted and how a
+/// database is left mid-write. This exists so that stops being the only option.
+///
+/// Three steps, in order, and the first is the one a bare `poweroff` misses:
+///
+/// 1. **Write the resume point now.** It is otherwise saved on an interval
+///    `[REQ-VIS-155]`, so a deliberate shutdown would still lose up to that
+///    much position -- in exactly the case someone took care over.
+/// 2. **Hand off to systemd**, which stops the services and unmounts, rather
+///    than cutting power under a live filesystem.
+/// 3. **Answer 202, not 204.** The request is accepted; whether the machine
+///    completes it is not something this reply can honestly claim, since the
+///    process making it is about to be stopped.
 async fn power_off(State(ui): State<Ui>) -> Response {
     ui.handle.send(Command::Persist);
     // Long enough for the engine to take the command off the channel and write

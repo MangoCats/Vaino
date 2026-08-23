@@ -17,13 +17,21 @@ pub struct Mpd {
     /// The `OK MPD <version>` greeting, kept because the protocol level is the
     /// thing to target rather than the newest release `[SPEC-MPD-080]`.
     pub version: String,
+    /// The socket has failed and this connection is finished.
+    ///
+    /// **Which kind of failure it was is not recoverable from the message.**
+    /// `cmd` reports an `ACK` and a broken pipe both as `Err(String)`, and a
+    /// caller that wants to reconnect on one but not the other was left
+    /// matching on the text of it. The distinction is known here, so it is
+    /// recorded here `[SPEC-MPD-130]`.
+    pub broken: bool,
 }
 
 impl Mpd {
     pub fn connect(addr: &str) -> Result<Self, String> {
         let out = TcpStream::connect(addr).map_err(|e| format!("connect {addr}: {e}"))?;
         let inp = BufReader::new(out.try_clone().map_err(|e| e.to_string())?);
-        let mut m = Mpd { out, inp, version: String::new() };
+        let mut m = Mpd { out, inp, version: String::new(), broken: false };
         let mut greeting = String::new();
         m.inp.read_line(&mut greeting).map_err(|e| e.to_string())?;
         if !greeting.starts_with("OK MPD ") {
@@ -40,13 +48,22 @@ impl Mpd {
     /// because a caller that treats a refusal as an empty result will report a
     /// library of nothing and call it success.
     pub fn cmd(&mut self, command: &str) -> Result<Vec<String>, String> {
-        writeln!(self.out, "{command}").map_err(|e| e.to_string())?;
-        self.out.flush().map_err(|e| e.to_string())?;
+        if let Err(e) = writeln!(self.out, "{command}").and_then(|()| self.out.flush()) {
+            self.broken = true;
+            return Err(e.to_string());
+        }
         let mut lines = Vec::new();
         loop {
             let mut line = String::new();
-            let n = self.inp.read_line(&mut line).map_err(|e| e.to_string())?;
+            let n = match self.inp.read_line(&mut line) {
+                Ok(n) => n,
+                Err(e) => {
+                    self.broken = true;
+                    return Err(e.to_string());
+                }
+            };
             if n == 0 {
+                self.broken = true;
                 return Err("connection closed mid-response".into());
             }
             let line = line.trim_end_matches(['\n', '\r']).to_string();

@@ -151,10 +151,22 @@ pub struct Carried {
 /// reason an unnameable guest entry is `[SPEC-BK-045]`: a library that has been
 /// rescanned since the queue was built may have renumbered it away, and that is
 /// not a reason to refuse the switch.
+///
+/// **`moved` is what the backend took, not what the library could build**
+/// `[SPEC-BK-047]`. `enqueue` returns nothing and cannot refuse in line; a
+/// backend that would not take a passage says so by dropping it. Counting the
+/// successful `build` as a passage carried made this report unfalsifiable —
+/// measured on the appliance, a handoff into an MPD whose socket had died
+/// announced "6 passage(s) carried" into an empty queue, and went on saying it
+/// for as long as the connection stayed dead `[PI-CHR-095]`. A report that
+/// cannot come out wrong is not evidence `[PI3-API-030]`.
 pub fn carry_queue<F>(ids: &[i64], into: &mut dyn Playback, build: F) -> Carried
 where
     F: Fn(i64) -> Option<QueueEntry>,
 {
+    // Anything already waiting is from before this transfer and belongs to
+    // whoever asks next, not to this report.
+    let _ = into.take_dropped();
     let mut out = Carried::default();
     for &id in ids {
         match build(id) {
@@ -164,6 +176,14 @@ where
             }
             None => out.lost.push(id),
         }
+    }
+    // Taken here rather than left for the session loop because these are the
+    // same failure as an unbuildable passage and want the same treatment: named
+    // in `lost`, and un-counted by the Director once `[REQ-PD-112]`.
+    let refused = into.take_dropped();
+    if !refused.is_empty() {
+        out.moved.retain(|id| !refused.contains(id));
+        out.lost.extend(refused);
     }
     out
 }
@@ -375,6 +395,11 @@ mod tests {
         /// Shared, because once boxed as a `Backend` the field is out of a
         /// test's reach and the flag has to come back some other way.
         handed_off: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        /// Passages this backend will not take. A real one refuses for its own
+        /// reasons — outside MPD's music directory, or nothing on the far end
+        /// of the socket — and says so only by dropping them.
+        refuses: Vec<i64>,
+        dropped: Vec<i64>,
     }
 
     impl Progress for Fake {
@@ -409,6 +434,10 @@ mod tests {
             self.caps.unwrap_or(Capabilities::FULL)
         }
         fn enqueue(&mut self, e: QueueEntry) {
+            if self.refuses.contains(&e.passage_id) {
+                self.dropped.push(e.passage_id);
+                return;
+            }
             self.queued.push(e.passage_id);
         }
         fn queued_ids(&self) -> Vec<i64> {
@@ -421,7 +450,7 @@ mod tests {
             5usize.saturating_sub(self.queued.len())
         }
         fn take_dropped(&mut self) -> Vec<i64> {
-            Vec::new()
+            std::mem::take(&mut self.dropped)
         }
         fn resume_at(&mut self, ms: u64) {
             self.resumed = Some(ms);
@@ -471,6 +500,38 @@ mod tests {
         assert_eq!(got.moved, vec![7, 8]);
         assert_eq!(got.lost, vec![999], "named, so a caller can say which");
         assert_eq!(dest.queued_ids(), vec![7, 8]);
+    }
+
+    /// The bug this pair of tests exists for: a backend that took nothing at
+    /// all once reported a full queue carried `[SPEC-BK-047]`.
+    #[test]
+    fn a_passage_the_backend_refused_is_not_reported_as_carried() {
+        let mut dest = Fake { refuses: vec![8], ..Default::default() };
+        let got = carry_queue(&[7, 8, 9], &mut dest, |id| Some(entry(id)));
+        assert_eq!(got.moved, vec![7, 9], "only what arrived");
+        assert_eq!(got.lost, vec![8], "and the refusal is named, not silent");
+        assert_eq!(dest.queued_ids(), vec![7, 9]);
+    }
+
+    /// A dead MPD socket refuses everything, which is exactly the case that
+    /// went unnoticed on the appliance `[PI-CHR-095]`.
+    #[test]
+    fn a_backend_that_takes_nothing_reports_nothing_carried() {
+        let mut dest = Fake { refuses: vec![7, 8, 9], ..Default::default() };
+        let got = carry_queue(&[7, 8, 9], &mut dest, |id| Some(entry(id)));
+        assert!(got.moved.is_empty(), "nothing arrived, so nothing was carried");
+        assert_eq!(got.lost, vec![7, 8, 9]);
+    }
+
+    /// A drop left over from before the transfer is not this transfer's news,
+    /// and must not turn a passage that did arrive into a loss.
+    #[test]
+    fn a_stale_drop_does_not_contaminate_the_report() {
+        let mut dest = Fake::default();
+        dest.dropped.push(7);
+        let got = carry_queue(&[7, 8], &mut dest, |id| Some(entry(id)));
+        assert_eq!(got.moved, vec![7, 8], "both were taken this time");
+        assert!(got.lost.is_empty());
     }
 
     impl Publish for Cutter {

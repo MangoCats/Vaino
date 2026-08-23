@@ -217,6 +217,11 @@ struct Offered {
 
 pub struct MpdBackend {
     mpd: Mpd,
+    /// Kept so the connection can be rebuilt. MPD is a separate process with
+    /// its own lifetime — it is updated, it is restarted, it crashes — and the
+    /// socket dying is a thing to recover from rather than a thing to end on
+    /// `[SPEC-MPD-130]`.
+    addr: String,
     /// MPD's `music_directory`, normalised, for turning a path into a URI.
     root: String,
     depth: usize,
@@ -251,8 +256,26 @@ pub struct MpdBackend {
     /// history. Neither counted again nor written down as a rejection when
     /// they end `[SPEC-BK-065]`.
     counted_elsewhere: HashSet<i64>,
+    /// The connection is dead. Recoverable: see `reconnect` `[SPEC-MPD-130]`.
     lost: bool,
+    /// When the connection was first found dead, for deciding that MPD is not
+    /// coming back rather than retrying for ever.
+    lost_since: Option<Instant>,
+    /// The next moment worth trying again, so a machine with no MPD on it does
+    /// not spend the session opening sockets.
+    retry_at: Option<Instant>,
 }
+
+/// How often a lost connection is retried.
+const RECONNECT_EVERY: Duration = Duration::from_secs(2);
+
+/// How long MPD may be away before this backend calls itself finished.
+///
+/// **Long enough to cover a package update**, which is the ordinary reason an
+/// appliance's MPD disappears for a moment: `apt` stops it, replaces it and
+/// starts it again, and a listener should hear a gap rather than lose the
+/// guest until someone restarts Vaino `[SPEC-MPD-130]`.
+const GIVE_UP_AFTER: Duration = Duration::from_secs(120);
 
 impl MpdBackend {
     pub fn connect(
@@ -268,6 +291,7 @@ impl MpdBackend {
         mpd.cmd("consume 1")?;
         Ok(Self {
             mpd,
+            addr: addr.to_string(),
             root: music_root.replace('\\', "/").trim_end_matches('/').to_string(),
             depth,
             interval: Duration::from_millis(interval_ms),
@@ -284,7 +308,71 @@ impl MpdBackend {
             head: None,
             counted_elsewhere: HashSet::new(),
             lost: false,
+            lost_since: None,
+            retry_at: None,
         })
+    }
+
+    /// Report a failed command, and note the connection as lost if that is what
+    /// it was.
+    ///
+    /// **A refusal is not a death.** MPD answers a command it dislikes with
+    /// `ACK`, and treating that as a lost connection would throw away a working
+    /// socket — and, through `is_shutdown`, eventually the player with it. Only
+    /// the transport failing counts, which is what `Mpd::broken` records.
+    fn mark_lost(&mut self, what: &str, e: &str) {
+        if !self.mpd.broken {
+            eprintln!("mpd {what}: {e}");
+            return;
+        }
+        if !self.lost {
+            eprintln!("mpd {what}: {e} -- connection lost, will retry");
+            self.lost_since = Some(Instant::now());
+        }
+        self.lost = true;
+    }
+
+    /// Try to become usable again `[SPEC-MPD-130]`.
+    ///
+    /// **What MPD remembers across its own restart is not ours to assume.** It
+    /// restores its queue from `state_file`, but the song *ids* in it are freshly
+    /// assigned, and `ours` is keyed by song id — so every entry in it now points
+    /// at nothing, or worse, at somebody else's song. They are released as
+    /// dropped rather than retired: a dropped passage is un-counted by the
+    /// Director `[REQ-PD-112]`, which is the honest reading of "this was queued
+    /// and its fate is now unknown". Calling `retire` instead would have written
+    /// a play or a skip for something nobody observed `[PI3-API-030]`.
+    ///
+    /// Returns whether the connection is usable, so a caller that needs it right
+    /// now — a handoff — can find out without waiting for the next tick.
+    fn reconnect(&mut self) -> bool {
+        if !self.lost {
+            return true;
+        }
+        if self.retry_at.map(|t| Instant::now() < t).unwrap_or(false) {
+            return false;
+        }
+        self.retry_at = Some(Instant::now() + RECONNECT_EVERY);
+        let mut mpd = match Mpd::connect(&self.addr) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        if let Err(e) = mpd.cmd("consume 1") {
+            eprintln!("mpd reconnect: consume 1: {e}");
+            return false;
+        }
+        eprintln!("mpd reconnected at {} (protocol {})", self.addr, mpd.version);
+        self.mpd = mpd;
+        for (_, o) in std::mem::take(&mut self.ours) {
+            self.dropped.push(o.passage_id);
+        }
+        self.order.clear();
+        self.head = None;
+        self.playing = false;
+        self.queue_len = 0;
+        self.lost = false;
+        self.lost_since = None;
+        true
     }
 
     /// Teach it to name what the listener queues `[SPEC-MPD-115]`. Without
@@ -406,8 +494,7 @@ impl MpdBackend {
         let status = match self.mpd.status() {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("mpd status: {e}");
-                self.lost = true;
+                self.mark_lost("status", &e);
                 return;
             }
         };
@@ -503,8 +590,7 @@ impl MpdBackend {
         let order = match self.mpd.cmd("playlistinfo") {
             Ok(lines) => queue_of(&lines),
             Err(e) => {
-                eprintln!("mpd playlistinfo: {e}");
-                self.lost = true;
+                self.mark_lost("playlistinfo", &e);
                 return;
             }
         };
@@ -593,6 +679,11 @@ impl Playback for MpdBackend {
     }
 
     fn enqueue(&mut self, entry: QueueEntry) {
+        // A handoff enqueues into a backend that may have been idle for hours,
+        // and the next tick is too late to find out the socket died in the
+        // meantime `[SPEC-MPD-130]`. If it cannot be rebuilt, fall through: the
+        // failure is then reported as a drop rather than as a passage carried.
+        self.reconnect();
         let span_ms = entry.end_ms.saturating_sub(entry.start_ms);
 
         // **A cue track names what a bare file cannot** `[SPEC-MPD-056]`. MPD
@@ -665,7 +756,11 @@ impl Playback for MpdBackend {
                 self.queue_len += 1;
             }
             Err(e) => {
-                eprintln!("mpd enqueue {}: {e}", entry.passage_id);
+                // Refused for a reason to do with this passage, or refused
+                // because there is no longer anyone to refuse it. The second
+                // kind must be noticed here, or every later enqueue writes into
+                // a closed socket and reports nothing wrong.
+                self.mark_lost(&format!("enqueue {}", entry.passage_id), &e);
                 self.dropped.push(entry.passage_id);
             }
         }
@@ -720,6 +815,14 @@ impl Playback for MpdBackend {
         });
         if let Some(id) = first {
             let _ = self.mpd.cmd(&format!("seekid {id} {:.3}", position_ms as f64 / 1000.0));
+            // **`seekid` moves a paused player without starting it.** From
+            // `stop` it begins playing, which is why this was not noticed until
+            // MPD was restarted mid-session: `restore_paused "yes"` brings it
+            // back *paused*, the seek landed at the right offset, and the
+            // handoff completed into silence with `elapsed` advancing not at
+            // all `[SPEC-MPD-130]`. `pause 0` is "not paused" rather than a
+            // toggle, so it is a no-op on a player already playing.
+            let _ = self.mpd.cmd("pause 0");
         }
     }
 
@@ -758,21 +861,281 @@ impl Playback for MpdBackend {
     fn tick(&mut self) -> usize {
         // The session spins far faster than MPD should be asked anything.
         let due = self.last_poll.map(|t| t.elapsed() >= self.interval).unwrap_or(true);
-        if due && !self.lost {
+        if due {
             self.last_poll = Some(Instant::now());
-            self.poll();
+            if self.lost {
+                self.reconnect();
+            }
+            if !self.lost {
+                self.poll();
+            }
         }
         0
     }
 
+    /// **A dead socket is not a shutdown until MPD has really gone.**
+    ///
+    /// This answer ends the process: `Switching` forwards `is_shutdown` to the
+    /// live side, and `vaino`'s main loop runs until the live side says it is
+    /// finished. Returning `true` the moment a write failed meant that
+    /// restarting MPD — a package update, a config change — took the player
+    /// down with it `[SPEC-MPD-130]`. Measured on the appliance: after an
+    /// `mpd` restart the backend went silently inert, `enqueue` wrote to a
+    /// closed socket, and a handoff reported six passages carried into an
+    /// empty queue `[PI-CHR-095]`.
     fn is_shutdown(&self) -> bool {
-        self.lost
+        self.lost && self.lost_since.map(|t| t.elapsed() >= GIVE_UP_AFTER).unwrap_or(false)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The smallest thing that answers like MPD, and can be made to stop.
+    ///
+    /// **A connection that dies has to be a real one.** The failure being
+    /// covered here — MPD restarting under a running player — is entirely
+    /// about socket lifetime, and a mock that returns `Err` on demand would
+    /// have agreed with the broken code as readily as with the fixed one.
+    struct FakeMpd {
+        addr: String,
+        /// Bumped to hang up on whatever is currently connected.
+        generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        /// False while MPD is "not running": connections are accepted by the
+        /// operating system and then closed without a greeting, which is what
+        /// a listener with nothing behind it does.
+        up: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        /// Every command received, in order, so a test can assert what was
+        /// *sent* rather than only what came back.
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        /// What `status` should report, for standing in as a paused MPD.
+        state: std::sync::Arc<std::sync::Mutex<String>>,
+    }
+
+    impl FakeMpd {
+        fn start() -> Self {
+            use std::io::{BufRead, BufReader, Write};
+            use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+            use std::sync::Arc;
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let generation = Arc::new(AtomicU64::new(0));
+            let up = Arc::new(AtomicBool::new(true));
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let state = Arc::new(std::sync::Mutex::new("stop".to_string()));
+            let (g, u) = (generation.clone(), up.clone());
+            let (log, st) = (seen.clone(), state.clone());
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut sock) = stream else { return };
+                    if !u.load(Ordering::SeqCst) {
+                        continue; // dropped unanswered: nothing is listening
+                    }
+                    let mine = g.load(Ordering::SeqCst);
+                    let (g, u) = (g.clone(), u.clone());
+                    let (log, st) = (log.clone(), st.clone());
+                    std::thread::spawn(move || {
+                        if sock.write_all(b"OK MPD 0.23.5\n").is_err() {
+                            return;
+                        }
+                        let read = BufReader::new(sock.try_clone().unwrap());
+                        // MPD's queue, so `playlistinfo` can answer with what
+                        // was actually added: `resume_at` reads that order to
+                        // decide which song to seek, and against an always-empty
+                        // queue it would find nothing and send nothing.
+                        let mut queue: Vec<(u64, String)> = Vec::new();
+                        let mut next_id = 100;
+                        for line in read.lines() {
+                            let Ok(line) = line else { return };
+                            // Hung up on, the way a restarting MPD hangs up.
+                            if g.load(Ordering::SeqCst) != mine || !u.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            log.lock().unwrap().push(line.clone());
+                            let reply = if let Some(rest) = line.strip_prefix("addid ") {
+                                next_id += 1;
+                                queue.push((next_id, rest.trim_matches('"').to_string()));
+                                format!("Id: {next_id}\nOK\n")
+                            } else if line.starts_with("playlistid") {
+                                "Time: 30\nOK\n".to_string()
+                            } else if line == "playlistinfo" {
+                                let mut out = String::new();
+                                for (id, uri) in &queue {
+                                    out.push_str(&format!("file: {uri}\nId: {id}\n"));
+                                }
+                                out.push_str("OK\n");
+                                out
+                            } else if line == "status" {
+                                format!(
+                                    "state: {}\nplaylistlength: {}\nOK\n",
+                                    st.lock().unwrap(),
+                                    queue.len()
+                                )
+                            } else {
+                                "OK\n".to_string()
+                            };
+                            if sock.write_all(reply.as_bytes()).is_err() {
+                                return;
+                            }
+                        }
+                    });
+                }
+            });
+            FakeMpd { addr, generation, up, seen, state }
+        }
+
+        /// Come back paused, the way `restore_paused "yes"` does.
+        fn paused(&self) {
+            *self.state.lock().unwrap() = "pause".to_string();
+        }
+
+        fn commands(&self) -> Vec<String> {
+            self.seen.lock().unwrap().clone()
+        }
+
+        /// Hang up, and refuse to answer until `restart`.
+        fn stop(&self) {
+            use std::sync::atomic::Ordering;
+            self.up.store(false, Ordering::SeqCst);
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
+
+        /// Hang up, but be there again immediately — a service restart.
+        fn bounce(&self) {
+            self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn restart(&self) {
+            self.up.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn backend(&self) -> MpdBackend {
+            // Zero interval: every tick polls, so a test is not a wait.
+            MpdBackend::connect(&self.addr, "/music", 5, 0).unwrap()
+        }
+    }
+
+    fn queued(passage_id: i64) -> QueueEntry {
+        QueueEntry {
+            qid: 0,
+            passage_id,
+            path: std::path::PathBuf::from("/music/a/b.mp3"),
+            start_ms: 0,
+            end_ms: 30_000,
+            file_ms: 0,
+            lead_in_ms: 0,
+            lead_out_ms: 0,
+            gain_db: 0.0,
+            mbid: None,
+            naming: Default::default(),
+        }
+    }
+
+    /// **The appliance failure, in a test** `[SPEC-MPD-130]` `[PI-CHR-095]`.
+    ///
+    /// MPD was restarted under a running Vaino. Every later command wrote into
+    /// a closed socket, `enqueue` did nothing and said nothing, and a handoff
+    /// announced six passages carried into an empty queue.
+    #[test]
+    fn a_dead_connection_refuses_work_out_loud() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        mpd.stop();
+        b.tick();
+        assert!(b.lost, "a failed poll is noticed");
+
+        b.enqueue(queued(42));
+        assert_eq!(b.take_dropped(), vec![42], "what it could not enqueue, it drops");
+        assert!(b.queued_ids().is_empty(), "and it holds nothing");
+    }
+
+    /// Losing the socket must not take the player down with it: `Switching`
+    /// forwards `is_shutdown` to the live side, and `vaino` runs until the live
+    /// side says it is finished `[SPEC-MPD-130]`.
+    #[test]
+    fn a_restart_of_mpd_is_not_a_shutdown_of_vaino() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        mpd.stop();
+        b.tick();
+        assert!(b.lost);
+        assert!(!b.is_shutdown(), "MPD being away is not Vaino being over");
+
+        // Only after it has been away far longer than any restart takes.
+        b.lost_since = Some(Instant::now() - GIVE_UP_AFTER - Duration::from_secs(1));
+        assert!(b.is_shutdown(), "but an MPD that never comes back is");
+    }
+
+    /// And when it comes back, it is used again without anyone restarting
+    /// anything `[SPEC-MPD-130]`.
+    #[test]
+    fn a_returning_mpd_is_picked_up_again() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.enqueue(queued(7));
+        assert!(b.take_dropped().is_empty(), "accepted while the socket was good");
+
+        mpd.bounce();
+        b.tick();
+        assert!(b.lost, "the hang-up is noticed");
+
+        mpd.restart();
+        b.tick();
+        assert!(!b.lost, "and the next tick has it back");
+        // Passage 7 was released by the reconnect, which is its own test below.
+        assert_eq!(b.take_dropped(), vec![7]);
+
+        b.enqueue(queued(8));
+        assert!(b.take_dropped().is_empty(), "working again, with no restart of Vaino");
+    }
+
+    /// **A seek is not a start** `[SPEC-MPD-130]`.
+    ///
+    /// `seekid` begins playback from `stop`, so a handoff appeared to work for
+    /// as long as MPD was only ever stopped. Restart MPD mid-session and
+    /// `restore_paused "yes"` brings it back *paused*: the seek then landed at
+    /// exactly the right offset and nothing was heard, while `status` reported
+    /// the position the switch had asked for `[PI-CHR-095]`.
+    #[test]
+    fn resuming_a_paused_mpd_also_starts_it() {
+        let mpd = FakeMpd::start();
+        mpd.paused();
+        let mut b = mpd.backend();
+        b.enqueue(queued(7));
+        b.resume_at(20_000);
+
+        let sent = mpd.commands();
+        let seek = sent.iter().position(|c| c.starts_with("seekid")).expect("it seeks");
+        assert!(
+            sent[seek..].iter().any(|c| c == "pause 0"),
+            "and then says play, or the handoff lands silently: {sent:?}"
+        );
+    }
+
+    /// **What MPD remembers across its own restart is not ours to assume.**
+    /// Song ids are reassigned, so entries keyed by the old ones are released
+    /// as dropped — un-counted by the Director — rather than retired as though
+    /// somebody had watched them play or skip `[PI3-API-030]`.
+    #[test]
+    fn passages_held_under_old_song_ids_are_released_not_judged() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.enqueue(queued(7));
+        b.enqueue(queued(8));
+        assert!(b.take_dropped().is_empty());
+
+        mpd.bounce();
+        b.tick();
+        mpd.restart();
+        b.tick();
+
+        let mut released = b.take_dropped();
+        released.sort_unstable();
+        assert_eq!(released, vec![7, 8], "named, so the Director can un-count them");
+        assert!(b.ours.is_empty(), "and nothing is still keyed by a stale song id");
+    }
 
     fn offered(passage_id: i64) -> Offered {
         Offered {

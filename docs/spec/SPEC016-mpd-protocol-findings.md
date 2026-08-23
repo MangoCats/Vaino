@@ -210,8 +210,32 @@ gesture. Relatedly, `play` on an **empty** queue returns `OK` and leaves the sta
 `stop` — there is no error to detect, which is why the Director cannot start a
 session from cold.
 
+**`[SPEC-MPD-130]` The connection is rebuilt, and losing it is not the end of
+Vaino.** *(Settled 2026-08-23.)* MPD is a separate process with its own
+lifetime: it is upgraded, reconfigured, and restarted, and each of those closes
+the socket. The backend therefore reconnects on its own poll interval rather
+than holding one connection for the life of the player.
+
+Two consequences that were wrong before, both found on the appliance
+`[PI-CHR-095]`:
+
+- **A dead socket is not a shutdown.** `Switching` forwards `is_shutdown` to
+  the live side and `vaino`'s main loop runs until the live side is finished,
+  so reporting the lost connection as a shutdown made `apt upgrade mpd` stop
+  the player. It is reported only after MPD has been unreachable for far longer
+  than any restart takes.
+- **A refusal is not a death.** `ACK` and a broken pipe both surface as
+  `Err(String)`, and a caller distinguishing them by the *text* would throw
+  away a working socket on an unexpected message. The transport records which
+  it was, because that is where the difference is known.
+
+What MPD remembers across its own restart is not assumed. It restores its queue
+from `state_file`, but song **ids** are freshly assigned, so entries held under
+the old ones are released as dropped — un-counted by the Director
+`[REQ-PD-112]` — rather than retired as plays or skips nobody observed.
+
 ---
 
 **Traceability:** `[SPEC-MPD-092]`, `[SPEC-MPD-094]`, `[SPEC-MPD-096]`,
-`[SPEC-MPD-098]` · measured by `[IMPL-MPD-010..030]` · design in
-[SPEC015](SPEC015-mpd-director.md) · ranking discipline `[GOV-SRC-010]`
+`[SPEC-MPD-098]`, `[SPEC-MPD-130]` · measured by `[IMPL-MPD-010..030]` · design
+in [SPEC015](SPEC015-mpd-director.md) · ranking discipline `[GOV-SRC-010]`

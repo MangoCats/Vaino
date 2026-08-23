@@ -69,6 +69,18 @@ is not, and must not pretend to be**: 191 of 5,709 files carry more than one
 radio passage, and a whole-file entry could be any of up to forty of them. Those
 are reported, never guessed `[SPEC-MPD-060]`.
 
+**`[SPEC-BK-047]` What a handoff reports carried is what the incoming backend
+took, not what the library could build.** *(Settled 2026-08-23.)* `enqueue`
+returns nothing and cannot refuse in line; a backend that will not take a
+passage says so by dropping it, and `carry_queue` must ask. Counting a
+successful `build` instead made the report **unfalsifiable** — it read the same
+whether the passage arrived or vanished.
+
+Found on the appliance, where a handoff into an MPD whose socket had died
+announced *"6 passage(s) carried"* into an empty queue, and went on announcing
+it for as long as the connection stayed dead `[PI-CHR-095]`. A report that
+cannot come out wrong is not evidence `[PI3-API-030]`.
+
 **`[SPEC-BK-045]` An MPD entry Vaino cannot name is dropped from the switch,
 not blocked by it.** *(Settled 2026-08-21.)* 191 of 5,709 files carry more than
 one radio passage, so a whole-file entry can be unnameable through no fault of
