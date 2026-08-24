@@ -1495,12 +1495,17 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// The stored cover for a passage's chosen release `[REQ-VIS-170]`.
+    /// The stored cover for a passage's recording `[REQ-VIS-170]`.
     ///
-    /// Looked up through the release Sampo chose, so a folder holding two
-    /// albums gives each its own cover. Absent table, absent row and a blob
-    /// too small to be a picture all mean the same thing to the caller: no
-    /// art, show nothing.
+    /// Looked up through the release Sampo chose when that release has the
+    /// art; otherwise through any other release known to carry the same
+    /// recording. Sampo's pick and a hand-curated pick (MuLibPlay's, notably
+    /// `[GDE-PHS-010]`) often name different pressings of the same release,
+    /// and a recording without art is worse than one shown under a release
+    /// that is not quite the chosen edition -- so `covers.rs` already takes
+    /// this same fallback for the MPD-facing cover file, and this matches it.
+    /// Absent table, absent row and a blob too small to be a picture all mean
+    /// the same thing to the caller: no art, show nothing.
     pub fn stored_art(&self, passage_id: i64, back: bool) -> Option<crate::tags::Artwork> {
         if !self.has_table("cover_art") {
             return None;
@@ -1513,8 +1518,8 @@ impl Library {
                     "SELECT a.{col} FROM cover_art a \
                        JOIN release_recordings rr ON rr.release_mbid = a.release_mbid \
                        JOIN passage_recordings pr ON pr.mbid = rr.mbid \
-                      WHERE pr.passage_id = ?1 AND rr.chosen = 1 \
-                        AND a.{col} IS NOT NULL LIMIT 1"
+                      WHERE pr.passage_id = ?1 AND a.{col} IS NOT NULL \
+                      ORDER BY rr.chosen DESC LIMIT 1"
                 ),
                 [passage_id],
                 |r| r.get(0),
@@ -1827,6 +1832,34 @@ mod tests {
         assert_eq!(front.data.len(), 512);
         assert!(lib.stored_art(2, true).is_some(), "the back is stored too");
         assert!(lib.stored_art(999, false).is_none(), "unknown passage, no art");
+    }
+
+    /// Sampo's chosen release and a hand-curated pick (MuLibPlay's) often name
+    /// different pressings of the same recording. When the chosen release has
+    /// no art, a non-chosen release of the same recording is still offered --
+    /// matching the fallback `covers.rs` already takes for the MPD-facing
+    /// cover file -- rather than showing nothing over a technicality.
+    #[test]
+    fn stored_art_falls_back_to_a_non_chosen_release() {
+        let c = reviewable();
+        let big = vec![0xFFu8; 512];
+        c.execute_batch(ART_TABLE).unwrap();
+        c.execute(
+            "INSERT INTO releases (mbid,title,source) VALUES \
+             ('rel-chosen','Sampo''s Pick','mb'), ('rel-other','MuLibPlay''s Pick','mb')", [])
+            .unwrap();
+        c.execute(
+            "INSERT INTO release_recordings (release_mbid,mbid,source,chosen) VALUES \
+             ('rel-chosen','aaaaaaaa-0000-0000-0000-000000000001','mb',1), \
+             ('rel-other','aaaaaaaa-0000-0000-0000-000000000001','mb',0)", [])
+            .unwrap();
+        // Only the non-chosen release carries art.
+        c.execute("INSERT INTO cover_art VALUES ('rel-other',?1,NULL,'test','t')",
+                  rusqlite::params![big.clone()])
+            .unwrap();
+        let lib = Library { conn: c };
+        let front = lib.stored_art(2, false).expect("found through the other release");
+        assert_eq!(front.data.len(), 512);
     }
 
     /// A blob too small to be a picture is not a picture. MuLibPlay applied the
