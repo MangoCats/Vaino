@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Fold reviewed boundary edits into the library `[REQ-LIB-175]`, `[SPEC021 §5]`.
+
+The waveform editor records a draft and changes nothing else. This is the
+step that acts on it -- deliberately separate, run by hand, and a rehearsal
+by default, for the same reason `tools/apply_reviews.py` is: an edit changes
+what a passage *is*, and the library is Sampo's to write, not a web click's.
+
+    python tools/apply_boundary_reviews.py data/vaino_new.db            REHEARSE
+    python tools/apply_boundary_reviews.py data/vaino_new.db --commit   do it
+
+No `--revert`. Unlike a recording reassignment, the automatic values an edit
+overrides are always recoverable by re-running the amplitude/segmentation
+pass that produced them `[SPEC021 §2]` -- there is nothing here to restore
+from `previous_*` columns, because there are none; re-deriving is that
+pass's job, not this tool's.
+"""
+
+import argparse
+import sqlite3
+import sys
+
+
+def say(text: str) -> None:
+    enc = sys.stdout.encoding or "utf-8"
+    print(text.encode(enc, "replace").decode(enc), flush=True)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("db")
+    ap.add_argument("--commit", action="store_true")
+    args = ap.parse_args()
+
+    conn = sqlite3.connect(args.db, timeout=60)
+    conn.execute("PRAGMA busy_timeout = 60000")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    have = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "boundary_reviews" not in have:
+        say("no boundary edits recorded yet")
+        return 1
+
+    pending = conn.execute(
+        """SELECT b.passage_id, b.start_ms, b.end_ms, b.lead_in_ms, b.lead_out_ms,
+                  b.gain_db, p.file_id, p.kind, p.start_ms, p.end_ms,
+                  p.lead_in_ms, p.lead_out_ms, p.gain_db, f.audio_md5
+             FROM boundary_reviews b
+             JOIN passages p ON p.passage_id = b.passage_id
+             JOIN files f ON f.file_id = p.file_id
+            WHERE b.applied_at IS NULL
+            ORDER BY b.passage_id""").fetchall()
+
+    say(f"{len(pending)} boundary edit(s) to apply")
+    if not pending:
+        return 0
+
+    applied = span_moved = cache_dropped = 0
+    skipped: list[tuple[int, str]] = []
+    if args.commit:
+        conn.execute("BEGIN IMMEDIATE")
+
+    for (passage_id, new_start, new_end, new_lead_in, new_lead_out, new_gain,
+         file_id, kind, old_start, old_end, old_lead_in, old_lead_out,
+         old_gain, audio_md5) in pending:
+
+        moved = (new_start, new_end) != (old_start, old_end)
+        say(f"  passage {passage_id}: {old_start}-{old_end} -> {new_start}-{new_end}"
+            + ("" if moved else " (leads/gain only)")
+            + f", lead-in {old_lead_in}->{new_lead_in}, "
+              f"lead-out {old_lead_out}->{new_lead_out}, gain {old_gain}->{new_gain}")
+
+        # `passages_span` is UNIQUE on (file_id, kind, start_ms, end_ms) --
+        # checked before writing, in both modes, so a rehearsal's count is the
+        # count a real run would actually apply.
+        if moved and conn.execute(
+            """SELECT 1 FROM passages
+                WHERE file_id = ?1 AND kind = ?2 AND start_ms = ?3 AND end_ms = ?4
+                  AND passage_id != ?5""",
+            (file_id, kind, new_start, new_end, passage_id)).fetchone():
+            skipped.append((passage_id, "would collide with another passage's span on this file"))
+            continue
+
+        if args.commit:
+            conn.execute(
+                """UPDATE passages
+                      SET start_ms = ?1, end_ms = ?2, lead_in_ms = ?3,
+                          lead_out_ms = ?4, gain_db = ?5, boundary_src = 'manual'
+                    WHERE passage_id = ?6""",
+                (new_start, new_end, new_lead_in, new_lead_out, new_gain, passage_id))
+
+            if moved:
+                # The old span's cached features describe audio that nothing
+                # plays anymore. Deleted, not re-keyed, when no other passage
+                # still uses that exact span `[SPEC021 §5]`: re-keying would
+                # relabel features extracted for the OLD span as valid for the
+                # new one, and a wrong answer that looks like a right one is
+                # worse than an honest gap a later pass fills in.
+                still_used = conn.execute(
+                    """SELECT 1 FROM passages p2 JOIN files f2 ON f2.file_id = p2.file_id
+                        WHERE f2.audio_md5 = ?1 AND p2.start_ms = ?2 AND p2.end_ms = ?3
+                          AND p2.passage_id != ?4""",
+                    (audio_md5, old_start, old_end, passage_id)).fetchone()
+                if not still_used:
+                    cache_dropped += conn.execute(
+                        """DELETE FROM lowlevel_cache
+                            WHERE audio_md5 = ?1 AND start_ms = ?2 AND end_ms = ?3""",
+                        (audio_md5, old_start, old_end)).rowcount
+
+            # Stamped so the decision is known to have reached the library.
+            # `boundary_reviews`'s own page refuses to touch this row once it
+            # is set, for the same reason `id_reviews.applied_at` does.
+            conn.execute(
+                "UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
+                (passage_id,))
+            if moved:
+                span_moved += 1
+        applied += 1
+
+    if skipped:
+        say(f"\n{len(skipped)} refused: the new span collides with another "
+            f"passage on the same file")
+        for passage_id, reason in skipped[:10]:
+            say(f"  passage {passage_id}: {reason}")
+
+    if args.commit:
+        conn.commit()
+        say(f"\napplied {applied}; {span_moved} moved a span, "
+            f"dropped {cache_dropped} stale lowlevel_cache row(s)")
+    else:
+        say(f"\nwould apply {applied}"
+            + (f", refusing {len(skipped)}" if skipped else ""))
+        say("nothing was written. Re-run with --commit to do it.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

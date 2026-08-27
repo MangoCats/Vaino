@@ -43,6 +43,8 @@ Stages 9–10 do not block 6–8 or the reverse — they touch different tables 
 **`apply_boundary_reviews.py`**, dry-run by default, `--commit` to write, per [SPEC021 §5](spec/SPEC021-waveform-boundary-editor.md#5-applying-an-accepted-edit).
 
 > **Claims:** run without `--commit`, it reports what it would change and touches nothing. With `--commit`, an accepted `boundary_reviews` row becomes the passage's new `start_ms`/`end_ms`/`lead_in_ms`/`lead_out_ms`/`gain_db`, `boundary_src` becomes `'manual'`, and a second run makes no further change. A `lowlevel_cache` row whose span the edit invalidated is re-keyed or removed, never left pointing at a span nothing plays.
+>
+> **Done, 2026-08-27.** `tools/apply_boundary_reviews.py`, dry-run by default. A moved span is checked against `passages_span`'s own unique index before writing, in both modes, so a rehearsal's count is the count a real run would apply — a collision is refused and reported, not forced. The old span's `lowlevel_cache` row is **deleted, not re-keyed**, when nothing else uses it: re-keying would relabel features extracted for the old span as valid for the new one, and a wrong answer indistinguishable from a right one is worse than an honest gap a later extraction pass fills in. Verified end to end against a real copy of the library: passage 10068's edit from Stage 7's own verification, applied, left `passages` reading exactly `(80000, 300000, 250, 2000, -2.0, 'manual')` and dropped the one real `lowlevel_cache` row keyed to its old span. `tools/test_apply_boundary_reviews.py` covers the rehearsal/commit/no-op/collision/still-used-elsewhere cases against a schema copied from SPEC008, the same discipline `test_apply_reviews.py` uses.
 
 ## Stage 9 — MusicBrainz search proxy
 
