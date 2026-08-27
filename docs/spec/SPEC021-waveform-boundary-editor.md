@@ -46,8 +46,11 @@ Created by Vaino on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 | route | method | does |
 | :--- | :--- | :--- |
 | `/edit/:passage_id` | GET | the editor page |
+| `/edit/:passage_id/info` | GET | the passage's current boundaries as JSON |
 | `/edit/:passage_id/audio` | GET | the raw file bytes for the passage's file, `Range`-aware so the browser is not made to fetch a 40-minute capture to look at one song |
 | `/edit/:passage_id/review` | POST | write a `boundary_reviews` row — body carries the five values |
+
+**`[SPEC-SUI-201]` `/info` exists because Vaino has no server-side templating.** Every page here is a static shell compiled in with `include_str!` and fetches its own state over a small JSON route once loaded — `/why/:id` and `/review/queue` are the same shape already. There was never a way to bake a passage's boundaries into the `/edit/:passage_id` response itself, so a sibling route carries them instead.
 
 `/edit/:passage_id/audio` is the one genuinely new capability, and it is scoped narrowly: **the file, not the passage.** Vaino already resolves a passage to a file path for playback; this reuses that resolution and streams the bytes back rather than decoding them, so it costs nothing the player does not already pay to open the file today. `Range` support lets the browser's own `<audio>`/`decodeAudioData` machinery fetch only the span it needs rather than the whole capture.
 

@@ -327,7 +327,11 @@ pub fn router(ui: Ui) -> Router {
         .route("/review.js", get(|| async { js(REVIEW_JS) }))
         .route(REVIEW_QUEUE_ROUTE, get(review_queue))
         .route("/review/releases/:mbid", get(review_releases))
-        .route("/review/:passage_id/:decision", post(record_review));
+        .route("/review/:passage_id/:decision", post(record_review))
+        .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
+        .route("/edit.js", get(|| async { js(EDIT_JS) }))
+        .route("/edit/:passage_id/info", get(edit_info))
+        .route("/edit/:passage_id/audio", get(edit_audio));
 
     router
         .route("/queue/:passages/:action", post(queue_passage))
@@ -851,6 +855,166 @@ async fn art_response(ui: Ui, passage_id: i64, back: bool) -> axum::response::Re
     }
 }
 
+/// The editor's read side: what a passage's boundaries currently are
+/// `[SPEC-SUI-201]`. A small JSON sibling of the editor page rather than data
+/// baked into the page response -- every page Vaino serves is a static shell
+/// compiled in with `include_str!`, and this one fetches its own state the
+/// same way `/review` does `[SPEC021 §3]`.
+#[cfg(feature = "sampo-support")]
+async fn edit_info(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        lib.passage(passage_id).ok()
+    })
+    .await
+    .ok()
+    .flatten();
+    match found {
+        Some(entry) => axum::Json(serde_json::json!({
+            "passage_id": entry.passage_id,
+            "start_ms": entry.start_ms,
+            "end_ms": entry.end_ms,
+            "file_ms": entry.file_ms,
+            "lead_in_ms": entry.lead_in_ms,
+            "lead_out_ms": entry.lead_out_ms,
+            "gain_db": entry.gain_db,
+        }))
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The raw bytes of a passage's file, `Range`-aware `[SPEC021 §3]` -- the
+/// file, not the passage. Vaino already resolves a passage to a file path for
+/// playback; this reuses that resolution and streams bytes back rather than
+/// decoding them, so `decodeAudioData` in the browser can fetch only the span
+/// it needs instead of Vaino deciding that for it.
+#[cfg(feature = "sampo-support")]
+async fn edit_audio(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let range = headers.get(axum::http::header::RANGE).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    // Both the path lookup and the file read block, so they belong off the
+    // runtime -- the same reasoning `art_response` above already applies.
+    let chunk = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        let path = lib.passage_path(passage_id).ok()?;
+        read_audio_range(&path, range.as_deref()).ok()
+    })
+    .await
+    .ok()
+    .flatten();
+
+    match chunk {
+        Some(c) if c.partial => (
+            StatusCode::PARTIAL_CONTENT,
+            [
+                (axum::http::header::CONTENT_TYPE, c.content_type.to_string()),
+                (axum::http::header::ACCEPT_RANGES, "bytes".to_string()),
+                (axum::http::header::CONTENT_RANGE, format!("bytes {}-{}/{}", c.start, c.end, c.total)),
+            ],
+            c.bytes,
+        )
+            .into_response(),
+        Some(c) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, c.content_type.to_string()),
+                (axum::http::header::ACCEPT_RANGES, "bytes".to_string()),
+            ],
+            c.bytes,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// One slice of a file's bytes, and where it sits in the whole `[SPEC021 §3]`.
+#[cfg(feature = "sampo-support")]
+struct AudioChunk {
+    bytes: Vec<u8>,
+    start: u64,
+    end: u64,
+    total: u64,
+    /// Whether this is less than the whole file -- decides `206` vs `200`.
+    partial: bool,
+    content_type: &'static str,
+}
+
+/// Read one byte range of `path`, or the whole file when `range` is absent,
+/// unparseable, or a multi-range request -- the same "serve something useful
+/// rather than refuse" choice most static file servers make, since a client
+/// that cannot parse `Content-Range` back still gets a correct, if larger,
+/// answer.
+#[cfg(feature = "sampo-support")]
+fn read_audio_range(path: &std::path::Path, range: Option<&str>) -> std::io::Result<AudioChunk> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let total = file.metadata()?.len();
+    let content_type = mime_for_ext(path.extension().and_then(|e| e.to_str()).unwrap_or(""));
+    if total == 0 {
+        return Ok(AudioChunk { bytes: Vec::new(), start: 0, end: 0, total: 0, partial: false, content_type });
+    }
+    let (start, end, partial) = match range.and_then(|r| parse_byte_range(r, total)) {
+        Some((s, e)) => (s, e, true),
+        None => (0, total - 1, false),
+    };
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = vec![0u8; (end - start + 1) as usize];
+    file.read_exact(&mut bytes)?;
+    Ok(AudioChunk { bytes, start, end, total, partial, content_type })
+}
+
+/// Parses one `Range: bytes=...` value against a known file length, per
+/// [RFC 7233 §2.1](https://httpwg.org/specs/rfc7233.html#header.range):
+/// `START-END`, `START-` (to the end), or `-SUFFIX` (the last SUFFIX bytes).
+/// A second range after a comma is ignored rather than honoured -- multi-range
+/// responses are a different wire format (`multipart/byteranges`) this route
+/// does not speak, and pretending to would be worse than not trying.
+#[cfg(feature = "sampo-support")]
+fn parse_byte_range(header: &str, total: u64) -> Option<(u64, u64)> {
+    let spec = header.strip_prefix("bytes=")?.split(',').next()?.trim();
+    let (start_s, end_s) = spec.split_once('-')?;
+    let last = total - 1;
+    let (start, end) = if start_s.is_empty() {
+        let suffix: u64 = end_s.parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        (last.saturating_sub(suffix - 1), last)
+    } else {
+        let start: u64 = start_s.parse().ok()?;
+        let end = if end_s.is_empty() { last } else { end_s.parse::<u64>().ok()?.min(last) };
+        (start, end)
+    };
+    (start <= end && start <= last).then_some((start, end))
+}
+
+/// The `Content-Type` for a file extension Vaino might be asked to stream
+/// raw, so the browser's `<audio>`/`decodeAudioData` picks the right decoder
+/// instead of guessing from bytes. Unknown extensions still serve -- the
+/// bytes are correct either way, just without a hint.
+#[cfg(feature = "sampo-support")]
+fn mime_for_ext(ext: &str) -> &'static str {
+    match ext.to_ascii_lowercase().as_str() {
+        "flac" => "audio/flac",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "opus" => "audio/opus",
+        "m4a" | "aac" => "audio/mp4",
+        "wma" => "audio/x-ms-wma",
+        _ => "application/octet-stream",
+    }
+}
+
 /// How long a skip fades the outgoing passage out, in ms. Clamped by the
 /// engine, which owns the limits `[REQ-AUD-162]`.
 async fn set_skip_fade(
@@ -1264,6 +1428,10 @@ const BROWSE_JS: &str = include_str!("web/browse.js");
 const REVIEW_HTML: &str = include_str!("web/review.html");
 #[cfg(feature = "sampo-support")]
 const REVIEW_JS: &str = include_str!("web/review.js");
+#[cfg(feature = "sampo-support")]
+const EDIT_HTML: &str = include_str!("web/edit.html");
+#[cfg(feature = "sampo-support")]
+const EDIT_JS: &str = include_str!("web/edit.js");
 
 /// The route the review page fetches its work from, named once so the router
 /// and the test that checks the page agrees with it cannot drift apart.
@@ -1546,5 +1714,84 @@ mod tests {
         for field in ["passage_id", "title", "artist", "duration_ms", "editable"] {
             assert!(json.contains(&format!("\"{field}\"")), "queue item lost {field}");
         }
+    }
+
+    /// The editor page and its own JS, present only behind the feature that
+    /// gates every other Sampo-support page `[SPEC-SUI-190]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_edit_page_loads_the_runtime() {
+        assert!(EDIT_HTML.contains("/core.js") && EDIT_HTML.contains("/edit.js"));
+        assert!(EDIT_JS.contains("startBare"), "edit takes the skin, not the player");
+    }
+
+    /// The page and the router have to agree about the URLs it fetches --
+    /// the seam a jsdom check of the JS alone cannot see `[SPEC021 §3]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_edit_page_asks_for_routes_the_router_serves() {
+        assert!(EDIT_JS.contains("/edit/${passageId}/info"));
+        assert!(EDIT_JS.contains("/edit/${passageId}/audio"));
+    }
+
+    /// `bytes=START-END`, `bytes=START-` and `bytes=-SUFFIX` per RFC 7233 --
+    /// the three forms a real browser actually sends, plus the malformed and
+    /// out-of-bounds cases that must fall back to "serve the whole file"
+    /// rather than panic or serve garbage.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn byte_ranges_parse_the_way_a_browser_sends_them() {
+        assert_eq!(parse_byte_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(parse_byte_range("bytes=500-", 1000), Some((500, 999)));
+        assert_eq!(parse_byte_range("bytes=-100", 1000), Some((900, 999)));
+        // Past the end of the file clamps rather than overruns.
+        assert_eq!(parse_byte_range("bytes=900-99999", 1000), Some((900, 999)));
+        // A second range is ignored, not honoured -- this route does not
+        // speak `multipart/byteranges`.
+        assert_eq!(parse_byte_range("bytes=0-9,20-29", 1000), Some((0, 9)));
+        // Malformed or inverted inputs report "could not parse" so the
+        // caller serves the whole file instead of guessing.
+        assert_eq!(parse_byte_range("nonsense", 1000), None);
+        assert_eq!(parse_byte_range("bytes=", 1000), None);
+        assert_eq!(parse_byte_range("bytes=-0", 1000), None);
+        assert_eq!(parse_byte_range("bytes=500-100", 1000), None);
+        assert_eq!(parse_byte_range("bytes=5000-", 1000), None);
+    }
+
+    /// A real file on disk, read whole and read in a slice -- the seam
+    /// `parse_byte_range`'s unit tests cannot reach, since it never touches
+    /// the filesystem.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn read_audio_range_serves_the_whole_file_or_the_asked_for_slice() {
+        let path = std::env::temp_dir().join(format!("vaino-edit-audio-{}.bin", std::process::id()));
+        std::fs::write(&path, b"0123456789").unwrap();
+
+        let whole = read_audio_range(&path, None).unwrap();
+        assert_eq!(whole.bytes, b"0123456789");
+        assert!(!whole.partial);
+        assert_eq!(whole.total, 10);
+
+        let slice = read_audio_range(&path, Some("bytes=2-4")).unwrap();
+        assert_eq!(slice.bytes, b"234");
+        assert!(slice.partial);
+        assert_eq!((slice.start, slice.end, slice.total), (2, 4, 10));
+
+        // A range this route cannot parse falls back to the whole file rather
+        // than an error -- a client that sent it still gets a correct answer.
+        let garbled = read_audio_range(&path, Some("garbage")).unwrap();
+        assert!(!garbled.partial);
+        assert_eq!(garbled.bytes, b"0123456789");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn mime_for_ext_knows_the_formats_this_library_actually_has() {
+        assert_eq!(mime_for_ext("flac"), "audio/flac");
+        assert_eq!(mime_for_ext("MP3"), "audio/mpeg");
+        assert_eq!(mime_for_ext("wav"), "audio/wav");
+        assert_eq!(mime_for_ext("xyz"), "application/octet-stream");
     }
 }

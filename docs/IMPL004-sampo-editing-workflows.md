@@ -26,7 +26,9 @@ Stages 9–10 do not block 6–8 or the reverse — they touch different tables 
 
 **Serve the file, render the picture, commit nothing.** `/edit/:passage_id` and `/edit/:passage_id/audio` from [SPEC021 §3](spec/SPEC021-waveform-boundary-editor.md#3-the-route-surface-all-behind-sampo-support), `Range`-aware. The page decodes client-side and draws the peak waveform with the passage's *current* (automatic or already-manual) boundaries marked, undraggable.
 
-> **Claims:** opening `/edit/:passage_id` for a passage inside a 40-minute DAO capture shows a waveform within a few seconds, not a fetch of the whole file. The marked start/end/lead-in/lead-out match what `/api/profile/:id` already reports for the same passage — two views of one row, not two sources of truth. Nothing in this stage writes anywhere; it is safe to ship and use before Stage 7 exists.
+> **Claims:** opening `/edit/:passage_id` for a passage inside a 40-minute DAO capture shows a waveform within a few seconds, not a fetch of the whole file. The marked start/end/lead-in/lead-out match what `/edit/:passage_id/info` reports for the same passage — two views of one row, not two sources of truth. Nothing in this stage writes anywhere; it is safe to ship and use before Stage 7 exists.
+>
+> **Done, 2026-08-27.** `/edit/:passage_id/info` and `/edit/:passage_id/audio` (`[SPEC-SUI-201]`) added, both behind `sampo-support`; the audio route is `Range`-aware (`bytes=START-END`, `START-`, `-SUFFIX`, malformed or multi falling back to the whole file rather than erroring). `edit.js` decodes client-side and draws min/max peaks per pixel, with start/end as lines and lead-in/lead-out as shaded ramps, undraggable. 337 tests with the feature on (320 without), clippy clean both ways, docs governance clean. `decodeAudioData` speed on a real multi-minute capture is not yet measured against a browser — jsdom has no Web Audio, so the jsdom check covers the info round-trip and the not-found case, not the decode itself.
 
 ## Stage 7 — Dragging, preview, commit
 

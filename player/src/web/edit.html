@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaino — Edit boundaries</title>
+<style>
+  /* Waveform boundary editing [REQ-LIB-175], [SPEC021].
+
+     Stage 6 only: the waveform is drawn, the passage's current boundaries are
+     marked on it, and nothing here writes anywhere. Dragging the markers and
+     the real-time preview transport are Stage 7 -- this page proves decode
+     and render exist and are fast enough before either is built on top. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .edit { max-width: 60rem; margin: 0 auto; padding: .75rem; }
+  .edit header { display: flex; align-items: center; gap: .5rem;
+                 flex-wrap: wrap; margin-bottom: .5rem; }
+  .edit h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+             font-weight: 600; margin: 0; flex: 1; opacity: .6; }
+  .edit a.back { font-size: .8125rem; }
+
+  .facts { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .8125rem;
+           opacity: .8; margin: 0 0 .6rem; font-variant-numeric: tabular-nums; }
+  .facts b { font-weight: 600; opacity: 1; }
+
+  /* One canvas: peaks in the middle, boundaries drawn on top of them rather
+     than beside them, so "what will play" and "what does this look like" are
+     one picture `[SPEC021 §4]`. */
+  #wave { display: block; width: 100%; height: 220px; border-radius: 6px;
+          background: #0b0b0c; border: 1px solid rgba(128,128,128,.28); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .75rem;
+            opacity: .7; margin: .5rem 0 0; }
+  .legend .swatch { display: inline-block; width: .7rem; height: .7rem;
+                     border-radius: 2px; margin-right: .3rem; vertical-align: -1px; }
+
+  .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
+  .note.bad { opacity: 1; }
+</style>
+
+<div class="edit">
+  <header>
+    <h1>Vaino — Edit boundaries</h1>
+    <a class="back" href="/">← player</a>
+  </header>
+  <p class="facts" id="facts"></p>
+  <canvas id="wave" width="1200" height="220"></canvas>
+  <p class="legend">
+    <span><span class="swatch" style="background:#6cf"></span>start / end</span>
+    <span><span class="swatch" style="background:#fb6"></span>lead-in / lead-out</span>
+  </p>
+  <p class="note" id="note"></p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/edit.js"></script>

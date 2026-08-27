@@ -873,11 +873,96 @@ async function runReviewHandoff() {
   if (errors.length) failures++;
 }
 
+// ---------------------------------------------------------------------------
+// The waveform editor's read-only stage `[REQ-LIB-175]`, `[SPEC021]`. jsdom
+// has no Web Audio, so decoding and drawing the waveform itself is out of
+// reach here -- that seam is left to a person with a real browser. What this
+// checks is the seam jsdom *can* see: the facts line renders exactly what
+// `/edit/:id/info` reported (the "two views of one row" claim `[IMPL004]`
+// makes), and a passage the server does not have explains itself instead of
+// sitting blank.
+async function runEdit() {
+  const html = fs.readFileSync(path.join(ROOT, 'edit.html'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost/edit/22' });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+
+  const INFO = { passage_id: 22, start_ms: 1000, end_ms: 181000, file_ms: 200000,
+                 lead_in_ms: 5, lead_out_ms: 946, gain_db: -1.2 };
+  window.fetch = url => {
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    if (url === '/edit/22/info')
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(INFO) });
+    if (url === '/edit/22/audio')
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript(fs.readFileSync(path.join(ROOT, 'edit.js'), 'utf8'));
+  await new Promise(r => setTimeout(r, 30));
+
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const facts = window.document.getElementById('facts').textContent;
+  check(facts.includes('5 ms'), `facts missing lead-in, got "${facts}"`);
+  check(facts.includes('946 ms'), `facts missing lead-out, got "${facts}"`);
+  check(facts.includes('-1.20 dB'), `facts missing gain, got "${facts}"`);
+
+  // jsdom has no `AudioContext`; decoding fails there the same way it would
+  // in a browser without Web Audio, and that must read as an explanation, not
+  // a crash the page swallows silently.
+  const note = window.document.getElementById('note').textContent;
+  check(note.length > 0, 'a page that cannot decode audio must say so, not sit blank');
+
+  // A second instance for the passage the server does not have -- its own
+  // fixture, since the query differs before the page's own script ever runs.
+  const dom2 = new JSDOM(fs.readFileSync(path.join(ROOT, 'edit.html'), 'utf8'),
+    { runScripts: 'dangerously', url: 'http://localhost/edit/999' });
+  dom2.window.console.error = (...a) => errors.push('(999) ' + a.join(' '));
+  const create2 = dom2.window.document.createElement.bind(dom2.window.document);
+  dom2.window.document.createElement = tag => {
+    const el = create2(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  dom2.window.fetch = url => {
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  const runScript2 = src => {
+    const el = create2('script');
+    el.textContent = src;
+    dom2.window.document.body.appendChild(el);
+  };
+  runScript2(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript2(fs.readFileSync(path.join(ROOT, 'edit.js'), 'utf8'));
+  await new Promise(r => setTimeout(r, 30));
+  const note2 = dom2.window.document.getElementById('note').textContent;
+  check(/999/.test(note2), `an unknown passage must name itself, got "${note2}"`);
+
+  console.log(`${'edit'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `facts line matches /info for passage 22, and 999 explains itself`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
   await runBrowse();
   await runReview();
   await runReviewHandoff();
+  await runEdit();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);
 })();
