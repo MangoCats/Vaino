@@ -1,4 +1,4 @@
-# IMPL004: Building the Editing Workflows
+# IMPL006: Building the Editing Workflows
 
 **Implementation Guide — the build order for [SPEC021](spec/SPEC021-waveform-boundary-editor.md) and [SPEC010 §3](spec/SPEC010-identification-review.md#3-searching-musicbrainz-directly)**
 
