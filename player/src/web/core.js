@@ -613,6 +613,13 @@ const Vaino = (() => {
         return r.json();
       });
     },
+    // A page of what has actually sounded `[REQ-VIS-250]`. Same shape of
+    // failure as `browse`: thrown, not silently empty.
+    history: (page, size) =>
+      fetch(`/history?page=${page}&size=${size}`).then(r => {
+        if (!r.ok) throw new Error(`the server answered ${r.status}`);
+        return r.json();
+      }),
     // The verbs, in one place `[REQ-VIS-185]`. The engine validates them and
     // is the authority; this is the list the pages build their controls from,
     // so adding one means touching the match in `web.rs` and this array,

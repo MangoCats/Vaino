@@ -127,7 +127,12 @@ pub(crate) const PLAY_TABLE: &str = "
         play_id     INTEGER PRIMARY KEY,
         played_at   INTEGER NOT NULL,
         passage_id  INTEGER,
-        mbid        TEXT);
+        mbid        TEXT,
+        -- How much of the passage was heard, and how long it was, in ms
+        -- `[REQ-VIS-250]`. Absent on rows written before this column existed --
+        -- a NULL history page reads as \"unknown\", never as 0%.
+        heard_ms    INTEGER,
+        span_ms     INTEGER);
     CREATE INDEX IF NOT EXISTS listener_play_time ON listener_play_history(played_at);
     CREATE INDEX IF NOT EXISTS listener_play_mbid ON listener_play_history(mbid);";
 
@@ -137,9 +142,32 @@ pub(crate) const REJECTION_TABLE: &str = "
         rejected_at  INTEGER NOT NULL,
         kind         TEXT NOT NULL,
         passage_id   INTEGER,
-        mbid         TEXT);
+        mbid         TEXT,
+        -- Only ever set for 'skip' -- a 'dequeue' never sounded, so it has no
+        -- percentage to report `[REQ-VIS-250]`.
+        heard_ms     INTEGER,
+        span_ms      INTEGER);
     CREATE INDEX IF NOT EXISTS listener_reject_mbid
         ON listener_rejections(mbid, kind);";
+
+/// Bring an existing `listener_play_history` / `listener_rejections` up to the
+/// column set above `[REQ-VIS-250]`.
+///
+/// A library built before this feature has both tables already, so the
+/// `CREATE TABLE IF NOT EXISTS` above is a no-op on it -- the same shape of
+/// gap `ensure_review_table` and `ensure_tag_table` close for their own
+/// tables. Already-present columns fail here, which is the expected path on
+/// every start after the first.
+fn ensure_history_columns(conn: &Connection) {
+    for (table, column) in [
+        ("listener_play_history", "heard_ms INTEGER"),
+        ("listener_play_history", "span_ms INTEGER"),
+        ("listener_rejections", "heard_ms INTEGER"),
+        ("listener_rejections", "span_ms INTEGER"),
+    ] {
+        let _ = conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column}"), []);
+    }
+}
 
 pub(crate) const ART_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS cover_art (
@@ -672,6 +700,7 @@ impl PlayerStore {
         conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        ensure_history_columns(&conn);
         ensure_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
@@ -879,6 +908,20 @@ impl PlayerStore {
         any.then_some(out)
     }
 
+    /// Bring `listener_settings.utc_offset_minutes` into line with what the
+    /// OS believes right now, if it differs `[SPEC-DIR-180]`, `[REQ-VIS-255]`.
+    ///
+    /// **Must run through this connection, not `Library`'s.** `Library::open`
+    /// is deliberately read-only ("the player must not be able to corrupt the
+    /// library"), so a write attempted there fails silently every time --
+    /// which is exactly the trap the first version of this fix fell into: it
+    /// looked like it was working, called `sync_os_utc_offset` on schedule,
+    /// and never once reached the disk. `PlayerStore` is the one connection
+    /// this process holds that can actually write.
+    pub fn sync_utc_offset(&self) {
+        crate::director::program::sync_os_utc_offset(&self.conn);
+    }
+
     /// Bring settings over from the columns they used to live in.
     ///
     /// Runs once: after the first save every key is present and the copy is
@@ -967,12 +1010,35 @@ impl PlayerStore {
     ///
     /// Rotation is meaningless without it: an unrecorded play leaves a track as
     /// eligible as it was before it was heard.
-    pub fn record_play(&self, passage_id: i64, mbid: Option<&str>) -> Result<(), DbError> {
+    ///
+    /// `heard_ms` is the threshold just crossed, not the final figure -- the
+    /// caller corrects it with [`finish_play`](Self::finish_play) once the
+    /// passage actually departs `[REQ-VIS-250]`. Returns the row's id so the
+    /// caller can do that.
+    pub fn record_play(
+        &self,
+        passage_id: i64,
+        mbid: Option<&str>,
+        heard_ms: u64,
+        span_ms: u64,
+    ) -> Result<i64, DbError> {
         self.conn
             .execute(
-                "INSERT INTO listener_play_history (played_at, passage_id, mbid) \
-                 VALUES (strftime('%s','now'), ?1, ?2)",
-                rusqlite::params![passage_id, mbid],
+                "INSERT INTO listener_play_history (played_at, passage_id, mbid, heard_ms, span_ms) \
+                 VALUES (strftime('%s','now'), ?1, ?2, ?3, ?4)",
+                rusqlite::params![passage_id, mbid, heard_ms, span_ms],
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Fill in how much of a play was actually heard, now that the passage has
+    /// departed and the figure will not grow again `[REQ-VIS-250]`.
+    pub fn finish_play(&self, play_id: i64, heard_ms: u64) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "UPDATE listener_play_history SET heard_ms = ?1 WHERE play_id = ?2",
+                rusqlite::params![heard_ms, play_id],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
@@ -991,16 +1057,23 @@ impl PlayerStore {
     /// is what lets the listener change a window and have it apply to what they
     /// have already rejected; an expiry computed under yesterday's setting would
     /// outlive the setting itself.
+    /// `heard_ms`/`span_ms` are `None` for a dequeue -- the passage never
+    /// sounded, so there is nothing to report a percentage of
+    /// `[REQ-VIS-250]`.
     pub fn record_rejection(
         &self,
         kind: Rejection,
         passage_id: i64,
         mbid: Option<&str>,
+        heard_ms: Option<u64>,
+        span_ms: Option<u64>,
     ) -> Result<(), DbError> {
         self.conn
             .execute(
-                "INSERT INTO listener_rejections (rejected_at, kind, passage_id, mbid)                  VALUES (strftime('%s','now'), ?1, ?2, ?3)",
-                rusqlite::params![kind.as_str(), passage_id, mbid],
+                "INSERT INTO listener_rejections \
+                     (rejected_at, kind, passage_id, mbid, heard_ms, span_ms) \
+                 VALUES (strftime('%s','now'), ?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![kind.as_str(), passage_id, mbid, heard_ms, span_ms],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
@@ -1093,6 +1166,18 @@ const TITLE_EXPR: &str =
 const PLAYS_EXPR: &str =
     "(SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid)";
 
+/// The same naming as `TITLE_EXPR`/`ARTIST_EXPR`/`ALBUM_EXPR`, but without the
+/// `file_tags` fallback `[REQ-VIS-250]`: history has no passage to join a file
+/// through, and a rescan that renumbers passages must not blank out a title
+/// six years old. `u` is the unioned history row, not `NAMED`'s `m`.
+const HIST_TITLE_EXPR: &str = "(SELECT r.title FROM recordings r WHERE r.mbid = u.mbid)";
+const HIST_ARTIST_EXPR: &str = "(SELECT a.name FROM recording_artists ra \
+    JOIN artists a ON a.mbid = ra.artist_mbid \
+    WHERE ra.mbid = u.mbid ORDER BY ra.weight DESC, a.name LIMIT 1)";
+const HIST_ALBUM_EXPR: &str = "(SELECT rel.title FROM release_recordings rr \
+    JOIN releases rel ON rel.mbid = rr.release_mbid \
+    WHERE rr.mbid = u.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BrowseGroup {
     pub name: String,
@@ -1112,6 +1197,28 @@ pub struct BrowseTrack {
     /// Position on the record, when the file knows it `[REQ-VIS-190]`.
     pub track_no: Option<i64>,
     pub disc_no: Option<i64>,
+}
+
+/// One row of the play-history page `[REQ-VIS-250]`: something that sounded
+/// long enough to be counted, or long enough to be judged and declined.
+///
+/// Named by MusicBrainz alone, unlike [`BrowseTrack`] -- history has no
+/// passage to fall back to a file's own tag with, and a play from six years
+/// ago must still be nameable after the file that made it has gone.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HistoryEntry {
+    /// Unix seconds: when it played, or when it was skipped.
+    pub at: i64,
+    /// `"play"` if it crossed the threshold `[SPEC-PLAY-030]`, `"skip"` if it
+    /// did not. Dequeues never sounded and do not appear here at all.
+    pub kind: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// `None` for a row written before this column existed, or for a guest
+    /// backend that never reported a span -- absent, not zero
+    /// `[GOV-SRC-040]`.
+    pub played_pct: Option<f64>,
 }
 
 /// One candidate identity for a passage, as AcoustID reports it.
@@ -1623,6 +1730,63 @@ impl Library {
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// A page of what has actually sounded, newest first `[REQ-VIS-250]`.
+    ///
+    /// Plays and skips, unioned into one timeline: both started sounding, and
+    /// what tells them apart -- did it reach the threshold -- is exactly the
+    /// question this page answers per row. A dequeue never sounded and has no
+    /// place in a *play* history.
+    pub fn play_history(&self, limit: i64, offset: i64) -> Result<Vec<HistoryEntry>, DbError> {
+        let sql = format!(
+            "SELECT at, kind, heard_ms, span_ms, \
+                    {HIST_TITLE_EXPR} AS title, {HIST_ARTIST_EXPR} AS artist, \
+                    {HIST_ALBUM_EXPR} AS album \
+               FROM (SELECT played_at AS at, 'play' AS kind, mbid, heard_ms, span_ms \
+                       FROM listener_play_history \
+                     UNION ALL \
+                     SELECT rejected_at AS at, 'skip' AS kind, mbid, heard_ms, span_ms \
+                       FROM listener_rejections WHERE kind = 'skip') u \
+              ORDER BY at DESC LIMIT ?1 OFFSET ?2"
+        );
+        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map(rusqlite::params![limit, offset], |r| {
+                let heard_ms: Option<i64> = r.get(2)?;
+                let span_ms: Option<i64> = r.get(3)?;
+                let played_pct = match (heard_ms, span_ms) {
+                    (Some(h), Some(s)) if s > 0 => {
+                        Some((h as f64 / s as f64 * 100.0).clamp(0.0, 100.0))
+                    }
+                    _ => None,
+                };
+                Ok(HistoryEntry {
+                    at: r.get(0)?,
+                    kind: r.get(1)?,
+                    title: r.get(4)?,
+                    artist: r.get(5)?,
+                    album: r.get(6)?,
+                    played_pct,
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// How many rows [`play_history`](Self::play_history) has to page through,
+    /// so the page can say "page 3 of 41" rather than guessing when to stop
+    /// offering "next".
+    pub fn play_history_count(&self) -> Result<i64, DbError> {
+        self.conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM listener_play_history) + \
+                        (SELECT COUNT(*) FROM listener_rejections WHERE kind = 'skip')",
+                [],
+                |r| r.get(0),
+            )
             .map_err(|e| DbError::Query(e.to_string()))
     }
 }
@@ -2284,8 +2448,8 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let st = PlayerStore::open(&p).unwrap();
         // The table is PlayerStore::open's now.
-        st.record_play(7, Some("aaaaaaaa-0000-0000-0000-000000000001")).unwrap();
-        st.record_play(8, None).unwrap();
+        st.record_play(7, Some("aaaaaaaa-0000-0000-0000-000000000001"), 90_000, 180_000).unwrap();
+        st.record_play(8, None, 90_000, 180_000).unwrap();
         let rows: Vec<(i64, Option<String>)> = st
             .conn
             .prepare("SELECT passage_id, mbid FROM listener_play_history ORDER BY play_id")
@@ -2348,11 +2512,65 @@ mod tests {
         assert_eq!(s.sample_interval_ms, d.sample_interval_ms);
 
         // And the table the player writes rejections to now exists.
-        store.record_rejection(Rejection::Skip, 1, Some("m")).unwrap();
+        store.record_rejection(Rejection::Skip, 1, Some("m"), Some(10_000), Some(180_000)).unwrap();
         assert_eq!(store.last_rejected(Rejection::Skip).unwrap().len(), 1);
 
         // Writing back does not fail on the migrated row either.
         store.save_settings(&s).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A library with `listener_play_history`/`listener_rejections` already in
+    /// place -- any build before `[REQ-VIS-250]` -- must gain the two new
+    /// columns rather than failing every write with "no such column".
+    #[test]
+    fn an_existing_history_table_gains_the_played_columns() {
+        let tmp = std::env::temp_dir().join(format!(
+            "vaino_histmig_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = Connection::open(&tmp).unwrap();
+            c.execute_batch(
+                "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                     played_at INTEGER NOT NULL, passage_id INTEGER, mbid TEXT);
+                 CREATE TABLE listener_rejections (rejection_id INTEGER PRIMARY KEY,
+                     rejected_at INTEGER NOT NULL, kind TEXT NOT NULL,
+                     passage_id INTEGER, mbid TEXT);
+                 INSERT INTO listener_play_history VALUES (1, 100, 7, 'm');",
+            )
+            .unwrap();
+        }
+
+        let store = PlayerStore::open(&tmp).expect("a pre-migration history table must still open");
+
+        // The old row survives, unharmed and now reading its new columns as
+        // absent rather than missing -- the query naming them no longer fails.
+        let old: (i64, Option<i64>, Option<i64>) = store
+            .conn
+            .query_row(
+                "SELECT passage_id, heard_ms, span_ms FROM listener_play_history WHERE play_id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(old, (7, None, None), "an old row keeps its data and gains absent new columns");
+
+        // And a fresh write goes in with the new columns filled.
+        let id = store.record_play(8, Some("n"), 90_000, 180_000).unwrap();
+        store.finish_play(id, 150_000).unwrap();
+        let heard: i64 = store
+            .conn
+            .query_row("SELECT heard_ms FROM listener_play_history WHERE play_id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(heard, 150_000, "finish_play must update the row record_play wrote");
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -2375,8 +2593,8 @@ mod tests {
         let st = PlayerStore::open(&tmp).unwrap();
         let skipped = "aaaaaaaa-0000-0000-0000-000000000009";
         let dropped = "aaaaaaaa-0000-0000-0000-00000000000d";
-        st.record_rejection(Rejection::Skip, 11, Some(skipped)).unwrap();
-        st.record_rejection(Rejection::Dequeue, 12, Some(dropped)).unwrap();
+        st.record_rejection(Rejection::Skip, 11, Some(skipped), Some(10_000), Some(180_000)).unwrap();
+        st.record_rejection(Rejection::Dequeue, 12, Some(dropped), None, None).unwrap();
 
         // Each kind sees only its own: they earn different windows, so mixing
         // them would apply the wrong one.
@@ -2393,7 +2611,7 @@ mod tests {
         assert_eq!(plays, 0, "a rejection must never become a play");
 
         // Only the most recent of a kind matters: a window, not an accumulation.
-        st.record_rejection(Rejection::Skip, 11, Some(skipped)).unwrap();
+        st.record_rejection(Rejection::Skip, 11, Some(skipped), Some(15_000), Some(180_000)).unwrap();
         assert_eq!(st.last_rejected(Rejection::Skip).unwrap().len(), 1);
         let _ = std::fs::remove_file(&tmp);
     }
@@ -2414,6 +2632,44 @@ mod tests {
         let _ = std::fs::remove_file(&dir);
     }
 
+    /// The regression `[REQ-VIS-255]` exists for: the first version called
+    /// `sync_os_utc_offset` through `Library`'s connection, which is opened
+    /// read-only, so the write silently failed on every real run while every
+    /// unit test -- built on a writable in-memory `Connection` -- passed.
+    /// This goes through `PlayerStore::open` the way production actually
+    /// does, so a future version that makes the same mistake fails here too.
+    #[test]
+    fn sync_utc_offset_actually_reaches_disk() {
+        let Some(os) = crate::director::program::os_utc_offset_minutes() else {
+            return; // nothing to prove on a platform this cannot ask
+        };
+        let dir = std::env::temp_dir().join(format!("vaino_tz_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+        // `listener_settings` is Sampo's table, not one `PlayerStore::open`
+        // creates -- built here the way a real library already has it.
+        let wrong = if os == 0 { 60 } else { 0 };
+        st.conn
+            .execute_batch(&format!(
+                "CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
+                     utc_offset_minutes INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
+                 INSERT INTO listener_settings (id, utc_offset_minutes, updated_at)
+                     VALUES (1, {wrong}, 't');"
+            ))
+            .unwrap();
+
+        st.sync_utc_offset();
+
+        let after: i64 = st
+            .conn
+            .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(after, os, "the write must reach disk through PlayerStore's own connection");
+        let _ = std::fs::remove_file(&dir);
+    }
+
     #[test]
     fn a_null_lead_yields_a_gapless_handover() {
         use crate::queue::overlap_ms;
@@ -2421,5 +2677,95 @@ mod tests {
         let album = lib.passage(1).unwrap();
         let radio = lib.passage(2).unwrap();
         assert_eq!(overlap_ms(&album, &radio), 0, "unanalysed passage must not crossfade");
+    }
+
+    /// The naming tables `play_history` reads, filled with one recording that
+    /// has both an artist and a chosen release -- enough to exercise every
+    /// column the page shows.
+    fn historyable() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
+                 length_ms INTEGER, source TEXT NOT NULL);
+             CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT NOT NULL,
+                 sort_name TEXT, source TEXT NOT NULL);
+             CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT,
+                 weight REAL DEFAULT 1.0, source TEXT);
+             CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT, release_date TEXT,
+                 source TEXT);
+             CREATE TABLE release_recordings (release_mbid TEXT, mbid TEXT, position INTEGER,
+                 source TEXT, chosen INTEGER DEFAULT 0);
+             INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-000000000001','A Song',NULL,'s');
+             INSERT INTO artists VALUES ('bbbbbbbb-0000-0000-0000-000000000001','A Band',NULL,'s');
+             INSERT INTO recording_artists VALUES
+                 ('aaaaaaaa-0000-0000-0000-000000000001','bbbbbbbb-0000-0000-0000-000000000001',1.0,'s');
+             INSERT INTO releases VALUES ('cccccccc-0000-0000-0000-000000000001','An Album',NULL,'s');
+             INSERT INTO release_recordings VALUES
+                 ('cccccccc-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001',1,'s',1);",
+        )
+        .unwrap();
+        c.execute_batch(PLAY_TABLE).unwrap();
+        c.execute_batch(REJECTION_TABLE).unwrap();
+        c
+    }
+
+    /// Plays and skips read back newest first, named from MusicBrainz, and
+    /// carrying the percentage heard -- the one thing `browse_tracks` never
+    /// has to compute `[REQ-VIS-250]`.
+    #[test]
+    fn play_history_names_and_orders_its_rows() {
+        let c = historyable();
+        c.execute(
+            "INSERT INTO listener_play_history (played_at, mbid, heard_ms, span_ms) \
+             VALUES (100, 'aaaaaaaa-0000-0000-0000-000000000001', 150000, 180000)",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO listener_rejections (rejected_at, kind, mbid, heard_ms, span_ms) \
+             VALUES (200, 'skip', 'aaaaaaaa-0000-0000-0000-000000000001', 9000, 180000)",
+            [],
+        )
+        .unwrap();
+        // A dequeue never sounded and must not appear in a *play* history.
+        c.execute(
+            "INSERT INTO listener_rejections (rejected_at, kind, mbid) \
+             VALUES (300, 'dequeue', 'aaaaaaaa-0000-0000-0000-000000000001')",
+            [],
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+
+        assert_eq!(lib.play_history_count().unwrap(), 2, "the dequeue is not counted");
+
+        let rows = lib.play_history(10, 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, "skip", "newest first");
+        assert_eq!(rows[0].title.as_deref(), Some("A Song"));
+        assert_eq!(rows[0].artist.as_deref(), Some("A Band"));
+        assert_eq!(rows[0].album.as_deref(), Some("An Album"));
+        assert!((rows[0].played_pct.unwrap() - 5.0).abs() < 1e-9);
+        assert_eq!(rows[1].kind, "play");
+        assert!((rows[1].played_pct.unwrap() - 83.333).abs() < 1e-2);
+
+        // Paging: asking past the end returns nothing, not an error.
+        assert_eq!(lib.play_history(10, 2).unwrap().len(), 0);
+    }
+
+    /// A row written before `heard_ms`/`span_ms` existed reads as "unknown",
+    /// never as "0%" `[GOV-SRC-040]`.
+    #[test]
+    fn a_played_percentage_absent_before_the_migration_reads_as_unknown() {
+        let c = historyable();
+        c.execute(
+            "INSERT INTO listener_play_history (played_at, mbid) \
+             VALUES (100, 'aaaaaaaa-0000-0000-0000-000000000001')",
+            [],
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let rows = lib.play_history(10, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].played_pct, None);
     }
 }

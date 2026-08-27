@@ -81,6 +81,21 @@ const RICH = {
   },
 };
 
+// A page of play history `[REQ-VIS-250]`: one play, one skip, and a play
+// written before the percentage columns existed -- the three shapes a row
+// can actually be in.
+const HISTORY = {
+  entries: [
+    { at: 1735689600, kind: 'play', title: 'A Song', artist: 'A Band',
+      album: 'An Album', played_pct: 91.4 },
+    { at: 1735689500, kind: 'skip', title: 'Another Song', artist: 'A Band',
+      album: null, played_pct: 4.2 },
+    { at: 1735689400, kind: 'play', title: null, artist: null, album: null,
+      played_pct: null },
+  ],
+  total: 3, page: 1, size: 100,
+};
+
 const skins = fs.readdirSync(path.join(ROOT, 'skins'));
 let failures = 0;
 
@@ -121,6 +136,9 @@ async function run(skin) {
     if (/^\/why\/\d+$/.test(url)) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(
         { ...RICH.why, program: 'Queued Reasons' }) });
+    }
+    if (/^\/history\?/.test(url)) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(HISTORY) });
     }
     return Promise.reject(new Error('unexpected fetch ' + url));
   };
@@ -311,6 +329,63 @@ async function run(skin) {
     check(!main.hidden && set.hidden, 'the gear must close it again');
   }
 
+  // A skin offering play history must be able to open it, fetch a page, and
+  // close again without disturbing the other two panels `[REQ-VIS-250]`.
+  const histBtn = window.document.getElementById('histbtn');
+  if (histBtn) {
+    const main = window.document.getElementById('panel-main');
+    const hist = window.document.getElementById('panel-history');
+    check(main && hist, 'a history button needs both panels to switch between');
+    check(!main.hidden && hist.hidden, 'history must start closed');
+    histBtn.onclick();
+    await new Promise(r => setTimeout(r, 20));
+    check(main.hidden && !hist.hidden, 'the history button must open the history screen');
+    check(histBtn.getAttribute('aria-expanded') === 'true', 'aria-expanded must follow');
+    const rows = () => [...window.document.querySelectorAll('#histtable tbody tr')];
+    check(rows().length === HISTORY.entries.length,
+          `history should render ${HISTORY.entries.length} rows, got ${rows().length}`);
+    check(rows().some(r => /Played/.test(r.textContent)), 'a play must read as Played');
+    check(rows().some(r => /Skipped/.test(r.textContent)), 'a skip must read as Skipped');
+    check(rows().some(r => /91%|91\.4%/.test(r.textContent)), 'a known percentage must be shown');
+    check(rows().some(r => /—/.test(r.textContent)),
+          'a row with no percentage must read as absent, not 0%');
+    histBtn.onclick();
+    check(!main.hidden && hist.hidden, 'the history button must close it again');
+  }
+
+  // The programme list orders by engagement time, not by name, and the
+  // times beside each button carry whether the schedule is actually the
+  // thing choosing right now.
+  const stations = window.document.getElementById('stations');
+  if (stations) {
+    const rows = () => [...stations.querySelectorAll('.stationrow')];
+    check(rows().length === RICH.programs.length,
+          `stations should render ${RICH.programs.length} rows, got ${rows().length}`);
+    const starts = rows().map(r => r.querySelector('.engagetime').textContent);
+    const sorted = [...starts].sort();
+    check(JSON.stringify(starts) === JSON.stringify(sorted),
+          `programmes should be ordered by start time, got ${JSON.stringify(starts)}`);
+    // RICH sets program_manual: true -- the clock is not the one choosing.
+    check(rows().every(r => r.querySelector('.engagetime').classList.contains('dim')),
+          'engagement times must read as inert while a manual pick is in force');
+    sock.onmessage({ data: JSON.stringify({ ...RICH, program_manual: false }) });
+    check(rows().every(r => !r.querySelector('.engagetime').classList.contains('dim')),
+          'engagement times must read as live once the clock is choosing again');
+    // Restore the state later checks in this run expect.
+    sock.onmessage({ data: JSON.stringify(RICH) });
+
+    // Unchecking must freeze on whatever is engaged right now, not do
+    // nothing and let the next snapshot spring the box back on -- the
+    // control being a dead end in that direction is the bug this guards.
+    sock.onmessage({ data: JSON.stringify({ ...RICH, program_manual: false }) });
+    const autoclock = window.document.getElementById('autoclock');
+    autoclock.checked = false;
+    autoclock.onchange({ target: autoclock });
+    const active = RICH.programs.find(p => p.name === RICH.program);
+    check(posted.includes(`/program/${active.id}`),
+          `unchecking must freeze on the active programme, posted ${JSON.stringify(posted)}`);
+  }
+
   // Picking which track the explanation panel describes `[REQ-VIS-100]`.
   // The skin that does this shows ONE control set beside the picked row, so
   // the rows must not carry their own -- two ways to move a track is how they
@@ -380,7 +455,7 @@ async function run(skin) {
     check(dev.hidden, 'and clear again when it goes off');
   }
 
-  const expectedPosts = gear ? (nowrow ? 5 : 4) : 2;
+  const expectedPosts = (gear ? (nowrow ? 5 : 4) : 2) + (stations ? 1 : 0);
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;

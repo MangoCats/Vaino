@@ -27,6 +27,14 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# The appliance's own local UTC offset `[SPEC-DIR-180]`: already in the
+# dependency tree via cpal/rusqlite, so this declares an existing compile
+# rather than adding a new one. Unix only -- Windows has no `tm_gmtoff` and
+# is asked through `TimeZoneInfo` instead, since it is a development
+# convenience here and never the appliance.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [[bin]]
 name = "vaino"
 path = "src/bin/vaino.rs"

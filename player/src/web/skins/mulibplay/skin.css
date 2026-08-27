@@ -97,10 +97,20 @@ body { background-color: black; color: #ccc; }
 .browserow .button { font-size: 18px; padding: 8px 16px; }
 .stations { text-align: right; }
 .stations h3 { margin: 0 0 .3rem; }
+/* One row per programme: the engagement time to the left, the button at the
+   right edge -- `flex-end` is what keeps the button's own right edge exactly
+   where the old full-width button left it, now that it is only half as wide. */
+.stationrow { display: flex; align-items: center; justify-content: flex-end;
+              gap: .5rem; width: 100%; }
 .stations .button, .stations .buttonOn {
-  display: block; width: 100%; box-sizing: border-box; font-size: 18px;
-  padding: 8px 16px;
+  display: block; width: 50%; flex: none; box-sizing: border-box;
+  font-size: 18px; padding: 8px 16px;
 }
+/* Same reading as "Played N times" `[.elapsed]` when the clock is the one
+   choosing; dimmed when a manual pick has made the schedule inert, so a
+   glance says whether these times mean anything right now. */
+.engagetime { color: #888; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.engagetime.dim { color: #555; }
 .queue p { margin: .35rem 0; display: flex; align-items: center; gap: .5rem; }
 .queue .qtitle { flex: 1; min-width: 0; }
 .queue .dur { color: #888; }

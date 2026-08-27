@@ -314,6 +314,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
+        .route("/history", get(history))
         .route("/review", get(|| async { ([REVALIDATE], Html(REVIEW_HTML)) }))
         .route("/review.js", get(|| async { js(REVIEW_JS) }))
         .route(REVIEW_QUEUE_ROUTE, get(review_queue))
@@ -434,6 +435,51 @@ async fn browse(
     match out {
         Ok(Some(v)) => axum::Json(v).into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The page sizes the history panel offers `[REQ-VIS-250]`. Anything else
+/// asked for falls back to the default rather than handing SQLite an
+/// unbounded `LIMIT`.
+const HISTORY_PAGE_SIZES: [i64; 3] = [10, 100, 1000];
+const HISTORY_DEFAULT_SIZE: i64 = 100;
+
+/// One page of the play-history panel, with enough to draw the pager without
+/// a second request `[REQ-VIS-250]`.
+#[derive(Serialize)]
+struct HistoryPage {
+    entries: Vec<crate::db::HistoryEntry>,
+    total: i64,
+    page: i64,
+    size: i64,
+}
+
+/// What has actually sounded, paged `[REQ-VIS-250]`.
+///
+/// Off the engine entirely, like `browse`: a history read must never get in
+/// the way of playing the next track.
+async fn history(
+    State(ui): State<Ui>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let size = q
+        .get("size")
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|n| HISTORY_PAGE_SIZES.contains(n))
+        .unwrap_or(HISTORY_DEFAULT_SIZE);
+    let page = q.get("page").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1).max(1);
+    let offset = (page - 1) * size;
+    let out = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        let entries = lib.play_history(size, offset).ok()?;
+        let total = lib.play_history_count().ok()?;
+        Some(HistoryPage { entries, total, page, size })
+    })
+    .await;
+    match out {
+        Ok(Some(page)) => axum::Json(page).into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -972,7 +1018,7 @@ async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
     axum::Json(crate::sink::current())
 }
 
-/// Restart the player, without restarting the machine `[REQ-VIS-245]`.
+/// Restart the player, without restarting the machine `[REQ-VIS-250]`.
 ///
 /// **Several settings only take effect at startup**, because what they change
 /// is read once: cue tracks are mapped when the guest is attached

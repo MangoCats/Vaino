@@ -39,6 +39,33 @@ struct Live {
     gain: f32,
 }
 
+/// A play already written to history, whose passage finished decoding but may
+/// still be sounding out of the output ring `[REQ-VIS-250]`.
+///
+/// **Why this waits rather than reading `heard_ms` on the spot.** A passage
+/// leaves `live` the instant its decoder is exhausted, which is up to a
+/// ring's depth -- `BUFFER_FRAMES`, ~15 s here -- before its last sample
+/// actually reaches the speaker `[REQ-VIS-240]`. Finalising there froze the
+/// figure at "decoded", not "heard": a track played all the way through and
+/// left with 15 s of itself still queued behind it read as ~94%, never 100%,
+/// however completely it was listened to. `at_ms`/`since` are the same pair
+/// `draining` carries, so the estimate advances exactly as the position
+/// display already does -- one clock, trusted by both.
+struct PendingFinish {
+    play_id: i64,
+    span_ms: u64,
+    at_ms: u64,
+    since: Instant,
+}
+
+impl PendingFinish {
+    /// How much would have been heard by now, capped at the passage's own
+    /// length -- the clock must not run past the music.
+    fn estimate(&self) -> u64 {
+        (self.at_ms + self.since.elapsed().as_millis() as u64).min(self.span_ms)
+    }
+}
+
 /// What the UI and the persistence layer read. Cheap to clone.
 #[derive(Debug, Clone, Default)]
 pub struct PlayerState {
@@ -323,6 +350,21 @@ pub struct Engine {
     /// Its MBID, kept because a skip is written *after* the passage has gone
     /// and the entry it came from is no longer reachable `[SPEC-PLAY-050]`.
     head_mbid: Option<String>,
+    /// The head's passage span, kept for the same reason as `head_mbid`: a
+    /// skip's percentage-played is written after the passage has gone, and by
+    /// then `live` no longer holds it `[REQ-VIS-250]`.
+    head_span_ms: u64,
+    /// The row `record_play` wrote for the head, if any -- so the eventual
+    /// departure can go back and fill in how much was actually heard, rather
+    /// than freezing the figure at the instant the play was earned
+    /// `[REQ-VIS-250]`. `None` once there is nothing left to finish: cleared
+    /// after use and whenever the head changes.
+    pending_play_id: Option<i64>,
+    /// A play whose passage exhausted naturally and is still draining
+    /// through the ring, waiting for the clock to say how much of the tail
+    /// was actually heard `[REQ-VIS-250]`. At most one at a time, the same
+    /// simplification `draining` makes for the display.
+    pending_finish: Option<PendingFinish>,
     /// Passages chosen but never opened, waiting to be reported `[REQ-PD-112]`.
     ///
     /// The engine drops them; only the Director can undo having counted them,
@@ -421,6 +463,9 @@ impl Engine {
             recorded: false,
             head: None,
             head_mbid: None,
+            head_span_ms: 0,
+            pending_play_id: None,
+            pending_finish: None,
             shown: None,
             dropped: Vec::new(),
             underruns_playing: 0,
@@ -492,6 +537,10 @@ impl Engine {
         let submitted = if self.playing && audible { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.record_play();
+        // Independent of `self.playing`, the same as `advance_shown` below:
+        // the ring drains at the device's own pace regardless of pause
+        // `[REQ-VIS-250]`.
+        self.finalize_draining_plays();
         self.advance_shown();
         // Throttled by time, but never at the cost of a late answer to the
         // question anyone actually asks: a change of audible passage is
@@ -629,6 +678,8 @@ impl Engine {
                                 crate::db::Rejection::Dequeue,
                                 passage_id,
                                 mbid.as_deref(),
+                                None,
+                                None,
                             );
                         }
                     }
@@ -709,6 +760,12 @@ impl Engine {
     /// turned out to need exactly it: both replace what is in the ring with a
     /// different point in the music, and differ only in which point.
     fn cut_ring_to_incoming(&mut self, fade_samples: usize, lead_samples: usize) {
+        // Whatever a previously-departed passage still had draining through
+        // this ring is about to be wiped along with everything else in it --
+        // take its estimate as final now, rather than let a skip or a seek
+        // strand it waiting for a tail that will never finish arriving
+        // `[REQ-VIS-250]`.
+        self.resolve_pending_finish_now();
         // How much of the outgoing survives the cut sets how much of the
         // incoming overlaps it. Asked before the cut, since afterwards the
         // answer is by definition the fade length.
@@ -1252,18 +1309,61 @@ impl Engine {
         // now that a passage can finish unrecorded, a stale id would suppress
         // the next honest play of the same passage.
         if self.head != id_now {
-            // The outgoing passage left without reaching the threshold: it did
-            // not play, and it is not forgotten either `[SPEC-PLAY-050]`.
             // A handoff is a departure without a rejection: the passage did
             // not stop, it moved to the other backend `[SPEC-BK-065]`. Taken
             // rather than read, so it covers exactly one departure.
             let handoff = std::mem::take(&mut self.handing_over);
-            if let (Some(prev), false, false) = (self.head, self.recorded, handoff) {
-                let prev_mbid = self.head_mbid.take();
-                self.note_rejection(crate::db::Rejection::Skip, prev, prev_mbid.as_deref());
+            if let Some(prev) = self.head {
+                if !handoff {
+                    if self.recorded {
+                        // Already earned a play, and there may be nothing
+                        // further to do: a passage adopted mid-play from
+                        // another backend, or one whose write itself failed,
+                        // leaves no local row to correct.
+                        if let Some(play_id) = self.pending_play_id.take() {
+                            // If it left because it was CUT SHORT -- a skip,
+                            // a seek, anything that did not go through
+                            // `retire_finished` -- `heard_ms` is already
+                            // final: it was live and tracked right up to the
+                            // interruption, no ring left to drain. But if
+                            // `draining` names this same passage, it left the
+                            // ordinary way -- decoded to its end -- and up to
+                            // a ring's depth of it may still be sounding
+                            // `[REQ-VIS-250]`. Finalising on the spot there
+                            // is exactly the bug this exists to avoid:
+                            // freezing the figure at "decoded" rather than
+                            // waiting for "heard".
+                            match self.draining {
+                                Some((id, at, since)) if id == prev => {
+                                    self.queue_pending_finish(PendingFinish {
+                                        play_id,
+                                        span_ms: self.head_span_ms,
+                                        at_ms: at,
+                                        since,
+                                    });
+                                }
+                                _ => self.write_finish(play_id, self.heard_ms.min(self.head_span_ms)),
+                            }
+                        }
+                    } else {
+                        // The outgoing passage left without reaching the
+                        // threshold: it did not play, and it is not
+                        // forgotten either `[SPEC-PLAY-050]`.
+                        let prev_mbid = self.head_mbid.take();
+                        self.note_rejection(
+                            crate::db::Rejection::Skip,
+                            prev,
+                            prev_mbid.as_deref(),
+                            Some(self.heard_ms),
+                            Some(self.head_span_ms),
+                        );
+                    }
+                }
             }
             self.head = id_now;
             self.head_mbid = head_now.as_ref().and_then(|(_, m, ..)| m.clone());
+            self.head_span_ms = head_now.as_ref().map(|(.., span)| *span).unwrap_or(0);
+            self.pending_play_id = None;
             // A passage that arrives already counted starts its life here as
             // recorded, which is what stops it being counted twice.
             self.recorded = match (id_now, self.counted_elsewhere) {
@@ -1298,9 +1398,66 @@ impl Engine {
         }
         self.recorded = true;
         if let Some(store) = &self.store {
-            if let Err(e) = store.record_play(id, mbid.as_deref()) {
-                eprintln!("record play: {e}");
+            // `heard_ms` at this instant is only the threshold just crossed --
+            // half the passage, or four minutes -- not what will finally have
+            // been heard. `finish_play` corrects it once the passage actually
+            // departs `[REQ-VIS-250]`.
+            match store.record_play(id, mbid.as_deref(), self.heard_ms, span_ms) {
+                Ok(play_id) => self.pending_play_id = Some(play_id),
+                Err(e) => eprintln!("record play: {e}"),
             }
+        }
+    }
+
+    /// Correct a play already written with how much was truly heard.
+    ///
+    /// Best-effort, like the write it corrects: if this never runs -- process
+    /// exit, a store error -- the row simply keeps whatever figure it was
+    /// last written with, which under-reports rather than over-reports.
+    fn write_finish(&self, play_id: i64, heard_ms: u64) {
+        let Some(store) = &self.store else { return };
+        if let Err(e) = store.finish_play(play_id, heard_ms) {
+            eprintln!("finish play: {e}");
+        }
+    }
+
+    /// Hold a play's correction until the clock says the drain is done
+    /// `[REQ-VIS-250]`, replacing whatever was already waiting.
+    ///
+    /// There is only one slot, the same simplification `draining` itself
+    /// makes -- two passages finishing within one ring's depth of each other
+    /// is the case neither tracks past. Losing the earlier one silently would
+    /// leave its row frozen at the threshold forever, so it is flushed with
+    /// its best estimate first rather than dropped.
+    fn queue_pending_finish(&mut self, next: PendingFinish) {
+        if let Some(prev) = self.pending_finish.take() {
+            self.write_finish(prev.play_id, prev.estimate());
+        }
+        self.pending_finish = Some(next);
+    }
+
+    /// Every tick: has a deferred play finished draining on its own?
+    /// `[REQ-VIS-250]`. Checked here rather than resolved once and forgotten,
+    /// because the answer depends on the clock, not on anything that happens
+    /// to run this tick -- the same reason `advance_shown` re-reads `draining`
+    /// every time rather than computing it once `[REQ-VIS-240]`.
+    fn finalize_draining_plays(&mut self) {
+        let Some(pending) = &self.pending_finish else { return };
+        let estimate = pending.estimate();
+        if estimate >= pending.span_ms {
+            let play_id = pending.play_id;
+            self.pending_finish = None;
+            self.write_finish(play_id, estimate);
+        }
+    }
+
+    /// A skip or a seek is about to overwrite the ring outright `[REQ-VIS-250]`.
+    /// Whatever a still-draining play had reached is as much of it as anyone
+    /// will ever hear now, so take the estimate as final rather than let the
+    /// interrupted tail count toward it forever.
+    fn resolve_pending_finish_now(&mut self) {
+        if let Some(pending) = self.pending_finish.take() {
+            self.write_finish(pending.play_id, pending.estimate());
         }
     }
 
@@ -1324,9 +1481,20 @@ impl Engine {
     ///
     /// Best-effort, like `record_play`. A history write must never interrupt
     /// the music.
-    fn note_rejection(&self, kind: crate::db::Rejection, passage_id: i64, mbid: Option<&str>) {
+    ///
+    /// `heard_ms`/`span_ms` are `None` for a dequeue: the passage never
+    /// sounded, so there is no percentage to report, not a percentage of
+    /// zero `[REQ-VIS-250]`. A skip supplies both -- it always started.
+    fn note_rejection(
+        &self,
+        kind: crate::db::Rejection,
+        passage_id: i64,
+        mbid: Option<&str>,
+        heard_ms: Option<u64>,
+        span_ms: Option<u64>,
+    ) {
         if let Some(store) = &self.store {
-            if let Err(e) = store.record_rejection(kind, passage_id, mbid) {
+            if let Err(e) = store.record_rejection(kind, passage_id, mbid, heard_ms, span_ms) {
                 eprintln!("record {}: {e}", kind.as_str());
             }
         }
@@ -1628,6 +1796,157 @@ mod tests {
 
         assert!(tick_until(&mut e, |_| plays(&st) > 0), "a play should have been written");
         assert_eq!(plays(&st), 1, "and exactly one, however many ticks it took");
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The primitive the deferred correction runs on `[REQ-VIS-250]`: grows
+    /// with real time from wherever the ring left off, and never claims more
+    /// than the passage actually is -- the same cap `advance_shown` applies
+    /// to the position display for the identical reason `[REQ-VIS-240]`.
+    #[test]
+    fn pending_finish_estimate_advances_with_the_clock_and_caps_at_span() {
+        let p = PendingFinish { play_id: 1, span_ms: 100, at_ms: 80, since: Instant::now() };
+        assert_eq!(p.estimate(), 80, "nothing has elapsed yet");
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(p.estimate(), 100, "the clock must not run past the passage's own length");
+    }
+
+    /// A skip or a seek wipes the ring outright `[REQ-VIS-250]`: whatever a
+    /// still-draining play had reached by then is all it is ever going to
+    /// reach, so it must be written now rather than left waiting for a tail
+    /// that no longer exists.
+    #[test]
+    fn a_skip_resolves_a_still_draining_correction_rather_than_losing_it() {
+        let (_st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        // As if an earlier passage had just departed and was still draining
+        // when this test picks the story up.
+        let play_id = e
+            .store
+            .as_ref()
+            .unwrap()
+            .record_play(90, Some("aaaaaaaa-0000-0000-0000-000000000090"), 400, 500)
+            .unwrap();
+        e.pending_finish =
+            Some(PendingFinish { play_id, span_ms: 500, at_ms: 400, since: Instant::now() });
+
+        // Something else has to be live for `skip` to act on at all.
+        let wav = wav_of(2_000);
+        let mut ent = entry(91, wav.to_str().unwrap());
+        ent.end_ms = 2_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.snapshot_live() > 0), "the second passage should have started");
+
+        h.send(Command::Skip);
+        e.drain_commands();
+
+        assert!(e.pending_finish.is_none(), "the interrupted correction must be resolved, not left pending");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let heard: i64 = conn
+            .query_row("SELECT heard_ms FROM listener_play_history WHERE play_id = ?1", [play_id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(
+            (400..=500).contains(&heard),
+            "the resolved figure should be at least what had already drained: got {heard}"
+        );
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The figure `record_play` writes the instant the threshold is crossed
+    /// is not the last word `[REQ-VIS-250]`. A passage played all the way
+    /// through must read as EXACTLY whole once its drain tail has actually
+    /// finished, not frozen at whatever the ring still had queued behind it
+    /// the moment the decoder ran out.
+    ///
+    /// **Needs a real ring, not `silent()`.** A ring of `None` reports zero
+    /// frames buffered, always -- `audible_ms` never lags `played_ms` there,
+    /// so the bug this guards against cannot occur in that fixture no matter
+    /// what the code does. Draining it fully after every tick stands in for
+    /// a device consuming what was just mixed, except on the very tick the
+    /// passage exhausts: that tick's freshly-submitted tail is still sitting
+    /// in the ring when `retire_finished` reads it, which is exactly the gap
+    /// a real device leaves too.
+    #[test]
+    fn a_completed_play_is_corrected_with_what_was_actually_heard() {
+        let (st, path) = store();
+        let ring = crate::output::OutputRing::new(20_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let wav = wav_of(600);
+        let mut ent = entry(46, wav.to_str().unwrap());
+        ent.end_ms = 600;
+        ent.mbid = Some("aaaaaaaa-0000-0000-0000-000000000046".into());
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+
+        // Left holding a steady backlog rather than drained to empty: a real
+        // device keeps a roughly constant amount of latency, not zero, and
+        // draining fully every tick let the exhaustion tick's own tiny
+        // remainder round down to nothing in milliseconds -- proving
+        // nothing about the bug this exists to catch. ~90 ms of stereo
+        // audio at 44.1 kHz.
+        const KEEP: usize = 8_000;
+        let drain = |ring: &crate::output::OutputRing| {
+            let mut st = ring.state.lock().unwrap();
+            let len = st.ring.len();
+            if len > KEEP {
+                let mut scratch = vec![0.0f32; len - KEEP];
+                st.ring.read(&mut scratch);
+            }
+        };
+        // Let it actually start sounding before watching for it to finish --
+        // `live` is empty both before the first admission and after the last
+        // retirement, and only the second one is the departure this test
+        // wants.
+        assert!(tick_until(&mut e, |eng| eng.snapshot_live() > 0), "the passage should have started");
+        while e.snapshot_live() > 0 {
+            e.tick();
+            drain(&ring);
+        }
+
+        assert_eq!(plays(&st), 1, "a play should have been written");
+        let pending = e.pending_finish.as_ref().expect(
+            "a naturally-exhausted play must be deferred, not finalised on the spot",
+        );
+        assert!(
+            pending.at_ms < pending.span_ms,
+            "the ring should still have been holding some of the tail: at {} of {}",
+            pending.at_ms, pending.span_ms
+        );
+
+        // Still sitting at whatever `record_play` wrote when the threshold
+        // was first crossed -- the old, buggy answer -- until the clock
+        // says the tail is done.
+        let row = |c: &rusqlite::Connection| -> (i64, i64) {
+            c.query_row("SELECT heard_ms, span_ms FROM listener_play_history", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap()
+        };
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let (before, span_check) = row(&conn);
+        assert_eq!(span_check, 600);
+        assert!(before < 600, "not corrected yet: read {before} of 600 before the clock catches up");
+
+        // The clock closes the rest of the gap, not the ring -- which by now
+        // holds nothing at all for this passage.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        e.tick();
+        assert!(e.pending_finish.is_none(), "the drain estimate should have resolved by now");
+
+        let (heard, span) = row(&conn);
+        assert_eq!(span, 600);
+        assert_eq!(heard, span, "played to the end must read as exactly whole");
         let _ = std::fs::remove_file(&wav);
         let _ = std::fs::remove_file(&path);
     }

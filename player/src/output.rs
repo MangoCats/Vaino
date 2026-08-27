@@ -161,7 +161,10 @@ pub struct OutputRing {
 }
 
 impl OutputRing {
-    fn new(capacity: usize, volume: Volume) -> Self {
+    // `pub(crate)`, not private: `path.rs` builds one to attach a real
+    // device, and the engine's own tests build one to simulate a device that
+    // is buffering audio without a real one on the machine `[REQ-VIS-250]`.
+    pub(crate) fn new(capacity: usize, volume: Volume) -> Self {
         Self {
             state: Arc::new(Mutex::new(OutputState::new(capacity))),
             volume,

@@ -194,7 +194,12 @@ CREATE TABLE IF NOT EXISTS listener_play_history (
     passage_id  INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
     -- denormalised on purpose: six years of history must survive a rescan
     -- that renumbers passages [SPEC-SC-095]
-    mbid        TEXT
+    mbid        TEXT,
+    -- How much of the passage was heard, and how long it was, in ms
+    -- [REQ-VIS-250]. NULL on rows written before this column existed -- an
+    -- absent percentage, never a claimed 0%.
+    heard_ms    INTEGER,
+    span_ms     INTEGER
 );
 CREATE INDEX IF NOT EXISTS listener_play_time ON listener_play_history(played_at);
 CREATE INDEX IF NOT EXISTS listener_play_mbid ON listener_play_history(mbid);
@@ -226,7 +231,11 @@ CREATE TABLE IF NOT EXISTS listener_rejections (
     kind         TEXT NOT NULL,             -- 'skip' | 'dequeue'
     passage_id   INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
     -- denormalised for the same reason as listener_play_history [SPEC-SC-095]
-    mbid         TEXT
+    mbid         TEXT,
+    -- Set only for 'skip' -- a 'dequeue' never sounded, so it has no
+    -- percentage to report [REQ-VIS-250].
+    heard_ms     INTEGER,
+    span_ms      INTEGER
 );
 CREATE INDEX IF NOT EXISTS listener_reject_mbid ON listener_rejections(mbid, kind);
 

@@ -73,6 +73,19 @@ impl PathHandle {
         Self { ring: None, tx: None, recoveries: Arc::new(AtomicU64::new(0)) }
     }
 
+    /// A handle over a real ring with no supervisor behind it `[REQ-VIS-250]`.
+    ///
+    /// For the engine's own tests, which otherwise run entirely against
+    /// `silent()` -- a ring of `None` reports zero frames buffered, so
+    /// nothing exercised there can tell "mixed" from "heard" apart. This
+    /// gives a test a ring it can fill and simply never drain, which is
+    /// indistinguishable from a real device that is buffering audio slower
+    /// than the mixer is producing it.
+    #[cfg(test)]
+    pub(crate) fn with_ring(ring: crate::output::OutputRing) -> Self {
+        Self { ring: Some(ring), tx: None, recoveries: Arc::new(AtomicU64::new(0)) }
+    }
+
     fn ask(&self, r: PathRequest) {
         if let Some(t) = &self.tx {
             let _ = t.send(r);

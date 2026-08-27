@@ -524,7 +524,8 @@ impl MpdBackend {
             // `[SPEC-PLAY-055]`, and the Director is told to un-count the
             // queueing mark by way of `take_dropped` `[REQ-PD-112]`.
             self.dropped.push(o.passage_id);
-            self.write(Rejection::Dequeue, o.passage_id, o.mbid.as_deref());
+            // Never sounded, so there is no percentage to report `[REQ-VIS-250]`.
+            self.write(Rejection::Dequeue, o.passage_id, o.mbid.as_deref(), None, None);
             return;
         }
         // A passage handed over mid-play brought its play with it. Asking the
@@ -536,20 +537,31 @@ impl MpdBackend {
         }
         // It sounded. Whether it *played* is `[SPEC-PLAY-010]`'s question, and
         // it is asked against Vaino's span rather than MPD's idea of one.
+        //
+        // Unlike the local engine, `o.heard_ms` is already final here --
+        // `retire` runs once, at departure, not on every tick -- so there is
+        // no threshold-crossing figure to correct afterwards `[REQ-VIS-250]`.
         if counts_as_play(o.heard_ms, o.span_ms) {
             if let Some(s) = &self.store {
-                if let Err(e) = s.record_play(o.passage_id, o.mbid.as_deref()) {
+                if let Err(e) = s.record_play(o.passage_id, o.mbid.as_deref(), o.heard_ms, o.span_ms) {
                     eprintln!("record play: {e}");
                 }
             }
         } else {
-            self.write(Rejection::Skip, o.passage_id, o.mbid.as_deref());
+            self.write(Rejection::Skip, o.passage_id, o.mbid.as_deref(), Some(o.heard_ms), Some(o.span_ms));
         }
     }
 
-    fn write(&self, kind: Rejection, passage_id: i64, mbid: Option<&str>) {
+    fn write(
+        &self,
+        kind: Rejection,
+        passage_id: i64,
+        mbid: Option<&str>,
+        heard_ms: Option<u64>,
+        span_ms: Option<u64>,
+    ) {
         if let Some(s) = &self.store {
-            if let Err(e) = s.record_rejection(kind, passage_id, mbid) {
+            if let Err(e) = s.record_rejection(kind, passage_id, mbid, heard_ms, span_ms) {
                 eprintln!("record {}: {e}", kind.as_str());
             }
         }

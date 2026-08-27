@@ -145,6 +145,47 @@ body.dev { --bg: #2a1418; --line: #4a2830; }
 }
 #gear[aria-expanded="true"] { color: var(--fg); border-color: var(--line);
                               background: var(--line); }
+#histbtn { font-size: 1rem; line-height: 1; padding: .3rem .5rem; cursor: pointer;
+           color: var(--dim); background: transparent; border: 1px solid transparent;
+           border-radius: 6px; margin-right: .3rem; }
+#histbtn:hover { color: var(--fg); border-color: var(--line); }
+#histbtn[aria-expanded="true"] { color: var(--fg); border-color: var(--line);
+                                 background: var(--line); }
+
+/* The history panel: the same screen shape as Settings, with a table long
+   enough to need its own scroller rather than the whole page's `[REQ-VIS-250]`. */
+#panel-history h2 { font-size: .75rem; letter-spacing: .12em;
+                    text-transform: uppercase; color: var(--dim);
+                    font-weight: 600; margin: 0 0 1.2rem; }
+.histbar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+           font-size: .875rem; color: var(--dim); margin-bottom: .9rem; }
+.histpage { margin-left: auto; font-variant-numeric: tabular-nums; }
+.histnav { display: flex; gap: .3rem; }
+.histnav button { padding: .3rem .7rem; font-size: .8125rem; }
+.histnav button:disabled { opacity: .4; cursor: default; }
+.histnav button:disabled:hover { border-color: var(--line); }
+/* Scrolls on its own, so paging the table never scrolls the page it sits in
+   out from under the controls above it. */
+.histscroll { max-height: 22rem; overflow-y: auto; overflow-x: auto;
+              border: 1px solid var(--line); border-radius: 6px; }
+#histtable { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+#histtable th { position: sticky; top: 0; background: var(--bg); text-align: left;
+                font-size: .6875rem; letter-spacing: .06em; text-transform: uppercase;
+                color: var(--dim); font-weight: 600; padding: .5rem .6rem;
+                border-bottom: 1px solid var(--line); }
+#histtable td { padding: .4rem .6rem; border-bottom: 1px solid var(--line);
+                overflow-wrap: anywhere; }
+#histtable tr:last-child td { border-bottom: none; }
+#histtable td:first-child { color: var(--dim); white-space: nowrap; }
+#histtable td:nth-child(5) { text-align: right; font-variant-numeric: tabular-nums;
+                             white-space: nowrap; }
+#histtable tr.empty td { text-align: center; color: var(--dim); padding: 1.5rem 0; }
+/* Result carries its own word as well as its colour `[REQ-VIS-250]`, the same
+   reasoning as the speaker states above -- colour is a second channel, not
+   the only one. */
+#histtable td:last-child { font-weight: 600; white-space: nowrap; }
+#histtable tr.hit td:last-child { color: #4c9a5a; }
+#histtable tr.miss td:last-child { color: var(--dim); font-weight: 400; }
 
 /* Provenance [REQ-VIS-120]. Small, raised and dim: present at every glance,
    but never competing with the name it qualifies. MusicBrainz is the claim

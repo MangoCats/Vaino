@@ -347,11 +347,18 @@ fn main() {
                 }
                 if let Some(st) = &store {
                     let r = if heard {
-                        st.record_play(o.passage_id, o.mbid.as_deref())
+                        st.record_play(o.passage_id, o.mbid.as_deref(), o.furthest_ms, o.span_ms)
+                            .map(|_| ())
                     } else {
                         // A skip is not a play, and earns the longer window
                         // `[SPEC-PLAY-055]`.
-                        st.record_rejection(Rejection::Skip, o.passage_id, o.mbid.as_deref())
+                        st.record_rejection(
+                            Rejection::Skip,
+                            o.passage_id,
+                            o.mbid.as_deref(),
+                            Some(o.furthest_ms),
+                            Some(o.span_ms),
+                        )
                     };
                     if let Err(e) = r {
                         eprintln!("record {verb}: {e}");
@@ -373,9 +380,15 @@ fn main() {
                     o.passage_id, o.title
                 );
                 if let Some(st) = &store {
-                    if let Err(e) =
-                        st.record_rejection(Rejection::Dequeue, o.passage_id, o.mbid.as_deref())
-                    {
+                    // Never sounded, so there is no percentage to report
+                    // `[REQ-VIS-250]`.
+                    if let Err(e) = st.record_rejection(
+                        Rejection::Dequeue,
+                        o.passage_id,
+                        o.mbid.as_deref(),
+                        None,
+                        None,
+                    ) {
                         eprintln!("record dequeue: {e}");
                     }
                 }

@@ -42,6 +42,61 @@ fn parse_hhmm(s: &str) -> Option<i64> {
     Some(h * 60 + m)
 }
 
+/// What the operating system believes the local UTC offset is right now, in
+/// minutes east of UTC `[SPEC-DIR-180]`.
+///
+/// `std` has no timezone of its own -- deliberately, per the schema comment
+/// this exists to make good on ("the appliance stores its offset rather than
+/// the player guessing"). Nothing ever wrote it, so every library sat at the
+/// column's own default of 0 and every programme was chosen against raw UTC
+/// clock time instead of the listener's own. The OS already knows its
+/// offset; asking it once at load time is simpler and more honest than
+/// asking a person to type a number nobody enjoys getting right twice a year.
+///
+/// `None` on a platform this cannot ask, or if the ask fails -- the caller's
+/// job is to fall back to whatever is already stored, not to invent one.
+#[cfg(unix)]
+pub(crate) fn os_utc_offset_minutes() -> Option<i64> {
+    // SAFETY: `tm` is zeroed before use and `localtime_r` only ever writes
+    // into it; `now` is a valid `time_t` just read from the same call.
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&now, &mut tm).is_null() {
+            return None;
+        }
+        Some(tm.tm_gmtoff / 60)
+    }
+}
+
+/// The Windows CRT's `tm` carries no `tm_gmtoff` `[SPEC-DIR-180]`; Windows is
+/// a development convenience here, never the appliance, so this asks
+/// `TimeZoneInfo` once at load time rather than pulling in a timezone crate
+/// for a platform nothing actually ships on. Best-effort like its Unix
+/// sibling: any failure to launch, parse, or a non-UTF-8 answer yields
+/// `None`, never a guess.
+#[cfg(windows)]
+pub(crate) fn os_utc_offset_minutes() -> Option<i64> {
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[int][System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now).TotalMinutes",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()?.trim().parse().ok()
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn os_utc_offset_minutes() -> Option<i64> {
+    None
+}
+
 pub struct Programs {
     programs: Vec<Program>,
     seeds: HashMap<i64, Vec<String>>,
@@ -180,6 +235,46 @@ impl Programs {
     }
 }
 
+/// Bring `listener_settings.utc_offset_minutes` into line with what the OS
+/// believes right now, if it differs `[SPEC-DIR-180]`.
+///
+/// **Deliberately not part of `load`.** `load` is exercised directly by a
+/// great many fixture-backed tests across this module and `library.rs`, and
+/// every one of them passes a connection with no listener_settings row at
+/// all -- relying on that reading as offset 0 to keep their time-of-day
+/// assertions independent of whichever timezone happens to run the suite.
+/// Folding a real OS call into `load` would have made every one of them
+/// depend on the machine running `cargo test`. This is called once, from the
+/// production startup path only, before `load` ever reads the column.
+///
+/// Best-effort like everything else that touches this table off the audio
+/// path: a write that fails here costs a stale offset until the next
+/// restart, not a player that will not start.
+pub fn sync_os_utc_offset(conn: &Connection) {
+    let Some(os) = os_utc_offset_minutes() else { return };
+    let stored: i64 = conn
+        .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0);
+    if os == stored {
+        return;
+    }
+    // `updated_at` is carried even though nothing reads it back, because the
+    // row may not exist yet on a library old enough to predate this column,
+    // and the table's own `NOT NULL` on it has no default -- an INSERT that
+    // omitted it would fail exactly on the library that most needs this to
+    // work.
+    let _ = conn.execute(
+        "INSERT INTO listener_settings (id, utc_offset_minutes, updated_at) \
+         VALUES (1, ?1, datetime('now')) \
+         ON CONFLICT(id) DO UPDATE SET \
+             utc_offset_minutes = excluded.utc_offset_minutes, \
+             updated_at = excluded.updated_at",
+        [os],
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +297,70 @@ mod tests {
     /// Unix 0 is a Thursday midnight UTC.
     fn at(hour: i64, minute: i64) -> i64 {
         (hour * 60 + minute) * 60
+    }
+
+    /// The bug this exists to fix `[SPEC-DIR-180]`: a library whose offset was
+    /// never set reads programmes against raw UTC clock time, and a listener
+    /// anywhere but UTC gets the wrong one on. Corrected once, from a stored
+    /// value that disagrees with what the OS actually reports.
+    #[test]
+    fn sync_os_utc_offset_corrects_a_mismatch_and_leaves_a_match_alone() {
+        let Some(os) = os_utc_offset_minutes() else {
+            return; // nothing to test on a platform this cannot ask
+        };
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
+                 utc_offset_minutes INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);",
+        )
+        .unwrap();
+        // Deliberately wrong, and still a legal offset either side of it.
+        let wrong = if os == 0 { 60 } else { 0 };
+        c.execute(
+            "INSERT INTO listener_settings (id, utc_offset_minutes, updated_at) VALUES (1, ?1, 't')",
+            [wrong],
+        )
+        .unwrap();
+
+        sync_os_utc_offset(&c);
+        let read = |c: &Connection| -> i64 {
+            c.query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(read(&c), os, "a stored mismatch must be corrected to what the OS reports");
+
+        // Calling again with an already-correct value must not error or drift.
+        sync_os_utc_offset(&c);
+        assert_eq!(read(&c), os);
+    }
+
+    /// A library that predates this column has no row at all -- the read
+    /// this already tolerates via `unwrap_or(0)`, and the write must too,
+    /// or the fix would silently never apply to the libraries needing it.
+    #[test]
+    fn sync_os_utc_offset_creates_the_row_when_absent() {
+        let Some(os) = os_utc_offset_minutes() else { return };
+        if os == 0 {
+            // The unconfigured default already agrees with this machine's
+            // real offset; there is nothing here for the test to tell apart.
+            return;
+        }
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
+                 utc_offset_minutes INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);",
+        )
+        .unwrap();
+
+        sync_os_utc_offset(&c);
+        let after: i64 = c
+            .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(after, os);
     }
 
     #[test]

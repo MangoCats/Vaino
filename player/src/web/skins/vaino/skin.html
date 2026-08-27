@@ -258,11 +258,43 @@
     </div>
   </section>
 
+  <!-- A third panel, the same shape as Settings: driven by its own fetch
+       rather than the socket's snapshot, since a page of history is not
+       "what is true right now" [REQ-VIS-250]. -->
+  <section id="panel-history" hidden>
+    <h2>Play history</h2>
+    <div class="histbar">
+      <label for="histsize">Show</label>
+      <select id="histsize">
+        <option value="10">10</option>
+        <option value="100" selected>100</option>
+        <option value="1000">1000</option>
+      </select>
+      <span>per page</span>
+      <span class="histpage" id="histpage"></span>
+      <span class="histnav">
+        <button type="button" id="histprev">‹ Prev</button>
+        <button type="button" id="histnext">Next ›</button>
+      </span>
+    </div>
+    <div class="histscroll">
+      <table id="histtable">
+        <thead><tr>
+          <th>When</th><th>Title</th><th>Artist</th><th>Album</th>
+          <th>Played</th><th>Result</th>
+        </tr></thead>
+        <tbody><tr class="empty"><td colspan="6">Nothing played yet.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
   <div id="link">Connecting…</div>
 
   <div class="skinbar">
     <button type="button" id="gear" aria-expanded="false"
             title="Settings">⚙</button>
+    <button type="button" id="histbtn" aria-expanded="false"
+            title="Play history">🕘</button>
     <!-- Development mode is visible, not remembered [PI-SET-016]. -->
     <span id="devmode" hidden>diagnostics on</span>
     <a href="/browse">Browse the library →</a>

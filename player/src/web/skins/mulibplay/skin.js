@@ -23,7 +23,15 @@
     $('queue'), q => (q.artist ? `${q.title} by ${q.artist}` : q.title), 'p');
 
   // Checked means the clock is choosing, which is Vaino's "no manual override".
-  $('autoclock').onchange = e => { if (e.target.checked) Vaino.program('auto'); };
+  // Unchecking has to name something to switch TO -- "manual" is a programme
+  // id, not a bare flag -- so it freezes on whatever is engaged right now
+  // rather than doing nothing and leaving the box to spring back on the next
+  // snapshot, which is what a `false` branch here used to be `[SPEC-DIR-185]`.
+  let activeProgramId = null;
+  $('autoclock').onchange = e => {
+    if (e.target.checked) { Vaino.program('auto'); }
+    else if (activeProgramId != null) { Vaino.program(activeProgramId); }
+  };
 
   // Gold is "this is what is on" throughout the original -- transport and
   // stations alike -- so it is applied from one place here.
@@ -32,20 +40,34 @@
   let stationSig = '';
   function renderStations(s) {
     const host = $('stations');
-    const sig = (s.programs || []).map(p => p.id + p.name).join('|');
+    // By engagement time, not by name -- the order the list is actually
+    // used in, since that is the question "what comes on when" asks.
+    const sorted = [...(s.programs || [])].sort((a, b) => a.start.localeCompare(b.start));
+    const active = sorted.find(p => p.name === s.program);
+    activeProgramId = active ? active.id : null;
+    const sig = sorted.map(p => p.id + p.name + p.start).join('|');
     if (sig !== stationSig) {
       stationSig = sig;
       host.textContent = '';
-      for (const p of s.programs || []) {
+      for (const p of sorted) {
+        const row = document.createElement('div');
+        row.className = 'stationrow';
+        const time = document.createElement('span');
+        time.className = 'engagetime';
+        time.textContent = p.start;
         const b = document.createElement('button');
         b.className = 'button';
         b.textContent = p.name;
         b.title = `from ${p.start}`;
         b.onclick = () => Vaino.program(p.id);
-        host.appendChild(b);
+        row.append(time, b);
+        host.appendChild(row);
       }
     }
-    for (const b of host.children) lit(b, b.textContent === s.program);
+    for (const b of host.querySelectorAll('.button, .buttonOn')) lit(b, b.textContent === s.program);
+    // Dimmed once a manual pick has made the schedule inert -- the same
+    // signal the checkbox itself gives, read here for the times beside it.
+    for (const t of host.querySelectorAll('.engagetime')) t.classList.toggle('dim', s.program_manual);
     $('autoclock').checked = !s.program_manual;
   }
 

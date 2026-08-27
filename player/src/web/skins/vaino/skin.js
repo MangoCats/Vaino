@@ -55,12 +55,27 @@
   // same snapshot as everything else, and a separate page would need its own
   // socket to show the programme currently in force. Both panels stay in the
   // DOM, so the bindings below attach once and keep working either way.
-  const gear = $('gear');
-  gear.onclick = () => {
-    const open = gear.getAttribute('aria-expanded') !== 'true';
-    gear.setAttribute('aria-expanded', String(open));
-    $('panel-main').hidden = open;
-    $('panel-settings').hidden = !open;
+  //
+  // History joins them as a third panel `[REQ-VIS-250]` rather than a fourth
+  // shape: exactly one of the three is ever open, so opening one closes
+  // whichever of the other two was showing instead of layering a screen on
+  // top of it.
+  const gear = $('gear'), histBtn = $('histbtn');
+  function showPanel(which) {
+    const settings = which === 'settings', history = which === 'history';
+    $('panel-main').hidden = settings || history;
+    $('panel-settings').hidden = !settings;
+    $('panel-history').hidden = !history;
+    gear.setAttribute('aria-expanded', String(settings));
+    histBtn.setAttribute('aria-expanded', String(history));
+  }
+  gear.onclick = () => showPanel(gear.getAttribute('aria-expanded') === 'true' ? 'main' : 'settings');
+  histBtn.onclick = () => {
+    const opening = histBtn.getAttribute('aria-expanded') !== 'true';
+    showPanel(opening ? 'history' : 'main');
+    // Freshest first every time it is opened: "history" that opened on
+    // whatever page you last left is not what "recently played" promises.
+    if (opening) { histPage = 1; loadHistory(); }
   };
 
   // Seconds here, milliseconds on the wire: seconds are what the listener is
@@ -669,5 +684,79 @@
   gear.addEventListener('click', () => {
     if (!$('panel-settings').hidden) { radios(); refresh(); }
   });
+
+  // --------------------------------------------------------------- history
+  // Its own fetch rather than the socket's snapshot `[REQ-VIS-250]`: a page
+  // of what has already happened is not "what is true right now", and
+  // teaching the wire format to page would serve nowhere else it is used.
+  let histPage = 1;
+
+  const HIST_COLS = 6;
+
+  function histRow(cells) {
+    const tr = document.createElement('tr');
+    for (const text of cells) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    return tr;
+  }
+
+  function histMessage(text) {
+    const tr = document.createElement('tr');
+    tr.className = 'empty';
+    const td = document.createElement('td');
+    td.colSpan = HIST_COLS;
+    td.textContent = text;
+    tr.appendChild(td);
+    return tr;
+  }
+
+  async function loadHistory() {
+    const size = Number($('histsize').value);
+    const body = $('histtable').querySelector('tbody');
+    let data;
+    try {
+      data = await Vaino.history(histPage, size);
+    } catch (e) {
+      body.textContent = '';
+      body.appendChild(histMessage('Could not reach the player.'));
+      return;
+    }
+    // The server clamps an unrecognised size rather than refusing it, so the
+    // control is put back in step with what was actually asked for.
+    if (data.size !== size) $('histsize').value = String(data.size);
+    const pages = Math.max(1, Math.ceil(data.total / data.size));
+    // A page that emptied out from under us -- the listener paged forward,
+    // then something aged out, or they picked a bigger size -- settles on
+    // the new last page rather than showing nothing.
+    if (histPage > pages) { histPage = pages; return loadHistory(); }
+
+    body.textContent = '';
+    if (!data.entries.length) {
+      body.appendChild(histMessage('Nothing played yet.'));
+    }
+    for (const row of data.entries) {
+      const pct = row.played_pct == null ? '—' : `${Math.round(row.played_pct)}%`;
+      const tr = histRow([
+        Vaino.since(row.at),
+        row.title || '(unknown)',
+        row.artist || '',
+        row.album || '',
+        pct,
+        row.kind === 'play' ? 'Played' : 'Skipped',
+      ]);
+      tr.className = row.kind === 'play' ? 'hit' : 'miss';
+      body.appendChild(tr);
+    }
+    $('histpage').textContent = `Page ${histPage} of ${pages}`;
+    $('histprev').disabled = histPage <= 1;
+    $('histnext').disabled = histPage >= pages;
+  }
+
+  $('histsize').onchange = () => { histPage = 1; loadHistory(); };
+  $('histprev').onclick = () => { if (histPage > 1) { histPage--; loadHistory(); } };
+  $('histnext').onclick = () => { histPage++; loadHistory(); };
 
 })();

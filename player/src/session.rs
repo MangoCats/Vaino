@@ -239,6 +239,11 @@ impl Session {
             Some((Some(id), pos, playing)) => (Some(id), pos, playing),
             _ => (None, 0, false),
         };
+        // Before the Director reads it, so a corrected offset takes effect on
+        // this same startup rather than the next one `[REQ-VIS-255]`.
+        if let Some(s) = &store {
+            s.sync_utc_offset();
+        }
         // Selection degrades rather than fails: a library without the Program
         // Director's tables still plays, just uniformly at random.
         let director = match lib.director() {

@@ -491,6 +491,92 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-255]` A programme is chosen against the listener's own clock, and
+the control that reverts to automatic actually reverts.** *(Fixed
+2026-08-24.)* Two faults reported together, both in service of
+`[SPEC-DIR-185]`.
+
+**The wrong programme was engaged.** `listener_settings.utc_offset_minutes`
+governs what "local" means to `Programs::active` `[SPEC-DIR-180]`, and
+nothing had ever written it — every library sat at the column's own default
+of 0, so every programme was chosen against raw UTC clock time. Reported at
+local 11:34 (UTC 15:34): Groove, which starts at 15:00, was on; Light, which
+starts at 10:00 and should have run until Cool's 12:00, was not. The player
+now asks the OS for its real offset once at startup, before the Director
+reads it, and writes it back only when it disagrees with what is stored, so
+a DST change self-corrects on the next restart instead of running an hour
+off until someone notices. Not re-asked on an explicit library reload
+mid-session -- rare enough, and startup already close enough behind it, that
+the gap was left rather than opening a second writable connection to close it.
+
+> **Not folded into `Programs::load` itself.** That function is exercised
+> directly by a great many fixture-backed tests, every one of them relying on
+> an absent `listener_settings` row reading as offset 0 to keep their
+> time-of-day assertions independent of whichever timezone happens to run
+> the suite. The OS ask lives in `PlayerStore::sync_utc_offset`, called once
+> from `Session::open` -- deliberately not `Library::director()`, which was
+> the first version's mistake: `Library`'s connection is opened read-only
+> ("the player must not be able to corrupt the library"), so a write
+> attempted there fails silently every time. It looked finished, ran on
+> schedule, and never once reached the disk. `PlayerStore` is the one
+> connection this process holds that can actually write.
+
+**"Autoselect by clock time" re-checked itself the moment it was
+unchecked.** The MuLibPlay skin only ever sent a command when the box
+*became* checked (`Vaino.program('auto')`); unchecking sent nothing, so the
+next snapshot — twice a second — read `program_manual` as still false and
+put the tick back. Manual mode is a specific programme id, not a bare flag,
+so there was never anything for a bare uncheck to mean. It now freezes on
+whichever programme is engaged at the moment of unchecking, giving the
+control a real, stable off-state instead of a dead end.
+
+**`[REQ-VIS-250]` A play-history page, pageable and scrollable.** *(Built
+2026-08-23.)* A third panel in the Vaino skin, opened the same way as
+Settings and mutually exclusive with it: the most recently played and
+skipped passages, newest first, each showing **title**, **artist**,
+**album**, **what percentage of the passage was heard**, and **whether it
+counted as a play or a skip** `[SPEC-PLAY-030]`. Paged at **10, 100 or
+1000** rows, default **100**, with Prev/Next and a "page N of M" readout.
+
+**Its own fetch, not the socket's snapshot.** A page of what has already
+happened is not "what is true right now", and teaching the wire format to
+paginate would serve nowhere else it is used. `GET /history?page=&size=`
+reads `listener_play_history` and `listener_rejections` off the engine
+entirely, the same way `/browse` does, so a long scroll back through
+history cannot get in the way of playing the next track. A `kind='dequeue'`
+rejection never appears here: it never sounded, so it is not a *play*
+history `[SPEC-PLAY-050]`.
+
+**The percentage is corrected, not frozen at the threshold.** `record_play`
+still writes the moment half the passage (or four minutes) is crossed
+`[SPEC-PLAY-030]`, so a crash right after still counts the play — but the
+figure written then is only the threshold just reached, not what was
+actually heard. The engine corrects that row once the passage is actually
+done sounding. A skip writes its final figure directly, since a skip never
+leaves anything draining behind it to wait for.
+
+> **Corrected again, 2026-08-24: "departs" is not "is heard".** The first
+> version wrote the correction the instant the passage left `live`, which is
+> the moment its DECODER is exhausted — up to a ring's depth (`BUFFER_FRAMES`,
+> ~15 s here) before its last sample reaches the speaker `[REQ-VIS-240]`. A
+> track played all the way through therefore read as ~94%, never 100%,
+> however completely it was actually listened to: the figure was frozen at
+> "decoded", the same mistake the ring's-depth fix already corrected for the
+> position display, made again in the one place that fix did not reach.
+>
+> The correction is now **held until the clock says the drain is done** — the
+> same `(position, instant)` pair `draining` already carries for the display,
+> read again for this. A skip or a seek that wipes the ring out from under a
+> still-draining correction takes whatever it had reached as final, rather
+> than leaving it waiting for a tail that will never arrive.
+
+> **Absent, not zero.** `heard_ms`/`span_ms` are new columns on both tables,
+> migrated onto an existing library the same way `id_reviews` gains its
+> columns — `ALTER TABLE ... ADD COLUMN`, ignored where it already exists.
+> A row written before this shipped has neither, and reads as an absent
+> percentage (`—`) rather than a claimed 0%, the same distinction
+> `counts_as_play` already draws for an unknown span `[GOV-SRC-040]`.
+
 **`[REQ-VIS-240]` The position runs to the end of the track, not to the end of
 the mixing.** *(Fixed 2026-08-23.)* The elapsed time and the progress bar stopped
 about fifteen seconds short of every track and sat there until the next one
