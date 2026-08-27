@@ -120,6 +120,8 @@ That is a weaker check, so it is labelled as one. A file passed on size and mtim
 
 ### 3.4 Handoff — the player's own pages, inside Sampo's workflow
 
+> **Status.** The mechanics below — `[SPEC-SUI-140]`, `[SPEC-SUI-145]`, `[SPEC-SUI-150]`, `[SPEC-SUI-155]`, `[SPEC-SUI-170]` — were decided 2026-08-20 and **built 2026-08-27**: `ensure_vaino()` in `console.py`, the "Review in Vaino" handoff on the profile page, and `review.js`'s `?passage=` deep link. `[SPEC-SUI-135]`'s waveform editor is designed in [SPEC021](SPEC021-waveform-boundary-editor.md) and not yet built; the handoff mechanics here already reach it, so building the editor is all that remains.
+
 **`[SPEC-SUI-140]` Where a capability is naturally Vaino's, it is built there and *presented* through Sampo's workflow.** *(Decided 2026-08-20.)* Not "left there and linked to as a concession" — chosen there, because that is where the resources for it already are, and then composed into the operator's sequence here.
 
 Identification review is the first case. The review page can **play the passage**, and hearing it is the only thing that settles a case the names cannot `[REQ-LIB-165]`. Rebuilding it here would mean giving an audio path to a program defined by not having one `[SPEC-SA-100]`; duplicating the queue would mean two lists of the same disputes, disagreeing inside a week.
@@ -169,6 +171,10 @@ The handoff URL is configuration, and it names the local player alone (default p
 But that is the *absence* of a header, not a promise of one, and the fallback is load-bearing for a reason worth naming: if the embed were required to work, Vaino would have to start sending a header for Sampo's benefit — Sampo-facing code in every Vaino, which is precisely what `[SPEC-SUI-110]` refuses. So a frame that does not load degrades to a plain link in a new tab, and nothing is asked of the player to keep it working.
 
 Cross-origin also means Sampo cannot see inside the frame. That is not a limitation to engineer around; it is `[SPEC-SUI-145]` holding.
+
+**`[SPEC-SUI-190]` Everything in this section is behind `sampo-support`, off by default.** *(Decided 2026-08-27.)* `[SPEC-SA-010]` already confines Sampo itself to an x86 desktop that never runs on the appliance; a Vaino feature that exists only to be *reached from* Sampo inherits the same confinement, and a Pi Zero 2W that will never see a console has no reason to carry the review page's routes, its embedded HTML and JS, or the database code behind them. Cargo's own `mpd` feature is the precedent — off by default, one line of `Environment` away from being real. `cargo build --release` for the appliance carries none of it; a build for a desktop induct session adds `--features sampo-support`. Measured: **≈200 KB smaller** without it.
+
+This is why the waveform editor and the MusicBrainz search of [SPEC010 §4](SPEC010-identification-review.md#4-searching-musicbrainz-directly) belong behind the same flag from the day they are written, not retrofitted afterward — the second thing built ungated is the second thing that has to be moved later.
 
 ---
 

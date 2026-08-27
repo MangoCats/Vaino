@@ -8,9 +8,15 @@ license = "MIT"
 # The MPD Director is off unless asked for `[SPEC-MPD-070]`, `[IMPL-MPD-065]`.
 # Gated LAST, deliberately: gating first would have meant five stages developed
 # behind a flag nobody had turned on.
+#
+# `sampo-support` is the same shape, for the same reason `[SPEC-SUI-190]`: the
+# identification-review page, and the waveform editor and MusicBrainz browser
+# built alongside it, exist for the desktop induct workflow and have no reason
+# to occupy a byte of an appliance image that never runs Sampo `[SPEC-SA-010]`.
 [features]
 default = []
 mpd = []
+sampo-support = []
 
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }

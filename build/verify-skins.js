@@ -790,10 +790,94 @@ async function runReview() {
   if (errors.length) failures++;
 }
 
+// ---------------------------------------------------------------------------
+// A handoff lands on one passage, not the whole queue `[SPEC-SUI-150]`. Its
+// own small fixture and its own JSDOM instance, since the query string has to
+// be present before the page's own script ever runs.
+async function runReviewHandoff() {
+  const html = fs.readFileSync(path.join(ROOT, 'review.html'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost/review?passage=22' });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+
+  const QUEUE = {
+    progress: { ran: true, checked: 10, confirmed: 8, contradicted: 2, decided: 0 },
+    items: [
+      { passage_id: 22, stored_mbid: 'rec-other', title: 'Another', artist: null,
+        album: null, score: 0.93, severity: 'wrong-song', rank: 0, suggested: [] },
+      { passage_id: 23, stored_mbid: 'rec-press', title: 'Why Worry',
+        artist: 'Dire Straits', album: 'Brothers in Arms', score: 0.99,
+        severity: 'different-id', rank: 3, suggested: [] },
+    ],
+  };
+  window.fetch = url => {
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    if (url === '/review/queue')
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(QUEUE) });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript(fs.readFileSync(path.join(ROOT, 'review.js'), 'utf8'));
+  await new Promise(r => setTimeout(r, 30));
+
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const cards = () => [...window.document.querySelectorAll('.card')];
+
+  check(cards().length === 1, `a handoff should show exactly one card, got ${cards().length}`);
+  check(cards()[0] && cards()[0].dataset.passage === '22',
+        `the one card shown must be the named passage, got ${cards()[0] && cards()[0].dataset.passage}`);
+  check(window.document.getElementById('filters').hidden,
+        'the grade filters belong to the whole-queue view, not a handoff');
+  check(/show the whole queue/i.test(window.document.getElementById('note').textContent),
+        'a way back to the full queue must be offered');
+
+  // A passage the queue does not carry -- confirmed, unchecked, or simply not
+  // this library's numbering -- must explain itself, not render as empty.
+  const dom2 = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost/review?passage=999' });
+  dom2.window.console.error = (...a) => errors.push('(999) ' + a.join(' '));
+  const create2 = dom2.window.document.createElement.bind(dom2.window.document);
+  dom2.window.document.createElement = tag => {
+    const el = create2(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  dom2.window.fetch = window.fetch;
+  const runScript2 = src => {
+    const el = create2('script');
+    el.textContent = src;
+    dom2.window.document.body.appendChild(el);
+  };
+  runScript2(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript2(fs.readFileSync(path.join(ROOT, 'review.js'), 'utf8'));
+  await new Promise(r => setTimeout(r, 30));
+  check([...dom2.window.document.querySelectorAll('.card')].length === 0,
+        'a passage absent from the queue must render no card');
+  check(/999/.test(dom2.window.document.getElementById('note').textContent),
+        'the explanation must name the passage that was not found');
+
+  console.log(`${'handoff'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `deep-linked to passage 22 and to an absent 999`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
   await runBrowse();
   await runReview();
+  await runReviewHandoff();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);
 })();

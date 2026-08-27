@@ -261,11 +261,15 @@ Two observations from the appliance that are **not** about this change, and are 
 
 > **Claims:** with no player running, taking a handoff starts one **on the console's own database path** and the passage plays. With a player already running, no second process appears. With the binary renamed so it cannot start, the operator is told which capability is unavailable and why — not shown a dead link `[SPEC-DF-095]`.
 
+> **Done, 2026-08-27.** `ensure_vaino()` in `console.py` implements the three-step sequence exactly; the profile page's "Review in Vaino" box embeds `/review?passage=:id`, with an unconditional new-tab link beside it rather than embed-failure detection `[SPEC-SUI-155]`. Verified against a real co-resident pair: `/api/handoff/ensure` on a cold console started `vaino.exe` on Sampo's own db path and it answered within seconds; called again with one already running, `started: false` and no second process. All of it — the review page, the handoff route, the deep link — sits behind `sampo-support` `[SPEC-SUI-190]`, off by default; the appliance binary measured **≈200 KB smaller** without it.
+
 ---
 
 ## Not on this path
 
 **`[IMPL-SUI-080]` The waveform editor is Vaino's, and it is `[GDE-PHS-040]`'s third deliverable, not this one's.** `[SPEC-SUI-135]` settles *where* it lives; `[SPEC-SA-080]` says what it must do; neither is a reason to build it before the console can reach it. It wants its own requirements and specification first, exactly as segmentation does.
+
+> **Designed, 2026-08-27, still not built** — [SPEC021](spec/SPEC021-waveform-boundary-editor.md), alongside `[REQ-LIB-180]`'s MusicBrainz search (design in [SPEC010 §3](spec/SPEC010-identification-review.md#3-searching-musicbrainz-directly)). Build order for both is [IMPL004](IMPL004-sampo-editing-workflows.md), which starts where this document's Stage 5 ends.
 
 **`[IMPL-SUI-085]` Segmentation stays provisional** `[SPEC-SA-070]`. Stage 0 works because single-track files need no segmentation; a DAO capture arriving before `[GDE-PHS-040]` lands still needs hand work, and the console must say so rather than produce one whole-file passage and call it done `[SPEC-SUI-075]`.
 

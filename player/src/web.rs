@@ -302,7 +302,7 @@ impl From<&PlayerState> for Snapshot {
 }
 
 pub fn router(ui: Ui) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/", get(|| async { Html(SHELL) }))
         .route("/core.js", get(|| async { js(CORE) }))
         .route("/skins", get(skin_list))
@@ -314,12 +314,22 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
-        .route("/history", get(history))
+        .route("/history", get(history));
+
+    // The identification-review page, and everything reached from it: desktop
+    // induct tooling with no reason to occupy an appliance image that never
+    // runs Sampo `[SPEC-SUI-190]`. A build without this feature serves none of
+    // these routes at all, not even a 404 stub -- the handlers, the embedded
+    // HTML/JS and the database code behind them are not compiled in.
+    #[cfg(feature = "sampo-support")]
+    let router = router
         .route("/review", get(|| async { ([REVALIDATE], Html(REVIEW_HTML)) }))
         .route("/review.js", get(|| async { js(REVIEW_JS) }))
         .route(REVIEW_QUEUE_ROUTE, get(review_queue))
         .route("/review/releases/:mbid", get(review_releases))
-        .route("/review/:passage_id/:decision", post(record_review))
+        .route("/review/:passage_id/:decision", post(record_review));
+
+    router
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/audio/sink", get(audio_sink))
@@ -576,6 +586,7 @@ async fn queue_passage(
 /// Progress travels with the list so the page can distinguish three states that
 /// would otherwise all render as an empty table: the pass has never been run,
 /// it ran and found nothing, or everything it found has been dealt with.
+#[cfg(feature = "sampo-support")]
 async fn review_queue(State(ui): State<Ui>) -> axum::response::Response {
     let db = ui.db.clone();
     let out = tokio::task::spawn_blocking(move || {
@@ -604,6 +615,7 @@ async fn review_queue(State(ui): State<Ui>) -> axum::response::Response {
 /// `tools/apply_reviews.py` folds accepted ones into the library as a separate,
 /// deliberate step -- reassigning an id changes what a passage *is*, and play
 /// history is keyed by recording.
+#[cfg(feature = "sampo-support")]
 async fn record_review(
     State(ui): State<Ui>,
     axum::extract::Path((passage_id, decision)): axum::extract::Path<(i64, String)>,
@@ -643,6 +655,7 @@ async fn record_review(
 /// recording can be on dozens of releases, and sending them for every
 /// candidate of every card would be most of the payload for something almost
 /// none of them will be asked about.
+#[cfg(feature = "sampo-support")]
 async fn review_releases(
     State(ui): State<Ui>,
     axum::extract::Path(mbid): axum::extract::Path<String>,
@@ -1247,15 +1260,18 @@ async fn command(
 const SHELL: &str = include_str!("web/shell.html");
 const BROWSE_HTML: &str = include_str!("web/browse.html");
 const BROWSE_JS: &str = include_str!("web/browse.js");
+#[cfg(feature = "sampo-support")]
 const REVIEW_HTML: &str = include_str!("web/review.html");
+#[cfg(feature = "sampo-support")]
 const REVIEW_JS: &str = include_str!("web/review.js");
 
 /// The route the review page fetches its work from, named once so the router
 /// and the test that checks the page agrees with it cannot drift apart.
+#[cfg(feature = "sampo-support")]
 const REVIEW_QUEUE_ROUTE: &str = "/review/queue";
 /// The prefix every decision is posted to. The page builds the rest of the
 /// path from the passage id, so only the stem can be shared.
-#[cfg(test)]
+#[cfg(all(test, feature = "sampo-support"))]
 const REVIEW_DECIDE_PREFIX: &str = "/review/";
 const CORE: &str = include_str!("web/core.js");
 
@@ -1412,16 +1428,28 @@ mod tests {
         assert!(SHELL.contains("Vaino.start()"), "the shell starts core");
         assert!(BROWSE_HTML.contains("/core.js") && BROWSE_HTML.contains("/browse.js"));
         assert!(BROWSE_JS.contains("startBare"), "browse takes the skin, not the player");
-        assert!(REVIEW_HTML.contains("/core.js") && REVIEW_HTML.contains("/review.js"));
-        assert!(REVIEW_JS.contains("startBare"), "review takes the skin, not the player");
         // Reviewing ids is reachable, or it may as well not exist -- it is not
         // linked from the player, deliberately, so browse is the only way in.
+        // The literal link is compiled into `BROWSE_HTML` regardless of
+        // whether `/review` itself is served this build `[SPEC-SUI-190]`, so
+        // this assertion holds either way; the route's own existence is
+        // `sampo-support`'s to check.
         assert!(BROWSE_HTML.contains("/review"), "no way to reach the review page");
+    }
+
+    /// The review page loads core the same way the others do -- gated with
+    /// everything else it depends on `[SPEC-SUI-190]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_page_loads_the_runtime() {
+        assert!(REVIEW_HTML.contains("/core.js") && REVIEW_HTML.contains("/review.js"));
+        assert!(REVIEW_JS.contains("startBare"), "review takes the skin, not the player");
     }
 
     /// The review page and its routes have to agree about the URLs, which is
     /// the seam a jsdom check cannot see: it mocks `fetch`, so a page asking
     /// for a route the server never registered still passes there.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn the_review_routes_match_what_the_page_asks_for() {
         assert!(REVIEW_JS.contains(REVIEW_QUEUE_ROUTE));

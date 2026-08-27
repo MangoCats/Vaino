@@ -26,6 +26,47 @@ function kv(pairs) {
   return dl;
 }
 
+// The handoff `[SPEC-SUI-140]`, `[SPEC-SUI-150]`, `[SPEC-SUI-170]`. Sampo asks
+// the operating system to ensure a co-resident player is there -- never Vaino
+// itself `[SPEC-SUI-025]` -- then embeds its review page for this exact
+// passage. `[SPEC-SUI-155]`: embed it where it embeds, link it where it does
+// not. Detecting a blocked frame from script is unreliable across browsers,
+// so the new-tab link is offered unconditionally alongside the frame rather
+// than only after a failure is inferred -- cheap, and correct either way.
+function handoffBox(passageId) {
+  const box = S.el('div', { class: 'handoff' },
+    S.el('p', { class: 'empty', text: 'Starting the local player…' }));
+
+  (async () => {
+    let r;
+    try {
+      r = await S.get('/api/handoff/ensure');
+    } catch (e) {
+      box.replaceChildren(S.el('p', { class: 'err' },
+        `Could not reach Sampo's own server to ask: ${e.message}`));
+      return;
+    }
+    if (!r.ok) {
+      box.replaceChildren(S.el('p', { class: 'err' }, r.error));
+      return;
+    }
+    const url = `http://localhost:${r.port}/review?passage=${passageId}`;
+    box.replaceChildren(
+      S.el('p', {},
+        S.el('a', { href: url, target: '_blank', rel: 'noopener' }, 'Open in a new tab ↗'),
+        r.started ? S.el('span', { class: 'pill ok', style: 'margin-left:.6rem',
+                                    text: 'started a local Vaino' }) : null),
+      S.el('iframe', {
+        src: url, class: 'handoff-frame', title: 'Vaino — review',
+        // Cross-origin, deliberately [SPEC-SUI-145]: Sampo cannot see inside
+        // this frame, and does not ask to. The round trip closes through the
+        // shared database on the next scan, not through the browser.
+      }));
+  })();
+
+  return box;
+}
+
 (async () => {
   const m = document.getElementById('main');
   try {
@@ -90,6 +131,13 @@ function kv(pairs) {
         m.append(box);
       }
     }
+
+    // Where a capability is naturally Vaino's, it is built there and
+    // *presented* through Sampo's workflow [SPEC-SUI-140]: id review and
+    // boundary editing both play the passage, and Sampo has no audio path to
+    // give them [SPEC-SA-100]. This is the handoff, not a reimplementation.
+    m.append(S.el('h2', {}, 'Review in Vaino'));
+    m.append(handoffBox(pid));
 
     // The rejected candidates, beside the chosen one. Written by every stage
     // since the migration and read by nothing until now [SPEC-SUI-045].

@@ -194,6 +194,10 @@ pub(crate) const ART_TABLE: &str = "
 /// So this is a decision log the player owns and honours, and
 /// `tools/apply_reviews.py` is what folds accepted decisions into the library
 /// proper -- deliberately a separate, deliberate step.
+///
+/// Gated behind `sampo-support` along with everything else on this page
+/// `[SPEC-SUI-190]`: an appliance that never runs Sampo has nothing to review.
+#[cfg(feature = "sampo-support")]
 pub(crate) const REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS id_reviews (
         passage_id  INTEGER PRIMARY KEY,
@@ -213,6 +217,7 @@ pub(crate) const REVIEW_TABLE: &str = "
 /// `applied_at` is the difference between a judgement that can simply be
 /// withdrawn and one that has already changed the library. The page must not
 /// offer the same button for both.
+#[cfg(feature = "sampo-support")]
 pub(crate) const REVIEW_COLUMNS: [&str; 3] = [
     "chosen_release_mbid TEXT",
     "previous_mbid TEXT",
@@ -225,6 +230,7 @@ pub(crate) const REVIEW_COLUMNS: [&str; 3] = [
 /// and anything that builds one without the other gets a table the queries
 /// cannot read. That is not hypothetical: the test fixture did exactly that
 /// and every review test failed on `no such column`.
+#[cfg(feature = "sampo-support")]
 pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
     for column in REVIEW_COLUMNS {
@@ -701,6 +707,7 @@ impl PlayerStore {
         conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_history_columns(&conn);
+        #[cfg(feature = "sampo-support")]
         ensure_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
@@ -770,6 +777,7 @@ impl PlayerStore {
     /// The decision is validated here rather than trusted from the request:
     /// this is the only writer, so it is the only place the vocabulary can be
     /// enforced. A reassignment must name a recording; a keep must not.
+    #[cfg(feature = "sampo-support")]
     pub fn record_review(
         &self,
         passage_id: i64,
@@ -844,6 +852,7 @@ impl PlayerStore {
     /// an undo that leaves the thing it was undoing in place. Reverting an
     /// applied decision is `apply_reviews --revert`, which puts the old id
     /// back and clears the row in one transaction.
+    #[cfg(feature = "sampo-support")]
     pub fn clear_review(&self, passage_id: i64) -> Result<(), DbError> {
         let applied: Option<String> = self
             .conn
@@ -1264,6 +1273,7 @@ pub struct HistoryEntry {
 }
 
 /// One candidate identity for a passage, as AcoustID reports it.
+#[cfg(feature = "sampo-support")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct Suggestion {
     pub mbid: String,
@@ -1273,6 +1283,7 @@ pub struct Suggestion {
 }
 
 /// A passage whose audio does not match the id it carries `[REQ-LIB-165]`.
+#[cfg(feature = "sampo-support")]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ReviewItem {
     pub passage_id: i64,
@@ -1307,6 +1318,7 @@ pub struct ReviewItem {
 
 /// A release the chosen recording appears on, for naming the album
 /// `[REQ-LIB-165]`.
+#[cfg(feature = "sampo-support")]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ReleaseOption {
     pub mbid: String,
@@ -1328,6 +1340,7 @@ pub struct ReleaseOption {
 /// The grades are the same distinctions `verify_ids.py` drew against the file
 /// tags -- title agrees, artist agrees, neither -- applied here to evidence
 /// that is actually independent.
+#[cfg(feature = "sampo-support")]
 pub const SEVERITIES: [(&str, u8, &str); 6] = [
     ("no-mbid", 0, "no MusicBrainz id at all -- a migration placeholder"),
     ("wrong-song", 1, "neither the title nor the performer matches"),
@@ -1347,6 +1360,7 @@ pub const SEVERITIES: [(&str, u8, &str); 6] = [
 ///
 /// Shape-checked rather than prefix-checked, so any other non-conforming id
 /// the migration produced is caught too, not just the one spelling of it.
+#[cfg(feature = "sampo-support")]
 pub fn is_mbid(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 36
@@ -1364,6 +1378,7 @@ pub fn is_mbid(s: &str) -> bool {
 /// no candidate names one, then the artist cannot be *wrong*, and grading it
 /// `wrong-artist` would invent a dispute out of two silences. In that case the
 /// title decides alone.
+#[cfg(feature = "sampo-support")]
 fn grade(
     stored_mbid: &str,
     title: Option<&str>,
@@ -1404,6 +1419,7 @@ fn grade(
 ///
 /// Deliberately blunt. It decides how a row is *labelled and ordered*, never
 /// whether anything is changed, so a wrong answer costs a misfiled card.
+#[cfg(feature = "sampo-support")]
 fn same_title(a: &str, b: &str) -> bool {
     fn norm(s: &str) -> String {
         let mut out = String::new();
@@ -1432,6 +1448,7 @@ fn same_title(a: &str, b: &str) -> bool {
     !x.is_empty() && x == y
 }
 
+#[cfg(feature = "sampo-support")]
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ReviewProgress {
     /// False when the fingerprint pass has never been run and merged. "No
@@ -1516,6 +1533,7 @@ impl Library {
     ///
     /// Already-decided passages are excluded, so the queue empties as it is
     /// worked through rather than re-presenting settled questions.
+    #[cfg(feature = "sampo-support")]
     pub fn review_queue(&self, limit: usize) -> Result<Vec<ReviewItem>, DbError> {
         // `id_checks` is written by the fingerprint pass, not by the player, so
         // on a library where that has never been run the table is simply absent
@@ -1613,6 +1631,7 @@ impl Library {
     /// Only releases Sampo has already fetched can be offered. A recording new
     /// to the library has none, and the album then falls back to the file's own
     /// tag, which is the designed fallback rather than a failure.
+    #[cfg(feature = "sampo-support")]
     pub fn releases_for(&self, recording_mbid: &str) -> Result<Vec<ReleaseOption>, DbError> {
         if !self.has_table("release_recordings") {
             return Ok(Vec::new());
@@ -1692,6 +1711,7 @@ impl Library {
     /// Returned even when `id_checks` has never been created -- the pass may
     /// simply not have been run -- because "no findings" and "never looked"
     /// are different states and the page says which one it is in.
+    #[cfg(feature = "sampo-support")]
     pub fn review_progress(&self) -> ReviewProgress {
         let n = |sql: &str| -> i64 { self.conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
         ReviewProgress {
@@ -1901,6 +1921,7 @@ mod tests {
         )
         .unwrap();
         c.execute_batch(TAG_TABLE).unwrap();
+        #[cfg(feature = "sampo-support")]
         ensure_review_table(&c).unwrap();
         c
     }
@@ -1908,6 +1929,7 @@ mod tests {
     /// Confirmed ids never reach a person: 6,591 of them here, and there is
     /// nothing to decide about a passage the audio agrees with. What does
     /// reach the page arrives with the candidates that dispute it.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn settled_ids_stay_out_of_the_queue() {
         let c = reviewable();
@@ -1930,6 +1952,7 @@ mod tests {
     /// recording id -- another pressing, a remaster, a 5.1 mix. That is a much
     /// smaller problem than a passage playing under the wrong name, and the
     /// queue leads with the ones where the names disagree too.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn a_different_pressing_is_told_apart_from_a_wrong_song() {
         assert!(same_title("Why Worry", "Why Worry (5.1 mix)"));
@@ -1965,6 +1988,7 @@ mod tests {
     /// Severity is what makes the queue usable: 41 cases against 526 on this
     /// library, and one bit cannot tell them apart. Absent evidence must never
     /// count as agreement -- a suggestion with no artist cannot confirm one.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn a_disagreement_is_graded_by_how_much_disagrees() {
         let s = |t: Option<&str>, a: Option<&str>| Suggestion {
@@ -2102,6 +2126,7 @@ mod tests {
     /// an absent one. The migration left 44 of them carrying `local:track:N`,
     /// two of which share a number, so they do not even identify a track.
     /// Everything downstream keys on this string.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn a_passage_with_no_mbid_leads_the_queue() {
         assert!(is_mbid("68684e6b-37d2-487e-8ee2-d21e28fa1589"));
@@ -2135,6 +2160,7 @@ mod tests {
     /// the top of the queue for ever. The migration's placeholders stay,
     /// because those really are broken identifications -- the difference is
     /// the source, not the shape of the id.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn a_deliberately_local_id_is_not_a_review_finding() {
         let c = reviewable();
@@ -2179,6 +2205,7 @@ mod tests {
     /// `unmatched` reaches the page so it can be asked for deliberately, but
     /// it is graded lowest and the page leaves it off by default. It is 864
     /// passages here, and defaulting it on would bury the 41 that matter.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn unmatched_is_reachable_but_graded_lowest() {
         let c = reviewable();
@@ -2199,6 +2226,7 @@ mod tests {
     /// A decided passage comes back carrying its judgement, so it can be found
     /// again and withdrawn. It is a separate grade on the page and off by
     /// default, so the working queue still shortens as it is answered.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn a_decision_is_remembered_and_can_be_withdrawn() {
         let tmp = std::env::temp_dir().join(format!("vaino-rev-{}.db", std::process::id()));
@@ -2244,6 +2272,7 @@ mod tests {
     /// changed with nothing left saying what it used to be or why. Undo on the
     /// page refuses, and says to use `apply_reviews --revert`, which restores
     /// the old id and clears the row together.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn an_applied_decision_cannot_be_quietly_withdrawn() {
         let tmp = std::env::temp_dir().join(format!("vaino-rev3-{}.db", std::process::id()));
@@ -2407,6 +2436,7 @@ mod tests {
     /// The vocabulary is enforced where it is written, because that is the only
     /// place it can be. A reassignment with nothing to reassign to is the case
     /// a careless request would produce.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn a_reassignment_must_name_a_recording() {
         let tmp = std::env::temp_dir().join(format!("vaino-rev2-{}.db", std::process::id()));
@@ -2427,6 +2457,7 @@ mod tests {
     /// and a query naming a missing table FAILS rather than returning nothing.
     /// That mistake blanked the browse page twice; nothing to review has to be
     /// distinguishable from a broken page.
+    #[cfg(feature = "sampo-support")]
     #[test]
     fn a_library_without_findings_reviews_empty_rather_than_failing() {
         let lib = Library { conn: fixture() };

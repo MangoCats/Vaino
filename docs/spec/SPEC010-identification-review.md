@@ -81,3 +81,26 @@ Comparing an id against the file's own tags is the obvious check and a weak one:
 > **Two silences are not a disagreement.** Absent evidence never counts as agreement — a candidate naming a different artist is a real finding even if another names none — but where the library holds no artist, or no candidate states one, the artist cannot be *wrong* and the title decides alone. Grading that `wrong-artist` would invent a dispute out of missing data and send someone to adjudicate it.
 >
 > The 89 `local:track:N` placeholder ids from the migration were checked too: 21 contradicted, 23 unmatched, and the rest carry no passage. They are not MBIDs at all and want their own repair rather than case-by-case review.
+
+---
+
+## 3. Searching MusicBrainz directly
+
+This designs against `[REQ-LIB-180]`. *(Requested 2026-08-27; designed, not yet built.)* The review queue above settles the case AcoustID can speak to. It cannot help with the others, and there are three of them: self-released audio with no fingerprint entry at all, a remaster or bootleg AcoustID has never indexed, and — a case the queue does not even see today — a recording id that is *right* while its **credited artist** is wrong. `unverified` alone is 866 passages on this library, none of them reachable by a radio button.
+
+**`[SPEC-SUI-195]` Reference before reassignment: every id on the card is a link to what it actually names.** A person cannot judge a candidate by its MBID; they can judge it by the MusicBrainz page it opens onto. Every mbid already shown on a review card — the stored recording, each suggested candidate, the artists and the release offered against it — becomes a plain link to `https://musicbrainz.org/<entity>/<mbid>`, `target="_blank"`. No proxying, no API call: this is the browser's own operator following the same link they could type by hand, and it costs MusicBrainz nothing to serve.
+
+**`[SPEC-SUI-196]` Search is a proxy, and the proxy is where the rate limit lives.** MusicBrainz asks for a real `User-Agent` with a contact address and enforces roughly one request per second — `tools/fetch_releases.py` already carries both, for the bulk fetches Sampo already runs. A new console route, `GET /api/musicbrainz/search?kind=<recording|artist|release>&q=<text>`, wraps `/ws/2/<kind>?query=...&fmt=json` behind that same discipline in **one place**, so the browser never calls musicbrainz.org directly and the rate limit cannot be bypassed by opening two tabs. Results come back as a short list — name, disambiguation, id — each rendered as a radio candidate exactly like a suggested one, so choosing a searched result and choosing a fingerprinted one are the same action from the operator's side of the page.
+
+**`[SPEC-SUI-197]` Four things can be wrong independently, and today only one of them is fixable.**
+
+| what | today | wanted |
+| :--- | :--- | :--- |
+| **recording** (the song) | fixable — `record_review`'s `chosen_mbid` | unchanged |
+| **release** (the album) | fixable, but only among releases the *chosen recording* already links to | also: any release found by search, linked on accept |
+| **artist** (the credit) | **not independently fixable** — it follows whichever recording is chosen | a credit can be corrected without touching the recording id at all |
+| **track** (position on the release) | not tracked as a correction at all | `release_recordings.position`/`disc` correctable per (release, recording) pair |
+
+The artist case is the one this table adds, not merely extends: `recording_artists` is keyed `(mbid, artist_mbid)`, and today nothing writes to it outside Sampo's own ingest. A person confirming "this recording is right, but MusicBrainz's own credit is wrong" needs a decision `apply_reviews.py` can fold into `recording_artists` the same way it folds a recording reassignment into `passage_recordings` — a new decision shape, not a reuse of the existing one, because the row it corrects is a different table with a different key.
+
+**Not built this session.** `[REQ-LIB-175]`'s waveform editor and this section were both requested together and both designed together; the build order in [IMPL004](../IMPL004-sampo-editing-workflows.md) covers both.

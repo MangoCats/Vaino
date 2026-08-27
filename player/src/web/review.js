@@ -23,6 +23,16 @@
 
   Vaino.startBare();
 
+  // A handoff lands on one passage, not the whole queue `[SPEC-SUI-150]`.
+  // `passage_id` is a Sampo-issued local sequence number, valid only for the
+  // co-resident player that named it `[SPEC-DF-035]` -- this is the handoff
+  // contract, not a general-purpose bookmark, so it is read once and never
+  // written back to the URL.
+  const wantPassage = (() => {
+    const n = Number(new URLSearchParams(location.search).get('passage'));
+    return Number.isInteger(n) && n > 0 ? n : null;
+  })();
+
   const pct = s => (s == null ? '' : `${(s * 100).toFixed(1)}%`);
 
   // The grades, worst first. `on` is whether it is shown to begin with:
@@ -358,6 +368,29 @@
   function showCards() {
     const cards = $('cards');
     cards.textContent = '';
+    $('note').textContent = '';
+
+    // The handoff case: one card, or a plain explanation of why there is
+    // none, never the whole queue's worth of unrelated findings.
+    if (wantPassage != null) {
+      $('filters').hidden = true;
+      const item = items.find(i => i.passage_id === wantPassage);
+      const note = $('note');
+      if (item) {
+        cards.appendChild(card(item));
+        note.append(`Showing passage ${wantPassage} only — `);
+        const all = el('a', null, 'show the whole queue');
+        all.href = location.pathname;
+        note.appendChild(all);
+      } else {
+        note.className = 'note';
+        note.textContent = `Passage ${wantPassage} is not a review finding — ` +
+          'either the audio matches, or it has never been checked. There is ' +
+          'nothing to do about it here.';
+      }
+      return;
+    }
+
     const shown = items.filter(i =>
       isDecided(i) ? showDecided : showing.has(i.severity));
     for (const item of shown) cards.appendChild(card(item));

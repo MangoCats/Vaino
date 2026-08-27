@@ -26,8 +26,11 @@ import argparse
 import html
 import json
 import os
+import shutil
+import socket
 import socketserver
 import sqlite3
+import subprocess
 import sys
 import time
 from http.server import BaseHTTPRequestHandler
@@ -43,6 +46,7 @@ WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 # the same machine, and because `[SPEC-SUI-170]` may start the player: colliding
 # would make each look like the other's failure.
 DEFAULT_PORT = 5730
+VAINO_PORT = 5720
 
 # 71 (characteristic, class) pairs across 18 characteristics is a complete
 # vector `[SPEC-SA-040]`. Measured on the four reference tracks, and the number
@@ -175,6 +179,85 @@ def profile(conn, pid: int) -> dict:
             "SELECT stage, outcome, confidence, detail, decided_at FROM ingest_decisions "
             "WHERE audio_md5 = ? ORDER BY decided_at", (p["audio_md5"],))],
     }
+
+
+# ----------------------------------------------------------------- handoff ---
+# Reaching the player's own pages from inside Sampo's workflow `[SPEC-SUI-140]`,
+# `[SPEC-SUI-135]`. Sampo never asks Vaino anything about the library it is
+# running -- only the operating system, whether the port answers at all
+# `[SPEC-SUI-025]`, `[SPEC-SUI-170]`. The round trip closes through the shared
+# database on Sampo's next scan, not through this connection `[SPEC-SUI-145]`.
+
+def _vaino_reachable(port: int, timeout: float = 0.5) -> bool:
+    """A socket question, not a route question `[SPEC-SUI-170]`."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _vaino_binary() -> str | None:
+    """Where the co-resident player's binary is, if one can be found at all.
+
+    Checked against this repository's own build layout first -- the case
+    while Sampo and Vaino are developed side by side -- then `PATH`, for an
+    installed player. Never guessed beyond that: a wrong binary started
+    against the wrong database is worse than admitting there is none.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    for rel in (
+        os.path.join(here, "..", "player", "target", "release", "vaino.exe"),
+        os.path.join(here, "..", "player", "target", "release", "vaino"),
+    ):
+        if os.path.isfile(rel):
+            return os.path.abspath(rel)
+    return shutil.which("vaino")
+
+
+def ensure_vaino(port: int = VAINO_PORT) -> dict:
+    """Start the co-resident player if one is not already there `[SPEC-SUI-170]`.
+
+    1. **Already running?** Use it. Do not start a second -- two players on
+       one library contend for the audio device and both write the single
+       resume row `[SPEC-SC-098]`.
+    2. **Not running?** Start it, on **Sampo's own database path**. This is
+       what makes `[SPEC-SUI-150]`'s passage-id handoff sound: the player
+       reads the exact file the id came from because Sampo told it to, not
+       because a configuration happened to agree.
+    3. **Start failed?** Say which capability is unavailable, and why.
+       Silent degradation is its own failure `[SPEC-DF-095]`.
+    """
+    if _vaino_reachable(port):
+        return {"ok": True, "port": port, "started": False}
+
+    if not STATE["path"]:
+        return {"ok": False, "port": port, "error": "no library open"}
+
+    binary = _vaino_binary()
+    if not binary:
+        return {"ok": False, "port": port,
+                "error": "no local Vaino binary found -- build player/ first "
+                         "(see build/README.md)"}
+
+    try:
+        subprocess.Popen(
+            [binary, STATE["path"], "--port", str(port)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except OSError as e:
+        return {"ok": False, "port": port, "error": f"could not start vaino: {e}"}
+
+    # Polled, not a fixed wait: the Program Director's own startup time scales
+    # with library size, the same reason `deploy-player.sh` polls rather than
+    # sleeping a fixed span before declaring a new build alive.
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if _vaino_reachable(port):
+            return {"ok": True, "port": port, "started": True}
+        time.sleep(0.25)
+    return {"ok": False, "port": port,
+            "error": "vaino did not answer within 20s of starting"}
 
 
 # -------------------------------------------------------------------- scan ---
@@ -348,6 +431,11 @@ class Handler(BaseHTTPRequestHandler):
                     STATE["scan"] = scan(conn, STATE["roots"])
                     STATE["scanned_at"] = time.time()
                 return self.send_json(STATE["scan"])
+            if p == "/api/handoff/ensure":
+                # Idempotent -- GET rather than a POST, the same reasoning as
+                # the folder scan above: asking twice costs nothing when a
+                # player is already there, which is the common case.
+                return self.send_json(ensure_vaino())
             self.send_error(404)
         except BrokenPipeError:
             pass
