@@ -217,11 +217,16 @@ pub(crate) const REVIEW_TABLE: &str = "
 /// `applied_at` is the difference between a judgement that can simply be
 /// withdrawn and one that has already changed the library. The page must not
 /// offer the same button for both.
+/// `origin` is added here and to the other two review tables together
+/// `[SPEC-DF-104]`: `NULL` for a decision made on this machine, else the
+/// hostname it was synced in from -- so a decision's own history survives
+/// however many installations it has already crossed.
 #[cfg(feature = "sampo-support")]
-pub(crate) const REVIEW_COLUMNS: [&str; 3] = [
+pub(crate) const REVIEW_COLUMNS: [&str; 4] = [
     "chosen_release_mbid TEXT",
     "previous_mbid TEXT",
     "applied_at TEXT",
+    "origin TEXT",
 ];
 
 /// Create `id_reviews` and bring it up to date, in one place.
@@ -246,9 +251,10 @@ pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
 /// Sampo's to write, not a web click's. `tools/apply_boundary_reviews.py`
 /// folds an accepted row into `passages`, on its own schedule.
 ///
-/// No `previous_*` columns -- unlike a recording reassignment, the automatic
-/// values a manual edit overrides are always recoverable by re-running the
-/// pass that produced them, so nothing here is the only copy of a fact.
+/// No `previous_*` columns for *revert* -- unlike a recording reassignment,
+/// the automatic values a manual edit overrides are always recoverable by
+/// re-running the pass that produced them, so nothing here is the only copy
+/// of a fact. `orig_*` below exists for a different reason `[SPEC-DF-102]`.
 #[cfg(feature = "sampo-support")]
 pub(crate) const BOUNDARY_REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS boundary_reviews (
@@ -261,19 +267,49 @@ pub(crate) const BOUNDARY_REVIEW_TABLE: &str = "
         decided_at  TEXT NOT NULL,
         applied_at  TEXT);";
 
+/// The pre-edit span and the passage's file identity `[SPEC-DF-102]`,
+/// captured at decision time from the passage's *current* row -- not for
+/// revert, which still re-derives, but because this edit changes the
+/// passage's only portable identity `[SPEC-DF-035]`. Without the span as it
+/// stood before this edit, a receiving installation that has not seen the
+/// edit yet has nothing stable to resolve the decision against.
+#[cfg(feature = "sampo-support")]
+pub(crate) const BOUNDARY_REVIEW_COLUMNS: [&str; 8] = [
+    "audio_md5 TEXT",
+    "orig_kind TEXT",
+    "orig_start_ms INTEGER",
+    "orig_end_ms INTEGER",
+    "orig_lead_in_ms INTEGER",
+    "orig_lead_out_ms INTEGER",
+    "orig_gain_db REAL",
+    "origin TEXT",
+];
+
 #[cfg(feature = "sampo-support")]
 pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))
+    conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    for column in BOUNDARY_REVIEW_COLUMNS {
+        let _ = conn.execute(&format!("ALTER TABLE boundary_reviews ADD COLUMN {column}"), []);
+    }
+    Ok(())
 }
 
 /// A correction to a recording's credited artist `[SPEC-SUI-197]` -- a
 /// different table with a different key from `id_reviews`, because it
 /// corrects a different table with a different key: `recording_artists` is
-/// keyed `(mbid, artist_mbid)`, not `passage_id`. Reached from a passage's
-/// card, so keyed by `passage_id` here too, with the recording mbid captured
-/// at decision time -- the same reason `id_reviews.previous_mbid` is
-/// captured then: it is the passage's current link, and only meaningful
-/// alongside whatever that link was when the person judged it.
+/// keyed `(mbid, artist_mbid)`, not `passage_id`.
+///
+/// **Keyed by `recording_mbid`, not `passage_id`** -- corrected from this
+/// table's first version, which used `passage_id` because the correction is
+/// *reached* from a passage's card. The credit belongs to the recording, and
+/// the same recording can sit under several passages (any file it appears in
+/// more than once); keying by `passage_id` let two different cards for the
+/// same recording each record their own, silently conflicting correction.
+/// It also made a synced correction `[SPEC-DF-103]` impossible to key at all,
+/// since a receiver has no originating passage for a decision it never made.
+/// `passage_id` is kept as a plain, non-unique column -- which card the
+/// correction happened to be made from, useful for provenance, load-bearing
+/// for nothing.
 ///
 /// `artist_name` is stored, not looked up at apply time, because a name
 /// found through live search (`[SPEC-SUI-196]`) exists nowhere in the
@@ -289,8 +325,8 @@ pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbEr
 #[cfg(feature = "sampo-support")]
 pub(crate) const ARTIST_REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS artist_reviews (
-        passage_id             INTEGER PRIMARY KEY,
-        recording_mbid         TEXT NOT NULL,
+        recording_mbid         TEXT PRIMARY KEY,
+        passage_id             INTEGER,
         artist_mbid            TEXT NOT NULL,
         artist_name            TEXT NOT NULL,
         previous_artist_mbid   TEXT,
@@ -299,9 +335,19 @@ pub(crate) const ARTIST_REVIEW_TABLE: &str = "
         decided_at             TEXT NOT NULL,
         applied_at             TEXT);";
 
+/// `origin` `[SPEC-DF-104]`, added the same way the other two review tables
+/// gain it: `NULL` for a decision made on this machine, else the hostname it
+/// arrived from.
+#[cfg(feature = "sampo-support")]
+pub(crate) const ARTIST_REVIEW_COLUMNS: [&str; 1] = ["origin TEXT"];
+
 #[cfg(feature = "sampo-support")]
 pub(crate) fn ensure_artist_review_table(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch(ARTIST_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))
+    conn.execute_batch(ARTIST_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    for column in ARTIST_REVIEW_COLUMNS {
+        let _ = conn.execute(&format!("ALTER TABLE artist_reviews ADD COLUMN {column}"), []);
+    }
+    Ok(())
 }
 
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.duration_ms, \
@@ -956,22 +1002,72 @@ impl PlayerStore {
         if start_ms >= end_ms {
             return Err(DbError::Query("start must come before end".into()));
         }
+
+        // Changing a decision already folded into `passages` is not an
+        // overwrite of one row -- `apply_boundary_reviews.py` has to put the
+        // old span back first, the same guard `record_review` and
+        // `record_artist_review` already apply to their own tables. Missing
+        // here until this same change added `orig_*`: re-committing after
+        // apply would have captured the *already-applied* values as if they
+        // were the original, corrupting the one thing `[SPEC-DF-102]` exists
+        // to keep honest.
+        let applied: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT applied_at FROM boundary_reviews WHERE passage_id = ?1",
+                [passage_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+        if applied.is_some() {
+            return Err(DbError::Query(
+                "this edit has already been applied to the library".into(),
+            ));
+        }
+
+        // The pre-edit span and file identity, read from `passages` itself
+        // rather than from any earlier `boundary_reviews` row `[SPEC-DF-102]`.
+        // `passages` does not change until `apply_boundary_reviews.py` runs,
+        // so a second commit before that reads the same true original --
+        // exactly how `record_review`'s `previous_mbid` stays pinned across
+        // repeated commits without needing to remember its own prior value.
+        let (audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms, orig_lead_out_ms, orig_gain_db): (String, String, i64, i64, Option<i64>, Option<i64>, Option<f64>) = self
+            .conn
+            .query_row(
+                "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db \
+                   FROM passages p JOIN files f ON f.file_id = p.file_id \
+                  WHERE p.passage_id = ?1",
+                [passage_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            )
+            .map_err(|_| DbError::Query("no such passage".into()))?;
+
         self.conn
             .execute(
                 "INSERT INTO boundary_reviews
-                     (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms,
-                      gain_db, decided_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+                     (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                      audio_md5, orig_kind, orig_start_ms, orig_end_ms,
+                      orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, decided_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
                  ON CONFLICT(passage_id) DO UPDATE SET
                      start_ms = excluded.start_ms,
                      end_ms = excluded.end_ms,
                      lead_in_ms = excluded.lead_in_ms,
                      lead_out_ms = excluded.lead_out_ms,
                      gain_db = excluded.gain_db,
+                     audio_md5 = excluded.audio_md5,
+                     orig_kind = excluded.orig_kind,
+                     orig_start_ms = excluded.orig_start_ms,
+                     orig_end_ms = excluded.orig_end_ms,
+                     orig_lead_in_ms = excluded.orig_lead_in_ms,
+                     orig_lead_out_ms = excluded.orig_lead_out_ms,
+                     orig_gain_db = excluded.orig_gain_db,
                      decided_at = excluded.decided_at",
                 rusqlite::params![
                     passage_id, start_ms as i64, end_ms as i64,
                     lead_in_ms as i64, lead_out_ms as i64, gain_db,
+                    audio_md5, orig_kind, orig_start_ms, orig_end_ms,
+                    orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
                 ],
             )
             .map(|_| ())
@@ -1004,11 +1100,15 @@ impl PlayerStore {
                 DbError::Query("this passage has no recording linked yet".into())
             })?;
 
+        // Keyed by `recording_mbid`, not `passage_id`: the credit belongs to
+        // the recording, and a second passage carrying the same recording
+        // must find and refuse (or update) the SAME row, not start a second,
+        // silently conflicting one.
         let applied: Option<String> = self
             .conn
             .query_row(
-                "SELECT applied_at FROM artist_reviews WHERE passage_id = ?1",
-                [passage_id],
+                "SELECT applied_at FROM artist_reviews WHERE recording_mbid = ?1",
+                [&recording_mbid],
                 |r| r.get(0),
             )
             .unwrap_or(None);
@@ -1039,12 +1139,12 @@ impl PlayerStore {
         self.conn
             .execute(
                 "INSERT INTO artist_reviews
-                     (passage_id, recording_mbid, artist_mbid, artist_name,
+                     (recording_mbid, passage_id, artist_mbid, artist_name,
                       previous_artist_mbid, previous_artist_name, previous_artist_weight,
                       decided_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
-                 ON CONFLICT(passage_id) DO UPDATE SET
-                     recording_mbid = excluded.recording_mbid,
+                 ON CONFLICT(recording_mbid) DO UPDATE SET
+                     passage_id = excluded.passage_id,
                      artist_mbid = excluded.artist_mbid,
                      artist_name = excluded.artist_name,
                      previous_artist_mbid = excluded.previous_artist_mbid,
@@ -1052,7 +1152,7 @@ impl PlayerStore {
                      previous_artist_weight = excluded.previous_artist_weight,
                      decided_at = excluded.decided_at",
                 rusqlite::params![
-                    passage_id, recording_mbid, artist_mbid, artist_name,
+                    recording_mbid, passage_id, artist_mbid, artist_name,
                     prev_mbid, prev_name, prev_weight,
                 ],
             )
@@ -1064,21 +1164,34 @@ impl PlayerStore {
     /// undo `clear_review` offers for a recording reassignment.
     #[cfg(feature = "sampo-support")]
     pub fn clear_artist_review(&self, passage_id: i64) -> Result<(), DbError> {
-        let applied: Option<String> = self
+        // Resolved through the passage's CURRENT recording link, the same
+        // way `record_artist_review` finds the row to begin with -- the
+        // undo button lives on a passage's card, but the row it withdraws is
+        // keyed by the recording that card currently names.
+        let recording_mbid: String = self
             .conn
             .query_row(
-                "SELECT applied_at FROM artist_reviews WHERE passage_id = ?1",
+                "SELECT mbid FROM passage_recordings WHERE passage_id = ?1 \
+                  ORDER BY weight DESC, mbid LIMIT 1",
                 [passage_id],
                 |r| r.get(0),
             )
-            .map_err(|_| DbError::Query("no artist correction recorded for that passage".into()))?;
+            .map_err(|_| DbError::Query("this passage has no recording linked".into()))?;
+        let applied: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT applied_at FROM artist_reviews WHERE recording_mbid = ?1",
+                [&recording_mbid],
+                |r| r.get(0),
+            )
+            .map_err(|_| DbError::Query("no artist correction recorded for that recording".into()))?;
         if applied.is_some() {
             return Err(DbError::Query(
                 "already applied to the library; use tools/apply_reviews.py --revert-artist".into(),
             ));
         }
         self.conn
-            .execute("DELETE FROM artist_reviews WHERE passage_id = ?1", [passage_id])
+            .execute("DELETE FROM artist_reviews WHERE recording_mbid = ?1", [&recording_mbid])
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
@@ -1800,7 +1913,9 @@ impl Library {
         // `id_checks`/`id_reviews` never touch `[SPEC-SUI-197]` -- reachability
         // for this correction rides on whatever else put the passage in front
         // of a person, since nothing about a right recording's wrong credit
-        // makes AcoustID disagree with anything.
+        // makes AcoustID disagree with anything. Joined by `m.mbid` -- the
+        // passage's CURRENT recording link, which `NAMED` already computes --
+        // not by passage, since the table is keyed by recording.
         let sql = format!(
             "SELECT c.passage_id, c.stored_mbid, c.score, c.suggested, \
                     {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
@@ -1810,7 +1925,7 @@ impl Library {
                JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
                LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
                LEFT JOIN id_reviews v ON v.passage_id = c.passage_id \
-               LEFT JOIN artist_reviews a ON a.passage_id = c.passage_id \
+               LEFT JOIN artist_reviews a ON a.recording_mbid = m.mbid \
               WHERE c.verdict IN ('contradicted', 'unmatched') \
                 AND NOT (c.verdict = 'unmatched' \
                          AND EXISTS (SELECT 1 FROM passage_recordings pr \
@@ -2608,14 +2723,13 @@ mod tests {
         assert!(!q[0].artist_review_applied);
         assert_eq!(q[0].decision, None, "an artist correction must not touch `decision`");
 
-        let (recording, prev): (String, Option<String>) = store
+        let recording = "aaaaaaaa-0000-0000-0000-000000000001";
+        let prev: Option<String> = store
             .conn
             .query_row(
-                "SELECT recording_mbid, previous_artist_mbid FROM artist_reviews WHERE passage_id = 2",
-                [], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap();
-        assert_eq!(recording, "aaaaaaaa-0000-0000-0000-000000000001",
-                   "must capture the heavier of the two links, like previous_mbid does");
+                "SELECT previous_artist_mbid FROM artist_reviews WHERE recording_mbid = ?1",
+                [recording], |r| r.get(0))
+            .expect("the row must be keyed by recording_mbid, like previous_mbid does");
         assert_eq!(prev, None, "this recording has no existing credit to capture");
 
         store.clear_artist_review(2).unwrap();
@@ -2636,13 +2750,68 @@ mod tests {
         // Applied is a different, non-withdrawable state, the same as a
         // recording reassignment.
         store.conn.execute(
-            "UPDATE artist_reviews SET applied_at = datetime('now') WHERE passage_id = 2", [])
+            "UPDATE artist_reviews SET applied_at = datetime('now') WHERE recording_mbid = ?1",
+            [recording])
             .unwrap();
         assert!(lib.review_queue(50).unwrap()[0].artist_review_applied);
         assert!(store.clear_artist_review(2).is_err(),
                 "an applied correction must not just vanish");
         assert!(store.record_artist_review(2, "artist-mbid-3", "Yet Another").is_err(),
                 "nor be silently overwritten by a different answer");
+    }
+
+    /// The bug keying by `passage_id` would have been: two passages sharing
+    /// one recording each get their own, silently conflicting correction row.
+    /// Keyed by `recording_mbid`, a second passage naming the same recording
+    /// finds and updates the SAME row -- an unapplied correction is still a
+    /// mutable draft regardless of which card it is edited from -- rather
+    /// than starting an independent one nothing would ever reconcile.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn two_passages_sharing_a_recording_share_one_artist_correction() {
+        let tmp = std::env::temp_dir().join(format!("vaino-art3-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = reviewable();
+            // Passage 3 now ALSO names passage 2's recording -- the "same
+            // song, two files" case a correction must not see as two
+            // separate questions.
+            c.execute(
+                "INSERT INTO passage_recordings VALUES \
+                    (3,'aaaaaaaa-0000-0000-0000-000000000001',1.0,'s')",
+                [],
+            )
+            .unwrap();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+
+        store.record_artist_review(2, "artist-mbid-1", "The Real Artist").unwrap();
+        let n: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM artist_reviews", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+
+        // Reached from the OTHER passage, the SAME recording's correction is
+        // what is found and updated -- an unapplied correction is still a
+        // mutable draft regardless of which card it is edited from, the same
+        // as changing your mind about a reassignment before it is applied.
+        // What it must NOT do is create a second, independent row.
+        store.record_artist_review(3, "artist-mbid-2", "A Different Answer").unwrap();
+        let n2: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM artist_reviews", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n2, 1, "a second passage's edit must update the shared row, not add one");
+        let name: String = store
+            .conn
+            .query_row(
+                "SELECT artist_name FROM artist_reviews WHERE recording_mbid = 'aaaaaaaa-0000-0000-0000-000000000001'",
+                [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "A Different Answer");
+        let _ = std::fs::remove_file(&tmp);
     }
 
     /// The recording has to exist before its credit can be corrected -- "the
@@ -2836,6 +3005,73 @@ mod tests {
         let got2 = Library::open(&tmp).unwrap().boundary_review(2).unwrap();
         assert_eq!(got2.start_ms, 2100, "the update must actually take");
 
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The pre-edit span is captured for sync `[SPEC-DF-102]`, and stays
+    /// pinned to the true original across a second commit -- the same
+    /// "read the live table, not our own prior row" trick `previous_mbid`
+    /// already relies on.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn a_boundary_edit_captures_its_pre_edit_span_for_sync() {
+        let tmp = std::env::temp_dir().join(format!("vaino-bnd3-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = fixture();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0).unwrap();
+
+        let row = |c: &Connection| -> (String, String, i64, i64, Option<i64>, Option<i64>, Option<f64>) {
+            c.query_row(
+                "SELECT audio_md5, orig_kind, orig_start_ms, orig_end_ms, \
+                        orig_lead_in_ms, orig_lead_out_ms, orig_gain_db \
+                   FROM boundary_reviews WHERE passage_id = 2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            )
+            .unwrap()
+        };
+        let (md5, kind, os, oe, oli, olo, og) = row(&store.conn);
+        assert_eq!((md5.as_str(), kind.as_str()), ("md5", "radio"));
+        assert_eq!((os, oe), (1200, 298_000), "must be the passage's ORIGINAL span, not the draft");
+        assert_eq!((oli, olo), (Some(3000), Some(4000)));
+        assert!((og.unwrap() - -2.5).abs() < 1e-9);
+
+        // A second commit, before anything applies it, must not move the
+        // baseline to the FIRST draft's values -- `passages` itself has not
+        // changed, so re-reading it gives the same true original.
+        store.record_boundary_review(2, 2100, 291_000, 400, 1400, -0.5).unwrap();
+        let (_, _, os2, oe2, ..) = row(&store.conn);
+        assert_eq!((os2, oe2), (1200, 298_000), "the baseline must not drift on a re-commit");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Changing a decision already folded into `passages` would corrupt the
+    /// baseline `[SPEC-DF-102]` sync depends on, the same reason
+    /// `record_review` refuses the equivalent case for a reassignment.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn a_boundary_edit_cannot_be_recommitted_once_applied() {
+        let tmp = std::env::temp_dir().join(format!("vaino-bnd4-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = fixture();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = 2",
+                [],
+            )
+            .unwrap();
+        assert!(store.record_boundary_review(2, 2200, 292_000, 300, 1300, -0.2).is_err());
         let _ = std::fs::remove_file(&tmp);
     }
 

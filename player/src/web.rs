@@ -1113,7 +1113,10 @@ async fn edit_review(
     .await;
     match done {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
+        // The reason travels back as text, same as `record_review`'s own
+        // refusals -- "already applied" is exactly what the operator needs
+        // to read, not a bare status code.
+        Ok(Err(msg)) => (StatusCode::CONFLICT, msg).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }

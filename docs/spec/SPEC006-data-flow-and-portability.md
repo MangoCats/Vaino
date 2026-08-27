@@ -184,4 +184,64 @@ The run still produces fully portable data `[SPEC-DF-065]`; only the envelope ch
 
 ---
 
-**Traceability:** `[SPEC-DF-010..093]` · derived from `[GDE-BMK-050]`, `[GDE-ARC-010]`, `[GDE-CHT-045]`, `[GDE-FBD-020]`
+## 9. Syncing an applied edit to a remote installation
+
+Designed 2026-08-27, against `[REQ-LIB-185]`. The bundle transport (`[SPEC-SUI-095]`) answers "how does new music, and what Sampo learned about it, reach a Vaino that has none of it." It does not answer a different question: **the appliance already has this track — how does a correction made on the desktop reach it?** `import_bundle` treats a held `audio_md5` as fully present and applies nothing further to that encoding, which is right for new music and silently wrong for an edit to old music: nothing about it is broken, it simply was never asked to do this.
+
+**`[SPEC-DF-100]` The sync unit is the reviewed decision, not the row it wrote.** `id_reviews`, `boundary_reviews` and `artist_reviews` `[SPEC021 §2]` are already, in effect, small journals: what changed, when it was decided, and — for two of the three — what it replaced. A decision is also small (a handful of fields) where the tables it touches are not, so transporting decisions rather than diffing whole tables is both the cheaper mechanism and the one that already exists in the schema, half-built.
+
+**`[SPEC-DF-101]` Every synced decision carries a baseline and a target, and a receiver merges the same way git does.** Comparing the receiver's *current* value at the same identity against the two:
+
+| receiver's current value | means | action |
+| :--- | :--- | :--- |
+| equals **baseline** | nothing changed there since the source's own edit | **fast-forward**, no flag — apply automatically |
+| equals **target** already | the same correction, or an equivalent one, already landed | **no-op**, already in sync |
+| equals **neither** | changed independently since the shared baseline | **conflict** — stop, show both histories, wait for a person |
+
+This is `[SPEC-DF-070]`'s "never silently overwrite a user's correction" rule, generalised from "an import disagreeing with the receiver" to "two installations that have each made their own decision since they last agreed."
+
+**`[SPEC-DF-102]` A baseline is not optional, and one review table did not have one.** `id_reviews.previous_mbid` and the artist correction's `previous_artist_*` `[SPEC-SUI-197]` already capture what they replaced, for revert — and that value doubles exactly as a sync baseline. `boundary_reviews` deliberately captures no `previous_*` `[SPEC021 §2]`, because a boundary's old values are re-derivable by re-running segmentation and revert never needed them. Sync needs them for a different reason: the edit itself changes the passage's *only* portable identity, `(audio_md5, kind, start_ms, end_ms)` `[SPEC-DF-035]`, so without the pre-edit span captured, a receiver has nothing stable to resolve the decision against. This does not reopen `[SPEC021]`'s revert decision — revert still re-derives — it adds a second, narrower reason for a table to remember where it started.
+
+`boundary_reviews` gains, captured at decision time from the passage's *current* row, the same way `id_reviews.previous_mbid` is captured from `passage_recordings`'s current row: `audio_md5`, `orig_start_ms`, `orig_end_ms`, `orig_lead_in_ms`, `orig_lead_out_ms`, `orig_gain_db`.
+
+**`[SPEC-DF-103]` Portable identity, one per kind, narrowest that fits `[SPEC-DF-040]`:**
+
+| kind | identity | why |
+| :--- | :--- | :--- |
+| `artist_review` | `recording_mbid` alone | a credit is a fact about the recording, not the passage — no passage resolution needed at all |
+| `id_review` | `(audio_md5, kind, start_ms, end_ms)`, read live | its own edit never touches boundaries, so the passage's current span is already stable |
+| `boundary_review` | `(audio_md5, kind, orig_start_ms, orig_end_ms)` | the span *as it was*, per `[SPEC-DF-102]` — the only span a receiver that has not seen the edit can still recognise |
+
+**`[SPEC-DF-104]` Provenance travels with the decision, across as many hops as it takes.** Each review row gains `origin` — absent for a decision made on this machine, else the hostname that first decided it. A receiver landing a synced decision stamps its own copy with the *original* `origin` and the *original* `decided_at`, never its own arrival time — `apply_reviews.py`-style provenance (`[SPEC-DF-070]`'s rule 3) applied to installations instead of import sources, so a decision synced B → C still says where and when it was actually made, not merely that C received it from B.
+
+**`[SPEC-DF-105]` Two tools, the same rehearse-by-default shape every tool in this codebase already uses. Transport is manual, the same reason `[SPEC-SUI-095]`'s bundle transport is `[GDE-ARC-018]`: neither tool touches a network.**
+
+```
+python tools/export_changes.py <local_db> -o changes.json
+rsync changes.json pi@vainopi:/srv/library/incoming/
+
+python tools/apply_changes.py <remote_db> changes.json               # rehearsal
+python tools/apply_changes.py <remote_db> changes.json --commit      # fast-forwards land; conflicts are reported, not written
+python tools/apply_changes.py <remote_db> changes.json --resolve 3=ours    # keep what's already there
+python tools/apply_changes.py <remote_db> changes.json --resolve 3=theirs  # apply the incoming decision
+```
+
+`export_changes.py` reads every *applied* decision and writes one portable JSON record per row — no filtering by "already sent" in this version; idempotency (`[SPEC-DF-101]`'s no-op case) is what makes re-sending the whole history harmless rather than merely convenient, and a `--since` narrowing is a later optimisation, not a correctness requirement.
+
+`apply_changes.py` runs directly against a database path — `/srv/library/vaino.db`, with the player stopped, the same posture `[PI5-LIB-010]` already used for the one real library swap — and needs no Vaino process, no HTTP route, and no `sampo-support` build on the target. Landing a decision writes it twice, in one transaction: the review-table row itself (so the target's own history and any *further* sync hop can see it), and the live schema write `apply_reviews.py`/`apply_boundary_reviews.py` would have made for the same row — a synced decision becomes indistinguishable from one made locally and applied locally, except for `origin` saying otherwise.
+
+**`[SPEC-DF-106]` A conflict report names both sides, not just that they disagree.**
+
+```
+#3 CONFLICT  artist credit for recording 99b75401-… ("Jump")
+   incoming (Desktop, decided 2026-08-27 14:02): -> Dire Straits
+   baseline (what Desktop saw before its edit):     Van Halen
+   here now:                                        Eddie Van Halen (Solo)
+     decided here 2026-08-26 09:15 -- diverged independently, no shared baseline
+```
+
+If the receiver's current value carries no review row at all — ordinary Sampo ingest, never corrected here — the report says that instead of inventing a `decided_at` for a decision nobody made.
+
+---
+
+**Traceability:** `[SPEC-DF-010..106]` · derived from `[GDE-BMK-050]`, `[GDE-ARC-010]`, `[GDE-CHT-045]`, `[GDE-FBD-020]`

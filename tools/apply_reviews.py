@@ -24,8 +24,10 @@ today's fingerprint check has no way to notice. Every run folds in pending
 artist corrections too, whether or not there is a recording reassignment
 pending -- a different table (`recording_artists`), a different key, and a
 passage whose recording was never in question can still have one waiting.
-`--revert-artist PASSAGE_ID` undoes an applied one the same way `--revert`
-undoes a reassignment.
+`--revert-artist RECORDING_MBID` undoes an applied one the same way `--revert`
+undoes a reassignment -- keyed by the recording, not a passage, since the
+credit belongs to the recording and a passage is only ever how the
+correction was reached.
 """
 
 import argparse
@@ -121,8 +123,11 @@ def revert(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
     return 0
 
 
-def revert_artist(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
+def revert_artist(conn: sqlite3.Connection, recording_mbid: str, commit: bool) -> int:
     """Put back the artist credit an applied correction replaced `[SPEC-SUI-197]`.
+
+    Keyed by `recording_mbid`, not a passage: the credit belongs to the
+    recording, and a passage is only ever how the correction was reached.
 
     Unlike a recording reassignment, `artist_reviews` carries the ONE previous
     credit `record_artist_review` captured at decision time -- the heaviest
@@ -131,23 +136,21 @@ def revert_artist(conn: sqlite3.Connection, passage_id: int, commit: bool) -> in
     than one credited artist, but this correction only ever replaced one.
     """
     row = conn.execute(
-        "SELECT recording_mbid, artist_mbid, previous_artist_mbid, "
+        "SELECT artist_mbid, previous_artist_mbid, "
         "       previous_artist_name, previous_artist_weight, applied_at "
-        "  FROM artist_reviews WHERE passage_id = ?1", (passage_id,)).fetchone()
+        "  FROM artist_reviews WHERE recording_mbid = ?1", (recording_mbid,)).fetchone()
     if not row:
-        say(f"passage {passage_id}: no artist correction recorded")
+        say(f"recording {recording_mbid}: no artist correction recorded")
         return 1
-    recording_mbid, artist_mbid, prev_mbid, prev_name, prev_weight, applied_at = row
+    artist_mbid, prev_mbid, prev_name, prev_weight, applied_at = row
     if not applied_at:
-        say(f"passage {passage_id}: not yet applied -- withdraw it on the review page instead")
+        say(f"recording {recording_mbid}: not yet applied -- withdraw it on the review page instead")
         return 1
 
     if prev_mbid:
-        say(f"passage {passage_id}: recording {recording_mbid} credit "
-            f"{artist_mbid} -> {prev_mbid} ({prev_name}) (restoring)")
+        say(f"recording {recording_mbid}: credit {artist_mbid} -> {prev_mbid} ({prev_name}) (restoring)")
     else:
-        say(f"passage {passage_id}: recording {recording_mbid} credit "
-            f"{artist_mbid} -> no credit at all (restoring)")
+        say(f"recording {recording_mbid}: credit {artist_mbid} -> no credit at all (restoring)")
     if not commit:
         say("\nnothing was written. Re-run with --commit to do it.")
         return 0
@@ -164,7 +167,7 @@ def revert_artist(conn: sqlite3.Connection, passage_id: int, commit: bool) -> in
         conn.execute(
             "INSERT INTO recording_artists (mbid, artist_mbid, weight, source) "
             "VALUES (?1, ?2, ?3, 'inherited:mulib')", (recording_mbid, prev_mbid, prev_weight))
-    conn.execute("DELETE FROM artist_reviews WHERE passage_id = ?1", (passage_id,))
+    conn.execute("DELETE FROM artist_reviews WHERE recording_mbid = ?1", (recording_mbid,))
     conn.commit()
     say("reverted")
     return 0
@@ -178,17 +181,17 @@ def apply_artist_corrections(conn: sqlite3.Connection, commit: bool) -> int:
     question can still have a pending correction here.
     """
     pending = conn.execute(
-        """SELECT passage_id, recording_mbid, artist_mbid, artist_name
+        """SELECT recording_mbid, artist_mbid, artist_name
              FROM artist_reviews WHERE applied_at IS NULL
-            ORDER BY passage_id""").fetchall()
+            ORDER BY recording_mbid""").fetchall()
     say(f"{len(pending)} artist correction(s) to apply")
     if not pending:
         return 0
 
     if commit:
         conn.execute("BEGIN IMMEDIATE")
-    for passage_id, recording_mbid, artist_mbid, artist_name in pending:
-        say(f"  passage {passage_id}: recording {recording_mbid} -> credited to {artist_name}")
+    for recording_mbid, artist_mbid, artist_name in pending:
+        say(f"  recording {recording_mbid} -> credited to {artist_name}")
         if commit:
             conn.execute(
                 "INSERT OR IGNORE INTO artists (mbid, name, source) VALUES (?1, ?2, ?3)",
@@ -202,8 +205,8 @@ def apply_artist_corrections(conn: sqlite3.Connection, commit: bool) -> int:
                 "INSERT INTO recording_artists (mbid, artist_mbid, weight, source) "
                 "VALUES (?1, ?2, 1.0, ?3)", (recording_mbid, artist_mbid, SOURCE))
             conn.execute(
-                "UPDATE artist_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
-                (passage_id,))
+                "UPDATE artist_reviews SET applied_at = datetime('now') WHERE recording_mbid = ?1",
+                (recording_mbid,))
     if commit:
         conn.commit()
         say(f"applied {len(pending)} artist correction(s)")
@@ -218,7 +221,7 @@ def main() -> int:
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--revert", type=int, metavar="PASSAGE_ID",
                     help="undo an applied reassignment and re-open it for review")
-    ap.add_argument("--revert-artist", type=int, metavar="PASSAGE_ID",
+    ap.add_argument("--revert-artist", metavar="RECORDING_MBID",
                     help="undo an applied artist-credit correction `[SPEC-SUI-197]`")
     args = ap.parse_args()
 

@@ -65,11 +65,14 @@ CREATE TABLE identification_cache (audio_md5 TEXT NOT NULL, service TEXT NOT NUL
     PRIMARY KEY (audio_md5, service, request_key)) WITHOUT ROWID;
 CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT NOT NULL,
     chosen_mbid TEXT, decided_at TEXT NOT NULL,
-    chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT);
-CREATE TABLE artist_reviews (passage_id INTEGER PRIMARY KEY,
-    recording_mbid TEXT NOT NULL, artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
+    chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT, origin TEXT);
+-- Keyed by recording_mbid, not passage_id: the credit belongs to the
+-- recording, and passage_id is kept only as an informational column
+-- `[SPEC-SUI-197]`.
+CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
+    artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
     previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
-    decided_at TEXT NOT NULL, applied_at TEXT);
+    decided_at TEXT NOT NULL, applied_at TEXT, origin TEXT);
 """
 
 OLD = "11111111-1111-1111-1111-111111111111"
@@ -256,7 +259,7 @@ def main() -> int:
         name = c.execute("SELECT name FROM artists WHERE mbid=?", (ART_RIGHT,)).fetchone()
         check(name == ("Right Artist",), f"the new artist must be named, got {name}")
         applied_at = c.execute(
-            "SELECT applied_at FROM artist_reviews WHERE passage_id=1").fetchone()[0]
+            "SELECT applied_at FROM artist_reviews WHERE recording_mbid=?", (OLD,)).fetchone()[0]
         check(applied_at is not None, "applied_at must be stamped")
         c.close()
 
@@ -265,13 +268,13 @@ def main() -> int:
         check("0 artist correction(s) to apply" in r.stdout, f"got {r.stdout!r}")
 
         print("--revert-artist puts the old credit back and clears the record")
-        r = run(db5, "--revert-artist", "1")
+        r = run(db5, "--revert-artist", OLD)
         check(credit(db5) == [ART_RIGHT], "a revert rehearsal must not change the credit")
-        r = run(db5, "--revert-artist", "1", "--commit")
+        r = run(db5, "--revert-artist", OLD, "--commit")
         check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:300]}")
         check(credit(db5) == [ART_WRONG], f"after revert the credit is {credit(db5)}")
         c = sqlite3.connect(db5)
-        check(c.execute("SELECT COUNT(*) FROM artist_reviews WHERE passage_id=1")
+        check(c.execute("SELECT COUNT(*) FROM artist_reviews WHERE recording_mbid=?", (OLD,))
                .fetchone()[0] == 0, "revert must clear the record")
         c.close()
 
