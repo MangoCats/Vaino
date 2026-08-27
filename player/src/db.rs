@@ -241,6 +241,31 @@ pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Recorded boundary edits, shaped like `id_reviews` for the same reason
+/// `[SPEC021 §2]`: an edit changes what a passage *is*, and the library is
+/// Sampo's to write, not a web click's. `tools/apply_boundary_reviews.py`
+/// folds an accepted row into `passages`, on its own schedule.
+///
+/// No `previous_*` columns -- unlike a recording reassignment, the automatic
+/// values a manual edit overrides are always recoverable by re-running the
+/// pass that produced them, so nothing here is the only copy of a fact.
+#[cfg(feature = "sampo-support")]
+pub(crate) const BOUNDARY_REVIEW_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS boundary_reviews (
+        passage_id  INTEGER PRIMARY KEY,
+        start_ms    INTEGER NOT NULL,
+        end_ms      INTEGER NOT NULL,
+        lead_in_ms  INTEGER,
+        lead_out_ms INTEGER,
+        gain_db     REAL,
+        decided_at  TEXT NOT NULL,
+        applied_at  TEXT);";
+
+#[cfg(feature = "sampo-support")]
+pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))
+}
+
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.duration_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                                (SELECT pr.mbid FROM passage_recordings pr \
@@ -709,6 +734,8 @@ impl PlayerStore {
         ensure_history_columns(&conn);
         #[cfg(feature = "sampo-support")]
         ensure_review_table(&conn)?;
+        #[cfg(feature = "sampo-support")]
+        ensure_boundary_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
         // that only runs behind the background scan, so a library whose scan
@@ -866,6 +893,47 @@ impl PlayerStore {
         }
         self.conn
             .execute("DELETE FROM id_reviews WHERE passage_id = ?1", [passage_id])
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Record a boundary edit `[REQ-LIB-175]`, `[SPEC021 §2]`.
+    ///
+    /// Committing twice on the same passage updates the one row rather than
+    /// adding a second -- the same `ON CONFLICT` shape `record_review` uses,
+    /// for the same reason: the queue key is the passage, and a second draft
+    /// is not a second finding.
+    #[cfg(feature = "sampo-support")]
+    pub fn record_boundary_review(
+        &self,
+        passage_id: i64,
+        start_ms: u64,
+        end_ms: u64,
+        lead_in_ms: u64,
+        lead_out_ms: u64,
+        gain_db: f64,
+    ) -> Result<(), DbError> {
+        if start_ms >= end_ms {
+            return Err(DbError::Query("start must come before end".into()));
+        }
+        self.conn
+            .execute(
+                "INSERT INTO boundary_reviews
+                     (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms,
+                      gain_db, decided_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+                 ON CONFLICT(passage_id) DO UPDATE SET
+                     start_ms = excluded.start_ms,
+                     end_ms = excluded.end_ms,
+                     lead_in_ms = excluded.lead_in_ms,
+                     lead_out_ms = excluded.lead_out_ms,
+                     gain_db = excluded.gain_db,
+                     decided_at = excluded.decided_at",
+                rusqlite::params![
+                    passage_id, start_ms as i64, end_ms as i64,
+                    lead_in_ms as i64, lead_out_ms as i64, gain_db,
+                ],
+            )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
@@ -1460,6 +1528,17 @@ pub struct ReviewProgress {
     pub decided: i64,
 }
 
+/// A recorded-but-not-yet-applied boundary edit `[SPEC021 §2]`.
+#[cfg(feature = "sampo-support")]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BoundaryReview {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub lead_in_ms: Option<u64>,
+    pub lead_out_ms: Option<u64>,
+    pub gain_db: Option<f64>,
+}
+
 /// What to narrow a browse to. Every field is a whole-value match except `q`,
 /// which is a substring -- the difference between "this artist" and "anything
 /// that looks like this".
@@ -1721,6 +1800,38 @@ impl Library {
             confirmed: n("SELECT COUNT(*) FROM id_checks WHERE verdict = 'confirmed'"),
             decided: n("SELECT COUNT(*) FROM id_reviews"),
         }
+    }
+
+    /// A recorded-but-not-yet-applied boundary edit, if there is one
+    /// `[SPEC021 §2]`. Reopening the editor after a commit must show the
+    /// edit that was made, not the stale automatic values it drafted over --
+    /// so `/edit/:id/info` prefers this when it exists.
+    ///
+    /// `boundary_reviews` is created by `PlayerStore::open`, but this handle
+    /// does not itself guarantee that has run -- guarded the same way
+    /// `review_queue` guards `id_checks`, since a query naming a table that
+    /// does not exist fails outright rather than finding nothing.
+    #[cfg(feature = "sampo-support")]
+    pub fn boundary_review(&self, passage_id: i64) -> Option<BoundaryReview> {
+        if !self.has_table("boundary_reviews") {
+            return None;
+        }
+        self.conn
+            .query_row(
+                "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db
+                   FROM boundary_reviews WHERE passage_id = ?1",
+                [passage_id],
+                |r| {
+                    Ok(BoundaryReview {
+                        start_ms: r.get::<_, i64>(0)? as u64,
+                        end_ms: r.get::<_, i64>(1)? as u64,
+                        lead_in_ms: r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                        lead_out_ms: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
+                        gain_db: r.get(4)?,
+                    })
+                },
+            )
+            .ok()
     }
 
     fn has_table(&self, name: &str) -> bool {
@@ -2451,6 +2562,66 @@ mod tests {
         assert!(store.record_review(2, "nonsense", None, None).is_err());
         assert!(store.record_review(2, "deferred", None, None).is_ok());
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A boundary edit is readable back through `Library`, and committing
+    /// twice updates the one row rather than adding a second `[SPEC021 §2]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn a_boundary_edit_is_recorded_and_updates_in_place() {
+        let tmp = std::env::temp_dir().join(format!("vaino-bnd-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = fixture();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0).unwrap();
+
+        let lib = Library::open(&tmp).unwrap();
+        let got = lib.boundary_review(2).expect("a committed edit must be readable back");
+        assert_eq!((got.start_ms, got.end_ms), (2000, 290_000));
+        assert_eq!(got.lead_in_ms, Some(500));
+        assert_eq!(got.lead_out_ms, Some(1500));
+        assert!((got.gain_db.unwrap() - -1.0).abs() < 1e-9);
+
+        store.record_boundary_review(2, 2100, 291_000, 400, 1400, -0.5).unwrap();
+        let n: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM boundary_reviews", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "a second commit must update, not add a row");
+        let got2 = Library::open(&tmp).unwrap().boundary_review(2).unwrap();
+        assert_eq!(got2.start_ms, 2100, "the update must actually take");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// `start_ms >= end_ms` is nonsense no caller should be able to write,
+    /// validated where it is written because this is the only writer.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn a_boundary_edit_cannot_invert_start_and_end() {
+        let tmp = std::env::temp_dir().join(format!("vaino-bnd2-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = fixture();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        assert!(store.record_boundary_review(2, 5000, 5000, 0, 0, 0.0).is_err());
+        assert!(store.record_boundary_review(2, 6000, 5000, 0, 0, 0.0).is_err());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A library nothing has ever edited has no `boundary_reviews` table at
+    /// all -- the same "missing table means never looked, not nothing found"
+    /// distinction `review_queue` already has to make.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn a_passage_never_edited_has_no_boundary_review() {
+        let lib = Library { conn: fixture() };
+        assert!(lib.boundary_review(2).is_none());
     }
 
     /// A library the pass has never touched has no `id_checks` table at all,

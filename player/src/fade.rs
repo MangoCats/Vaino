@@ -148,6 +148,31 @@ mod tests {
         assert!(Curve::Exponential.gain_out(t) < Curve::Linear.gain_out(t));
     }
 
+    /// The one guard against the waveform editor's preview lying about what
+    /// production plays `[SPEC021 §4]`: `fade.js` is checked against the same
+    /// `fixtures/fade/exponential.json` table this test checks Rust against.
+    #[test]
+    fn matches_the_shared_fade_fixture_js_is_also_checked_against() {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/fade/exponential.json"
+        ));
+        let rows: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
+        assert!(rows.len() >= 10, "the fixture must not have shrunk to nothing");
+        for row in rows {
+            let t = row["t"].as_f64().unwrap() as f32;
+            let want_in = row["gain_in"].as_f64().unwrap() as f32;
+            let want_out = row["gain_out"].as_f64().unwrap() as f32;
+            let got_in = Curve::Exponential.gain_in(t);
+            let got_out = Curve::Exponential.gain_out(t);
+            assert!((got_in - want_in).abs() < 1e-5, "gain_in({t}): got {got_in}, want {want_in}");
+            assert!(
+                (got_out - want_out).abs() < 1e-5,
+                "gain_out({t}): got {got_out}, want {want_out}"
+            );
+        }
+    }
+
     #[test]
     fn zero_length_fade_is_pass_through() {
         let f = Fade::none();

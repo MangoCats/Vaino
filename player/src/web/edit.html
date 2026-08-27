@@ -5,10 +5,10 @@
 <style>
   /* Waveform boundary editing [REQ-LIB-175], [SPEC021].
 
-     Stage 6 only: the waveform is drawn, the passage's current boundaries are
-     marked on it, and nothing here writes anywhere. Dragging the markers and
-     the real-time preview transport are Stage 7 -- this page proves decode
-     and render exist and are fast enough before either is built on top. */
+     One canvas, four draggable markers, a gain field and a preview
+     transport -- the interaction model of SPEC021 §4. Nothing is written
+     until "Save edit" is pressed, and that writes a draft to `boundary_reviews`,
+     never `passages` itself `[SPEC-SUI-140]`. */
   html, body { margin: 0; padding: 0; background: #141416; color: #eee;
                font: 16px/1.5 system-ui, sans-serif; }
   .edit { max-width: 60rem; margin: 0 auto; padding: .75rem; }
@@ -26,15 +26,33 @@
      than beside them, so "what will play" and "what does this look like" are
      one picture `[SPEC021 §4]`. */
   #wave { display: block; width: 100%; height: 220px; border-radius: 6px;
-          background: #0b0b0c; border: 1px solid rgba(128,128,128,.28); }
+          background: #0b0b0c; border: 1px solid rgba(128,128,128,.28);
+          touch-action: none; cursor: default; }
 
   .legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .75rem;
             opacity: .7; margin: .5rem 0 0; }
   .legend .swatch { display: inline-block; width: .7rem; height: .7rem;
                      border-radius: 2px; margin-right: .3rem; vertical-align: -1px; }
 
+  /* The transport and the gain field, side by side under the waveform --
+     one is a position, the other is not, and drawing gain as a marker on the
+     canvas would invite confusing loudness with placement `[SPEC021 §4]`. */
+  .transport { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+               margin: .6rem 0 0; }
+  .transport button { font: inherit; min-height: 2.4rem; padding: 0 .9rem;
+                       cursor: pointer; background: transparent; color: inherit;
+                       border: 1px solid currentColor; border-radius: 4px; }
+  .transport label { font-size: .8125rem; opacity: .8; display: flex;
+                      align-items: center; gap: .35rem; }
+  .transport input[type=number] { font: inherit; width: 5rem; padding: .3rem .4rem;
+                       background: transparent; color: inherit; border-radius: 4px;
+                       border: 1px solid rgba(128,128,128,.45); }
+  .transport .spacer { flex: 1; }
+  #commit[disabled] { opacity: .35; cursor: default; }
+
   .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
   .note.bad { opacity: 1; }
+  .note.good { opacity: 1; color: #8c8; }
 </style>
 
 <div class="edit">
@@ -47,9 +65,17 @@
   <p class="legend">
     <span><span class="swatch" style="background:#6cf"></span>start / end</span>
     <span><span class="swatch" style="background:#fb6"></span>lead-in / lead-out</span>
+    <span><span class="swatch" style="background:#fff"></span>playhead</span>
   </p>
+  <div class="transport">
+    <button id="play" disabled>Play</button>
+    <label>gain <input type="number" id="gain" step="0.1" disabled> dB</label>
+    <span class="spacer"></span>
+    <button id="commit" disabled>Save edit</button>
+  </div>
   <p class="note" id="note"></p>
 </div>
 
 <script src="/core.js"></script>
+<script src="/fade.js"></script>
 <script src="/edit.js"></script>

@@ -874,6 +874,30 @@ async function runReviewHandoff() {
 }
 
 // ---------------------------------------------------------------------------
+// `fade.js`'s ramp formula against the same fixture `fade.rs`'s own test
+// checks Rust against `[SPEC021 §4]` -- the one part of the editor's math
+// this harness can verify without a real browser's Web Audio, since it is
+// pure arithmetic and `fade.js` is written to run under plain Node too.
+function runFadeFixture() {
+  const errors = [];
+  const rows = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'fade', 'exponential.json'), 'utf8'));
+  delete require.cache[require.resolve(path.join(ROOT, 'fade.js'))];
+  const { gainIn, gainOut } = require(path.join(ROOT, 'fade.js'));
+  for (const { t, gain_in, gain_out } of rows) {
+    const gotIn = gainIn(t), gotOut = gainOut(t);
+    if (Math.abs(gotIn - gain_in) > 1e-5)
+      errors.push(`gainIn(${t}): got ${gotIn}, want ${gain_in}`);
+    if (Math.abs(gotOut - gain_out) > 1e-5)
+      errors.push(`gainOut(${t}): got ${gotOut}, want ${gain_out}`);
+  }
+  console.log(`${'fade'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `${rows.length} points checked against the Rust-side fixture`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
+// ---------------------------------------------------------------------------
 // The waveform editor's read-only stage `[REQ-LIB-175]`, `[SPEC021]`. jsdom
 // has no Web Audio, so decoding and drawing the waveform itself is out of
 // reach here -- that seam is left to a person with a real browser. What this
@@ -962,6 +986,7 @@ async function runEdit() {
   await runBrowse();
   await runReview();
   await runReviewHandoff();
+  runFadeFixture();
   await runEdit();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);

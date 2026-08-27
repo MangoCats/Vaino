@@ -330,8 +330,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/review/:passage_id/:decision", post(record_review))
         .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
         .route("/edit.js", get(|| async { js(EDIT_JS) }))
+        .route("/fade.js", get(|| async { js(FADE_JS) }))
         .route("/edit/:passage_id/info", get(edit_info))
-        .route("/edit/:passage_id/audio", get(edit_audio));
+        .route("/edit/:passage_id/audio", get(edit_audio))
+        .route("/edit/:passage_id/review", post(edit_review));
 
     router
         .route("/queue/:passages/:action", post(queue_passage))
@@ -868,23 +870,93 @@ async fn edit_info(
     let db = ui.db.clone();
     let found = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open(&db).ok()?;
-        lib.passage(passage_id).ok()
+        let entry = lib.passage(passage_id).ok()?;
+        // A recorded-but-not-yet-applied draft wins over the passage's own
+        // values -- reopening the editor after a commit must show the edit
+        // that was made, not the automatic values it drafted over
+        // `[SPEC021 §2]`.
+        let draft = lib.boundary_review(passage_id);
+        Some((entry, draft))
     })
     .await
     .ok()
     .flatten();
     match found {
-        Some(entry) => axum::Json(serde_json::json!({
-            "passage_id": entry.passage_id,
-            "start_ms": entry.start_ms,
-            "end_ms": entry.end_ms,
-            "file_ms": entry.file_ms,
-            "lead_in_ms": entry.lead_in_ms,
-            "lead_out_ms": entry.lead_out_ms,
-            "gain_db": entry.gain_db,
-        }))
-        .into_response(),
+        Some((entry, draft)) => {
+            let edited = draft.is_some();
+            let (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db) = match draft {
+                Some(d) => (
+                    d.start_ms,
+                    d.end_ms,
+                    d.lead_in_ms.unwrap_or(entry.lead_in_ms),
+                    d.lead_out_ms.unwrap_or(entry.lead_out_ms),
+                    d.gain_db.unwrap_or(entry.gain_db as f64),
+                ),
+                None => (
+                    entry.start_ms,
+                    entry.end_ms,
+                    entry.lead_in_ms,
+                    entry.lead_out_ms,
+                    entry.gain_db as f64,
+                ),
+            };
+            axum::Json(serde_json::json!({
+                "passage_id": entry.passage_id,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "file_ms": entry.file_ms,
+                "lead_in_ms": lead_in_ms,
+                "lead_out_ms": lead_out_ms,
+                "gain_db": gain_db,
+                "edited": edited,
+            }))
+            .into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The five values a boundary edit posts `[SPEC021 §3]`, and nothing else --
+/// no `passage_id`, which comes from the path and cannot be spoofed by the
+/// body disagreeing with the URL.
+#[cfg(feature = "sampo-support")]
+#[derive(serde::Deserialize)]
+struct BoundaryDraft {
+    start_ms: u64,
+    end_ms: u64,
+    lead_in_ms: u64,
+    lead_out_ms: u64,
+    gain_db: f64,
+}
+
+/// Commit a boundary edit `[SPEC021 §2]`. Recorded, not applied -- the same
+/// posture `id_reviews` takes and for the same reason: this changes what a
+/// passage *is*, and the library is Sampo's to write.
+#[cfg(feature = "sampo-support")]
+async fn edit_review(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    axum::extract::Json(draft): axum::extract::Json<BoundaryDraft>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let done = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open(&db)
+            .map_err(|e| e.message().to_string())?
+            .record_boundary_review(
+                passage_id,
+                draft.start_ms,
+                draft.end_ms,
+                draft.lead_in_ms,
+                draft.lead_out_ms,
+                draft.gain_db,
+            )
+            .map_err(|e| e.message().to_string())
+    })
+    .await;
+    match done {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -1432,6 +1504,12 @@ const REVIEW_JS: &str = include_str!("web/review.js");
 const EDIT_HTML: &str = include_str!("web/edit.html");
 #[cfg(feature = "sampo-support")]
 const EDIT_JS: &str = include_str!("web/edit.js");
+/// The exponential ramp curve, ported from `fade.rs` and checked against the
+/// same fixture `[SPEC021 §4]`. Its own file and route so the editor's
+/// preview and `fade.rs`'s real playback provably agree, not just resemble
+/// each other.
+#[cfg(feature = "sampo-support")]
+const FADE_JS: &str = include_str!("web/fade.js");
 
 /// The route the review page fetches its work from, named once so the router
 /// and the test that checks the page agrees with it cannot drift apart.
@@ -1732,6 +1810,22 @@ mod tests {
     fn the_edit_page_asks_for_routes_the_router_serves() {
         assert!(EDIT_JS.contains("/edit/${passageId}/info"));
         assert!(EDIT_JS.contains("/edit/${passageId}/audio"));
+        assert!(EDIT_JS.contains("/edit/${passageId}/review"));
+    }
+
+    /// The wire shape `edit_review` accepts must be exactly what the store
+    /// can write -- an extra or renamed field here is invisible to `cargo
+    /// check` because `serde` just ignores unknown fields by default.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn boundary_draft_deserialises_the_five_values_the_store_wants() {
+        let draft: BoundaryDraft = serde_json::from_str(
+            r#"{"start_ms":1000,"end_ms":2000,"lead_in_ms":50,"lead_out_ms":900,"gain_db":-1.5}"#,
+        )
+        .unwrap();
+        assert_eq!((draft.start_ms, draft.end_ms), (1000, 2000));
+        assert_eq!((draft.lead_in_ms, draft.lead_out_ms), (50, 900));
+        assert!((draft.gain_db - -1.5).abs() < 1e-9);
     }
 
     /// `bytes=START-END`, `bytes=START-` and `bytes=-SUFFIX` per RFC 7233 --
