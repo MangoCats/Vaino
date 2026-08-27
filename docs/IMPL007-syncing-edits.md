@@ -49,12 +49,16 @@ Two independent pieces of work, requested together 2026-08-27 but touching neith
 **A new console page reusing the browse filters that already exist**, building a bundle through a new job type on `tools/jobs.py`'s existing `Runner` rather than a CLI invocation — the same progress machinery Stage 3 of `[IMPL003]` already built for induction. Shows what would be bundled (encodings, size) before committing to building it.
 
 > **Claims:** selecting an artist and pressing "Build bundle" produces the same `out/<name>/` directory `export_bundle.py` would from the equivalent `--like` filter, with a running job log rather than a silent CLI wait.
+>
+> **Done, 2026-08-27.** A third `Runner` job kind, one `_spawn` call, no multi-stage loop -- `export_bundle.py` is already one atomic operation. **Verified live, against the real library:** searching "Frisina" and building produced `4 encodings, 4 recordings, 4 files 38.9 MB, payload 66.1 KB (4.9 KB gzipped)` -- the exact figures `[IMPL003 Stage 4]` measured by hand from the CLI, now reached from a search box and a button.
 
 ## Stage 5 — Prepare, don't push
 
 **No SSH, no rsync, no remote host configured into Sampo.** The built bundle's page opens a local terminal window (an ordinary console on the operator's own machine — `cmd`/PowerShell on Windows, the platform default elsewhere) and separately displays the exact `rsync` / `import_bundle --apply` / `POST /library/reload` commands as selectable text, for the operator to copy into the window that just opened and run themselves. Sampo never executes a command against another host; opening a local terminal is the same act as the operator opening one themselves.
 
 > **Claims:** pressing "Deploy" opens a real terminal window and the page shows commands that, copied verbatim, reproduce exactly what `[IMPL003]`'s own manual bundle deployment already did by hand.
+>
+> **Done, 2026-08-27.** `POST /api/export/open-terminal` (an action, not a query, so POST rather than the GET the route sketch might suggest) spawns an ordinary `cmd`/Terminal/`x-terminal-emulator` on the operator's own machine, `cwd`'d to the bundle directory -- Sampo names no remote host anywhere in this path. **Verified live:** a real `cmd.exe` window opened at the bundle's own directory; a nonexistent directory was refused with a named reason before anything was spawned.
 
 ---
 

@@ -35,7 +35,7 @@ import time
 DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id     INTEGER PRIMARY KEY,
-    kind       TEXT NOT NULL,          -- 'propose' | 'induct'
+    kind       TEXT NOT NULL,          -- 'propose' | 'induct' | 'export-bundle'
     target     TEXT NOT NULL,          -- the folder
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -109,8 +109,9 @@ class Runner:
     one runs are queued, and shown as queued.
     """
 
-    def __init__(self, library: str, sidecar: str):
+    def __init__(self, library: str, sidecar: str, roots: list | None = None):
         self.library = library
+        self.roots = roots or []
         self.sidecar = sidecar
         self.q = queue.Queue()
         self.lock = threading.Lock()
@@ -241,6 +242,26 @@ class Runner:
             db = self._db()
             db.execute("UPDATE jobs SET plan=?1 WHERE job_id=?2",
                        (json.dumps(plan) if plan else None, job_id))
+            db.commit()
+            db.close()
+            return self._finish(job_id, "done" if code == 0 else "failed")
+
+        if kind == "export-bundle":
+            # A GUI over `export_bundle.py` `[IMPL007 Stage 4]`, one job, no
+            # multi-stage loop -- the tool is already one atomic operation.
+            # `target` carries the SQL LIKE pattern the console page built
+            # from what was typed; the output directory is deterministic so
+            # the page can offer it back without the tool needing to report it.
+            tools = os.path.dirname(os.path.abspath(__file__))
+            out_dir = os.path.join(os.path.dirname(tools), "out", f"bundle-{job_id}")
+            argv = [sys.executable, os.path.join(tools, "export_bundle.py"),
+                    self.library, "--like", target, "--gzip", "-o", out_dir]
+            for root in self.roots:
+                argv += ["--root", root]
+            code, _ = self._spawn(job_id, "export", argv)
+            db = self._db()
+            db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2",
+                       (json.dumps({"out_dir": out_dir}), job_id))
             db.commit()
             db.close()
             return self._finish(job_id, "done" if code == 0 else "failed")

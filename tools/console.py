@@ -17,7 +17,10 @@ Three views:
   /folder      what is on disk, against what the database claims
   /profile/N   one passage's whole derivation
 
-Jobs, induct and export are stage 3 and 4 and are deliberately absent.
+Jobs and induct are stage 3; a GUI over the bundle exporter is stage 4 of
+`[IMPL007]`. All three write only through a subprocess running the same CLI
+a person would run by hand -- this file's own connection to the library
+stays `mode=ro` throughout.
 
     python tools/console.py data/vaino_new.db --root "C:/Users/Mango Cat/Music"
 """
@@ -260,6 +263,41 @@ def ensure_vaino(port: int = VAINO_PORT) -> dict:
             "error": "vaino did not answer within 20s of starting"}
 
 
+def open_terminal(directory: str) -> dict:
+    """Open an ordinary terminal on THIS machine, in `directory` `[IMPL007
+    Stage 5]`.
+
+    Not SSH, not rsync, no remote host known to this process at all -- opening
+    a local terminal is the same act as the operator opening one themselves,
+    just one click closer to the deploy commands the page already prints as
+    plain, selectable text. The commands are never typed for them and never
+    run by this process; the window is a place to paste them, or type them by
+    hand, and see exactly what runs before it does.
+    """
+    if not os.path.isdir(directory):
+        return {"ok": False, "error": f"no such directory: {directory}"}
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["cmd", "/K", f'cd /d "{directory}"'],
+                             creationflags=subprocess.CREATE_NEW_CONSOLE)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-a", "Terminal", directory])
+        else:
+            # Best effort across desktops -- there is no single "the terminal"
+            # on Linux the way there is on the other two platforms.
+            for candidate in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
+                if shutil.which(candidate):
+                    subprocess.Popen([candidate], cwd=directory)
+                    break
+            else:
+                return {"ok": False,
+                        "error": "no terminal emulator found on PATH "
+                                 "(tried x-terminal-emulator, gnome-terminal, konsole, xterm)"}
+        return {"ok": True}
+    except OSError as e:
+        return {"ok": False, "error": f"could not open a terminal: {e}"}
+
+
 # -------------------------------------------------------------------- scan ---
 
 def scan(conn, roots: list) -> dict:
@@ -416,6 +454,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(d) if d else self.send_error(404)
             if p == "/jobs":
                 return self.send_file("jobs.html", "text/html; charset=utf-8")
+            if p == "/export":
+                return self.send_file("export.html", "text/html; charset=utf-8")
             if p == "/api/jobs":
                 return self.send_json(STATE["jobs"].recent())
             if p.startswith("/api/jobs/") and p.endswith("/stream"):
@@ -488,6 +528,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"job_id": STATE["jobs"].submit("induct", prev["target"])})
             if p.startswith("/api/jobs/") and p.endswith("/stop"):
                 return self.send_json({"stopped": STATE["jobs"].stop(int(p.split("/")[3]))})
+            if p == "/api/export/bundle":
+                # A GUI over `export_bundle.py` `[IMPL007 Stage 4]`. `q`
+                # becomes a `LIKE` pattern the same way `library()`'s own
+                # search already works, not a second query language.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                q = ((json.loads(body or b"{}") or {}).get("q") or "").strip()
+                if not q:
+                    return self.send_json({"error": "type something to select by first"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("export-bundle", f"%{q}%")})
+            if p == "/api/export/open-terminal":
+                # An action, not a query -- POST, the same reasoning
+                # `/api/jobs/:id/stop` already follows: it is not read-only
+                # or idempotent to run twice, since a process starts each time.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                d = (json.loads(body or b"{}") or {}).get("dir", "")
+                return self.send_json(open_terminal(d))
             self.send_error(404)
         except Exception as e:
             self.send_json({"error": f"{type(e).__name__}: {e}"}, code=500)
@@ -514,7 +570,7 @@ def main() -> int:
     STATE["roots"] = [os.path.normpath(r) for r in args.root]
     # Beside the library, named after it, exactly as the id-check sidecar is.
     sidecar = os.path.splitext(STATE["path"])[0] + ".console.db"
-    STATE["jobs"] = jobmod.Runner(STATE["path"], sidecar)
+    STATE["jobs"] = jobmod.Runner(STATE["path"], sidecar, roots=STATE["roots"])
 
     t = totals(STATE["db"])
     print(f"library: {t['files']:,} files, {t['radio']:,} radio passages")
