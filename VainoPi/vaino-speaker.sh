@@ -10,8 +10,25 @@
 # A timer runs it. Nothing here retries in a loop, because a loop is a thing
 # that can wedge and this must not be the reason audio stops.
 set -u
-SPEAKER="${SPEAKER:-20:64:DE:CF:F3:AD}"
+DB="${VAINO_DB:-/srv/library/vaino.db}"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+# The address is whatever the player last recorded through `use`/`pair`
+# [PI3-AIM-020], [REQ-VIS-260] -- not a hard-coded guess. A speaker chosen
+# once through the settings panel is the one this timer chases from then on,
+# on any appliance, without editing this file or its unit. `SPEAKER` still
+# overrides it, for a library with no player-chosen speaker yet, or a
+# deliberate manual pin.
+#
+# **Absent is a real answer, not an error.** Paging a device the shared
+# Bluetooth radio cannot reach stalls whatever the appliance IS playing for
+# several seconds -- measured as an audible skip with the position display
+# frozen, and invisible to the player's own underrun counter, because the
+# stall happens on the radio and never touches the output ring at all. A
+# stale or empty address must do nothing, not page something.
+SPEAKER="${SPEAKER:-$(sqlite3 "$DB" \
+    "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null)}"
+[ -n "$SPEAKER" ] || exit 0
 
 bluetoothctl info "$SPEAKER" 2>/dev/null | grep -qi 'Connected: yes' && exit 0
 

@@ -491,6 +491,19 @@ passage, since why a recording was chosen is the same for both copies.
 >
 > **The controls are built in `core.js`, not in each skin.** All three want the same verbs on the same object; three copies would drift. A skin styles them through `.qedit` and decides where they go — it does not decide what they do. This replaces MuLibPlay's checkboxes and "Remove Checked" button, which took three taps to do what one now does.
 
+**`[REQ-VIS-260]` The chosen speaker is remembered by Vaino, not guessed by a
+script.** *(Fixed 2026-08-27.)* `use`/`pair` now write the address to
+`player_settings`; the appliance's own reconnect timer (`vaino-speaker`,
+`[PI3-AIM-020]`) reads it back instead of carrying one compiled into the
+script. Reported as "playback is skippy" and traced from there: the timer had
+no durable record of which speaker was current, so it kept paging a device
+left over from early testing every 30 s. Paging a device the shared Bluetooth
+radio cannot reach ties the radio up for several seconds, stalling whatever
+*is* playing — audible as a skip, the on-screen position frozen for the
+duration, and invisible to the player's own underrun counter, since the stall
+never reaches the output ring at all. See [PI003 §1a](../../VainoPi/PI003-choosing-a-speaker.md#1a-what-the-listener-should-experience)
+for the full account.
+
 **`[REQ-VIS-255]` A programme is chosen against the listener's own clock, and
 the control that reverts to automatic actually reverts.** *(Fixed
 2026-08-24.)* Two faults reported together, both in service of

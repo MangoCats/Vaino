@@ -1165,6 +1165,20 @@ async fn speaker_verb_on(
     let result = bluetooth::run(v, Some(&address));
     let reopen = result.is_ok() && matches!(v, bluetooth::Verb::Use | bluetooth::Verb::Pair);
     if reopen {
+        // Remembered so the appliance's own reconnect timer knows which
+        // absent device is worth paging `[PI3-AIM-020]`, `[REQ-VIS-260]` --
+        // best-effort, since a listener whose speaker just started working
+        // should not be told it failed over a bookkeeping write.
+        let db = ui.db.clone();
+        let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
+            Ok(store) => {
+                if let Err(e) = store.save_speaker_address(&address) {
+                    eprintln!("save speaker address: {e}");
+                }
+            }
+            Err(e) => eprintln!("save speaker address: {e}"),
+        })
+        .await;
         ui.handle.send(Command::ReopenOutput);
         // Wait for the reopen to land before reporting where the audio went.
         // Reading the sink immediately gives sink:null with dummy:false, which

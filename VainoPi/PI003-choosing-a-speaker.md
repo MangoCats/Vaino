@@ -69,18 +69,23 @@ the experience still does not.
 
 What that costs, beyond what is already built:
 
-- **`[PI3-AIM-020]` The choice must be stored by Vaino**, not merely inferred
-  from BlueZ trust and PipeWire's current default. Those two happen to agree
-  today; they are not a record of what the listener asked for.
-- **Partly built: `vaino-speaker`,** a timer that connects the speaker if it is
-  absent and then tells the player to reopen. It closes the gap below for a
-  single hard-coded speaker; storing the listener's actual choice is still to
-  do `[PI3-AIM-020]`.
-- **`[PI3-AIM-030]` Play must be willing to go and get the speaker.** Today the
-  player waits for a sink to appear and nothing asks BlueZ to connect the
-  remembered one. If the speaker was off when the appliance booted, pressing
-  play finds a dummy and correctly reports silence -- correct, and not what was
-  asked for.
+- **`[PI3-AIM-020]` Done, 2026-08-27.** The choice must be stored by Vaino, not
+  inferred from BlueZ trust and PipeWire's default -- those agree only until a
+  second speaker is ever tested. `use`/`pair` now write the address to
+  `player_settings` `[REQ-VIS-260]`. Found by its absence: `vaino-speaker`
+  (below) had been paging a hard-coded leftover from the `[PI3-WHY-020]`
+  testing (`MIDDLETON`) every 30 s regardless of what was connected --
+  stalling whatever *was* playing for several seconds each time, since paging
+  an unreachable device ties up the one shared radio. Audible as a skip with
+  the on-screen position frozen; invisible to the underrun counter, since the
+  stall is on the radio and never touches the output ring.
+- **`vaino-speaker`,** the timer that connects the stored speaker if absent and
+  tells the player to reopen, now reads that stored address rather than a name
+  compiled into the script. `SPEAKER` still overrides it for a library with no
+  chosen speaker yet.
+- **`[PI3-AIM-030]` Play must be willing to go and get the speaker.** The timer
+  covers "off at boot." Still open: pressing play in the narrow window before
+  its next tick still finds a dummy and correctly reports silence.
 - **Failure has to stay legible.** A speaker that is off, flat, or in pairing
   mode cannot be reached by any amount of retrying, and the panel should say
   which of those it looks like rather than spinning `[PI3-UI-010]`.

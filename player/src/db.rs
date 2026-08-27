@@ -922,6 +922,48 @@ impl PlayerStore {
         crate::director::program::sync_os_utc_offset(&self.conn);
     }
 
+    /// Remember which speaker was chosen `[PI3-AIM-020]`, `[REQ-VIS-260]`.
+    ///
+    /// Found by its absence: the appliance's own reconnect timer had no way
+    /// to know which of possibly several trusted, paired devices was the one
+    /// actually in use, so it kept paging a stale one left over from early
+    /// testing -- and paging a device the shared radio cannot reach stalls
+    /// whatever *is* playing for several seconds, audible as a skip and
+    /// invisible to every counter Vaino already had, because the stall never
+    /// touches the output ring at all.
+    ///
+    /// Lives in `player_settings`, the same table the settings round-trip
+    /// uses, but kept out of `Settings` deliberately: nothing in the panel
+    /// reads this back, and folding it into that struct's whole-round-trip
+    /// contract would ask `every_setting_survives_a_round_trip` to police a
+    /// field the panel does not show.
+    pub fn save_speaker_address(&self, address: &str) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('speaker_address', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![address],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// The speaker last chosen through `use` or `pair`, if any
+    /// `[PI3-AIM-020]`, `[REQ-VIS-260]`. `None` on a library where nothing
+    /// has ever been chosen this way -- the caller's job is to fall back to
+    /// doing nothing, not to invent an address.
+    pub fn load_speaker_address(&self) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT value FROM player_settings WHERE key = 'speaker_address'",
+                [],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+
     /// Bring settings over from the columns they used to live in.
     ///
     /// Runs once: after the first save every key is present and the copy is
@@ -2667,6 +2709,47 @@ mod tests {
             })
             .unwrap();
         assert_eq!(after, os, "the write must reach disk through PlayerStore's own connection");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// Nothing chosen yet reads as `None`, not as an invented address
+    /// `[PI3-AIM-020]`, `[REQ-VIS-260]` -- the reconnect timer's job is to do
+    /// nothing in that case, and a stray default here would give it
+    /// something to page instead.
+    #[test]
+    fn no_speaker_address_until_one_is_chosen() {
+        let dir = std::env::temp_dir().join(format!("vaino_spk_none_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+        assert_eq!(st.load_speaker_address(), None);
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// The whole point `[PI3-AIM-020]`, `[REQ-VIS-260]`: a chosen speaker
+    /// round-trips through the same connection production writes it with,
+    /// and choosing a second one replaces the first rather than sitting
+    /// beside it -- there is exactly one appliance and one answer to "which
+    /// speaker", never a history of them.
+    #[test]
+    fn a_chosen_speaker_round_trips_and_a_later_choice_replaces_it() {
+        let dir = std::env::temp_dir().join(format!("vaino_spk_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+
+        st.save_speaker_address("AA:BB:CC:DD:EE:FF").unwrap();
+        assert_eq!(st.load_speaker_address().as_deref(), Some("AA:BB:CC:DD:EE:FF"));
+
+        st.save_speaker_address("11:22:33:44:55:66").unwrap();
+        assert_eq!(st.load_speaker_address().as_deref(), Some("11:22:33:44:55:66"));
+        let n: i64 = st
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM player_settings WHERE key = 'speaker_address'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "a later choice replaces the row rather than adding to it");
         let _ = std::fs::remove_file(&dir);
     }
 
