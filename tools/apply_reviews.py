@@ -17,6 +17,15 @@ not to a web click.
 
 The numbers a rehearsal prints are the ones a real run produces: both are
 measured from the same queries before anything is written.
+
+Extended, not duplicated, with a second, independent decision `[SPEC-SUI-197]`:
+a recording id can be exactly right while its credited artist is wrong, which
+today's fingerprint check has no way to notice. Every run folds in pending
+artist corrections too, whether or not there is a recording reassignment
+pending -- a different table (`recording_artists`), a different key, and a
+passage whose recording was never in question can still have one waiting.
+`--revert-artist PASSAGE_ID` undoes an applied one the same way `--revert`
+undoes a reassignment.
 """
 
 import argparse
@@ -112,12 +121,105 @@ def revert(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
     return 0
 
 
+def revert_artist(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
+    """Put back the artist credit an applied correction replaced `[SPEC-SUI-197]`.
+
+    Unlike a recording reassignment, `artist_reviews` carries the ONE previous
+    credit `record_artist_review` captured at decision time -- the heaviest
+    `recording_artists` row for that recording, or nothing if it had none.
+    That is what gets restored; a recording could in principle carry more
+    than one credited artist, but this correction only ever replaced one.
+    """
+    row = conn.execute(
+        "SELECT recording_mbid, artist_mbid, previous_artist_mbid, "
+        "       previous_artist_name, previous_artist_weight, applied_at "
+        "  FROM artist_reviews WHERE passage_id = ?1", (passage_id,)).fetchone()
+    if not row:
+        say(f"passage {passage_id}: no artist correction recorded")
+        return 1
+    recording_mbid, artist_mbid, prev_mbid, prev_name, prev_weight, applied_at = row
+    if not applied_at:
+        say(f"passage {passage_id}: not yet applied -- withdraw it on the review page instead")
+        return 1
+
+    if prev_mbid:
+        say(f"passage {passage_id}: recording {recording_mbid} credit "
+            f"{artist_mbid} -> {prev_mbid} ({prev_name}) (restoring)")
+    else:
+        say(f"passage {passage_id}: recording {recording_mbid} credit "
+            f"{artist_mbid} -> no credit at all (restoring)")
+    if not commit:
+        say("\nnothing was written. Re-run with --commit to do it.")
+        return 0
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("DELETE FROM recording_artists WHERE mbid = ?1", (recording_mbid,))
+    if prev_mbid:
+        # `inherited:mulib` on the way back, same as `revert()` above uses for
+        # a reassignment -- the row's own original `source` was never
+        # captured, only what it named, so this is a re-tagging, not a claim
+        # about where the credit first came from.
+        conn.execute(
+            "INSERT OR IGNORE INTO artists (mbid, name, source) VALUES (?1, ?2, 'inherited:mulib')",
+            (prev_mbid, prev_name))
+        conn.execute(
+            "INSERT INTO recording_artists (mbid, artist_mbid, weight, source) "
+            "VALUES (?1, ?2, ?3, 'inherited:mulib')", (recording_mbid, prev_mbid, prev_weight))
+    conn.execute("DELETE FROM artist_reviews WHERE passage_id = ?1", (passage_id,))
+    conn.commit()
+    say("reverted")
+    return 0
+
+
+def apply_artist_corrections(conn: sqlite3.Connection, commit: bool) -> int:
+    """Fold accepted artist corrections into `recording_artists` `[SPEC-SUI-197]`.
+
+    Independent of the recording reassignment loop in `main` -- a different
+    table, a different key, and a passage whose recording id was never in
+    question can still have a pending correction here.
+    """
+    pending = conn.execute(
+        """SELECT passage_id, recording_mbid, artist_mbid, artist_name
+             FROM artist_reviews WHERE applied_at IS NULL
+            ORDER BY passage_id""").fetchall()
+    say(f"{len(pending)} artist correction(s) to apply")
+    if not pending:
+        return 0
+
+    if commit:
+        conn.execute("BEGIN IMMEDIATE")
+    for passage_id, recording_mbid, artist_mbid, artist_name in pending:
+        say(f"  passage {passage_id}: recording {recording_mbid} -> credited to {artist_name}")
+        if commit:
+            conn.execute(
+                "INSERT OR IGNORE INTO artists (mbid, name, source) VALUES (?1, ?2, ?3)",
+                (artist_mbid, artist_name, SOURCE))
+            # Replace the credit rather than adding to it: this is a
+            # correction, not a second correct answer sitting beside a wrong
+            # one -- the same reasoning the recording reassignment above
+            # applies to `passage_recordings`.
+            conn.execute("DELETE FROM recording_artists WHERE mbid = ?1", (recording_mbid,))
+            conn.execute(
+                "INSERT INTO recording_artists (mbid, artist_mbid, weight, source) "
+                "VALUES (?1, ?2, 1.0, ?3)", (recording_mbid, artist_mbid, SOURCE))
+            conn.execute(
+                "UPDATE artist_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
+                (passage_id,))
+    if commit:
+        conn.commit()
+        say(f"applied {len(pending)} artist correction(s)")
+    else:
+        say("nothing was written. Re-run with --commit to do it.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--revert", type=int, metavar="PASSAGE_ID",
                     help="undo an applied reassignment and re-open it for review")
+    ap.add_argument("--revert-artist", type=int, metavar="PASSAGE_ID",
+                    help="undo an applied artist-credit correction `[SPEC-SUI-197]`")
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db, timeout=60)
@@ -132,6 +234,11 @@ def main() -> int:
 
     if args.revert is not None:
         return revert(conn, args.revert, args.commit)
+    if args.revert_artist is not None:
+        if "artist_reviews" not in have:
+            say("no artist corrections recorded yet")
+            return 1
+        return revert_artist(conn, args.revert_artist, args.commit)
 
     pending = conn.execute(
         """SELECT r.passage_id, r.chosen_mbid, pr.mbid, r.chosen_release_mbid
@@ -149,12 +256,10 @@ def main() -> int:
 
     say(f"{len(pending)} reassignment(s) to apply; "
         f"{kept} kept as they were; {deferred} deferred")
-    if not pending:
-        return 0
 
     applied = new_recordings = new_artists = unnamed = albums_set = 0
     skipped: list[tuple[int, str]] = []
-    if args.commit:
+    if args.commit and pending:
         conn.execute("BEGIN IMMEDIATE")
 
     for passage_id, new_mbid, old_mbid, release_mbid in pending:
@@ -249,6 +354,13 @@ def main() -> int:
         say(f"\nwould apply {applied}"
             + (f", refusing {unnamed}" if unnamed else ""))
         say("nothing was written. Re-run with --commit to do it.")
+
+    # Independent of everything above `[SPEC-SUI-197]`: a different table, a
+    # different key, and a passage's recording id being fine is exactly the
+    # case this exists for.
+    if "artist_reviews" in have:
+        say("")
+        apply_artist_corrections(conn, args.commit)
     return 0
 
 

@@ -123,6 +123,18 @@
                    border: 1px solid rgba(128,128,128,.45); }
   .albums .sub { font-size: .8125rem; opacity: .7; margin: 0; }
 
+  /* A correction independent of whatever the rest of the card is deciding
+     about the recording [SPEC-SUI-197]. */
+  .artistfix { margin-top: .6rem; padding-top: .5rem;
+               border-top: 1px solid rgba(128,128,128,.18); }
+  .artistfix h2 { font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+                  margin: 0 0 .3rem; opacity: .55; font-weight: 600; }
+  .artistfix .opts { margin-top: .3rem; }
+  .artistfix button { font: inherit; min-height: 2.2rem; padding: 0 .7rem;
+                      cursor: pointer; background: transparent; color: inherit;
+                      border: 1px solid currentColor; border-radius: 4px; }
+  .artistfix .sub { font-size: .8125rem; opacity: .7; margin: .2rem 0; }
+
   .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
   .note.bad { opacity: 1; }
 </style>

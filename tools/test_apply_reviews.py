@@ -66,6 +66,10 @@ CREATE TABLE identification_cache (audio_md5 TEXT NOT NULL, service TEXT NOT NUL
 CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT NOT NULL,
     chosen_mbid TEXT, decided_at TEXT NOT NULL,
     chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT);
+CREATE TABLE artist_reviews (passage_id INTEGER PRIMARY KEY,
+    recording_mbid TEXT NOT NULL, artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
+    previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
+    decided_at TEXT NOT NULL, applied_at TEXT);
 """
 
 OLD = "11111111-1111-1111-1111-111111111111"
@@ -73,6 +77,8 @@ NEW = "22222222-2222-2222-2222-222222222222"
 ART = "33333333-3333-3333-3333-333333333333"
 REL_A = "44444444-4444-4444-4444-444444444444"
 REL_B = "55555555-5555-5555-5555-555555555555"
+ART_WRONG = "66666666-6666-6666-6666-666666666666"
+ART_RIGHT = "77777777-7777-7777-7777-777777777777"
 
 FAILED = []
 
@@ -126,6 +132,33 @@ def linked(db):
     row = c.execute("SELECT mbid, source FROM passage_recordings WHERE passage_id=1").fetchone()
     c.close()
     return row
+
+
+def credit(db, mbid=OLD):
+    c = sqlite3.connect(db)
+    row = c.execute(
+        "SELECT artist_mbid FROM recording_artists WHERE mbid=?", (mbid,)).fetchall()
+    c.close()
+    return [r[0] for r in row]
+
+
+def build_artist_case(tmp: str) -> str:
+    """A recording with one existing (wrong) credit and a pending correction
+    `[SPEC-SUI-197]` -- independent of the recording-reassignment fixture
+    above, since this decision does not touch `passage_recordings` at all.
+    """
+    db = build(tmp)
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO artists VALUES (?,'Wrong Artist',NULL,'inherited:mulib')", (ART_WRONG,))
+    c.execute("INSERT INTO recording_artists VALUES (?,?,1.0,'inherited:mulib')", (OLD, ART_WRONG))
+    c.execute(
+        "INSERT INTO artist_reviews (passage_id, recording_mbid, artist_mbid, artist_name, "
+        "previous_artist_mbid, previous_artist_name, previous_artist_weight, decided_at) "
+        "VALUES (1, ?, ?, 'Right Artist', ?, 'Wrong Artist', 1.0, 't')",
+        (OLD, ART_RIGHT, ART_WRONG))
+    c.commit()
+    c.close()
+    return db
 
 
 def main() -> int:
@@ -201,6 +234,46 @@ def main() -> int:
         check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:200]}")
         check("not linked" in r.stdout, f"expected a warning, got {r.stdout!r}")
         check(linked(db4)[0] == NEW, "the reassignment itself should still apply")
+
+        # `[SPEC-SUI-197]`: an independent decision, applied alongside the
+        # recording reassignment above in the SAME commit -- proving one does
+        # not disturb the other, which is the actual claim this feature makes.
+        print("an artist correction rehearsal writes nothing")
+        db5 = build_artist_case(tmp + "/e")
+        r = run(db5)
+        check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:300]}")
+        check("1 artist correction(s) to apply" in r.stdout, f"got {r.stdout!r}")
+        check(credit(db5) == [ART_WRONG], "a rehearsal must not change the credit")
+
+        print("a commit replaces the credit and stamps the correction applied, "
+              "alongside the unrelated recording reassignment in the same fixture")
+        r = run(db5, "--commit")
+        check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:300]}")
+        check(credit(db5) == [ART_RIGHT],
+              f"the wrong credit must be replaced, not added to, got {credit(db5)}")
+        check(linked(db5)[0] == NEW, "the unrelated reassignment must still have applied too")
+        c = sqlite3.connect(db5)
+        name = c.execute("SELECT name FROM artists WHERE mbid=?", (ART_RIGHT,)).fetchone()
+        check(name == ("Right Artist",), f"the new artist must be named, got {name}")
+        applied_at = c.execute(
+            "SELECT applied_at FROM artist_reviews WHERE passage_id=1").fetchone()[0]
+        check(applied_at is not None, "applied_at must be stamped")
+        c.close()
+
+        print("re-running the artist correction is a no-op")
+        r = run(db5, "--commit")
+        check("0 artist correction(s) to apply" in r.stdout, f"got {r.stdout!r}")
+
+        print("--revert-artist puts the old credit back and clears the record")
+        r = run(db5, "--revert-artist", "1")
+        check(credit(db5) == [ART_RIGHT], "a revert rehearsal must not change the credit")
+        r = run(db5, "--revert-artist", "1", "--commit")
+        check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:300]}")
+        check(credit(db5) == [ART_WRONG], f"after revert the credit is {credit(db5)}")
+        c = sqlite3.connect(db5)
+        check(c.execute("SELECT COUNT(*) FROM artist_reviews WHERE passage_id=1")
+               .fetchone()[0] == 0, "revert must clear the record")
+        c.close()
 
     print()
     if FAILED:

@@ -328,6 +328,7 @@ pub fn router(ui: Ui) -> Router {
         .route(REVIEW_QUEUE_ROUTE, get(review_queue))
         .route("/review/releases/:mbid", get(review_releases))
         .route("/review/:passage_id/:decision", post(record_review))
+        .route("/review/:passage_id/artist/:verb", post(artist_review_verb))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
         .route("/edit.js", get(|| async { js(EDIT_JS) }))
@@ -651,6 +652,42 @@ async fn record_review(
         // The reason travels back as text. A refusal a person cannot read is
         // one they will retry, and "already applied to the library" is
         // precisely what they need to be told.
+        Ok(Err(why)) => (StatusCode::CONFLICT, why).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Correct a recording's credited artist, or withdraw that correction
+/// `[SPEC-SUI-197]` -- independent of whatever `record_review` above is doing
+/// with the recording itself, the same way `artist_reviews` is independent
+/// of `id_reviews` in the schema. `reopen` is the undo, routed here rather
+/// than a second endpoint shape, for the same reason `record_review` does it.
+#[cfg(feature = "sampo-support")]
+async fn artist_review_verb(
+    State(ui): State<Ui>,
+    axum::extract::Path((passage_id, verb)): axum::extract::Path<(i64, String)>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let mbid = q.get("mbid").cloned();
+    let name = q.get("name").cloned();
+    let done = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        if verb == "reopen" {
+            store.clear_artist_review(passage_id).map_err(|e| e.message().to_string())
+        } else {
+            let (mbid, name) = match (mbid.filter(|m| !m.is_empty()), name.filter(|n| !n.is_empty())) {
+                (Some(m), Some(n)) => (m, n),
+                _ => return Err("an artist correction needs both an id and a name".into()),
+            };
+            store
+                .record_artist_review(passage_id, &mbid, &name)
+                .map_err(|e| e.message().to_string())
+        }
+    })
+    .await;
+    match done {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(why)) => (StatusCode::CONFLICT, why).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -2053,6 +2090,16 @@ mod tests {
     #[test]
     fn the_review_page_asks_musicbrainz_search_for_the_route_it_gets() {
         assert!(REVIEW_JS.contains("/api/musicbrainz/search"));
+    }
+
+    /// The artist-correction verbs the page can send are exactly the two the
+    /// router registers under `/review/:id/artist/:verb` -- `correct` (via
+    /// the literal path built into the fetch call) and `reopen`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_page_sends_artist_verbs_the_router_serves() {
+        assert!(REVIEW_JS.contains("/artist/correct"));
+        assert!(REVIEW_JS.contains("/artist/reopen"));
     }
 
     #[cfg(feature = "sampo-support")]

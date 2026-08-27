@@ -266,6 +266,44 @@ pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbEr
     conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))
 }
 
+/// A correction to a recording's credited artist `[SPEC-SUI-197]` -- a
+/// different table with a different key from `id_reviews`, because it
+/// corrects a different table with a different key: `recording_artists` is
+/// keyed `(mbid, artist_mbid)`, not `passage_id`. Reached from a passage's
+/// card, so keyed by `passage_id` here too, with the recording mbid captured
+/// at decision time -- the same reason `id_reviews.previous_mbid` is
+/// captured then: it is the passage's current link, and only meaningful
+/// alongside whatever that link was when the person judged it.
+///
+/// `artist_name` is stored, not looked up at apply time, because a name
+/// found through live search (`[SPEC-SUI-196]`) exists nowhere in the
+/// database to look back up later -- unlike a fingerprint suggestion, which
+/// `identification_cache` already holds a name for.
+/// `previous_artist_*` is what makes `apply_boundary_reviews.py`'s sibling
+/// able to revert an applied correction -- captured at decision time, the
+/// same reason `id_reviews.previous_mbid` is: applying overwrites the only
+/// other copy. The single heaviest existing credit, same as `previous_mbid`
+/// captures the single heaviest existing recording link; `NULL` when the
+/// recording had no credited artist at all, which is itself worth restoring
+/// to on revert rather than inventing one.
+#[cfg(feature = "sampo-support")]
+pub(crate) const ARTIST_REVIEW_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS artist_reviews (
+        passage_id             INTEGER PRIMARY KEY,
+        recording_mbid         TEXT NOT NULL,
+        artist_mbid            TEXT NOT NULL,
+        artist_name            TEXT NOT NULL,
+        previous_artist_mbid   TEXT,
+        previous_artist_name   TEXT,
+        previous_artist_weight REAL,
+        decided_at             TEXT NOT NULL,
+        applied_at             TEXT);";
+
+#[cfg(feature = "sampo-support")]
+pub(crate) fn ensure_artist_review_table(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(ARTIST_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))
+}
+
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.duration_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                                (SELECT pr.mbid FROM passage_recordings pr \
@@ -736,6 +774,8 @@ impl PlayerStore {
         ensure_review_table(&conn)?;
         #[cfg(feature = "sampo-support")]
         ensure_boundary_review_table(&conn)?;
+        #[cfg(feature = "sampo-support")]
+        ensure_artist_review_table(&conn)?;
         // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
         // Created HERE, on every start, rather than in `ensure_tag_table`:
         // that only runs behind the background scan, so a library whose scan
@@ -934,6 +974,111 @@ impl PlayerStore {
                     lead_in_ms as i64, lead_out_ms as i64, gain_db,
                 ],
             )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Correct a recording's credited artist without touching the recording
+    /// itself `[SPEC-SUI-197]` -- the one correction today's review page
+    /// cannot make any other way.
+    ///
+    /// Refuses a passage with no recording linked at all: "the recording is
+    /// right, the credit is wrong" presupposes a recording has been chosen,
+    /// and there is nothing here to attach a corrected credit to otherwise.
+    #[cfg(feature = "sampo-support")]
+    pub fn record_artist_review(
+        &self,
+        passage_id: i64,
+        artist_mbid: &str,
+        artist_name: &str,
+    ) -> Result<(), DbError> {
+        let recording_mbid: String = self
+            .conn
+            .query_row(
+                "SELECT mbid FROM passage_recordings WHERE passage_id = ?1 \
+                  ORDER BY weight DESC, mbid LIMIT 1",
+                [passage_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| {
+                DbError::Query("this passage has no recording linked yet".into())
+            })?;
+
+        let applied: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT applied_at FROM artist_reviews WHERE passage_id = ?1",
+                [passage_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+        if applied.is_some() {
+            return Err(DbError::Query(
+                "this correction has already been applied to the library".into(),
+            ));
+        }
+
+        // Captured now, because applying overwrites the only other copy --
+        // `None` when the recording carries no credit at all today, which is
+        // itself the state a revert should restore rather than inventing one.
+        let previous: Option<(String, String, f64)> = self
+            .conn
+            .query_row(
+                "SELECT ra.artist_mbid, a.name, ra.weight \
+                   FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid \
+                  WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name LIMIT 1",
+                [&recording_mbid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok();
+        let (prev_mbid, prev_name, prev_weight) = match previous {
+            Some((m, n, w)) => (Some(m), Some(n), Some(w)),
+            None => (None, None, None),
+        };
+
+        self.conn
+            .execute(
+                "INSERT INTO artist_reviews
+                     (passage_id, recording_mbid, artist_mbid, artist_name,
+                      previous_artist_mbid, previous_artist_name, previous_artist_weight,
+                      decided_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+                 ON CONFLICT(passage_id) DO UPDATE SET
+                     recording_mbid = excluded.recording_mbid,
+                     artist_mbid = excluded.artist_mbid,
+                     artist_name = excluded.artist_name,
+                     previous_artist_mbid = excluded.previous_artist_mbid,
+                     previous_artist_name = excluded.previous_artist_name,
+                     previous_artist_weight = excluded.previous_artist_weight,
+                     decided_at = excluded.decided_at",
+                rusqlite::params![
+                    passage_id, recording_mbid, artist_mbid, artist_name,
+                    prev_mbid, prev_name, prev_weight,
+                ],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Withdraw an artist correction, the same "recorded, not yet applied"
+    /// undo `clear_review` offers for a recording reassignment.
+    #[cfg(feature = "sampo-support")]
+    pub fn clear_artist_review(&self, passage_id: i64) -> Result<(), DbError> {
+        let applied: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT applied_at FROM artist_reviews WHERE passage_id = ?1",
+                [passage_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| DbError::Query("no artist correction recorded for that passage".into()))?;
+        if applied.is_some() {
+            return Err(DbError::Query(
+                "already applied to the library; use tools/apply_reviews.py --revert-artist".into(),
+            ));
+        }
+        self.conn
+            .execute("DELETE FROM artist_reviews WHERE passage_id = ?1", [passage_id])
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
@@ -1382,6 +1527,12 @@ pub struct ReviewItem {
     /// that has been applied has to be reverted, which is a different act and
     /// gets a different button.
     pub applied: bool,
+    /// A recorded-but-not-necessarily-applied artist correction
+    /// `[SPEC-SUI-197]`, independent of `decision` above: the recording can
+    /// be exactly right while its credit is not, so this exists whether or
+    /// not the recording itself was ever reassigned.
+    pub artist_review: Option<String>,
+    pub artist_review_applied: bool,
 }
 
 /// A release the chosen recording appears on, for naming the album
@@ -1636,21 +1787,30 @@ impl Library {
         // `id_reviews` is checked too: it is created by `PlayerStore::open`,
         // which any running server has done, but this handle does not itself
         // guarantee it.
-        if !self.has_table("id_checks") || !self.has_table("id_reviews") {
+        if !self.has_table("id_checks") || !self.has_table("id_reviews")
+            || !self.has_table("artist_reviews")
+        {
             return Ok(Vec::new());
         }
         // Decided passages come back too, carrying their judgement, so that a
         // decision can be found again and withdrawn. They are a separate grade
         // on the page and switched off by default, so working through the
         // queue still shortens it.
+        // `artist_reviews` is joined here too, though it corrects a table
+        // `id_checks`/`id_reviews` never touch `[SPEC-SUI-197]` -- reachability
+        // for this correction rides on whatever else put the passage in front
+        // of a person, since nothing about a right recording's wrong credit
+        // makes AcoustID disagree with anything.
         let sql = format!(
             "SELECT c.passage_id, c.stored_mbid, c.score, c.suggested, \
                     {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
-                    v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at \
+                    v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
+                    a.artist_name, a.applied_at \
                FROM id_checks c \
                JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
                LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
                LEFT JOIN id_reviews v ON v.passage_id = c.passage_id \
+               LEFT JOIN artist_reviews a ON a.passage_id = c.passage_id \
               WHERE c.verdict IN ('contradicted', 'unmatched') \
                 AND NOT (c.verdict = 'unmatched' \
                          AND EXISTS (SELECT 1 FROM passage_recordings pr \
@@ -1673,6 +1833,8 @@ impl Library {
                 let (severity, rank) =
                     grade(&stored_mbid, title.as_deref(), artist.as_deref(), &suggested);
                 let applied_at: Option<String> = r.get(10)?;
+                let artist_review: Option<String> = r.get(11)?;
+                let artist_review_applied_at: Option<String> = r.get(12)?;
                 Ok(ReviewItem {
                     passage_id: r.get(0)?,
                     stored_mbid,
@@ -1687,6 +1849,8 @@ impl Library {
                     chosen_mbid: r.get(8)?,
                     chosen_release_mbid: r.get(9)?,
                     applied: applied_at.is_some(),
+                    artist_review,
+                    artist_review_applied: artist_review_applied_at.is_some(),
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -2034,6 +2198,8 @@ mod tests {
         c.execute_batch(TAG_TABLE).unwrap();
         #[cfg(feature = "sampo-support")]
         ensure_review_table(&c).unwrap();
+        #[cfg(feature = "sampo-support")]
+        ensure_artist_review_table(&c).unwrap();
         c
     }
 
@@ -2416,6 +2582,82 @@ mod tests {
                 "nor be silently overwritten by a different answer");
         let q = lib.review_queue(50).unwrap();
         assert!(q[0].applied, "the page has to be able to show it as applied");
+    }
+
+    /// An artist correction is independent of the recording decision
+    /// `[SPEC-SUI-197]` -- it can be made, found again and withdrawn without
+    /// `decision` ever being set, and captures the recording it was made
+    /// against (the heavier of passage 2's two links, exactly as
+    /// `previous_mbid` above captures the same thing for a reassignment).
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn an_artist_correction_is_recorded_and_can_be_withdrawn() {
+        let tmp = std::env::temp_dir().join(format!("vaino-art-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = reviewable();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        let lib = Library::open(&tmp).unwrap();
+        assert!(lib.review_queue(50).unwrap()[0].artist_review.is_none());
+
+        store.record_artist_review(2, "artist-mbid-1", "The Real Artist").unwrap();
+        let q = lib.review_queue(50).unwrap();
+        assert_eq!(q[0].artist_review.as_deref(), Some("The Real Artist"));
+        assert!(!q[0].artist_review_applied);
+        assert_eq!(q[0].decision, None, "an artist correction must not touch `decision`");
+
+        let (recording, prev): (String, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT recording_mbid, previous_artist_mbid FROM artist_reviews WHERE passage_id = 2",
+                [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(recording, "aaaaaaaa-0000-0000-0000-000000000001",
+                   "must capture the heavier of the two links, like previous_mbid does");
+        assert_eq!(prev, None, "this recording has no existing credit to capture");
+
+        store.clear_artist_review(2).unwrap();
+        assert!(lib.review_queue(50).unwrap()[0].artist_review.is_none());
+        assert!(store.clear_artist_review(2).is_err(), "nothing to withdraw twice");
+
+        // Committing twice updates the one row, the same `ON CONFLICT` shape
+        // every other decision here uses.
+        store.record_artist_review(2, "artist-mbid-1", "First Try").unwrap();
+        store.record_artist_review(2, "artist-mbid-2", "Better Name").unwrap();
+        let n: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM artist_reviews", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "a second commit must update, not add a row");
+        assert_eq!(lib.review_queue(50).unwrap()[0].artist_review.as_deref(), Some("Better Name"));
+
+        // Applied is a different, non-withdrawable state, the same as a
+        // recording reassignment.
+        store.conn.execute(
+            "UPDATE artist_reviews SET applied_at = datetime('now') WHERE passage_id = 2", [])
+            .unwrap();
+        assert!(lib.review_queue(50).unwrap()[0].artist_review_applied);
+        assert!(store.clear_artist_review(2).is_err(),
+                "an applied correction must not just vanish");
+        assert!(store.record_artist_review(2, "artist-mbid-3", "Yet Another").is_err(),
+                "nor be silently overwritten by a different answer");
+    }
+
+    /// The recording has to exist before its credit can be corrected -- "the
+    /// recording is right" presupposes one was chosen.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn an_artist_correction_needs_a_recording_to_correct() {
+        let lib_conn = reviewable();
+        // Passage 3 in `reviewable()`'s fixture has a link; an entirely
+        // unlinked passage id (none in the fixture) is what this checks.
+        let tmp = std::env::temp_dir().join(format!("vaino-art2-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        lib_conn.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        let store = PlayerStore::open(&tmp).unwrap();
+        assert!(store.record_artist_review(99999, "artist-mbid-1", "Nobody").is_err());
     }
 
     /// The resume-save interval persists like the others `[REQ-VIS-155]`, and

@@ -233,6 +233,85 @@
       albums.appendChild(sel);
     }
 
+    // A recording can be exactly right while MusicBrainz's own credit is
+    // wrong `[SPEC-SUI-197]` -- a correction independent of whatever else
+    // this card is about, so it is offered whether or not the recording
+    // itself was ever reassigned. Only offered against a real MusicBrainz
+    // id: a placeholder has no `recording_artists` row to correct yet.
+    const isMbid = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    if (isMbid(item.stored_mbid)) {
+      const fix = el('div', 'artistfix');
+      fix.appendChild(el('h2', null, 'Fix the artist credit'));
+      box.appendChild(fix);
+
+      const renderFix = () => {
+        fix.querySelectorAll(':scope > :not(h2)').forEach(n => n.remove());
+        if (item.artist_review) {
+          fix.appendChild(el('p', 'sub',
+            `Corrected to “${item.artist_review}”` +
+            (item.artist_review_applied ? ' — applied to the library.' : ' — saved, not yet applied.')));
+          if (!item.artist_review_applied) {
+            const undo = el('button', null, 'Undo the correction');
+            undo.onclick = async () => {
+              undo.disabled = true;
+              const r = await fetch(`/review/${item.passage_id}/artist/reopen`, { method: 'POST' });
+              if (r.ok) { delete item.artist_review; renderFix(); }
+              else { undo.disabled = false; fix.appendChild(el('p', 'sub', await r.text())); }
+            };
+            fix.appendChild(undo);
+          }
+          return;
+        }
+        const abox = document.createElement('input');
+        abox.type = 'search';
+        abox.placeholder = 'search MusicBrainz for the right artist…';
+        const ago = el('button', null, 'Search');
+        const astatus = el('span', 'sub');
+        const results = el('ul', 'opts');
+        const row = el('div', 'search');
+        row.append(abox, ago, astatus);
+        fix.append(row, results);
+
+        const confirmArtist = (mbid, name) => {
+          const c = el('button', null, `Confirm “${name}”`);
+          c.onclick = async () => {
+            c.disabled = true;
+            const q = new URLSearchParams({ mbid, name });
+            const r = await fetch(`/review/${item.passage_id}/artist/correct?${q}`, { method: 'POST' });
+            if (r.ok) { item.artist_review = name; item.artist_review_applied = false; renderFix(); }
+            else { c.disabled = false; astatus.textContent = await r.text(); }
+          };
+          return c;
+        };
+
+        const runArtistSearch = async () => {
+          const text = abox.value.trim();
+          if (!text) return;
+          ago.disabled = true;
+          astatus.textContent = 'searching…';
+          results.textContent = '';
+          try {
+            const r = await fetch(`/api/musicbrainz/search?kind=artist&q=${encodeURIComponent(text)}`);
+            const found = r.ok ? await r.json() : [];
+            for (const s of found) {
+              const li = el('li');
+              li.appendChild(el('div', 'name', s.title || '(unnamed)'));
+              li.appendChild(mbidLink(s.mbid, 'artist'));
+              li.appendChild(confirmArtist(s.mbid, s.title || s.mbid));
+              results.appendChild(li);
+            }
+            astatus.textContent = found.length ? '' : 'no results';
+          } catch {
+            astatus.textContent = 'search failed';
+          }
+          ago.disabled = false;
+        };
+        ago.onclick = runArtistSearch;
+        abox.addEventListener('keydown', e => { if (e.key === 'Enter') runArtistSearch(); });
+      };
+      renderFix();
+    }
+
     const acts = el('div', 'acts');
     const said = el('span', 'said');
 

@@ -602,7 +602,10 @@ async function runReview() {
         artist: 'Some Band', album: 'Some Record', score: 0.97,
         severity: 'wrong-song', rank: 0,
         suggested: [{ mbid: 'rec-real', title: 'Right Song', artist: 'A Band', score: 0.97 }] },
-      { passage_id: 22, stored_mbid: 'rec-other', title: 'Another', artist: null,
+      // A real MusicBrainz id -- the artist-fix panel is only offered
+      // against one of these, never a placeholder [SPEC-SUI-197].
+      { passage_id: 22, stored_mbid: 'aaaaaaaa-0000-0000-0000-000000000022',
+        title: 'Another', artist: null,
         album: null, score: 0.93, severity: 'wrong-song', rank: 0, suggested: [] },
       // The bulk of a real library, and off by default: if these render
       // without being asked for, the serious cases are buried again.
@@ -788,6 +791,43 @@ async function runReview() {
   const reopened = cards().find(c => c.dataset.passage === '21');
   check(reopened && !reopened.classList.contains('done'),
         'after undo the card must be answerable again');
+
+  // Fixing the artist credit `[SPEC-SUI-197]` -- independent of the recording
+  // decision above, offered because passage 22's stored id is now a real
+  // MusicBrainz id rather than a placeholder. Placed after every posted[N]
+  // index check above: this itself posts, and would shift them. Re-fetched
+  // fresh rather than reusing the `noCand` captured earlier: passage 21's
+  // own undo just called `showCards()`, which rebuilds every card's DOM.
+  const freshNoCand = cards().find(c => c.dataset.passage === '22');
+  const fixPanel = freshNoCand.querySelector('.artistfix');
+  check(fixPanel, 'a card with a real MusicBrainz id must offer the artist-fix panel');
+  const fixSearchIn = fixPanel.querySelector('.search input');
+  const fixSearchGo = fixPanel.querySelector('.search button');
+  fixSearchIn.value = 'the real artist';
+  fixSearchGo.onclick();
+  await settle();
+  const confirmBtn = [...fixPanel.querySelectorAll('button')]
+                       .find(b => b.textContent.startsWith('Confirm'));
+  check(confirmBtn, 'a found artist must offer a way to confirm it');
+  if (confirmBtn) {
+    confirmBtn.onclick();
+    await settle();
+    check(posted.some(u => u.startsWith('/review/22/artist/correct')),
+          `expected an artist correction to post, got ${JSON.stringify(posted)}`);
+    check(/corrected to/i.test(fixPanel.textContent),
+          'a confirmed correction must read back as corrected');
+    const undoBtn = [...fixPanel.querySelectorAll('button')]
+                      .find(b => b.textContent.includes('Undo'));
+    check(undoBtn, 'an unapplied correction must offer an undo');
+    if (undoBtn) {
+      undoBtn.onclick();
+      await settle();
+      check(posted.some(u => u === '/review/22/artist/reopen'),
+            `expected the correction to be withdrawn, got ${JSON.stringify(posted)}`);
+      check(!/corrected to/i.test(fixPanel.textContent),
+            'after undo the panel must offer the search again, not the corrected state');
+    }
+  }
 
   // Decided cards from earlier sessions are off by default and reachable.
   check(!cards().some(c => c.dataset.passage === '25'),

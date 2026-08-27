@@ -94,15 +94,15 @@ This designs against `[REQ-LIB-180]`. *(Requested 2026-08-27; designed, not yet 
 >
 > **Built in Vaino, not Sampo's console — a correction to this paragraph's first draft.** `/review` is served by Vaino since `[SPEC-SUI-135]`'s handoff, so `review.js` runs on Vaino's own origin; a route on the console's separate process would be a cross-origin call the browser refuses without CORS the console has no reason to grow. The rate limiter lives as a process-wide mutex in `player/src/web.rs`, gated `sampo-support` along with the rest of this page, and Vaino's own `reqwest` dependency is declared `optional`, wired to that same feature, so an appliance build never resolves or compiles an HTTP client it will never call.
 
-**`[SPEC-SUI-197]` Four things can be wrong independently, and today only one of them is fixable.**
+**`[SPEC-SUI-197]` Four things can be wrong independently, and one of them had no way to be fixed at all.**
 
-| what | today | wanted |
+| what | before this section | now |
 | :--- | :--- | :--- |
 | **recording** (the song) | fixable — `record_review`'s `chosen_mbid` | unchanged |
-| **release** (the album) | fixable, but only among releases the *chosen recording* already links to | also: any release found by search, linked on accept |
-| **artist** (the credit) | **not independently fixable** — it follows whichever recording is chosen | a credit can be corrected without touching the recording id at all |
-| **track** (position on the release) | not tracked as a correction at all | `release_recordings.position`/`disc` correctable per (release, recording) pair |
+| **release** (the album) | fixable, but only among releases the *chosen recording* already links to | unchanged — any release found by search, linked on accept, stays wanted, not built |
+| **artist** (the credit) | **not independently fixable** — it followed whichever recording was chosen | **fixable.** `artist_reviews`, `POST /review/:id/artist/correct` |
+| **track** (position on the release) | not tracked as a correction at all | unchanged, still wanted |
 
-The artist case is the one this table adds, not merely extends: `recording_artists` is keyed `(mbid, artist_mbid)`, and today nothing writes to it outside Sampo's own ingest. A person confirming "this recording is right, but MusicBrainz's own credit is wrong" needs a decision `apply_reviews.py` can fold into `recording_artists` the same way it folds a recording reassignment into `passage_recordings` — a new decision shape, not a reuse of the existing one, because the row it corrects is a different table with a different key.
+The artist case was the one this table added, not merely extended: `recording_artists` is keyed `(mbid, artist_mbid)`, and nothing wrote to it outside Sampo's own ingest before this. A person confirming "this recording is right, but MusicBrainz's own credit is wrong" needed a decision `apply_reviews.py` could fold into `recording_artists` the same way it folds a recording reassignment into `passage_recordings` — a new decision shape, not a reuse of the existing one, because the row it corrects is a different table with a different key. Built 2026-08-27: `artist_reviews` carries `recording_mbid` and the previous credit (`previous_artist_mbid`/`name`/`weight`), captured at decision time for the same reason `id_reviews.previous_mbid` is — a credit correction has no re-derivable source the way a boundary edit does, so this is the only copy, and `apply_reviews.py --revert-artist` needs it to mean anything. Offered on any card whose stored id shape-checks as a real MusicBrainz id, independent of whatever else that card decides. See [IMPL004 Stage 10](../IMPL004-sampo-editing-workflows.md#stage-10--artist-only-correction) for what was verified.
 
-**Not built this session.** `[REQ-LIB-175]`'s waveform editor and this section were both requested together and both designed together; the build order in [IMPL004](../IMPL004-sampo-editing-workflows.md) covers both.
+**Designed and built 2026-08-27**, alongside `[REQ-LIB-175]`'s waveform editor — both requested together, both designed together, and the build order in [IMPL004](../IMPL004-sampo-editing-workflows.md) covers both, now complete.

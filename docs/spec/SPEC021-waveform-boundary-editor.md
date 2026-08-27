@@ -1,6 +1,6 @@
 # SPEC021: Waveform Boundary Editor
 
-**Design Specification — Tier 2 · Not yet built**
+**Design Specification — Tier 2 · Built 2026-08-27, see [IMPL004](../IMPL004-sampo-editing-workflows.md) Stages 6–8**
 
 How a passage's start, end, lead-in, lead-out and gain are reviewed and corrected by hand, hearing the edit as it is made `[REQ-LIB-175]`, `[REQ-VIS-130]`, `[SPEC-SA-080]`.
 
