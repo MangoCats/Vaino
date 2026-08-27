@@ -16,7 +16,10 @@ license = "MIT"
 [features]
 default = []
 mpd = []
-sampo-support = []
+# `dep:reqwest` -- an appliance build never resolves, fetches or compiles the
+# HTTP client at all, not just leaves it unused `[SPEC-SUI-190]`,
+# `[SPEC-SUI-196]`.
+sampo-support = ["dep:reqwest"]
 
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
@@ -32,6 +35,13 @@ axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# One outbound call this player ever makes: MusicBrainz search, from the
+# review page, desktop-only `[SPEC-SUI-196]`. `rustls` rather than the default
+# system-OpenSSL backend -- one less thing a desktop build needs installed to
+# link, and an appliance build never pulls this crate in at all (see
+# `sampo-support` above).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`: already in the
 # dependency tree via cpal/rusqlite, so this declares an existing compile

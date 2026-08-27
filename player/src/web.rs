@@ -328,6 +328,7 @@ pub fn router(ui: Ui) -> Router {
         .route(REVIEW_QUEUE_ROUTE, get(review_queue))
         .route("/review/releases/:mbid", get(review_releases))
         .route("/review/:passage_id/:decision", post(record_review))
+        .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
         .route("/edit.js", get(|| async { js(EDIT_JS) }))
         .route("/fade.js", get(|| async { js(FADE_JS) }))
@@ -676,6 +677,126 @@ async fn review_releases(
         Ok(Some(v)) => axum::Json(v).into_response(),
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+/// Serialises MusicBrainz search calls to roughly one per second
+/// `[SPEC-SUI-196]` -- so opening two browser tabs and searching from both
+/// still respects the API's limit, because the discipline lives in this one
+/// process rather than in client behaviour a second tab simply would not
+/// share. Same rate `tools/fetch_releases.py` already uses for the same API.
+#[cfg(feature = "sampo-support")]
+static MB_LAST_REQUEST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+#[cfg(feature = "sampo-support")]
+async fn mb_rate_limit() {
+    use std::time::{Duration, Instant};
+    // The slot is reserved while holding the lock, and only the wait itself
+    // happens after releasing it -- an `await` under a `std::sync::Mutex`
+    // guard would hold it across a suspend point, which is the bug this
+    // avoids rather than a style preference.
+    let target = {
+        let mut last = MB_LAST_REQUEST.lock().unwrap();
+        let now = Instant::now();
+        let earliest = last.map(|t| t + Duration::from_secs(1)).unwrap_or(now);
+        let target = earliest.max(now);
+        *last = Some(target);
+        target
+    };
+    let now = Instant::now();
+    if target > now {
+        tokio::time::sleep(target - now).await;
+    }
+}
+
+/// The same contact-bearing agent string `tools/fetch_releases.py` already
+/// sends for the same API -- MusicBrainz asks for one and enforces it.
+#[cfg(feature = "sampo-support")]
+const MB_USER_AGENT: &str = "Vaino-Sampo/0.1 ( https://github.com/MangoCats/Vaino )";
+
+#[cfg(feature = "sampo-support")]
+#[derive(serde::Deserialize)]
+struct MbSearchQuery {
+    kind: String,
+    q: String,
+}
+
+/// Search MusicBrainz directly `[SPEC-SUI-196]`, `[REQ-LIB-180]` -- for the
+/// cases the fingerprint queue cannot reach: self-released audio with no
+/// AcoustID entry, and a remaster or bootleg it has never indexed. The one
+/// route the browser is allowed to reach musicbrainz.org through, so the rate
+/// limit above cannot be bypassed by calling the API directly from the page.
+///
+/// Results come back shaped exactly like a fingerprint [`crate::db::Suggestion`]
+/// so the page renders a searched match and a suggested one identically --
+/// choosing either is the same action from the reviewer's side of the page.
+#[cfg(feature = "sampo-support")]
+async fn musicbrainz_search(
+    axum::extract::Query(q): axum::extract::Query<MbSearchQuery>,
+) -> axum::response::Response {
+    if !matches!(q.kind.as_str(), "recording" | "artist" | "release") {
+        return (StatusCode::BAD_REQUEST, "kind must be recording, artist or release")
+            .into_response();
+    }
+    if q.q.trim().is_empty() {
+        return axum::Json(Vec::<crate::db::Suggestion>::new()).into_response();
+    }
+
+    mb_rate_limit().await;
+
+    let client = match reqwest::Client::builder().user_agent(MB_USER_AGENT).build() {
+        Ok(c) => c,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let url = format!("https://musicbrainz.org/ws/2/{}", q.kind);
+    let resp = client
+        .get(&url)
+        .query(&[("query", q.q.as_str()), ("fmt", "json"), ("limit", "15")])
+        .send()
+        .await;
+    let body: serde_json::Value = match resp {
+        Ok(r) if r.status().is_success() => match r.json().await {
+            Ok(v) => v,
+            Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+        },
+        _ => return StatusCode::BAD_GATEWAY.into_response(),
+    };
+
+    axum::Json(parse_mb_results(&q.kind, &body)).into_response()
+}
+
+/// The parsing half of [`musicbrainz_search`], kept separate from the HTTP
+/// call so it can be checked against a captured response without a network
+/// -- MusicBrainz's own JSON shape differs per entity (`name` vs. `title`,
+/// present or absent `artist-credit`), and that is exactly the part worth a
+/// test's attention, not the fact that `reqwest` can fetch a URL.
+#[cfg(feature = "sampo-support")]
+fn parse_mb_results(kind: &str, body: &serde_json::Value) -> Vec<crate::db::Suggestion> {
+    let key = match kind {
+        "recording" => "recordings",
+        "artist" => "artists",
+        _ => "releases",
+    };
+    let is_artist = kind == "artist";
+    body.get(key)
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let mbid = item.get("id")?.as_str()?.to_string();
+            let title = if is_artist { item.get("name") } else { item.get("title") }
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let artist = item
+                .get("artist-credit")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|c| c.get("name"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let score = item.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0) / 100.0;
+            Some(crate::db::Suggestion { mbid, title, artist, score })
+        })
+        .collect()
 }
 
 /// Why any one passage was chosen `[REQ-VIS-100]`.
@@ -1878,6 +1999,60 @@ mod tests {
         assert_eq!(garbled.bytes, b"0123456789");
 
         std::fs::remove_file(&path).ok();
+    }
+
+    /// A recording search response, in MusicBrainz's own shape -- `title`,
+    /// `artist-credit[0].name`, `score` 0-100 `[SPEC-SUI-196]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn mb_recording_results_parse_into_suggestions() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"recordings":[{"id":"rec-1","title":"Why Worry","score":97,
+                 "artist-credit":[{"name":"Dire Straits"}]},
+                {"id":"rec-2","title":"No Artist Credit","score":80}]}"#,
+        )
+        .unwrap();
+        let out = parse_mb_results("recording", &body);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].mbid, "rec-1");
+        assert_eq!(out[0].title, Some("Why Worry".into()));
+        assert_eq!(out[0].artist, Some("Dire Straits".into()));
+        assert!((out[0].score - 0.97).abs() < 1e-9, "score must be normalised to 0..1");
+        assert_eq!(out[1].artist, None, "no artist-credit must not panic or fabricate one");
+    }
+
+    /// An artist search names itself with `name`, not `title` -- the one
+    /// place MusicBrainz's own shape actually differs by entity kind.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn mb_artist_results_read_name_not_title() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"artists":[{"id":"art-1","name":"Dire Straits","score":100}]}"#,
+        )
+        .unwrap();
+        let out = parse_mb_results("artist", &body);
+        assert_eq!(out[0].title, Some("Dire Straits".into()));
+    }
+
+    /// No results, or a shape this parser was not given a key for, must come
+    /// back as an empty list rather than panicking on the request that
+    /// probably matters most: a search for something that genuinely is not
+    /// on MusicBrainz at all.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn mb_results_with_nothing_found_is_an_empty_list_not_a_panic() {
+        let body: serde_json::Value = serde_json::from_str(r#"{"recordings":[]}"#).unwrap();
+        assert!(parse_mb_results("recording", &body).is_empty());
+        let empty = serde_json::json!({});
+        assert!(parse_mb_results("release", &empty).is_empty());
+    }
+
+    /// The review page's own search box has to agree with the router about
+    /// this route, the same seam every other page-to-route check here guards.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_page_asks_musicbrainz_search_for_the_route_it_gets() {
+        assert!(REVIEW_JS.contains("/api/musicbrainz/search"));
     }
 
     #[cfg(feature = "sampo-support")]

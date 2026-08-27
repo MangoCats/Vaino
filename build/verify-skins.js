@@ -644,6 +644,11 @@ async function runReview() {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(QUEUE) });
     if (url.startsWith('/review/releases/'))
       return Promise.resolve({ ok: true, json: () => Promise.resolve(RELEASES) });
+    if (url.startsWith('/api/musicbrainz/search'))
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(
+        /q=nothing/.test(url) ? [] : [
+          { mbid: 'rec-searched', title: 'Found By Search', artist: 'Some Artist', score: 0.8 },
+        ]) });
     return Promise.resolve({ ok: false, status: 404 });
   };
   // jsdom does not fetch `<script src>`; the page's scripts are injected the
@@ -713,6 +718,37 @@ async function runReview() {
         '"Use the match" must be hidden when there is nothing to match to');
   check(/nothing to compare|nothing here to reassign/i.test(noCand.textContent),
         'a card with no candidates must say why, not just show an empty list');
+
+  // Searching MusicBrainz directly finds something the fingerprint queue
+  // could not `[SPEC-SUI-196]` -- on the same no-candidate card.
+  const searchIn = card => card.querySelector('.search input');
+  const searchGo = card => [...card.querySelectorAll('.search button')][0];
+  searchIn(noCand).value = 'nothing';
+  searchGo(noCand).onclick();
+  await settle();
+  check(/no results/i.test(noCand.querySelector('.search').textContent),
+        'a search with nothing found must say so');
+  check(noCandUse.hidden, 'zero results must not un-hide "Use the match"');
+
+  searchIn(noCand).value = 'a real title';
+  searchGo(noCand).onclick();
+  await settle();
+  check(!noCandUse.hidden, 'a found result must un-hide "Use the match"');
+  check(!noCand.querySelector('li.none'),
+        '"nothing to compare" must be removed once something was found');
+  const found = noCand.querySelector('input[value="rec-searched"]');
+  check(found, 'the searched result must be selectable exactly like a suggestion');
+  if (found) {
+    found.click();
+    check(!noCandUse.disabled, 'choosing a searched result must arm the button the same way');
+  }
+
+  // Every mbid on a card is a real MusicBrainz link, not plain text
+  // `[SPEC-SUI-195]`.
+  const mbidLinks = [...window.document.querySelectorAll('a.mbid')];
+  check(mbidLinks.length > 0, 'no mbid links were rendered at all');
+  check(mbidLinks.every(a => a.href.startsWith('https://musicbrainz.org/') && a.target === '_blank'),
+        'every mbid must link to its own MusicBrainz page in a new tab');
 
   // Auditioning goes through the ordinary queue verb rather than a new route.
   btn('Play now').onclick();

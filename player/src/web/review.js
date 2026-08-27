@@ -35,6 +35,20 @@
 
   const pct = s => (s == null ? '' : `${(s * 100).toFixed(1)}%`);
 
+  // Every mbid on a card is a link to what it actually names `[SPEC-SUI-195]`
+  // -- a person cannot judge a candidate by its id, only by the MusicBrainz
+  // page it opens onto. No proxying: this is the browser's own operator
+  // following the same link it could type by hand.
+  const mbidLink = (mbid, kind = 'recording') => {
+    const a = document.createElement('a');
+    a.className = 'mbid';
+    a.href = `https://musicbrainz.org/${kind}/${encodeURIComponent(mbid)}`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = mbid;
+    return a;
+  };
+
   // The grades, worst first. `on` is whether it is shown to begin with:
   // `different-id` is 93% of the findings on this library and is a tidiness
   // problem, and `unverified` is not evidence of anything at all -- leaving
@@ -90,7 +104,7 @@
     mine.appendChild(el('div', 'name', item.title || '(untitled)'));
     mine.appendChild(el('div', 'sub',
       [item.artist, item.album].filter(Boolean).join(' — ') || '—'));
-    mine.appendChild(el('div', 'mbid', item.stored_mbid));
+    mine.appendChild(mbidLink(item.stored_mbid));
     claims.appendChild(mine);
 
     const theirs = el('div', 'claim');
@@ -98,8 +112,13 @@
     const opts = el('ul', 'opts');
     // Radio rather than a button per candidate: picking is not deciding, and
     // a row of "use this one" buttons makes an irreversible-feeling choice out
-    // of what should be a glance.
-    for (const s of item.suggested || []) {
+    // of what should be a glance. A search result and a fingerprint
+    // suggestion render through this one function, so choosing either is the
+    // same action from the reviewer's side of the page `[SPEC-SUI-196]`.
+    const seen = new Set();
+    const addOption = s => {
+      if (seen.has(s.mbid)) return;
+      seen.add(s.mbid);
       const li = el('li');
       const input = document.createElement('input');
       input.type = 'radio';
@@ -110,26 +129,64 @@
       label.htmlFor = input.id;
       label.appendChild(el('div', 'name', s.title || '(untitled)'));
       label.appendChild(el('div', 'sub', s.artist || '—'));
-      label.appendChild(el('div', 'mbid', s.mbid));
+      label.appendChild(mbidLink(s.mbid));
       li.appendChild(input);
       li.appendChild(label);
       li.appendChild(el('span', 'pct', pct(s.score)));
       opts.appendChild(li);
-    }
+    };
+    for (const s of item.suggested || []) addOption(s);
     // Nothing to choose between. On this library that is 23 of the 44 `no-mbid`
     // cards and every `unverified` one -- and `no-mbid` leads the queue, so it
     // is most likely the first thing anyone meets. Say what the card is for
-    // instead of leaving a dead control to be poked at.
+    // instead of leaving a dead control to be poked at -- removed the moment a
+    // search actually finds something, since it stops being true then.
+    let none = null;
     if (!(item.suggested || []).length) {
-      opts.appendChild(el('li', 'none',
+      none = el('li', 'none',
         item.severity === 'no-mbid'
           ? 'This passage carries no MusicBrainz id, and AcoustID does not ' +
             'recognise the audio either — so there is nothing here to reassign ' +
             'it to. It needs identifying by hand, or a better fingerprint.'
           : 'AcoustID has no entry for this audio. That is not evidence for or ' +
-            'against the stored id — there is simply nothing to compare.'));
+            'against the stored id — there is simply nothing to compare.');
+      opts.appendChild(none);
     }
     theirs.appendChild(opts);
+
+    // Searching MusicBrainz directly `[SPEC-SUI-196]`, `[REQ-LIB-180]` -- for
+    // the cases the fingerprint queue cannot reach at all: self-released
+    // audio with no AcoustID entry, or a remaster it has never indexed.
+    const search = el('div', 'search');
+    const box2 = document.createElement('input');
+    box2.type = 'search';
+    box2.placeholder = 'search MusicBrainz by title…';
+    const go = el('button', null, 'Search');
+    const status = el('span', 'sub');
+    search.append(box2, go, status);
+    theirs.appendChild(search);
+
+    const runSearch = async () => {
+      const text = box2.value.trim();
+      if (!text) return;
+      go.disabled = true;
+      status.textContent = 'searching…';
+      try {
+        const r = await fetch(`/api/musicbrainz/search?kind=recording&q=${encodeURIComponent(text)}`);
+        const found = r.ok ? await r.json() : [];
+        for (const s of found) addOption(s);
+        if (found.length && none) { none.remove(); none = null; }
+        if (found.length) { use.hidden = false; use.title = 'choose one of the matches above first'; }
+        status.textContent = found.length ? `${found.length} result(s) added above`
+                                          : 'no results';
+      } catch {
+        status.textContent = 'search failed';
+      }
+      go.disabled = false;
+    };
+    go.onclick = runSearch;
+    box2.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+
     claims.appendChild(theirs);
     box.appendChild(claims);
 
