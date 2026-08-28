@@ -1,8 +1,8 @@
-# SONOS003: Repair Log — the `hass_players` Entity Was Never Added
+# SONOS003: Repair Log — Two Bugs, Both on `pi@homeassistant`, Both Closed
 
 **Development Record — repaired on `pi@homeassistant`, 2026-08-28**
 
-[SONOS002](SONOS002-integration-options.md) `[GDE-SONOS-160]` said to try the `hass_players` route before touching anything else. It was the whole fix — no container update, no `sonos_s1` surgery, one entity id added to an allowlist.
+[SONOS002](SONOS002-integration-options.md) `[GDE-SONOS-160]` said to try the `hass_players` route before touching anything else. That closed the visible symptom — a selectable "Sonos Speakers" player — but not actual playback, which surfaced a second, independent bug: Music Assistant's own music library was bind-mounted to a stale, empty path. Fixing both together is confirmed, from the speaker's own UPnP state, to have restored real playback.
 
 > **Related:** [SONOS001](SONOS001-appliance-survey.md) · [SONOS002](SONOS002-integration-options.md)
 
@@ -32,12 +32,31 @@ Player registered: media_player.office/Sonos Speakers
 
 `media_player.office` now shows in Music Assistant's own persisted player state as provider `hass_players`, `available: True`, no errors in the minutes following restart. It surfaces under the display name **"Sonos Speakers"** — Home Assistant's own name for the entity, not the stale "Upstairs Speakers" label `sonos_s1`'s direct registration still carries.
 
-**Not done, and worth deciding separately, not assumed:**
-
-- **The `sonos_s1` provider is still enabled** and still registers the same physical pair a second time, under its old name. Two entries for one pair in Music Assistant's player list — harmless, but worth disabling `sonos_s1` once "Sonos Speakers" (via `hass_players`) is confirmed to actually play audio correctly, so there is one obvious player to choose rather than two, one of which has a documented history of trouble `[GDE-SONOS-090]`.
-- **The container image was not updated.** `[GDE-SONOS-150]`'s update-and-add-a-restart-policy step is still open, and lower priority now that the actual blocking gap is closed.
-- **No audio was played as part of verifying this fix.** Confirmation stopped at "the player registers, reports available, and logs no errors" — an actual listening test, in the household's own space, is left to be done by ear, at their own choosing, via the Music Assistant app already open on this network.
+**What this alone did not fix:** pressing Play produced no audible music — instead, a replay of Home Assistant's own last text-to-speech clip, which then stopped. Confirmed directly against the speaker's own `AVTransport#GetMediaInfo`, both before and after a play attempt: `CurrentURI` never changed from the old TTS proxy URL. Whatever "Play" reached the speaker, the step that should have loaded a new track into it did not take effect.
 
 ---
 
-**Traceability:** `[GDE-SONOS-300..310]` · closes the "try `hass_players` first" step of `[GDE-SONOS-160]`
+## 4. The second bug, found while chasing the first: a stale bind mount
+
+**`[GDE-SONOS-320]` The household noticed it first, in the same error the container was quietly spamming its own logs with:** `FileNotFoundError: ... '/media/McKennitt, Loreena/Parallel Dreams/01_SAM_1.MP3'`. Checked directly on `shelfpi`: the container's actual bind mount was `/media/pi/Smart2T/Media/Music -> /media` — but `/media/pi/Smart2T` is a stale, empty leftover directory, not currently mounted at all. The real, currently-mounted drive (`/dev/sda1`, exfat) is at `/media/pi/Smart2T2/Media/Music`, holding the real library. The drive had evidently been relabeled at some point since the container was created, and the bind mount was never updated to follow it — Music Assistant's own library database still named files that, from inside the container, simply no longer existed.
+
+**Fixed:** stopped and removed the container, recreated it with the corrected mount (`/media/pi/Smart2T2/Media/Music:/media`) and, since a recreation was already happening, added `--restart unless-stopped` — closing `[GDE-SONOS-150]`'s separate hygiene recommendation at no extra risk. The image itself was left at `2.4.4`; only the mount and the restart policy changed. `settings.json` (and so the `hass_players` fix above) persisted unchanged, since it lives in the separate `/data` mount.
+
+**Confirmed:** zero `FileNotFoundError` lines in the twenty minutes following the fix (versus one roughly every ninety seconds before it), and a library sync started cleanly.
+
+---
+
+## 5. Confirmed working: Music Assistant plays real audio on the Office pair
+
+**`[GDE-SONOS-330]` After both fixes, a play issued from Music Assistant was confirmed, from the speaker's own UPnP state, to actually be the requested track — not inferred from the app's own UI.** `AVTransport#GetMediaInfo` against `.56` returned `CurrentURI = http://192.168.67.70:8097/flow/media_player.office/e5f080a4a0214d4eb95ee5e4a964f45c.mp3` — Music Assistant's own stream server (port `8097`), keyed to this exact player, not the stale TTS clip. The household independently confirmed audio was audible.
+
+**Whether the two bugs were causally linked, or merely fixed in the same sitting, is not established.** Both were real, both are independently confirmed fixed, and playback now works — but nothing here proves the file-not-found storm was *why* `SetAVTransportURI` wasn't landing, only that fixing the mount and recreating the container preceded playback starting to work. Stated this carefully rather than claimed as a single diagnosed root cause, since only one clean before/after pair (mount broken → mount fixed, in the same step as the container recreation that also cleared whatever state was stuck) was actually measured.
+
+**Still open, deliberately:**
+
+- **The `sonos_s1` provider is still enabled** and still registers the same physical pair a second time, under its old "Upstairs Speakers" name — harmless now that "Sonos Speakers" is confirmed working, but worth disabling so there is one obvious player to choose, one of which has a documented history of trouble `[GDE-SONOS-090]`.
+- **The container image is still `2.4.4`.** Left alone deliberately this time too, to avoid changing a second variable in the same sitting a working fix was just confirmed in.
+
+---
+
+**Traceability:** `[GDE-SONOS-300..330]` · closes `[GDE-SONOS-160]`'s "try `hass_players` first" step and, independently, the media-mount question `[GDE-SONOS-090]` had not resolved
