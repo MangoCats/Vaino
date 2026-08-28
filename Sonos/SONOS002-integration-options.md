@@ -68,7 +68,7 @@ followed by the same shape for `Play`, `SetVolume` (on `RenderingControl`), and 
 
 ## 6. Recommendation
 
-**`[GDE-SONOS-240]` Try Option A first, and specifically `[GDE-SONOS-160]`'s `hass_players` route before touching `sonos_s1` at all.** It is the only option that might already work with zero new code, on infrastructure already proven healthy `[GDE-SONOS-040]`, and it costs one settings check rather than an implementation.
+**`[GDE-SONOS-240]` Try Option A first, and specifically `[GDE-SONOS-160]`'s `hass_players` route before touching `sonos_s1` at all.** It is the only option that might already work with zero new code, on infrastructure already proven healthy `[GDE-SONOS-040]`, and it costs one settings check rather than an implementation. *Done, [SONOS003](SONOS003-repair-log.md): it was exactly this — one entity id missing from an allowlist, not a protocol fault.*
 
 **`[GDE-SONOS-250]` Build Option B regardless of how Option A turns out.** It is the one path under this project's own control end to end, matches the household's own stated preference for Vaino-direct, and its cost — one encoder, a handful of SOAP calls already validated against the real device — is smaller than either Music Assistant-mediated path's dependency on a second system staying correctly configured.
 
@@ -78,7 +78,7 @@ followed by the same shape for `Play`, `SetVolume` (on `RenderingControl`), and 
 
 ## 7. Open
 
-1. **`[GDE-SONOS-270]` Which Home Assistant `media_player` entity currently represents the Office pair**, and whether `hass_players` is already configured to expose it — the one fact `[GDE-SONOS-160]` needs and `settings.json` alone did not answer.
+1. ~~**`[GDE-SONOS-270]` Which Home Assistant `media_player` entity currently represents the Office pair**~~ — answered in [SONOS003](SONOS003-repair-log.md): `media_player.office`, now added to `hass_players`.
 2. **`[GDE-SONOS-280]` What `media_player.upstairs_bedroom_speaker`** `[GDE-SONOS-100]` **actually is** — confirm it is unrelated before assuming every "Upstairs" reference in the historical logs is about the Office pair.
 3. **`[GDE-SONOS-290]` Which MP3 encoder crate to use for Option B**, and what latency it adds relative to `PassageDecoder`'s own frame cadence — unmeasured, the same honesty `[GDE-MSA-270]` already applied to a different endpoint's per-request cost.
 
