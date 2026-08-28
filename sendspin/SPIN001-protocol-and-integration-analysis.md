@@ -50,7 +50,7 @@ What the Sendspin multi-room audio protocol actually is, who is behind it, and t
 
 **`[GDE-SPIN-130]` Mode C — vainopi as a plain Sendspin player.** The cheapest by far — `player@v1` only, no source or server role — and the only one where **the Director is bypassed entirely**: some other controller picks what plays, and vainopi is a synced speaker like any $10 ESP32. This has a real, narrow use: a housemate casting from Music Assistant's own library to the room vainopi occupies without displacing whatever vainopi itself is doing when idle. It earns no line in `[SPEC009]`'s own story and should be judged only as "the appliance can also be an ordinary Sendspin speaker when asked," never as a Director feature.
 
-**`[GDE-SPIN-140]` A fourth, non-protocol option: Sampo talks to Music Assistant's catalog, not its wire format.** Sampo's derived facts — corrected identifications, artist credits, `[REQ-LIB-195]`'s flag-and-sync mechanism — are data-flow problems already solved for *Vaino-to-Vaino* sync (`[SPEC006 §9, §10]`). Whether any of that has a receiving end in Music Assistant's own database is a question about Music Assistant's import/metadata API, not about Sendspin at all, and is out of scope for this document; noted here only so it is not mistaken for a fifth Sendspin mode.
+**`[GDE-SPIN-140]` A fourth, non-protocol option: Sampo talks to Music Assistant's catalog, not its wire format.** Sampo's derived facts — corrected identifications, artist credits, `[REQ-LIB-195]`'s flag-and-sync mechanism — are data-flow problems already solved for *Vaino-to-Vaino* sync (`[SPEC006 §9, §10]`). Whether any of that has a receiving end in Music Assistant's own database is a question about Music Assistant's import/metadata API, not about Sendspin at all, and is out of scope for this document; noted here only so it is not mistaken for a fifth Sendspin mode. Answered in full in [SPIN003](SPIN003-music-assistant-ecosystem-fit.md), which found the cheaper route runs through the OpenSubsonic adapter `[GDE-BAK-020]` already priced, not through Music Assistant's own plugin API `[GDE-MSA-050]`.
 
 ---
 
@@ -90,7 +90,7 @@ A build without it contains no Noise code, no Opus code, and no larger binary �
 ## 7. Open
 
 1. **`[GDE-SPIN-220]` Whether `sendspin-rs` matures enough to build on**, rather than implementing the handshake and Noise layer directly against the spec — worth re-checking before any Mode A/B work starts.
-2. **`[GDE-SPIN-230]` Whether Music Assistant's own catalog has any use for what Sampo already derives** `[GDE-SPIN-140]`, independent of the wire protocol entirely.
+2. ~~**`[GDE-SPIN-230]` Whether Music Assistant's own catalog has any use for what Sampo already derives**~~ — answered in [SPIN003](SPIN003-music-assistant-ecosystem-fit.md).
 3. **`[GDE-SPIN-240]` What pairing looks like on a Pi appliance with no display and no dedicated button** — the gap `[GDE-SPIN-160]` names without resolving.
 4. **`[GDE-SPIN-250]` Whether Opus is worth the dependency over PCM** for a protocol still willing to accept 16-bit PCM in its own flagship server implementation `[GDE-SPIN-060]`.
 
