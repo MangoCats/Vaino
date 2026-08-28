@@ -151,10 +151,12 @@ def vaino_docs():
     # checker cannot see is worse than no folder: its links go unverified and
     # its tags are reported as dangling from everywhere that cites them.
     # sendspin/ is the same shape again, one folder for one external
-    # ecosystem under investigation rather than one appliance.
+    # ecosystem under investigation rather than one appliance. Sonos/ is a
+    # third: one folder for one real device pair and the integration work
+    # around it, not an appliance either.
     out = (glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")
            + glob.glob("VainoPi/*.md") + glob.glob("BosePi/*.md")
-           + glob.glob("sendspin/*.md"))
+           + glob.glob("sendspin/*.md") + glob.glob("Sonos/*.md"))
     out = [p for p in out if INHERITED_DIR not in p]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
