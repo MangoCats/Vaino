@@ -150,8 +150,11 @@ def vaino_docs():
     # material would otherwise be interleaved with the first's. A folder the
     # checker cannot see is worse than no folder: its links go unverified and
     # its tags are reported as dangling from everywhere that cites them.
+    # sendspin/ is the same shape again, one folder for one external
+    # ecosystem under investigation rather than one appliance.
     out = (glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")
-           + glob.glob("VainoPi/*.md") + glob.glob("BosePi/*.md"))
+           + glob.glob("VainoPi/*.md") + glob.glob("BosePi/*.md")
+           + glob.glob("sendspin/*.md"))
     out = [p for p in out if INHERITED_DIR not in p]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
