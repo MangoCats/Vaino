@@ -29,6 +29,23 @@ swap -- this writes to `passages`, `passage_recordings` and
 change. `theirs` applies the incoming change, overwriting what diverged.
 Both still need `--commit` to actually write; without it, a `--resolve` run
 only previews what that resolution would do.
+
+**`--emit-sql OUT.sql` `[SPEC-DF-111]`**, for a target with no Python at all
+(vainopi, per `[SPEC-DF-108]`): runs the identical merge against `db` as a
+**read-only** comparison -- nothing is ever committed to `db` itself when
+this is given, regardless of `--commit` -- and captures the literal SQL
+actually executed into `OUT.sql`, ready to hand to a target's own `sqlite3`
+CLI:
+
+    python tools/apply_changes.py /tmp/vainopi-copy.db changes.json --commit --emit-sql patch.sql
+    scp patch.sql pi@vainopi:/tmp/patch.sql
+    ssh pi@vainopi 'systemctl stop vaino && sqlite3 /srv/library/vaino.db < /tmp/patch.sql && systemctl start vaino'
+
+**`--clear-flags`**, combined with either write mode: for each change
+actually applied, also deletes the `listener_flags` row(s) that plausibly
+named it `[SPEC-DF-112]` -- closing the loop `tools/import_flags.py` opened,
+the same checkbox semantics either way, just cleared by the sync instead of
+by hand.
 """
 
 import argparse
@@ -291,12 +308,46 @@ def apply_artist_review(conn: sqlite3.Connection, recording_mbid: str, change: d
          change["decided_at"], change["origin"]))
 
 
+def clear_flags_for(conn: sqlite3.Connection, kind: str, passage_id, change: dict) -> None:
+    """`--clear-flags` `[SPEC-DF-112]`: a change landing for exactly the
+    subject a flag named is the looking-at `[REQ-VIS-265]`'s checkbox asked
+    for, having happened. Clears every subject the change plausibly *was*
+    flagged under, not only the one it turned out to be -- an `id_review`'s
+    passage may have been flagged before it had a recording at all, or by
+    the recording it is being moved away from.
+    """
+    subjects = []
+    if passage_id is not None:
+        subjects.append(("passage", str(passage_id)))
+    if kind == "id_review":
+        # Both ends: a listener most often flags a *misidentification* while
+        # it still carries the wrong id, so the baseline -- what it was
+        # flagged as -- is at least as likely to be the flagged subject as
+        # the corrected target is.
+        subjects.append(("recording", change["target"]["mbid"]))
+        if change["baseline"].get("mbid"):
+            subjects.append(("recording", change["baseline"]["mbid"]))
+    elif kind == "artist_review":
+        subjects.append(("recording", change["anchor"]["recording_mbid"]))
+    for subject_kind, subject_id in subjects:
+        conn.execute(
+            "DELETE FROM listener_flags WHERE subject_kind=?1 AND subject_id=?2",
+            (subject_kind, subject_id))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
     ap.add_argument("changes", help="changes.json from export_changes.py")
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--resolve", action="append", default=[], metavar="N=ours|theirs|skip")
+    ap.add_argument("--emit-sql", metavar="OUT.sql",
+                     help="write the literal SQL a commit would run to this file instead "
+                          "of writing to `db` `[SPEC-DF-111]`; `db` is never modified when "
+                          "this is given, whether or not --commit is also passed")
+    ap.add_argument("--clear-flags", action="store_true",
+                     help="delete the listener_flags row(s) a successfully-applied change "
+                          "plausibly named `[SPEC-DF-112]`")
     args = ap.parse_args()
 
     resolutions = {}
@@ -314,21 +365,44 @@ def main() -> int:
     conn = sqlite3.connect(args.db, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
+
+    # `--emit-sql` `[SPEC-DF-111]`: capture the literal, fully-quoted SQL
+    # SQLite actually executes -- placeholders already expanded to safe
+    # literals, the same text `.trace` in the `sqlite3` CLI would show --
+    # instead of ever committing it to `db`. Attached before schema
+    # readiness below so a target missing the review tables entirely still
+    # gets the same `CREATE TABLE IF NOT EXISTS` statements in the script.
+    sql_log = [] if args.emit_sql else None
+    if sql_log is not None:
+        conn.set_trace_callback(sql_log.append)
+    writing = args.commit or bool(args.emit_sql)
+
     # Schema readiness, not a decision -- run even in rehearsal, the same as
     # `ensure_review_table` and its siblings run unconditionally on every
     # `PlayerStore::open` regardless of whether anything gets written after.
+    # Traced too `[SPEC-DF-111]`: a target missing the review tables
+    # entirely -- every real appliance today -- still needs them in the
+    # emitted script, not just in this disposable compare copy.
     ensure_review_tables(conn)
     conn.commit()
 
+    # A compare copy predating `[REQ-VIS-265]` entirely has no `listener_flags`
+    # at all -- `--clear-flags` is then simply nothing to do, not an error
+    # that would otherwise mask the change it was attached to having landed.
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    clear_flags_ok = args.clear_flags and "listener_flags" in have
+
     say(f"{len(changes)} change(s) in {args.changes}")
-    counts = {"fastforward": 0, "noop": 0, "conflict": 0, "missing": 0, "resolved": 0, "error": 0}
-    if args.commit:
+    counts = {"fastforward": 0, "noop": 0, "conflict": 0, "missing": 0, "resolved": 0, "error": 0,
+              "cleared": 0}
+    if writing:
         conn.execute("BEGIN IMMEDIATE")
 
     for i, change in enumerate(changes, 1):
         kind = change["kind"]
         anchor = change["anchor"]
 
+        passage_id = None
         if kind == "id_review":
             passage_id = resolve_passage(conn, anchor)
             current = {"mbid": current_recording(conn, passage_id)} if passage_id else None
@@ -378,7 +452,7 @@ def main() -> int:
             counts["fastforward"] += 1
             say(f"#{i} {kind}: {subject} -> {describe(change['target'], kind)}")
 
-        if not args.commit:
+        if not writing:
             continue
         try:
             if kind == "id_review":
@@ -387,17 +461,46 @@ def main() -> int:
                 apply_boundary_review(conn, passage_id, change)
             else:
                 apply_artist_review(conn, recording_mbid, change)
+            if clear_flags_ok:
+                before = conn.total_changes
+                clear_flags_for(conn, kind, passage_id, change)
+                counts["cleared"] += conn.total_changes - before
         except (ValueError, sqlite3.Error) as e:
             say(f"    refused: {e}")
             counts["error"] += 1
 
     say(f"\n{counts['fastforward']} fast-forward, {counts['resolved']} resolved, "
         f"{counts['noop']} already in sync, {counts['conflict']} conflict(s) unresolved, "
-        f"{counts['missing']} not present here, {counts['error']} refused")
+        f"{counts['missing']} not present here, {counts['error']} refused"
+        + (f", {counts['cleared']} flag(s) cleared" if args.clear_flags else ""))
 
-    if args.commit:
+    landed = counts["fastforward"] or counts["resolved"]
+    if args.emit_sql:
+        # `db` is never the destination here `[SPEC-DF-111]` -- whatever this
+        # comparison wrote to it (including the schema setup above, already
+        # committed) is rolled back, leaving only the trace to act on.
+        conn.rollback()
+        # Only the writes: every comparison above issues its own `SELECT`s
+        # (`resolve_passage`, `current_recording`, `history_for`, the
+        # `have`/existence checks...) and the trace callback sees those too --
+        # harmless to replay but pure noise in what is meant to be a short,
+        # readable "here is exactly what changed" script. Transaction control
+        # is re-issued at write time instead of preserved verbatim, since
+        # `BEGIN`/`COMMIT` were traced as well (Python's own implicit
+        # transaction handling, on top of the explicit `BEGIN IMMEDIATE`
+        # above), and collapsing to one pair is simpler than reasoning about
+        # which of those to keep.
+        WRITE_KEYWORDS = ("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "REPLACE")
+        patch = [s for s in sql_log if s.lstrip().upper().startswith(WRITE_KEYWORDS)]
+        with open(args.emit_sql, "w", encoding="utf-8") as f:
+            f.write("BEGIN IMMEDIATE;\n")
+            for stmt in patch:
+                f.write(stmt.rstrip().rstrip(";") + ";\n")
+            f.write("COMMIT;\n")
+        say(f"{len(patch)} statement(s) written to {args.emit_sql} -- {args.db} was not modified")
+    elif args.commit:
         conn.commit()
-        say("committed" if counts["fastforward"] or counts["resolved"] else "nothing to write")
+        say("committed" if landed else "nothing to write")
     else:
         say("nothing was written. Re-run with --commit to do it.")
     return 0

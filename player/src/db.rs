@@ -160,7 +160,19 @@ pub(crate) const FLAGS_TABLE: &str = "
         subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','passage')),
         subject_id   TEXT NOT NULL,
         flagged_at   TEXT NOT NULL,
+        origin       TEXT,
         PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID;";
+
+/// Bring a `listener_flags` predating `origin` up to date `[SPEC-DF-107]`,
+/// the same reason `ensure_history_columns` exists for the two tables beside
+/// it: `CREATE TABLE IF NOT EXISTS` above is a no-op on a library that
+/// already has the table. Vaino itself never writes this column -- only
+/// `tools/import_flags.py`, landing a flag pulled from elsewhere, does -- but
+/// the column has to already exist there for that write to have somewhere to
+/// go, on every appliance, not just ones a sync tool happens to reach first.
+fn ensure_flags_columns(conn: &Connection) {
+    let _ = conn.execute("ALTER TABLE listener_flags ADD COLUMN origin TEXT", []);
+}
 
 /// Bring an existing `listener_play_history` / `listener_rejections` up to the
 /// column set above `[REQ-VIS-250]`.
@@ -829,6 +841,7 @@ impl PlayerStore {
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_history_columns(&conn);
+        ensure_flags_columns(&conn);
         #[cfg(feature = "sampo-support")]
         ensure_review_table(&conn)?;
         #[cfg(feature = "sampo-support")]

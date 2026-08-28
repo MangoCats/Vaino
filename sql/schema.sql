@@ -326,10 +326,14 @@ CREATE INDEX IF NOT EXISTS listener_likes_mbid ON listener_likes(mbid);
 -- Keyed the way `flavor` already is [SPEC-SC-060]: a recording when the play
 -- had one, a passage when it did not, because a track worth flagging for
 -- review is often exactly the one with no MBID yet.
+-- `origin` [SPEC-DF-107]: NULL for a flag set here, else the hostname of the
+-- installation it was pulled from -- the same provenance discipline
+-- [SPEC-DF-104] already gives id_reviews/boundary_reviews/artist_reviews.
 CREATE TABLE IF NOT EXISTS listener_flags (
     subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','passage')),
     subject_id   TEXT NOT NULL,
     flagged_at   TEXT NOT NULL,
+    origin       TEXT,
     PRIMARY KEY (subject_kind, subject_id)
 ) WITHOUT ROWID;
 
