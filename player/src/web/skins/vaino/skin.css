@@ -152,8 +152,17 @@ body.dev { --bg: #2a1418; --line: #4a2830; }
 #histbtn[aria-expanded="true"] { color: var(--fg); border-color: var(--line);
                                  background: var(--line); }
 
-/* The history panel: the same screen shape as Settings, with a table long
-   enough to need its own scroller rather than the whole page's `[REQ-VIS-250]`. */
+/* The history panel: a table, not a now-playing card, so it earns room the
+   rest of the app has no use for -- twice the width, and every pixel of
+   height the viewport can spare, rather than the fixed scroller a card-shaped
+   page would need `[REQ-VIS-250]`. Scoped to whichever moment the panel is
+   actually shown, the same `:has()` technique review.html already uses, so
+   Settings and the now-playing card keep their narrower, centred shape. */
+body:has(#panel-history:not([hidden])) main {
+  max-width: 68rem; min-height: 100vh; box-sizing: border-box;
+  display: flex; flex-direction: column;
+}
+#panel-history { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 #panel-history h2 { font-size: .75rem; letter-spacing: .12em;
                     text-transform: uppercase; color: var(--dim);
                     font-weight: 600; margin: 0 0 1.2rem; }
@@ -165,8 +174,11 @@ body.dev { --bg: #2a1418; --line: #4a2830; }
 .histnav button:disabled { opacity: .4; cursor: default; }
 .histnav button:disabled:hover { border-color: var(--line); }
 /* Scrolls on its own, so paging the table never scrolls the page it sits in
-   out from under the controls above it. */
-.histscroll { max-height: 22rem; overflow-y: auto; overflow-x: auto;
+   out from under the controls above it. `flex: 1` (with the panel above it
+   also a flex column) is what actually fills the available height; the
+   `min-height` is only the floor for a browser too old for `:has()`, where
+   that flex context never forms. */
+.histscroll { flex: 1; min-height: 16rem; overflow-y: auto; overflow-x: auto;
               border: 1px solid var(--line); border-radius: 6px; }
 #histtable { width: 100%; border-collapse: collapse; font-size: .8125rem; }
 #histtable th { position: sticky; top: 0; background: var(--bg); text-align: left;
