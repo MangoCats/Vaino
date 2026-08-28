@@ -70,6 +70,11 @@ def ro(db: str) -> sqlite3.Connection:
 
 def totals(conn) -> dict:
     q = lambda s: conn.execute(s).fetchone()[0]  # noqa: E731
+    # `id_checks` is written by the fingerprint pass, not by schema.sql -- a
+    # library nothing has ever fingerprinted has no such table at all, and a
+    # query naming a missing table fails outright rather than finding nothing
+    # `[REQ-LIB-165]`. "Never checked" must not crash the page that would say so.
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     return {
         "files": q("SELECT count(*) FROM files"),
         "passages": q("SELECT count(*) FROM passages"),
@@ -78,7 +83,8 @@ def totals(conn) -> dict:
         # The two facets that are Sampo's business and never the player's.
         "unidentified": q("SELECT count(*) FROM recordings WHERE mbid NOT LIKE '________-____-____-____-____________'"),
         "unchecked": q("SELECT count(*) FROM passages p WHERE p.kind='radio' AND NOT EXISTS "
-                       "(SELECT 1 FROM id_checks c WHERE c.passage_id = p.passage_id)"),
+                       "(SELECT 1 FROM id_checks c WHERE c.passage_id = p.passage_id)")
+                     if "id_checks" in have else q("SELECT count(*) FROM passages WHERE kind='radio'"),
         "no_flavor": q("SELECT count(*) FROM passages p JOIN passage_recordings pr USING(passage_id) "
                        "WHERE p.kind='radio' AND NOT EXISTS "
                        "(SELECT 1 FROM flavor f WHERE f.subject_kind = 'recording' AND f.subject_id = pr.mbid)"),
