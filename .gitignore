@@ -43,6 +43,12 @@ vaino.db
 # Rust target directory (for Phase 6 Rust engine)
 /target/
 
+# VainoPi/deploy.sh's own scratch: a build script handed into the aarch64
+# container (has to live inside the repo so Windows/Docker path translation
+# works), and the binary a worktree build hands back out.
+/.vaino-deploy-build.sh
+/.deploy-out/
+
 # Sampo / feature-extraction working data.
 # Large, re-derivable artifacts stay out; measured RESULTS stay in.
 data/*
