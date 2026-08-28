@@ -162,7 +162,13 @@ body:has(#panel-history:not([hidden])) main {
   max-width: 68rem; min-height: 100vh; box-sizing: border-box;
   display: flex; flex-direction: column;
 }
-#panel-history { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* `:not([hidden])`, not a bare `#panel-history`: an ID selector's own
+   specificity beats the browser's `[hidden] { display: none }` regardless of
+   source order, so an unconditional `display: flex` here was overriding
+   `hidden` outright and leaving the panel on screen -- narrow, since the
+   `:has()` width rule above correctly never saw it as un-hidden -- at the
+   bottom of whichever page was actually showing. */
+#panel-history:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 #panel-history h2 { font-size: .75rem; letter-spacing: .12em;
                     text-transform: uppercase; color: var(--dim);
                     font-weight: 600; margin: 0 0 1.2rem; }
