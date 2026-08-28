@@ -90,6 +90,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `EXT` — Driving other players with Vaino's selection, and where that stops
 - `BAK` — External backends: the measured cost of an MPD/OpenSubsonic adapter
 - `MPD` — The Director as an MPD client: leverage, extension via stickers, mapping
+- `SPIN` — Sendspin protocol: interfacing Vaino/Sampo with the Sendspin multi-room ecosystem, see [sendspin/SPIN001-protocol-and-integration-analysis.md](../sendspin/SPIN001-protocol-and-integration-analysis.md)
 
 ---
 
