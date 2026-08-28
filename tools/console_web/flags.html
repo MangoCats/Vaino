@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Sampo — flagged for review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Sampo</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags" class="on">flags</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Flagged for review</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Checked from Vaino's own play-history page — "flag this for review" — and
+    only ever read here, never set or cleared: the checkbox is Vaino's, this
+    is a worklist over what it wrote. Choosing one opens its profile, where
+    the id review and boundary editor Vaino already offers are one click away.
+  </p>
+  <div class="controls">
+    <button class="chip" id="refresh">refresh</button>
+    <span id="count" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+  </div>
+  <div id="list"></div>
+</main>
+<script src="/console.js"></script>
+<script>
+async function load() {
+  let rows;
+  try {
+    rows = await S.get('/api/flags');
+  } catch (e) { return S.fail('#list', e); }
+
+  document.getElementById('count').textContent =
+    `${rows.length} flagged track${rows.length === 1 ? '' : 's'}`;
+  const box = document.getElementById('list');
+  if (!rows.length) {
+    box.replaceChildren(S.el('p', { class: 'empty', text: 'Nothing flagged yet.' }));
+    return;
+  }
+
+  box.replaceChildren(S.el('table', {},
+    S.el('thead', {}, S.el('tr', {}, ...['flagged', 'title', 'artist', 'kind', '']
+      .map(h => S.el('th', { text: h })))),
+    S.el('tbody', {}, ...rows.map(r => S.el('tr', {},
+      S.el('td', { class: 'num', text: r.flagged_at }),
+      S.el('td', { text: r.title || (r.resolved ? '(untitled)' : '') }),
+      S.el('td', { text: r.artist || '' }),
+      S.el('td', {}, S.el('span', { class: 'pill', text: r.subject_kind })),
+      S.el('td', {}, ...(r.resolved
+        ? r.passages.map((pid, i) => S.el('span', {},
+            i > 0 ? ', ' : null,
+            S.el('a', { href: `/profile/${pid}` }, `passage ${pid}`)))
+        : [S.el('span', { class: 'pill warn',
+              title: 'the library has changed since this was flagged, and nothing this specific survives to open',
+              text: 'no longer resolvable' })]))))))
+  );
+}
+
+document.getElementById('refresh').onclick = load;
+load();
+</script>

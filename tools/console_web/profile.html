@@ -5,7 +5,7 @@
 <link rel="stylesheet" href="/console.css">
 <header>
   <h1>Sampo</h1>
-  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a></nav>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a></nav>
   <span class="ro">library read-only</span>
 </header>
 <main id="main"><p class="empty">loading…</p></main>
@@ -28,12 +28,16 @@ function kv(pairs) {
 
 // The handoff `[SPEC-SUI-140]`, `[SPEC-SUI-150]`, `[SPEC-SUI-170]`. Sampo asks
 // the operating system to ensure a co-resident player is there -- never Vaino
-// itself `[SPEC-SUI-025]` -- then embeds its review page for this exact
-// passage. `[SPEC-SUI-155]`: embed it where it embeds, link it where it does
-// not. Detecting a blocked frame from script is unreliable across browsers,
-// so the new-tab link is offered unconditionally alongside the frame rather
-// than only after a failure is inferred -- cheap, and correct either way.
-function handoffBox(passageId) {
+// itself `[SPEC-SUI-025]` -- then embeds its own page for this exact passage.
+// `[SPEC-SUI-155]`: embed it where it embeds, link it where it does not.
+// Detecting a blocked frame from script is unreliable across browsers, so the
+// new-tab link is offered unconditionally alongside the frame rather than
+// only after a failure is inferred -- cheap, and correct either way.
+//
+// One function, two callers: id review and the waveform editor are the same
+// handoff shape aimed at a different Vaino route `[SPEC-SUI-135]` -- a
+// second mechanism would just be this one, copied.
+function handoffBox(passageId, route, label) {
   const box = S.el('div', { class: 'handoff' },
     S.el('p', { class: 'empty', text: 'Starting the local player…' }));
 
@@ -50,14 +54,14 @@ function handoffBox(passageId) {
       box.replaceChildren(S.el('p', { class: 'err' }, r.error));
       return;
     }
-    const url = `http://localhost:${r.port}/review?passage=${passageId}`;
+    const url = `http://localhost:${r.port}${route}`;
     box.replaceChildren(
       S.el('p', {},
         S.el('a', { href: url, target: '_blank', rel: 'noopener' }, 'Open in a new tab ↗'),
         r.started ? S.el('span', { class: 'pill ok', style: 'margin-left:.6rem',
                                     text: 'started a local Vaino' }) : null),
       S.el('iframe', {
-        src: url, class: 'handoff-frame', title: 'Vaino — review',
+        src: url, class: 'handoff-frame', title: `Vaino — ${label}`,
         // Cross-origin, deliberately [SPEC-SUI-145]: Sampo cannot see inside
         // this frame, and does not ask to. The round trip closes through the
         // shared database on the next scan, not through the browser.
@@ -137,7 +141,13 @@ function handoffBox(passageId) {
     // boundary editing both play the passage, and Sampo has no audio path to
     // give them [SPEC-SA-100]. This is the handoff, not a reimplementation.
     m.append(S.el('h2', {}, 'Review in Vaino'));
-    m.append(handoffBox(pid));
+    m.append(handoffBox(pid, `/review?passage=${pid}`, 'review'));
+
+    // The waveform/boundary editor `[SPEC021]` -- the second case
+    // `[SPEC-SUI-135]` names, reached the same way `[SPEC-SUI-150]` deep-links
+    // review: by passage_id, valid only for the co-resident player named above.
+    m.append(S.el('h2', {}, 'Edit boundaries in Vaino'));
+    m.append(handoffBox(pid, `/edit/${pid}`, 'edit boundaries'));
 
     // The rejected candidates, beside the chosen one. Written by every stage
     // since the migration and read by nothing until now [SPEC-SUI-045].

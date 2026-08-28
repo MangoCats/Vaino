@@ -87,11 +87,15 @@ const RICH = {
 const HISTORY = {
   entries: [
     { at: 1735689600, kind: 'play', title: 'A Song', artist: 'A Band',
-      album: 'An Album', played_pct: 91.4 },
+      album: 'An Album', played_pct: 91.4,
+      flag_kind: 'recording', flag_id: 'aaaaaaaa-0000-0000-0000-000000000001', flagged: false },
     { at: 1735689500, kind: 'skip', title: 'Another Song', artist: 'A Band',
-      album: null, played_pct: 4.2 },
+      album: null, played_pct: 4.2,
+      flag_kind: 'passage', flag_id: '42', flagged: true },
+    // A row nothing survives to key a flag by `[REQ-VIS-265]`: the passage
+    // was relinked away and no recording was ever attached to it.
     { at: 1735689400, kind: 'play', title: null, artist: null, album: null,
-      played_pct: null },
+      played_pct: null, flag_kind: null, flag_id: null, flagged: false },
   ],
   total: 3, page: 1, size: 100,
 };
@@ -349,6 +353,23 @@ async function run(skin) {
     check(rows().some(r => /91%|91\.4%/.test(r.textContent)), 'a known percentage must be shown');
     check(rows().some(r => /—/.test(r.textContent)),
           'a row with no percentage must read as absent, not 0%');
+
+    // "Flag this for review" `[REQ-VIS-265]`: a checkbox where a stable
+    // subject exists, nothing where it does not, and toggling it posts the
+    // new state -- checking and unchecking are the same call either way.
+    const boxes = () => rows().map(r => r.querySelector('input[type=checkbox]'));
+    check(boxes().filter(Boolean).length === 2,
+          `expected 2 flaggable rows, got ${boxes().filter(Boolean).length}`);
+    check(boxes()[2] === null, 'a row with no stable subject must offer no checkbox at all');
+    check(boxes()[0].checked === false && boxes()[1].checked === true,
+          'the checkbox must start in the state the server reported');
+    boxes()[0].checked = true;
+    boxes()[0].onchange();
+    await new Promise(r => setTimeout(r, 20));
+    check(posted.some(u => u === '/history/flag/recording/' +
+                            'aaaaaaaa-0000-0000-0000-000000000001?flagged=true'),
+          `expected a flag POST, got ${JSON.stringify(posted)}`);
+
     histBtn.onclick();
     check(!main.hidden && hist.hidden, 'the history button must close it again');
   }
@@ -455,7 +476,10 @@ async function run(skin) {
     check(dev.hidden, 'and clear again when it goes off');
   }
 
-  const expectedPosts = (gear ? (nowrow ? 5 : 4) : 2) + (stations ? 1 : 0);
+  // `+1` when a history panel exists: the flag-checkbox toggle above posts
+  // once, on top of whatever this skin's other controls already send
+  // `[REQ-VIS-265]`.
+  const expectedPosts = (gear ? (nowrow ? 5 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;

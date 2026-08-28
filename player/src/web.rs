@@ -314,7 +314,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
-        .route("/history", get(history));
+        .route("/history", get(history))
+        .route("/history/flag/:kind/:id", post(set_flag));
 
     // The identification-review page, and everything reached from it: desktop
     // induct tooling with no reason to occupy an appliance image that never
@@ -498,6 +499,38 @@ async fn history(
     match out {
         Ok(Some(page)) => axum::Json(page).into_response(),
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// "Flag this for review" from the history page, on at any time `[REQ-VIS-265]`.
+///
+/// `?flagged=` carries the checkbox's own new state rather than the route
+/// meaning "set" and needing a second one for "clear": a checkbox already
+/// knows what it just became, and sending that is simpler than the caller
+/// inferring a verb from it. `kind` is validated here against the same two
+/// words the table's own CHECK constraint allows, so a malformed request is
+/// refused with a reason before it reaches the database at all.
+async fn set_flag(
+    State(ui): State<Ui>,
+    axum::extract::Path((kind, id)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    if kind != "recording" && kind != "passage" {
+        return (StatusCode::BAD_REQUEST, "kind must be recording or passage").into_response();
+    }
+    let flagged = q.get("flagged").map(|v| v == "true" || v == "1").unwrap_or(false);
+    let db = ui.db.clone();
+    let done = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open(&db)
+            .map_err(|e| e.message().to_string())?
+            .set_flag(&kind, &id, flagged)
+            .map_err(|e| e.message().to_string())
+    })
+    .await;
+    match done {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 

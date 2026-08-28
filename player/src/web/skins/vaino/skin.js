@@ -691,7 +691,7 @@
   // teaching the wire format to page would serve nowhere else it is used.
   let histPage = 1;
 
-  const HIST_COLS = 6;
+  const HIST_COLS = 7;
 
   function histRow(cells) {
     const tr = document.createElement('tr');
@@ -701,6 +701,36 @@
       tr.appendChild(td);
     }
     return tr;
+  }
+
+  // "Flag this for review" `[REQ-VIS-265]`. Keyed by recording when the row
+  // has one, by passage when it does not -- the same fallback the server
+  // resolves, so an unidentified track is exactly as flaggable as a named one.
+  // Absent entirely (row.flag_kind is null) only for a play whose passage was
+  // relinked away with no recording ever attached to it, which has nothing
+  // left to flag `[SPEC-DF-035]`.
+  function flagCell(row) {
+    const td = document.createElement('td');
+    if (!row.flag_kind) {
+      td.title = 'nothing stable enough to flag survives for this row';
+      return td;
+    }
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!row.flagged;
+    box.title = 'flag this track for review in Sampo';
+    box.onchange = async () => {
+      const want = box.checked;
+      box.disabled = true;
+      try {
+        await Vaino.setFlag(row.flag_kind, row.flag_id, want);
+      } catch (e) {
+        box.checked = !want;   // put it back; the server never saw the change
+      }
+      box.disabled = false;
+    };
+    td.appendChild(box);
+    return td;
   }
 
   function histMessage(text) {
@@ -748,6 +778,7 @@
         row.kind === 'play' ? 'Played' : 'Skipped',
       ]);
       tr.className = row.kind === 'play' ? 'hit' : 'miss';
+      tr.appendChild(flagCell(row));
       body.appendChild(tr);
     }
     $('histpage').textContent = `Page ${histPage} of ${pages}`;

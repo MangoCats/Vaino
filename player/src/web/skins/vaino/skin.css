@@ -182,10 +182,14 @@ body.dev { --bg: #2a1418; --line: #4a2830; }
 #histtable tr.empty td { text-align: center; color: var(--dim); padding: 1.5rem 0; }
 /* Result carries its own word as well as its colour `[REQ-VIS-250]`, the same
    reasoning as the speaker states above -- colour is a second channel, not
-   the only one. */
-#histtable td:last-child { font-weight: 600; white-space: nowrap; }
-#histtable tr.hit td:last-child { color: #4c9a5a; }
-#histtable tr.miss td:last-child { color: var(--dim); font-weight: 400; }
+   the only one. Second-to-last now that the flag column sits after it. */
+#histtable td:nth-last-child(2) { font-weight: 600; white-space: nowrap; }
+#histtable tr.hit td:nth-last-child(2) { color: #4c9a5a; }
+#histtable tr.miss td:nth-last-child(2) { color: var(--dim); font-weight: 400; }
+/* The flag checkbox, on at any time from this page alone `[REQ-VIS-265]`. */
+#histtable td:last-child { text-align: center; }
+#histtable td:last-child input[type=checkbox] { width: 1.1rem; height: 1.1rem; cursor: pointer; }
+#histtable td:last-child input[disabled] { cursor: default; opacity: .35; }
 
 /* Provenance [REQ-VIS-120]. Small, raised and dim: present at every glance,
    but never competing with the name it qualifies. MusicBrainz is the claim

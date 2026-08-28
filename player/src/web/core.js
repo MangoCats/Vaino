@@ -620,6 +620,13 @@ const Vaino = (() => {
         if (!r.ok) throw new Error(`the server answered ${r.status}`);
         return r.json();
       }),
+    // "Flag this for review" `[REQ-VIS-265]` -- on at any time, off at any
+    // time, the same call either way with the new state carried as the query.
+    setFlag: (kind, id, flagged) =>
+      fetch(`/history/flag/${kind}/${encodeURIComponent(id)}?flagged=${flagged}`,
+            { method: 'POST' }).then(r => {
+        if (!r.ok) throw new Error(`the server answered ${r.status}`);
+      }),
     // The verbs, in one place `[REQ-VIS-185]`. The engine validates them and
     // is the authority; this is the list the pages build their controls from,
     // so adding one means touching the match in `web.rs` and this array,

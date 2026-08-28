@@ -140,6 +140,70 @@ def library(conn, q: str = "", facet: str = "", limit: int = 400) -> list:
     return [dict(r) for r in conn.execute(sql, args)]
 
 
+def flags(conn) -> list:
+    """Tracks flagged "for review" from Vaino's own play-history page
+    `[REQ-VIS-265]`, newest flag first.
+
+    Read-only, like everything else in this file -- the checkbox that sets
+    and clears a flag lives in Vaino, because it is listener state and
+    listener state is Vaino's to write `[SPEC-SC-020]`. This only ever looks.
+
+    `listener_flags` may not exist at all on a library no version of Vaino
+    carrying this feature has ever opened; that is "nothing flagged yet",
+    not a broken page `[REQ-LIB-165]`.
+    """
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "listener_flags" not in have:
+        return []
+
+    out = []
+    for kind, subject_id, flagged_at in conn.execute(
+            "SELECT subject_kind, subject_id, flagged_at FROM listener_flags "
+            "ORDER BY flagged_at DESC"):
+        passages, mbid = [], None
+        if kind == "recording":
+            mbid = subject_id
+            passages = [r[0] for r in conn.execute(
+                "SELECT passage_id FROM passage_recordings WHERE mbid=? "
+                "ORDER BY weight DESC, passage_id", (mbid,))]
+        else:
+            pid = int(subject_id)
+            if conn.execute("SELECT 1 FROM passages WHERE passage_id=?", (pid,)).fetchone():
+                passages = [pid]
+                row = conn.execute(
+                    "SELECT mbid FROM passage_recordings WHERE passage_id=? "
+                    "ORDER BY weight DESC, mbid LIMIT 1", (pid,)).fetchone()
+                mbid = row[0] if row else None
+
+        title = artist = None
+        if mbid:
+            row = conn.execute("SELECT title FROM recordings WHERE mbid=?", (mbid,)).fetchone()
+            title = row[0] if row else None
+            row = conn.execute(
+                "SELECT a.name FROM recording_artists ra JOIN artists a ON a.mbid=ra.artist_mbid "
+                "WHERE ra.mbid=? ORDER BY ra.weight DESC LIMIT 1", (mbid,)).fetchone()
+            artist = row[0] if row else None
+        if title is None and passages:
+            # No recording (or the recording carries no title of its own) --
+            # the file's own tag is what a listener actually saw play.
+            row = conn.execute(
+                "SELECT t.title, t.artist FROM passages p JOIN files fi USING(file_id) "
+                "LEFT JOIN file_tags t ON t.file_id=fi.file_id WHERE p.passage_id=?",
+                (passages[0],)).fetchone()
+            if row:
+                title, artist = title or row[0], artist or row[1]
+
+        out.append({
+            "subject_kind": kind, "subject_id": subject_id, "flagged_at": flagged_at,
+            "title": title, "artist": artist, "passages": passages,
+            # A passage-keyed flag from before a rescan renumbered things
+            # resolves to nothing at all -- said plainly, not left blank
+            # `[SPEC-DF-035]`.
+            "resolved": bool(passages),
+        })
+    return out
+
+
 def profile(conn, pid: int) -> dict:
     """One passage's whole derivation `[SPEC-SUI-040]`.
 
@@ -462,6 +526,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file("jobs.html", "text/html; charset=utf-8")
             if p == "/export":
                 return self.send_file("export.html", "text/html; charset=utf-8")
+            if p == "/flags":
+                return self.send_file("flags.html", "text/html; charset=utf-8")
+            if p == "/api/flags":
+                return self.send_json(flags(conn))
             if p == "/api/jobs":
                 return self.send_json(STATE["jobs"].recent())
             if p.startswith("/api/jobs/") and p.endswith("/stream"):

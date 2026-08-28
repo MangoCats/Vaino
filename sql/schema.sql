@@ -320,6 +320,19 @@ CREATE TABLE IF NOT EXISTS listener_likes (
 );
 CREATE INDEX IF NOT EXISTS listener_likes_mbid ON listener_likes(mbid);
 
+-- "Please look at this" from the listener's own chair, not a finding
+-- [REQ-VIS-265]. Set from a play-history row, cleared the same way, at any
+-- time -- a plain flag, not a judgement, so it carries no verdict of its own.
+-- Keyed the way `flavor` already is [SPEC-SC-060]: a recording when the play
+-- had one, a passage when it did not, because a track worth flagging for
+-- review is often exactly the one with no MBID yet.
+CREATE TABLE IF NOT EXISTS listener_flags (
+    subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','passage')),
+    subject_id   TEXT NOT NULL,
+    flagged_at   TEXT NOT NULL,
+    PRIMARY KEY (subject_kind, subject_id)
+) WITHOUT ROWID;
+
 -- ================================================================ visibility
 -- Describes process, not music, so never travels [SPEC-SC-100].
 

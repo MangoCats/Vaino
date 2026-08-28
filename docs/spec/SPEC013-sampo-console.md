@@ -120,7 +120,7 @@ That is a weaker check, so it is labelled as one. A file passed on size and mtim
 
 ### 3.4 Handoff — the player's own pages, inside Sampo's workflow
 
-> **Status.** The mechanics below — `[SPEC-SUI-140]`, `[SPEC-SUI-145]`, `[SPEC-SUI-150]`, `[SPEC-SUI-155]`, `[SPEC-SUI-170]` — were decided 2026-08-20 and **built 2026-08-27**: `ensure_vaino()` in `console.py`, the "Review in Vaino" handoff on the profile page, and `review.js`'s `?passage=` deep link. `[SPEC-SUI-135]`'s waveform editor is designed in [SPEC021](SPEC021-waveform-boundary-editor.md) and not yet built; the handoff mechanics here already reach it, so building the editor is all that remains.
+> **Status.** The mechanics below — `[SPEC-SUI-140]`, `[SPEC-SUI-145]`, `[SPEC-SUI-150]`, `[SPEC-SUI-155]`, `[SPEC-SUI-170]` — were decided 2026-08-20 and **built 2026-08-27**: `ensure_vaino()` in `console.py`, and `review.js`'s `?passage=` deep link. `[SPEC-SUI-135]`'s waveform editor is [built too](SPEC021-waveform-boundary-editor.md) as of the same date. **Correction, found building `[REQ-LIB-190]`:** the profile page had only ever grown the "Review in Vaino" box; the editor's own handoff was designed and its mechanics existed, but nothing on the page linked to `/edit/:passage_id` at all. `handoffBox()` is now parameterised by route and label, called twice — id review and the waveform editor are the same handoff shape aimed at a different route, not two mechanisms.
 
 **`[SPEC-SUI-140]` Where a capability is naturally Vaino's, it is built there and *presented* through Sampo's workflow.** *(Decided 2026-08-20.)* Not "left there and linked to as a concession" — chosen there, because that is where the resources for it already are, and then composed into the operator's sequence here.
 
@@ -175,6 +175,16 @@ Cross-origin also means Sampo cannot see inside the frame. That is not a limitat
 **`[SPEC-SUI-190]` Everything in this section is behind `sampo-support`, off by default.** *(Decided 2026-08-27.)* `[SPEC-SA-010]` already confines Sampo itself to an x86 desktop that never runs on the appliance; a Vaino feature that exists only to be *reached from* Sampo inherits the same confinement, and a Pi Zero 2W that will never see a console has no reason to carry the review page's routes, its embedded HTML and JS, or the database code behind them. Cargo's own `mpd` feature is the precedent — off by default, one line of `Environment` away from being real. `cargo build --release` for the appliance carries none of it; a build for a desktop induct session adds `--features sampo-support`. Measured: **≈200 KB smaller** without it.
 
 This is why the waveform editor and the MusicBrainz search of [SPEC010 §4](SPEC010-identification-review.md#4-searching-musicbrainz-directly) belong behind the same flag from the day they are written, not retrofitted afterward — the second thing built ungated is the second thing that has to be moved later.
+
+### 3.5 Flags — a worklist over what Vaino noticed while playing
+
+**`[SPEC-SUI-202]` Built 2026-08-27, against `[REQ-VIS-265]`, `[REQ-LIB-190]`.** Something worth a person's attention — a misidentified track, a clipped fade, a wrong credit — is noticed while *listening*, not while inducting, and until now there was no way to mark it without leaving the player. `GET /flags` lists everything Vaino's own "flag this for review" checkbox has set, newest first, resolved to a title and every passage that still carries it.
+
+**Unconditional in Vaino, not behind `sampo-support`.** Unlike the review page and the editor, flagging costs nothing an appliance cannot afford — one small table, two routes, no decoder, no `reqwest`. A listener on the Pi can flag a track exactly the way a listener at a desk can; only Sampo's own worklist needs the desktop tool at all.
+
+**`[SPEC-SUI-203]` Read-only, like everything else in this file.** The checkbox that sets and clears a flag lives in Vaino because it is listener state and listener state is Vaino's to write `[SPEC-SC-020]`. This page only ever queries `listener_flags`; choosing a row opens its profile page, which is where both handoffs already live.
+
+Keyed the way `flavor` already is — a recording when the play had one, a passage when it did not — because the unidentified case is often exactly the one worth flagging, and a flag with nowhere stable to attach would be no flag at all `[SPEC-DF-035]`. A passage-keyed flag surviving a rescan that renumbers passages is not promised; the page says so plainly rather than showing a blank row when it happens.
 
 ---
 
@@ -241,4 +251,4 @@ Rejection is whole and it is loud: one transaction, the target unchanged, and a 
 
 ---
 
-**Traceability:** `[SPEC-SUI-010..180]` · derived from `[REQ-LIB-170]`, `[SPEC-SA-015]`, `[SPEC-DF-035]`, `[SPEC-DF-050]`, `[SPEC-DF-080]`, `[SPEC-RLK-140]`, `[GDE-CHT-030]`
+**Traceability:** `[SPEC-SUI-010..203]` · derived from `[REQ-LIB-170]`, `[SPEC-SA-015]`, `[SPEC-DF-035]`, `[SPEC-DF-050]`, `[SPEC-DF-080]`, `[SPEC-RLK-140]`, `[GDE-CHT-030]`

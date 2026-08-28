@@ -150,6 +150,18 @@ pub(crate) const REJECTION_TABLE: &str = "
     CREATE INDEX IF NOT EXISTS listener_reject_mbid
         ON listener_rejections(mbid, kind);";
 
+/// "Please look at this" from the listener's own chair `[REQ-VIS-265]`, set
+/// and cleared from the play-history page at any time -- a plain flag, not a
+/// judgement, so it carries no verdict of its own. Keyed the way `flavor`
+/// already is: a recording when the play had one, a passage when it did not,
+/// because a track worth flagging is often exactly the one with no MBID yet.
+pub(crate) const FLAGS_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS listener_flags (
+        subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','passage')),
+        subject_id   TEXT NOT NULL,
+        flagged_at   TEXT NOT NULL,
+        PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID;";
+
 /// Bring an existing `listener_play_history` / `listener_rejections` up to the
 /// column set above `[REQ-VIS-250]`.
 ///
@@ -815,6 +827,7 @@ impl PlayerStore {
         conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_history_columns(&conn);
         #[cfg(feature = "sampo-support")]
         ensure_review_table(&conn)?;
@@ -1299,6 +1312,33 @@ impl PlayerStore {
             .ok()
     }
 
+    /// Set or clear "flag this for review" on a recording or a passage
+    /// `[REQ-VIS-265]`. A plain toggle, not a decision: unlike `id_reviews`
+    /// and its siblings, there is nothing here to apply and nothing to
+    /// refuse -- checking and unchecking the box are the same operation with
+    /// the state reversed, at any time, by design.
+    pub fn set_flag(&self, subject_kind: &str, subject_id: &str, flagged: bool) -> Result<(), DbError> {
+        if flagged {
+            self.conn
+                .execute(
+                    "INSERT INTO listener_flags (subject_kind, subject_id, flagged_at)
+                     VALUES (?1, ?2, datetime('now'))
+                     ON CONFLICT(subject_kind, subject_id) DO UPDATE SET
+                         flagged_at = excluded.flagged_at",
+                    rusqlite::params![subject_kind, subject_id],
+                )
+                .map(|_| ())
+        } else {
+            self.conn
+                .execute(
+                    "DELETE FROM listener_flags WHERE subject_kind = ?1 AND subject_id = ?2",
+                    rusqlite::params![subject_kind, subject_id],
+                )
+                .map(|_| ())
+        }
+        .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// Bring settings over from the columns they used to live in.
     ///
     /// Runs once: after the first save every key is present and the copy is
@@ -1596,6 +1636,14 @@ pub struct HistoryEntry {
     /// backend that never reported a span -- absent, not zero
     /// `[GOV-SRC-040]`.
     pub played_pct: Option<f64>,
+    /// What a "flag this for review" checkbox on this row would set
+    /// `[REQ-VIS-265]` -- `None` when neither a recording nor a live passage
+    /// survives to flag: the file has since been relinked away and only the
+    /// name persists `[SPEC-SC-095]`. The same `(subject_kind, subject_id)`
+    /// shape `listener_flags` itself is keyed by.
+    pub flag_kind: Option<&'static str>,
+    pub flag_id: Option<String>,
+    pub flagged: bool,
 }
 
 /// One candidate identity for a passage, as AcoustID reports it.
@@ -2192,14 +2240,27 @@ impl Library {
     /// question this page answers per row. A dequeue never sounded and has no
     /// place in a *play* history.
     pub fn play_history(&self, limit: i64, offset: i64) -> Result<Vec<HistoryEntry>, DbError> {
+        // `subject_kind`/`subject_id` resolve to a recording when the row has
+        // an mbid (survives a rescan `[SPEC-DF-035]`, same reason the naming
+        // columns are mbid-first), else to the passage -- often exactly the
+        // unidentified case someone most wants to flag. `passage_id` here is
+        // never a stale one: `ON DELETE SET NULL` already blanks it the
+        // moment the passage it named stops existing.
         let sql = format!(
             "SELECT at, kind, heard_ms, span_ms, \
                     {HIST_TITLE_EXPR} AS title, {HIST_ARTIST_EXPR} AS artist, \
-                    {HIST_ALBUM_EXPR} AS album \
-               FROM (SELECT played_at AS at, 'play' AS kind, mbid, heard_ms, span_ms \
+                    {HIST_ALBUM_EXPR} AS album, \
+                    CASE WHEN u.mbid IS NOT NULL THEN 'recording' \
+                         WHEN u.passage_id IS NOT NULL THEN 'passage' END AS subject_kind, \
+                    COALESCE(u.mbid, CAST(u.passage_id AS TEXT)) AS subject_id, \
+                    EXISTS (SELECT 1 FROM listener_flags f \
+                             WHERE f.subject_kind = CASE WHEN u.mbid IS NOT NULL THEN 'recording' \
+                                                          ELSE 'passage' END \
+                               AND f.subject_id = COALESCE(u.mbid, CAST(u.passage_id AS TEXT))) AS flagged \
+               FROM (SELECT played_at AS at, 'play' AS kind, mbid, passage_id, heard_ms, span_ms \
                        FROM listener_play_history \
                      UNION ALL \
-                     SELECT rejected_at AS at, 'skip' AS kind, mbid, heard_ms, span_ms \
+                     SELECT rejected_at AS at, 'skip' AS kind, mbid, passage_id, heard_ms, span_ms \
                        FROM listener_rejections WHERE kind = 'skip') u \
               ORDER BY at DESC LIMIT ?1 OFFSET ?2"
         );
@@ -2214,6 +2275,7 @@ impl Library {
                     }
                     _ => None,
                 };
+                let subject_kind: Option<String> = r.get(7)?;
                 Ok(HistoryEntry {
                     at: r.get(0)?,
                     kind: r.get(1)?,
@@ -2221,6 +2283,13 @@ impl Library {
                     artist: r.get(5)?,
                     album: r.get(6)?,
                     played_pct,
+                    flag_kind: match subject_kind.as_deref() {
+                        Some("recording") => Some("recording"),
+                        Some("passage") => Some("passage"),
+                        _ => None,
+                    },
+                    flag_id: r.get(8)?,
+                    flagged: r.get(9)?,
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -3469,6 +3538,7 @@ mod tests {
         .unwrap();
         c.execute_batch(PLAY_TABLE).unwrap();
         c.execute_batch(REJECTION_TABLE).unwrap();
+        c.execute_batch(FLAGS_TABLE).unwrap();
         c
     }
 
@@ -3511,8 +3581,74 @@ mod tests {
         assert_eq!(rows[1].kind, "play");
         assert!((rows[1].played_pct.unwrap() - 83.333).abs() < 1e-2);
 
+        // Both rows are the same recording, so both offer the same flag
+        // subject `[REQ-VIS-265]` -- one checkbox state per track, not per play.
+        assert_eq!(rows[0].flag_kind, Some("recording"));
+        assert_eq!(rows[0].flag_id.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000001"));
+        assert_eq!(rows[1].flag_kind, rows[0].flag_kind);
+        assert_eq!(rows[1].flag_id, rows[0].flag_id);
+        assert!(!rows[0].flagged, "nothing has been flagged yet");
+
         // Paging: asking past the end returns nothing, not an error.
         assert_eq!(lib.play_history(10, 2).unwrap().len(), 0);
+    }
+
+    /// Flagging a recording, or a passage that has none yet, and reading the
+    /// state back through `play_history` -- the same round trip the page
+    /// itself relies on `[REQ-VIS-265]`. A real file, `PlayerStore` writing
+    /// and `Library` reading, the same split the page itself uses.
+    #[test]
+    fn play_history_reflects_a_flag_by_recording_or_by_passage() {
+        let tmp = std::env::temp_dir().join(format!("vaino-flag-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = historyable();
+            c.execute(
+                "INSERT INTO listener_play_history (played_at, mbid, heard_ms, span_ms) \
+                 VALUES (100, 'aaaaaaaa-0000-0000-0000-000000000001', 150000, 180000)",
+                [],
+            )
+            .unwrap();
+            // A play with no mbid at all -- unidentified, and the case this
+            // feature is often most wanted for -- falls back to the passage.
+            c.execute(
+                "INSERT INTO listener_play_history (played_at, passage_id, heard_ms, span_ms) \
+                 VALUES (150, 42, 150000, 180000)",
+                [],
+            )
+            .unwrap();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        let lib = Library::open(&tmp).unwrap();
+
+        store.set_flag("recording", "aaaaaaaa-0000-0000-0000-000000000001", true).unwrap();
+        store.set_flag("passage", "42", true).unwrap();
+        let rows = lib.play_history(10, 0).unwrap();
+        let by_rec = rows.iter().find(|r| r.flag_kind == Some("recording")).unwrap();
+        let by_pas = rows.iter().find(|r| r.flag_kind == Some("passage")).unwrap();
+        assert!(by_rec.flagged, "the recording flag must be readable back");
+        assert_eq!(by_pas.flag_id.as_deref(), Some("42"));
+        assert!(by_pas.flagged, "the passage-keyed flag must be readable back");
+
+        store.set_flag("recording", "aaaaaaaa-0000-0000-0000-000000000001", false).unwrap();
+        let rows = lib.play_history(10, 0).unwrap();
+        let by_rec = rows.iter().find(|r| r.flag_kind == Some("recording")).unwrap();
+        assert!(!by_rec.flagged, "unchecking must actually clear it");
+        let by_pas = rows.iter().find(|r| r.flag_kind == Some("passage")).unwrap();
+        assert!(by_pas.flagged, "clearing one flag must not touch the other");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The vocabulary is enforced by the table itself, the same as `flavor`'s
+    /// own `subject_kind` -- there being only one writer does not mean it
+    /// cannot pass the wrong string.
+    #[test]
+    fn set_flag_rejects_an_unknown_subject_kind() {
+        let c = historyable();
+        let store = PlayerStore { conn: c };
+        assert!(store.set_flag("album", "x", true).is_err());
     }
 
     /// A row written before `heard_ms`/`span_ms` existed reads as "unknown",
