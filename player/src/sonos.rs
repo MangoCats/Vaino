@@ -812,11 +812,31 @@ pub mod stream {
         let sample_rate = ring.sample_rate();
         let started = std::time::Instant::now();
         let mut frames_encoded: u64 = 0;
+        // Logged only past a real threshold, not on every empty read -- an
+        // occasional single miss between mixer passes is ordinary and
+        // silent; a streak worth reporting is the mixing/decode pipeline
+        // itself falling behind real time upstream of this loop entirely,
+        // the one class of gap `[Sonos/SONOS012 §6]`'s other new logging
+        // (the HTTP stream's own open/close/lag) cannot see at all, since
+        // there is simply nothing here yet to send.
+        let mut starved_since: Option<std::time::Instant> = None;
         while !stop.load(Ordering::Relaxed) {
             let got = ring.read(&mut pcm);
             if got == 0 {
+                if starved_since.is_none() {
+                    starved_since = Some(std::time::Instant::now());
+                }
                 std::thread::sleep(IDLE);
                 continue;
+            }
+            if let Some(since) = starved_since.take() {
+                let gap = since.elapsed();
+                if gap > Duration::from_millis(300) {
+                    eprintln!(
+                        "sonos: nothing to encode for {:.1}s (upstream mixing/decode fell behind)",
+                        gap.as_secs_f64()
+                    );
+                }
             }
             mp3.clear();
             match encoder.encode_to_vec(InterleavedPcm(&pcm[..got]), &mut mp3) {

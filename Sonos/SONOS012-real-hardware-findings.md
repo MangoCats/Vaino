@@ -2,7 +2,7 @@
 
 **Development Record — `Sonos`, 2026-08-29**
 
-`[Sonos/SONOS010]` item 6 -- "never run end-to-end against the real Office pair" -- run for the first time tonight, at the user's own initiative. Seven real bugs found and fixed live, the largest (§3) held for review before fixing because it touches the one code path this project has already been burned by once (`[REQ-AUD-142]`, the "nine minutes became sixty-six seconds" bug `[GDE-SONOS-1230]` below cites directly) -- reviewed, and fixed, the same session; fixing it exposed one further gap (also §3, `[GDE-SONOS-1240]`), found and fixed the same way. This document is additive: nothing in `[SONOS002]`, `[SONOS008]`, `[SONOS009]`, `[SONOS010]`, or `[SONOS011]` is wrong so much as untested against a condition none of them anticipated -- a local output device that is not briefly absent but **entirely, indefinitely absent** for the whole session.
+`[Sonos/SONOS010]` item 6 -- "never run end-to-end against the real Office pair" -- run for the first time this weekend, at the user's own initiative, across several sessions as each finding led to the next. Seven real bugs found and fixed live; an eighth symptom (§6) found, not yet diagnosed -- logs across the whole session showed nothing, so this round added the instrumentation the next listen needs rather than guessing at a fix. This document is additive: nothing in `[SONOS002]`, `[SONOS008]`, `[SONOS009]`, `[SONOS010]`, or `[SONOS011]` is wrong so much as untested against a condition none of them anticipated -- a local output device that is not briefly absent but **entirely, indefinitely absent** for the whole session.
 
 > **Related:** `[SONOS010]` item 6 · `[SONOS011]` · `player/src/sonos.rs`, `player/src/web.rs`, `player/src/engine.rs`, `player/src/path.rs`
 
@@ -94,13 +94,29 @@ Tonight's first five fixes (§2) were built from this project's own trained know
 
 ---
 
-## 5. Recommendations
+## 6. A third symptom: periodic silence, invisible to every existing log -- instrumentation added, not yet diagnosed
 
-1. **Retest again now that `[GDE-SONOS-1240]` (§3) is also fixed** -- the starvation fix (`[GDE-SONOS-1230]`) got audio playing continuously for the first time all night; the pacing fix (`[GDE-SONOS-1240]`) is what should stop it sounding "skippy." Neither has been confirmed audibly clean over a longer stretch yet.
-2. **Extend the loss-of-control watcher to check `CurrentTransportState`, not only `CurrentURI`** -- still open, and lower priority: §4's own finding (Home Assistant has no special stall logic either) suggests the earlier `STOPPED`-while-correctly-pointed state was a legitimate reaction to a starved feed, which both fixes in §3 should now prevent from recurring, rather than a gap this watcher needed to paper over.
-3. **Reconnect a physical Bluetooth speaker before the next test**, if practical -- it removes the one remaining condition most likely to make a retest ambiguous, and confirms local-only playback (which `[GDE-SONOS-1230]` also touched) still works exactly as before on the more ordinary night.
-4. **Watch CPU load on `vainopi` during an extended Sonos session**, if `[GDE-SONOS-1240]` does not fully resolve the skipping -- a Raspberry Pi encoding MP3 in real time while also running the Program Director and everything else has less headroom than the development machine this was reasoned about on, and a machine that cannot quite keep up with `pacing_delay`'s own target would show the same symptom for a different reason (not enough CPU, rather than too little pacing).
+**With both §3 fixes deployed, a longer listen (roughly four hours, on and off) found audio running clean for thirty to sixty seconds at a stretch, then a gap of silence lasting five to ten seconds, repeating.** Not the starvation of §3 (which was total and immediate) and not obviously the pacing gap of `[GDE-SONOS-1240]` (which read as brief dropouts within otherwise-continuous audio, not full silence) -- a third, distinct pattern.
+
+**Checked first, and found wanting: the server's own logs across the whole session show nothing.** `active_udn` never left `Office`; the loss-of-control watcher never logged a fallback; no `SIGSEGV`, no panic, no "missed ring lock." Whatever is producing several-second gaps roughly once a minute is invisible to everything this project had already thought to log -- a real gap in the project's own observability, not merely an unsolved bug.
+
+**`[GDE-SONOS-1250]` Three pieces of instrumentation added, aimed at the three places a gap like this could actually originate, none of them exercised or confirmed yet:**
+
+- **`sonos_stream`'s own connection lifetime.** Logs `"stream connection opened"` when a GET arrives and, via a `LogOnClose` wrapper around the response body, `"stream connection closed after N.Ns"` the moment the client disconnects or the response is otherwise dropped. If the coordinator is periodically dropping and re-establishing its own read of `/audio/sonos/stream` -- a WiFi hiccup, a Sonos-side timeout on `x-rincon-mp3radio://` specifically, anything -- this is what would show it, and would point squarely at the network or at Sonos's own client behaviour rather than at Vaino's pipeline.
+- **The broadcast channel's own `Lagged` errors, logged rather than silently dropped** (previously `.filter_map(|item| item.ok())`; now the `Err` arm reports how many chunks were lost before returning `None`). Distinguishes "the reader could not keep up with a healthy encoder" from the connection-drop case above.
+- **`encode_loop`'s own starvation, past a 300 ms threshold.** Logs how long `ring.read()` returned nothing before audio resumed -- the signature of the mixing/decode pipeline itself falling behind real time, upstream of the encoder entirely, rather than anything in the encode-and-serve half of the pipeline `[GDE-SONOS-1240]` already covers.
+
+**Deliberately not guessed further before this data exists.** A five-to-ten-second gap, once a minute, is equally consistent with a WiFi association hiccup on either end, a Sonos-side buffering policy this project has no visibility into, or a genuine periodic stall somewhere in Vaino's own pipeline still not identified -- and picking one to fix without the logs above to confirm it would be exactly the "throwing everything at the wall" this investigation has been asked to avoid. The next occurrence should log which of the three it is.
 
 ---
 
-**Traceability:** `[GDE-SONOS-1180..1240]` · found and fixed, same session: `1180`, `1190`, `1200`, `1210`, `1220`, `1230`, `1240` · `1230` additionally touches `player/src/path.rs` (`recover`) and `[PI3-API-030]`'s own `audible`-gates-advancement rule in `player/src/engine.rs` (`tick`) · `1240` touches `player/src/sonos.rs` (`stream::encode_loop`, `stream::pacing_delay`) · five new tests (two engine, three pacing) pin the outcomes down · annotates `[Sonos/SONOS008 §6]`'s own mixer-independence claim, `player/src/engine.rs` (`mix_and_submit`)
+## 7. Recommendations
+
+1. **Listen again with `[GDE-SONOS-1250]`'s instrumentation deployed**, and read back whichever of the three new log lines appears during the next gap -- that is what decides where to look next, rather than another guess.
+2. **Extend the loss-of-control watcher to check `CurrentTransportState`, not only `CurrentURI`** -- still open, and lower priority: §4's own finding (Home Assistant has no special stall logic either) suggests the earlier `STOPPED`-while-correctly-pointed state was a legitimate reaction to a starved feed, which both fixes in §3 should now prevent from recurring, rather than a gap this watcher needed to paper over.
+3. **Reconnect a physical Bluetooth speaker before the next test**, if practical -- it removes one remaining condition from ambiguity, and confirms local-only playback (which `[GDE-SONOS-1230]` also touched) still works exactly as before on the more ordinary night.
+4. **Watch CPU load on `vainopi` during an extended Sonos session** -- a Raspberry Pi encoding MP3 in real time while also running the Program Director and everything else has less headroom than the development machine this was reasoned about on; `[GDE-SONOS-1250]`'s starvation log would catch this specific cause directly if it is the one at fault.
+
+---
+
+**Traceability:** `[GDE-SONOS-1180..1250]` · found and fixed: `1180`, `1190`, `1200`, `1210`, `1220`, `1230`, `1240` · found, instrumented, not yet diagnosed: `1250` (`player/src/web.rs`, `sonos_stream`/`LogOnClose`; `player/src/sonos.rs`, `stream::encode_loop`'s starvation log) · `1230` additionally touches `player/src/path.rs` (`recover`) and `[PI3-API-030]`'s own `audible`-gates-advancement rule in `player/src/engine.rs` (`tick`) · `1240` touches `player/src/sonos.rs` (`stream::encode_loop`, `stream::pacing_delay`) · five new tests (two engine, three pacing) pin `1230`/`1240` down · annotates `[Sonos/SONOS008 §6]`'s own mixer-independence claim, `player/src/engine.rs` (`mix_and_submit`)

@@ -2087,6 +2087,42 @@ pub fn spawn_restore_chosen_speaker(ui: Ui) {
     });
 }
 
+/// Logs when a stream this wraps stops being polled -- the client
+/// disconnected, or the whole response was dropped for some other reason --
+/// which a plain `.filter_map()` chain has no way to observe at all
+/// `[Sonos/SONOS012 §6]`. Found needed live: periodic silence was reported
+/// with every server-side signal (the loss-of-control watcher, `active_udn`)
+/// staying healthy throughout, which means whatever is happening is
+/// invisible to everything this project had already thought to log --
+/// starting with "did the coordinator's own connection to us even stay
+/// open."
+#[cfg(feature = "sonos")]
+struct LogOnClose<S> {
+    inner: S,
+    opened: std::time::Instant,
+}
+
+#[cfg(feature = "sonos")]
+impl<S: tokio_stream::Stream + Unpin> tokio_stream::Stream for LogOnClose<S> {
+    type Item = S::Item;
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_next(cx)
+    }
+}
+
+#[cfg(feature = "sonos")]
+impl<S> Drop for LogOnClose<S> {
+    fn drop(&mut self) {
+        eprintln!(
+            "sonos: stream connection closed after {:.1}s",
+            self.opened.elapsed().as_secs_f64()
+        );
+    }
+}
+
 /// The continuous MP3 stream itself -- what a Sonos coordinator's own
 /// `CurrentURI` actually points at `[Sonos/SONOS008 §6]`. One persistent
 /// GET, not one request per track; a second listener joining mid-stream is
@@ -2104,9 +2140,23 @@ async fn sonos_stream(State(ui): State<Ui>) -> Response {
         return (StatusCode::NOT_FOUND, "no Sonos session is active").into_response();
     };
 
-    let body_stream = tokio_stream::wrappers::BroadcastStream::new(rx)
-        .filter_map(|item| item.ok())
-        .map(Ok::<_, std::convert::Infallible>);
+    eprintln!("sonos: stream connection opened");
+    let logged = LogOnClose {
+        inner: tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(|item| match item {
+            Ok(v) => Some(v),
+            // The one thing between a real gap and a silent one
+            // `[Sonos/SONOS012 §6]`: this reader could not keep up with the
+            // encoder for at least this many chunks, and they are gone --
+            // logged now rather than swallowed, so a reported gap has
+            // something concrete to be measured against.
+            Err(e) => {
+                eprintln!("sonos: stream reader could not keep up ({e:?}); audio was dropped");
+                None
+            }
+        }),
+        opened: std::time::Instant::now(),
+    };
+    let body_stream = logged.map(Ok::<_, std::convert::Infallible>);
     let body = axum::body::Body::from_stream(body_stream);
 
     match Response::builder()
