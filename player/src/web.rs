@@ -395,7 +395,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/audio/sonos", get(sonos_list))
         .route("/audio/sonos/:verb", post(sonos_verb))
         .route("/audio/sonos/:verb/:target", post(sonos_verb_on))
-        .route("/audio/sonos/stream", get(sonos_stream));
+        .route("/audio/sonos/stream", get(sonos_stream))
+        .route("/audio/sonos/redirect", post(sonos_redirect));
 
     router.with_state(ui)
 }
@@ -1902,6 +1903,59 @@ async fn sonos_forget(ui: Ui) -> Response {
     })
     .await;
     axum::Json(serde_json::json!({"ok": true})).into_response()
+}
+
+/// Point an already-active session's coordinator at a *different* stream
+/// URL, without touching Vaino's own encoder or `/audio/sonos/stream` at
+/// all `[Sonos/SONOS012 §6/§8]` -- built for the Icecast reconnect-gap
+/// experiment, where the encoder needs to keep running and feeding whatever
+/// is relaying it (Icecast, say) exactly as before; only where the
+/// coordinator is told to *fetch from* changes.
+///
+/// Tried once by hand first, with a bare external SOAP call and no code
+/// change: the existing watcher, still expecting Vaino's own URL, read the
+/// resulting mismatch as a takeover within its usual two polls and fell
+/// back to local -- correctly, by its own rules `[GDE-SONOS-1190]`, just
+/// not what this redirect actually wanted. This endpoint closes that gap
+/// the direct way: the watcher this redirect starts is told the *new* URL
+/// is the expected one, so a deliberate redirect and an actual takeover
+/// stay distinguishable, same as `sonos_use`'s own watcher already keeps
+/// them for an ordinary session.
+#[cfg(feature = "sonos")]
+async fn sonos_redirect(
+    State(ui): State<Ui>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let Some(url) = params.get("url").cloned() else {
+        return (StatusCode::BAD_REQUEST, "missing ?url=").into_response();
+    };
+    let Some(ip) = ui.sonos.lock().ok().and_then(|g| g.as_ref().map(|s| s.speaker.ip)) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "no Sonos session is active to redirect -- use one first",
+        )
+            .into_response();
+    };
+
+    match tokio::task::spawn_blocking({
+        let url = url.clone();
+        move || crate::sonos::soap::set_uri_and_play(ip, &url)
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+
+    // Supersedes the watcher spawned for whatever URL was active before --
+    // the same generation bump `sonos_use`/`sonos_forget` already use to
+    // retire a superseded watcher `[Sonos/SONOS010 §3]`. The new one takes
+    // over with this redirect's own URL as what "confirmed" means from here.
+    let generation = ui.sonos_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    spawn_sonos_watcher(ui.clone(), ip, url.clone(), generation);
+
+    axum::Json(serde_json::json!({"ok": true, "redirected_to": url})).into_response()
 }
 
 /// Detects losing the speaker to another controller `[Sonos/SONOS010 §3]`.
