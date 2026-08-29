@@ -5,6 +5,7 @@
 #   VainoPi/deploy.sh pi-audio-stable-2026-08-16        a tag, without touching your own checkout
 #   VainoPi/deploy.sh pi-audio-stable-2026-08-16 pi@x   a tag, to a different host
 #   VainoPi/deploy.sh pi@x                              latest, to a different host
+#   FEATURES=sonos VainoPi/deploy.sh                    latest, built with the sonos feature on
 #
 # Wraps the two steps this used to mean doing by hand: cross-compiling
 # (build/README.md) and VainoPi/deploy-player.sh. Ends by asking the
@@ -12,6 +13,17 @@
 # done if the answer disagrees -- the same reason deploy-player.sh already
 # asks the running process to identify itself rather than trusting a
 # checksum alone.
+#
+# `FEATURES` passes straight through to `cargo build --features`, unset by
+# default -- matching Cargo.toml's own `default = []`, `sonos` opt-in
+# `[player/Cargo.toml]`. That default bit an actual appliance
+# `[Sonos/SONOS013]`: a plain `deploy.sh` run with no FEATURES replaced a
+# binary already running with Sonos support with one that had none at all,
+# with nothing here to say so -- caught only because someone happened to
+# poll `/audio/sonos` right after and got a 404. The check a few lines down
+# is what closes that gap: it refuses to build without `sonos` if the
+# appliance it is about to overwrite currently has it, unless told on
+# purpose (`ALLOW_FEATURE_DOWNGRADE=1`).
 set -uo pipefail
 
 # Git Bash on Windows "helpfully" rewrites any argument that looks like a
@@ -38,6 +50,35 @@ HOST="${2:-pi@vainopi}"
 case "$REF" in *@*) HOST="$REF"; REF="" ;; esac
 
 die() { echo "deploy: $*" >&2; exit 1; }
+
+# The regression this closes `[Sonos/SONOS013]`: check what the appliance
+# is *actually* running before deciding this build is fine to skip
+# `sonos` -- the same "observed, not inferred" discipline the loss-of-
+# control watcher already applies to the speaker itself
+# `[Sonos/SONOS010 §3]`, aimed here at the deploy instead. Two ssh/curl
+# attempts, not one: a single transient failure reading as "not running
+# Sonos" would make this check silently useless on exactly the flaky
+# connection that would most need it.
+FEATURES="${FEATURES:-}"
+case " $FEATURES " in *" sonos "*) BUILDING_SONOS=1 ;; *) BUILDING_SONOS=0 ;; esac
+if [ "$BUILDING_SONOS" != 1 ] && [ "${ALLOW_FEATURE_DOWNGRADE:-}" != "1" ]; then
+    PORT="${VAINO_PORT:-5720}"
+    REMOTE_SONOS=""
+    for _ in 1 2; do
+        # --max-time 8, not the usual few seconds: `/audio/sonos` runs a live
+        # 3 s SSDP discovery scan before it answers at all `[player/src/web.rs,
+        # sonos_list]`, and a tighter cap here raced that scan and made this
+        # check read as "not running Sonos" on a build that plainly was --
+        # caught testing this guard, not assumed.
+        REMOTE_SONOS="$(ssh -o ConnectTimeout=5 "$HOST" \
+            "curl -sS -o /dev/null -w '%{http_code}' --max-time 8 http://localhost:$PORT/audio/sonos" \
+            2>/dev/null)"
+        [ "$REMOTE_SONOS" = "200" ] && break
+    done
+    if [ "$REMOTE_SONOS" = "200" ]; then
+        die "$HOST is currently running with Sonos support, but FEATURES does not include \"sonos\" -- pass FEATURES=sonos to keep it, or ALLOW_FEATURE_DOWNGRADE=1 to remove it on purpose"
+    fi
+fi
 
 docker info >/dev/null 2>&1 \
     || die "Docker is not running -- start Docker Desktop (or dockerd) and try again"
@@ -66,9 +107,10 @@ if [ -z "$REF" ]; then
     EXPECTED="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
     git -C "$REPO_ROOT" diff --quiet --ignore-cr-at-eol HEAD 2>/dev/null || EXPECTED="${EXPECTED}+dirty"
 
-    echo "deploy: cross-compiling the currently checked-out tree ($EXPECTED)..."
+    echo "deploy: cross-compiling the currently checked-out tree ($EXPECTED)${FEATURES:+, features: $FEATURES}..."
     docker run --rm -v "$DOCKER_PATH:/w" vaino-aarch64 \
         cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml \
+        ${FEATURES:+--features "$FEATURES"} \
         || die "cross-compile failed"
 else
     # A named ref: built in a worktree that is created and used entirely
@@ -84,7 +126,7 @@ else
     # tag would look like a mismatch even though the right thing was built.
     EXPECTED="$(git -C "$REPO_ROOT" rev-parse --short=12 "$REF^{commit}")"
 
-    echo "deploy: cross-compiling $REF ($EXPECTED) in its own worktree..."
+    echo "deploy: cross-compiling $REF ($EXPECTED) in its own worktree${FEATURES:+, features: $FEATURES}..."
     # Written inside the repo itself (not `mktemp`, which on Git Bash lands
     # in MSYS's own virtual /tmp -- a path docker.exe cannot resolve at all,
     # so it silently mounts an empty directory at /build.sh instead of the
@@ -97,7 +139,7 @@ set -e
 cd /w
 git worktree add --detach --force /tmp/vaino-build "$1" >/dev/null
 cd /tmp/vaino-build
-cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml
+cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml ${FEATURES:+--features "$FEATURES"}
 mkdir -p /w/.deploy-out
 cp player/target/aarch64-unknown-linux-gnu/release/vaino /w/.deploy-out/vaino
 cd /w
@@ -110,7 +152,7 @@ EOS
     # just inside `-v` flags, and would otherwise turn the trailing `bash
     # /build.sh` (a path that only exists inside the container) into a
     # nonexistent path on the host's own filesystem.
-    MSYS_NO_PATHCONV=1 docker run --rm \
+    MSYS_NO_PATHCONV=1 docker run --rm -e FEATURES="$FEATURES" \
         -v "$DOCKER_PATH:/w" -v "$DOCKER_PATH/.vaino-deploy-build.sh:/build.sh:ro" vaino-aarch64 \
         bash /build.sh "$REF" \
         || die "cross-compile failed"
