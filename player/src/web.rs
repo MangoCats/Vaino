@@ -2123,6 +2123,49 @@ impl<S> Drop for LogOnClose<S> {
     }
 }
 
+/// A body that claims a large, fake length instead of the unknown one
+/// `axum::body::Body::from_stream` reports on its own `[Sonos/SONOS012 §6]`.
+///
+/// Real Sonos hardware is documented, independently of this project, to
+/// handle chunked-transfer MP3 poorly -- FLAC and WAV over the identical
+/// chunked encoding are fine -- reconnecting every few tens of seconds
+/// against exactly the kind of stream `axum` builds by default for a body
+/// of unknown size. `hyper` chooses `Content-Length` framing over
+/// `Transfer-Encoding: chunked` purely from `size_hint()`; claiming a size
+/// far larger than any session could ever reach, and letting the
+/// connection simply end (dropped, same as today) whenever the coordinator
+/// actually disconnects, is the documented workaround -- an accepted small
+/// lie about a number nothing will ever validate, not a change to what is
+/// actually sent.
+#[cfg(feature = "sonos")]
+struct FakeLength(axum::body::Body);
+
+#[cfg(feature = "sonos")]
+impl FakeLength {
+    /// Comfortably beyond anything one session could produce -- at the
+    /// encoder's own 192 kbps, over eleven years of continuous play.
+    const CLAIMED_BYTES: u64 = 100 * 1024 * 1024 * 1024;
+
+    fn wrap(inner: axum::body::Body) -> axum::body::Body {
+        axum::body::Body::new(Self(inner))
+    }
+}
+
+#[cfg(feature = "sonos")]
+impl http_body::Body for FakeLength {
+    type Data = axum::body::Bytes;
+    type Error = axum::Error;
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_frame(cx)
+    }
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(Self::CLAIMED_BYTES)
+    }
+}
+
 /// The continuous MP3 stream itself -- what a Sonos coordinator's own
 /// `CurrentURI` actually points at `[Sonos/SONOS008 §6]`. One persistent
 /// GET, not one request per track; a second listener joining mid-stream is
@@ -2157,7 +2200,7 @@ async fn sonos_stream(State(ui): State<Ui>) -> Response {
         opened: std::time::Instant::now(),
     };
     let body_stream = logged.map(Ok::<_, std::convert::Infallible>);
-    let body = axum::body::Body::from_stream(body_stream);
+    let body = FakeLength::wrap(axum::body::Body::from_stream(body_stream));
 
     match Response::builder()
         .status(StatusCode::OK)

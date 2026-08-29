@@ -24,7 +24,7 @@ sampo-support = ["dep:reqwest"]
 # new authenticated-free network entry point on the appliance, not because of
 # its weight -- `mp3lame-encoder` statically vendors LAME `[Sonos/SONOS006]`
 # and adds well under 1 MB at runtime `[Sonos/SONOS004]`.
-sonos = ["dep:mp3lame-encoder", "dep:tokio-stream"]
+sonos = ["dep:mp3lame-encoder", "dep:tokio-stream", "dep:http-body"]
 
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
@@ -58,6 +58,13 @@ mp3lame-encoder = { version = "0.2", optional = true }
 # response body. A thin wrapper over a channel already in the dependency
 # tree via `tokio` itself, not a new class of dependency.
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"], optional = true }
+# Already in the dependency tree via `axum` itself -- declared directly
+# only so `sonos_stream` can implement its own `Body` wrapper (a fake,
+# large `size_hint` in place of `axum::body::Body::from_stream`'s own
+# unknown one) `[Sonos/SONOS012 §6]`: real Sonos hardware is documented to
+# handle chunked-transfer MP3 poorly, reconnecting every few tens of
+# seconds, where FLAC/WAV over the same chunked encoding is fine.
+http-body = { version = "1", optional = true }
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`: already in the
 # dependency tree via cpal/rusqlite, so this declares an existing compile

@@ -2,7 +2,7 @@
 
 **Development Record — `Sonos`, 2026-08-29**
 
-`[Sonos/SONOS010]` item 6 -- "never run end-to-end against the real Office pair" -- run for the first time this weekend, at the user's own initiative, across several sessions as each finding led to the next. Seven real bugs found and fixed live; an eighth symptom (§6) found, not yet diagnosed -- logs across the whole session showed nothing, so this round added the instrumentation the next listen needs rather than guessing at a fix. This document is additive: nothing in `[SONOS002]`, `[SONOS008]`, `[SONOS009]`, `[SONOS010]`, or `[SONOS011]` is wrong so much as untested against a condition none of them anticipated -- a local output device that is not briefly absent but **entirely, indefinitely absent** for the whole session.
+`[Sonos/SONOS010]` item 6 -- "never run end-to-end against the real Office pair" -- run for the first time this weekend, at the user's own initiative, across several sessions as each finding led to the next. Eight real issues found; seven fixed live, the eighth (§7, skip lag) diagnosed to a specific cause and deliberately deferred rather than folded into an already-large session of changes to the same sensitive code. This document is additive: nothing in `[SONOS002]`, `[SONOS008]`, `[SONOS009]`, `[SONOS010]`, or `[SONOS011]` is wrong so much as untested against a condition none of them anticipated -- a local output device that is not briefly absent but **entirely, indefinitely absent** for the whole session.
 
 > **Related:** `[SONOS010]` item 6 · `[SONOS011]` · `player/src/sonos.rs`, `player/src/web.rs`, `player/src/engine.rs`, `player/src/path.rs`
 
@@ -94,7 +94,7 @@ Tonight's first five fixes (§2) were built from this project's own trained know
 
 ---
 
-## 6. A third symptom: periodic silence, invisible to every existing log -- instrumentation added, not yet diagnosed
+## 6. A third symptom: periodic silence, invisible to every existing log -- diagnosed and fixed within minutes of deploying instrumentation
 
 **With both §3 fixes deployed, a longer listen (roughly four hours, on and off) found audio running clean for thirty to sixty seconds at a stretch, then a gap of silence lasting five to ten seconds, repeating.** Not the starvation of §3 (which was total and immediate) and not obviously the pacing gap of `[GDE-SONOS-1240]` (which read as brief dropouts within otherwise-continuous audio, not full silence) -- a third, distinct pattern.
 
@@ -106,17 +106,43 @@ Tonight's first five fixes (§2) were built from this project's own trained know
 - **The broadcast channel's own `Lagged` errors, logged rather than silently dropped** (previously `.filter_map(|item| item.ok())`; now the `Err` arm reports how many chunks were lost before returning `None`). Distinguishes "the reader could not keep up with a healthy encoder" from the connection-drop case above.
 - **`encode_loop`'s own starvation, past a 300 ms threshold.** Logs how long `ring.read()` returned nothing before audio resumed -- the signature of the mixing/decode pipeline itself falling behind real time, upstream of the encoder entirely, rather than anything in the encode-and-serve half of the pipeline `[GDE-SONOS-1240]` already covers.
 
-**Deliberately not guessed further before this data exists.** A five-to-ten-second gap, once a minute, is equally consistent with a WiFi association hiccup on either end, a Sonos-side buffering policy this project has no visibility into, or a genuine periodic stall somewhere in Vaino's own pipeline still not identified -- and picking one to fix without the logs above to confirm it would be exactly the "throwing everything at the wall" this investigation has been asked to avoid. The next occurrence should log which of the three it is.
+**Deliberately not guessed further before this data exists** -- and it did not take long to arrive. The very next gap, minutes after `[GDE-SONOS-1250]` deployed, logged exactly this:
+
+```
+14:45:48  sonos: stream connection opened
+14:46:28  sonos: stream connection closed after 40.1s
+14:46:31  sonos: stream connection opened
+```
+
+No `Lagged` warning, no starvation warning either side of it -- the connection itself ran cleanly for forty seconds, then **the client closed it**, and a new one opened three seconds later. Nothing on Vaino's side initiated that close (no `forget`, no reactivation log in between). This is the connection-drop case, not the other two, and it points at Sonos's own client behaviour or the network, not at Vaino's mixing or encoding.
+
+**`[GDE-SONOS-1260]` A specific, independently-documented Sonos compatibility issue matches this exactly: Sonos hardware is reported to handle chunked-transfer-encoded MP3 poorly** -- reconnecting every few tens of seconds -- while FLAC or WAV over the identical chunked encoding is fine ([Sonos Community: "Chunked encoding transfer and MP3 (a technical question)"](https://en.community.sonos.com/advanced-setups-229000/chunked-encoding-transfer-and-mp3-a-technical-question-6763502)). `axum::body::Body::from_stream` -- what `sonos_stream` has always used -- produces exactly this: a body of unknown length, sent as `Transfer-Encoding: chunked` by `hyper`'s own default framing decision. The documented workaround, from the same thread: claim a large, fake `Content-Length` instead, so `hyper` frames the response by length rather than chunking it, and let the connection simply end (dropped, exactly as today) whenever the coordinator actually disconnects.
+
+**Fixed with `FakeLength`, a thin `http_body::Body` wrapper around the existing stream body that overrides only `size_hint()`,** claiming 100 GiB -- comfortably beyond anything one session could produce, at the encoder's own 192 kbps, in well over a decade of continuous play. Nothing about what is actually sent changes; only the header `hyper` chooses to advertise it with does. Not yet confirmed against the real pair -- deployed alongside this document's own update, awaiting the next listen.
 
 ---
 
-## 7. Recommendations
+## 7. A fourth finding: skip (and possibly volume) lag several seconds behind the button press -- root cause identified for skip, fix deferred
 
-1. **Listen again with `[GDE-SONOS-1250]`'s instrumentation deployed**, and read back whichever of the three new log lines appears during the next gap -- that is what decides where to look next, rather than another guess.
-2. **Extend the loss-of-control watcher to check `CurrentTransportState`, not only `CurrentURI`** -- still open, and lower priority: §4's own finding (Home Assistant has no special stall logic either) suggests the earlier `STOPPED`-while-correctly-pointed state was a legitimate reaction to a starved feed, which both fixes in §3 should now prevent from recurring, rather than a gap this watcher needed to paper over.
-3. **Reconnect a physical Bluetooth speaker before the next test**, if practical -- it removes one remaining condition from ambiguity, and confirms local-only playback (which `[GDE-SONOS-1230]` also touched) still works exactly as before on the more ordinary night.
-4. **Watch CPU load on `vainopi` during an extended Sonos session** -- a Raspberry Pi encoding MP3 in real time while also running the Program Director and everything else has less headroom than the development machine this was reasoned about on; `[GDE-SONOS-1250]`'s starvation log would catch this specific cause directly if it is the one at fault.
+**Reported live: commanding a skip or a volume change on the settings panel does not become audible on Office for five to ten seconds.** Checked against the code before touching anything, per the same discipline §3 was held to.
+
+**`[GDE-SONOS-1270]` Skip's own lag has a confirmed, specific cause: `cut_ring_to_incoming` -- the function that truncates and fades a ring when a skip or a seek lands -- only ever touches `self.path.ring`.** There is no equivalent call for `self.sonos_ring` anywhere in it. Whatever the outgoing passage had already had mixed into `sonos_ring` before the skip -- up to the ring's own ~15 s capacity, whatever fraction of it happened to be buffered at that moment -- has to drain in full, at real time (per `[GDE-SONOS-1240]`'s own pacing fix, which is correct and not itself the problem), before the *newly* mixed, post-skip audio reaches the front of the queue and is actually sent. A local listener never notices this gap because `begin_skip_transition` cuts local's own backlog short at the same moment the decoder switches passages; Sonos's backlog was never told a skip happened at all.
+
+**Not fixed here.** Truncating `sonos_ring` the same way `path.ring` is truncated is the obvious shape of a fix, but it touches the identical sensitive mixing/ring code `[GDE-SONOS-1230]` was held for review over, in the same session that has already found five bugs in this immediate neighbourhood -- worth its own pass, not folded in as a sixth.
+
+**Volume's own lag is reported but not yet explained with the same confidence.** `forward_volume_to_sonos` is a direct, un-queued `RenderingControl#SetVolume` SOAP call on its own thread, fired the moment the slider moves -- structurally, nothing about it should be subject to any buffering delay at all, since it addresses the coordinator's own hardware amplifier, not anything travelling through `sonos_ring`. Whether the perceived lag is the same phenomenon as skip's (a listener attributing a delay they hear for an unrelated reason to the control they just touched), a genuine but separate issue in the forwarding path, or a Sonos-side smoothing/ramp on volume changes, is not yet known -- not guessed at further here for the same reason `[GDE-SONOS-1230]` was not.
 
 ---
 
-**Traceability:** `[GDE-SONOS-1180..1250]` · found and fixed: `1180`, `1190`, `1200`, `1210`, `1220`, `1230`, `1240` · found, instrumented, not yet diagnosed: `1250` (`player/src/web.rs`, `sonos_stream`/`LogOnClose`; `player/src/sonos.rs`, `stream::encode_loop`'s starvation log) · `1230` additionally touches `player/src/path.rs` (`recover`) and `[PI3-API-030]`'s own `audible`-gates-advancement rule in `player/src/engine.rs` (`tick`) · `1240` touches `player/src/sonos.rs` (`stream::encode_loop`, `stream::pacing_delay`) · five new tests (two engine, three pacing) pin `1230`/`1240` down · annotates `[Sonos/SONOS008 §6]`'s own mixer-independence claim, `player/src/engine.rs` (`mix_and_submit`)
+## 8. Recommendations
+
+1. **Listen again now that `[GDE-SONOS-1260]` (§6) is deployed** -- it targets the specific, documented gap this session's own instrumentation caught on the very first occurrence after being turned on.
+2. **Design and review a fix for `[GDE-SONOS-1270]` (§7) before the next session**, rather than folding it into this one -- truncating `sonos_ring` on skip/seek the way `path.ring` already is.
+3. **Isolate the volume-lag report** (§7) with its own quick test -- change volume with nothing else happening, and time it against the log's own `forward_volume_to_sonos` call -- before assuming it shares skip's root cause.
+4. **Extend the loss-of-control watcher to check `CurrentTransportState`, not only `CurrentURI`** -- still open, and lower priority: §4's own finding (Home Assistant has no special stall logic either) suggests the earlier `STOPPED`-while-correctly-pointed state was a legitimate reaction to a starved feed, which the fixes in §3 and §6 should now prevent from recurring, rather than a gap this watcher needed to paper over.
+5. **Reconnect a physical Bluetooth speaker before the next test**, if practical -- it removes one remaining condition from ambiguity, and confirms local-only playback (which `[GDE-SONOS-1230]` also touched) still works exactly as before on the more ordinary night.
+6. **Watch CPU load on `vainopi` during an extended Sonos session** -- a Raspberry Pi encoding MP3 in real time while also running the Program Director and everything else has less headroom than the development machine this was reasoned about on; `[GDE-SONOS-1250]`'s starvation log would catch this specific cause directly if it is the one at fault.
+
+---
+
+**Traceability:** `[GDE-SONOS-1180..1270]` · found and fixed: `1180`, `1190`, `1200`, `1210`, `1220`, `1230`, `1240`, `1260` · found, instrumented, diagnosis pending confirmation: `1250` (`player/src/web.rs`, `sonos_stream`/`LogOnClose`; `player/src/sonos.rs`, `stream::encode_loop`'s starvation log) · found, root cause identified, fix deferred to its own pass: `1270` (`player/src/engine.rs`, `cut_ring_to_incoming`) · `1230` additionally touches `player/src/path.rs` (`recover`) and `[PI3-API-030]`'s own `audible`-gates-advancement rule in `player/src/engine.rs` (`tick`) · `1240` touches `player/src/sonos.rs` (`stream::encode_loop`, `stream::pacing_delay`) · `1260` touches `player/src/web.rs` (`FakeLength`) and `player/Cargo.toml` (`http-body`, gated on the `sonos` feature) · five new tests (two engine, three pacing) pin `1230`/`1240` down · annotates `[Sonos/SONOS008 §6]`'s own mixer-independence claim, `player/src/engine.rs` (`mix_and_submit`)
