@@ -1325,6 +1325,76 @@ impl PlayerStore {
             .ok()
     }
 
+    /// Which output is authoritative right now `[Sonos/SONOS008 §3]`:
+    /// `"local"` or `"sonos"`. Exclusive by construction -- one row, one
+    /// value -- rather than two flags that could disagree with each other.
+    pub fn save_output_mode(&self, mode: &str) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('output_mode', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![mode],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// `"local"` when nothing has ever chosen otherwise -- the same
+    /// fall-back-to-doing-nothing contract `load_speaker_address` keeps.
+    pub fn load_output_mode(&self) -> String {
+        self.conn
+            .query_row(
+                "SELECT value FROM player_settings WHERE key = 'output_mode'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| "local".to_string())
+    }
+
+    /// The Sonos speaker last chosen through `use`, if any
+    /// `[Sonos/SONOS008 §3]`. Stored as the small JSON object
+    /// `sonos::SonosTarget` serialises to -- one row, not a table, the same
+    /// reasoning `speaker_address` already uses for a single remembered
+    /// choice.
+    pub fn save_sonos_target(&self, target_json: &str) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('sonos_target', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![target_json],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// The raw JSON, left for the caller to deserialise -- `db.rs` does not
+    /// otherwise know about `sonos::SonosTarget`'s shape, and `sonos` is
+    /// behind its own feature gate `[Sonos/SONOS008 §9]`, which this module
+    /// is not.
+    pub fn load_sonos_target(&self) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT value FROM player_settings WHERE key = 'sonos_target'",
+                [],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+
+    /// Clears the remembered Sonos target and falls back to local output --
+    /// `forget`'s whole effect, in one statement.
+    pub fn clear_sonos_target(&self) -> Result<(), DbError> {
+        self.conn
+            .execute("DELETE FROM player_settings WHERE key = 'sonos_target'", [])
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        self.save_output_mode("local")
+    }
+
     /// Set or clear "flag this for review" on a recording or a passage
     /// `[REQ-VIS-265]`. A plain toggle, not a decision: unlike `id_reviews`
     /// and its siblings, there is nothing here to apply and nothing to
@@ -3512,6 +3582,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1, "a later choice replaces the row rather than adding to it");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// `[Sonos/SONOS008 §3]`: `output_mode` defaults to `"local"` on a
+    /// library nothing has ever chosen Sonos on -- the same "fall back to
+    /// doing nothing" contract every other persisted choice here keeps.
+    #[test]
+    fn output_mode_defaults_local_and_a_chosen_target_round_trips() {
+        let dir = std::env::temp_dir().join(format!("vaino_sonos_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+
+        assert_eq!(st.load_output_mode(), "local");
+        assert_eq!(st.load_sonos_target(), None);
+
+        let target = r#"{"udn":"RINCON_347E5CCAE44A01400","name":"Office","last_ip":"192.168.67.56"}"#;
+        st.save_sonos_target(target).unwrap();
+        st.save_output_mode("sonos").unwrap();
+        assert_eq!(st.load_output_mode(), "sonos");
+        assert_eq!(st.load_sonos_target().as_deref(), Some(target));
+
+        // `forget` clears the target AND falls back to local in one step --
+        // a target lingering behind a mode already switched away from it
+        // would be exactly the stale-registration confusion `Sonos/SONOS001`
+        // found in a real Music Assistant instance.
+        st.clear_sonos_target().unwrap();
+        assert_eq!(st.load_output_mode(), "local");
+        assert_eq!(st.load_sonos_target(), None);
+
         let _ = std::fs::remove_file(&dir);
     }
 

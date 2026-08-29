@@ -221,6 +221,17 @@
       </span>
       <p id="bt-countdown"></p>
     </div>
+    <!-- Only present in a build with `sonos` compiled in [Sonos/SONOS008 §7];
+         the skin has no way to know the feature exists otherwise, so this
+         section stays hidden until a fetch to /audio/sonos actually answers. -->
+    <div class="setting" id="sonos" hidden>
+      <label>Sonos</label>
+      <span>
+        <button type="button" id="sonos-scan">Find a Sonos speaker</button>
+      </span>
+      <p id="sonos-hint">Direct to a Sonos speaker, in stereo, instead of the local output.</p>
+      <ul id="sonos-list" aria-live="polite"></ul>
+    </div>
     <div class="setting">
       <label for="prog">Programme</label>
       <span><select id="prog"></select></span>

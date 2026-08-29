@@ -62,6 +62,11 @@ async fn main() {
     }
     if args.iter().any(|a| a == "--version") {
         println!("vaino {}", vaino_player::build_id());
+        // `[Sonos/SONOS007]` SS4(a): prominent notice that the Library is
+        // used, and that it is covered by its own license -- present only
+        // in a build that actually links it.
+        #[cfg(feature = "sonos")]
+        println!("includes LAME (libmp3lame), LGPL -- see THIRD-PARTY-LICENSES.md");
         return;
     }
     println!("vaino {}", vaino_player::build_id());
@@ -131,7 +136,16 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let ui = web::Ui { handle, why, controls, db: art_db };
+    let ui = web::Ui {
+        handle,
+        why,
+        controls,
+        db: art_db,
+        #[cfg(feature = "sonos")]
+        sonos: Arc::new(std::sync::Mutex::new(None)),
+        #[cfg(feature = "sonos")]
+        port: port as u16,
+    };
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port as u16));
     let listener = match tokio::net::TcpListener::bind(addr).await {

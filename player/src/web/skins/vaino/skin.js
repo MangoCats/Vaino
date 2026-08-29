@@ -679,10 +679,93 @@
   }
 
   $('bt-scan').onclick = () => refresh(true);
+
+  // ----------------------------------------------------------------- sonos
+  // A separate list rather than folded into the Bluetooth one above
+  // `[Sonos/SONOS008 §7]`: Bluetooth's confirm-or-revert countdown exists
+  // because a wrong choice there can strand a listener with no way to hear
+  // whether it worked `[PI3-UI-030]` -- a risk a LAN speaker with its own
+  // still-running local output does not carry the same way. Hidden by
+  // default and only ever shown once a fetch to `/audio/sonos` actually
+  // answers, since a build without `sonos` compiled in serves no such
+  // route at all and the skin has no other way to know.
+  function sonosHint(text) { $('sonos-hint').textContent = text; }
+
+  function sonosRow(s, activeUdn) {
+    const li = document.createElement('li');
+    const active = s.udn === activeUdn;
+    li.className = 'bt' + (active ? ' playing' : '');
+    const name = document.createElement('span');
+    name.className = 'btname';
+    name.textContent = s.name;
+    const said = document.createElement('span');
+    said.className = 'btstate';
+    said.textContent = active ? 'Playing' : 'Found';
+    li.append(name, said);
+    if (!active) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Use';
+      b.onclick = () => sonosUse(s);
+      li.appendChild(b);
+    } else {
+      const f = document.createElement('button');
+      f.type = 'button';
+      f.className = 'btforget';
+      f.textContent = 'Forget';
+      f.onclick = () => sonosAct('forget', '');
+      li.appendChild(f);
+    }
+    return li;
+  }
+
+  async function sonosAct(verb, udn) {
+    sonosHint('Working…');
+    try {
+      const r = await fetch(`/audio/sonos/${verb}${udn ? '/' + udn : ''}`, { method: 'POST' });
+      const body = await r.json().catch(() => null);
+      if (!r.ok) { sonosHint(body || 'That did not work.'); return null; }
+      return body;
+    } catch (e) {
+      sonosHint('Could not reach the player.');
+      return null;
+    }
+  }
+
+  async function sonosUse(s) {
+    const body = await sonosAct('use', s.udn);
+    if (body) sonosHint(`Playing on ${s.name}.`);
+    sonosRefresh();
+  }
+
+  async function sonosRefresh(scan) {
+    try {
+      const r = await fetch(scan ? '/audio/sonos/scan' : '/audio/sonos',
+                            { method: scan ? 'POST' : 'GET' });
+      if (!r.ok) { $('sonos').hidden = true; return; } // no `sonos` feature in this build
+      $('sonos').hidden = false;
+      if (scan) sonosHint('Looking for Sonos speakers…');
+      const body = await r.json();
+      const list = $('sonos-list');
+      list.textContent = '';
+      const speakers = body.speakers || [];
+      if (!speakers.length) {
+        sonosHint('No Sonos speakers found on this network yet.');
+        return;
+      }
+      for (const s of speakers) list.appendChild(sonosRow(s, body.active_udn));
+      if (!scan) sonosHint('Direct to a Sonos speaker, in stereo, instead of the local output.');
+    } catch (e) {
+      $('sonos').hidden = true;
+    }
+  }
+
+  $('sonos-scan').onclick = () => sonosRefresh(true);
+
   // Populated when the panel is opened rather than at load: it costs a
   // subprocess on the appliance, and most sessions never open the settings.
   gear.addEventListener('click', () => {
-    if (!$('panel-settings').hidden) { radios(); refresh(); }
+    if (!$('panel-settings').hidden) { radios(); refresh(); sonosRefresh(); }
   });
 
   // --------------------------------------------------------------- history

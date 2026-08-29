@@ -207,6 +207,17 @@ pub enum Command {
     /// cosmetic -- it looks like it worked, and is silent -- unless the output
     /// is reopened `[PI3-WHY-020]`.
     ReopenOutput,
+    /// A second, independent output ring to feed alongside (never instead
+    /// of) `path.ring`, or `None` to stop `[Sonos/SONOS008 §6]`.
+    ///
+    /// The mixer never knows *why* -- only that something else wants a copy
+    /// of the same mixed samples. Setting it does not touch `path.ring` at
+    /// all, which is how switching to Sonos output stops the local device
+    /// (a separate, existing step: `path.ring` becomes `None` because
+    /// nothing opened a local device that session, not because this command
+    /// closed one).
+    #[cfg(feature = "sonos")]
+    SetSonosRing(Option<crate::output::OutputRing>),
     /// Write the resume point NOW, ignoring the save interval `[REQ-VIS-155]`.
     ///
     /// For the moments the interval was not designed for: the machine is about
@@ -265,6 +276,12 @@ pub struct Engine {
     /// thread, because every time this loop was allowed to do that work it
     /// eventually did some of it blocking `[GDE-FBD-090]`.
     path: crate::path::PathHandle,
+    /// A second output the same mixed samples are also handed to, whenever
+    /// one is chosen `[Sonos/SONOS008 §6]`. `None` the overwhelming majority
+    /// of the time -- Sonos output is a listener's deliberate choice, not a
+    /// default -- and costs one extra `submit` when it is not.
+    #[cfg(feature = "sonos")]
+    sonos_ring: Option<crate::output::OutputRing>,
     out_rate: u32,
     out_channels: usize,
     scratch: Vec<f32>,
@@ -429,6 +446,8 @@ impl Engine {
             live: Vec::new(),
             ready: None,
             path,
+            #[cfg(feature = "sonos")]
+            sonos_ring: None,
             out_room: 0,
             publish_at: None,
             published: None,
@@ -562,6 +581,8 @@ impl Engine {
                 Ok(Command::Play) => self.set_playing(true),
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::ReopenOutput) => self.path.reopen(),
+                #[cfg(feature = "sonos")]
+                Ok(Command::SetSonosRing(ring)) => self.sonos_ring = ring,
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetSkipFade(ms)) => {
                     self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
@@ -1193,6 +1214,14 @@ impl Engine {
         }
         if filled == 0 {
             return 0;
+        }
+        // Handed to a second ring, if one is chosen, before anything checks
+        // whether the local device even exists `[Sonos/SONOS008 §6]`. The
+        // mixer does not know or care who is on the other end -- only that
+        // these are the same samples `path.ring` is about to receive.
+        #[cfg(feature = "sonos")]
+        if let Some(r) = &self.sonos_ring {
+            r.submit(&self.scratch[..filled]);
         }
         match &self.path.ring {
             Some(o) => {

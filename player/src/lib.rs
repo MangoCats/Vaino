@@ -56,6 +56,11 @@ pub mod queue;
 pub mod report;
 pub mod relink;
 pub mod bluetooth;
+/// Direct-to-Sonos output `[Sonos/SONOS008]`. An appliance build that never
+/// asks for `sonos` carries none of this -- no SSDP listener, no SOAP
+/// client, no encoder.
+#[cfg(feature = "sonos")]
+pub mod sonos;
 pub mod sink;
 pub mod session;
 

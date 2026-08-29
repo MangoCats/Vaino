@@ -160,6 +160,15 @@ pub struct OutputRing {
     pub counts: Counts,
 }
 
+/// Named only -- the state behind it is an `Arc<Mutex<..>>` nothing outside
+/// this file should be inspecting, and `Command`'s own `#[derive(Debug)]`
+/// `[Sonos/SONOS008 §6]` only needs *a* impl to exist, not a useful one.
+impl std::fmt::Debug for OutputRing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OutputRing({} Hz, {} ch)", self.sample_rate(), self.channels())
+    }
+}
+
 impl OutputRing {
     // `pub(crate)`, not private: `path.rs` builds one to attach a real
     // device, and the engine's own tests build one to simulate a device that
@@ -209,6 +218,15 @@ impl OutputRing {
                 (took, s.ring.free())
             })
             .unwrap_or((0, 0))
+    }
+
+    /// Drain mixed audio out, the same ring the cpal callback drains into a
+    /// device. A second, independent `OutputRing` fed the same way lets a
+    /// consumer other than a sound card -- a Sonos encoder, say -- read
+    /// exactly what the engine mixed, without the mixer knowing anything
+    /// about who is on the other end `[Sonos/SONOS008]`.
+    pub fn read(&self, dst: &mut [f32]) -> usize {
+        self.state.lock().map(|mut s| s.ring.read(dst)).unwrap_or(0)
     }
 
     /// Samples submitted but not yet consumed by the device.

@@ -38,6 +38,18 @@ pub struct Ui {
     pub db: std::path::PathBuf,
     pub why: Explanations,
     pub controls: SharedControls,
+    /// The running Sonos output, if that is what is currently chosen
+    /// `[Sonos/SONOS008 §6]` -- `None` the overwhelming majority of the
+    /// time. Held here, not on `Engine`, because the encoder thread and the
+    /// HTTP stream route both need it and neither should reach across to
+    /// the audio thread to get it.
+    #[cfg(feature = "sonos")]
+    pub sonos: Arc<std::sync::Mutex<Option<crate::sonos::SonosSession>>>,
+    /// This server's own port, so a freshly-chosen Sonos target can be
+    /// pointed at `http://<this machine>:<port>/audio/sonos/stream`
+    /// `[Sonos/SONOS008 §6]`.
+    #[cfg(feature = "sonos")]
+    pub port: u16,
 }
 
 /// How often a connected browser is sent a snapshot. Fast enough that the
@@ -338,7 +350,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/edit/:passage_id/audio", get(edit_audio))
         .route("/edit/:passage_id/review", post(edit_review));
 
-    router
+    let router = router
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/audio/sink", get(audio_sink))
@@ -366,8 +378,20 @@ pub fn router(ui: Ui) -> Router {
         .route("/audio/radios", get(radios))
         .route("/power/off", post(power_off))
         .route("/power/restart", post(restart_player))
-        .route("/audio/radio/:kind/:state", post(set_radio))
-        .with_state(ui)
+        .route("/audio/radio/:kind/:state", post(set_radio));
+
+    // A separate `let` rather than a `.route()` in the chain above: a `#[cfg]`
+    // cannot gate one call in the middle of a method chain, and this way an
+    // appliance build without `sonos` carries no trace of these routes at all
+    // `[Sonos/SONOS008 §9]`.
+    #[cfg(feature = "sonos")]
+    let router = router
+        .route("/audio/sonos", get(sonos_list))
+        .route("/audio/sonos/:verb", post(sonos_verb))
+        .route("/audio/sonos/:verb/:target", post(sonos_verb_on))
+        .route("/audio/sonos/stream", get(sonos_stream));
+
+    router.with_state(ui)
 }
 
 async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResponse {
@@ -1656,6 +1680,189 @@ fn bt_reply(result: Result<serde_json::Value, String>, reopened: bool) -> Respon
             axum::Json(v).into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+/// Discovered Sonos speakers, the same shape `[Sonos/SONOS008 §5]` calls for
+/// -- one entry per stereo pair or group, never per bonded satellite --
+/// plus which one (if any) is the currently active output, so the settings
+/// panel can say so without a second request.
+#[cfg(feature = "sonos")]
+async fn sonos_list(State(ui): State<Ui>) -> Response {
+    let found =
+        tokio::task::spawn_blocking(|| crate::sonos::discover(std::time::Duration::from_secs(3)))
+            .await
+            .unwrap_or_default();
+    let active_udn = ui.sonos.lock().ok().and_then(|g| g.as_ref().map(|s| s.speaker.udn.clone()));
+    axum::Json(serde_json::json!({"speakers": found, "active_udn": active_udn})).into_response()
+}
+
+/// Verbs that name no speaker: `scan` (an alias for the same discovery
+/// `GET /audio/sonos` already does) and `forget`.
+#[cfg(feature = "sonos")]
+async fn sonos_verb(
+    State(ui): State<Ui>,
+    axum::extract::Path(verb): axum::extract::Path<String>,
+) -> Response {
+    let Some(v) = crate::sonos::Verb::parse(&verb) else {
+        return (StatusCode::NOT_FOUND, "unknown verb").into_response();
+    };
+    match v {
+        crate::sonos::Verb::Scan | crate::sonos::Verb::Status => sonos_list(State(ui)).await,
+        crate::sonos::Verb::Forget => sonos_forget(ui).await,
+        crate::sonos::Verb::Use => (StatusCode::BAD_REQUEST, "verb needs a speaker").into_response(),
+    }
+}
+
+/// `use` -- the only verb that names a speaker `[Sonos/SONOS008 §5]`.
+#[cfg(feature = "sonos")]
+async fn sonos_verb_on(
+    State(ui): State<Ui>,
+    axum::extract::Path((verb, udn)): axum::extract::Path<(String, String)>,
+) -> Response {
+    match crate::sonos::Verb::parse(&verb) {
+        Some(crate::sonos::Verb::Use) => sonos_use(ui, udn).await,
+        Some(_) => (StatusCode::BAD_REQUEST, "verb does not take a speaker").into_response(),
+        None => (StatusCode::NOT_FOUND, "unknown verb").into_response(),
+    }
+}
+
+/// Discover, activate, and persist -- in that order, so nothing is
+/// remembered that was never confirmed reachable `[Sonos/SONOS008 §6]`.
+#[cfg(feature = "sonos")]
+async fn sonos_use(ui: Ui, udn: String) -> Response {
+    let found = tokio::task::spawn_blocking({
+        let udn = udn.clone();
+        move || {
+            crate::sonos::discover(std::time::Duration::from_secs(3))
+                .into_iter()
+                .find(|s| s.udn == udn)
+        }
+    })
+    .await
+    .unwrap_or(None);
+    let Some(speaker) = found else {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("{udn} was not found on the network just now"),
+        )
+            .into_response();
+    };
+
+    let Some(ip) = crate::sonos::local_ip() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "could not determine this machine's own address",
+        )
+            .into_response();
+    };
+    let stream_url = format!("http://{ip}:{}/audio/sonos/stream", ui.port);
+
+    // Whatever was running before is stopped first, so the coordinator
+    // never receives two SetAVTransportURI calls in flight at once.
+    if let Ok(mut guard) = ui.sonos.lock() {
+        if let Some(old) = guard.take() {
+            crate::sonos::deactivate(&ui.handle, old.speaker.ip);
+        }
+    }
+
+    let stream = match tokio::task::spawn_blocking({
+        let handle = Arc::clone(&ui.handle);
+        let speaker = speaker.clone();
+        move || crate::sonos::activate(&handle, &speaker, &stream_url, crate::BUFFER_FRAMES * 2)
+    })
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    if let Ok(mut guard) = ui.sonos.lock() {
+        *guard = Some(crate::sonos::SonosSession { stream, speaker: speaker.clone() });
+    }
+
+    // Best-effort, the same posture `speaker_verb_on` already uses for its
+    // own remembered choice: a listener whose speaker just started working
+    // should not be told it failed over a bookkeeping write.
+    let target = crate::sonos::SonosTarget {
+        udn: speaker.udn.clone(),
+        name: speaker.name.clone(),
+        last_ip: speaker.ip,
+    };
+    if let Ok(json) = serde_json::to_string(&target) {
+        let db = ui.db.clone();
+        let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
+            Ok(store) => {
+                if let Err(e) = store.save_sonos_target(&json) {
+                    eprintln!("save sonos target: {e}");
+                }
+                if let Err(e) = store.save_output_mode("sonos") {
+                    eprintln!("save output mode: {e}");
+                }
+            }
+            Err(e) => eprintln!("save sonos target: {e}"),
+        })
+        .await;
+    }
+
+    axum::Json(serde_json::json!({"ok": true, "speaker": speaker})).into_response()
+}
+
+/// Stop whatever Sonos session is running and fall back to local output --
+/// `output_mode` becomes `local` and `ReopenOutput` makes it audible in the
+/// same request, the same immediacy `speaker_verb_on`'s own `use` already
+/// gives a Bluetooth choice `[PI3-UI-020]`.
+#[cfg(feature = "sonos")]
+async fn sonos_forget(ui: Ui) -> Response {
+    if let Ok(mut guard) = ui.sonos.lock() {
+        if let Some(old) = guard.take() {
+            crate::sonos::deactivate(&ui.handle, old.speaker.ip);
+        }
+    }
+    let db = ui.db.clone();
+    let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
+        Ok(store) => {
+            if let Err(e) = store.clear_sonos_target() {
+                eprintln!("clear sonos target: {e}");
+            }
+        }
+        Err(e) => eprintln!("clear sonos target: {e}"),
+    })
+    .await;
+    ui.handle.send(Command::ReopenOutput);
+    axum::Json(serde_json::json!({"ok": true})).into_response()
+}
+
+/// The continuous MP3 stream itself -- what a Sonos coordinator's own
+/// `CurrentURI` actually points at `[Sonos/SONOS008 §6]`. One persistent
+/// GET, not one request per track; a second listener joining mid-stream is
+/// unsupported today only in the sense that nothing has ever asked for it,
+/// not because the broadcast channel underneath refuses it.
+#[cfg(feature = "sonos")]
+async fn sonos_stream(State(ui): State<Ui>) -> Response {
+    use tokio_stream::StreamExt;
+
+    let rx = {
+        let guard = ui.sonos.lock().ok();
+        guard.and_then(|g| g.as_ref().map(|s| s.stream.subscribe()))
+    };
+    let Some(rx) = rx else {
+        return (StatusCode::NOT_FOUND, "no Sonos session is active").into_response();
+    };
+
+    let body_stream = tokio_stream::wrappers::BroadcastStream::new(rx)
+        .filter_map(|item| item.ok())
+        .map(Ok::<_, std::convert::Infallible>);
+    let body = axum::body::Body::from_stream(body_stream);
+
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "audio/mpeg")
+        .body(body)
+    {
+        Ok(r) => r,
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 

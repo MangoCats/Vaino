@@ -20,6 +20,11 @@ mpd = []
 # HTTP client at all, not just leaves it unused `[SPEC-SUI-190]`,
 # `[SPEC-SUI-196]`.
 sampo-support = ["dep:reqwest"]
+# Direct-to-Sonos output `[Sonos/SONOS008]`: off by default because it is a
+# new authenticated-free network entry point on the appliance, not because of
+# its weight -- `mp3lame-encoder` statically vendors LAME `[Sonos/SONOS006]`
+# and adds well under 1 MB at runtime `[Sonos/SONOS004]`.
+sonos = ["dep:mp3lame-encoder", "dep:tokio-stream"]
 
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
@@ -42,6 +47,17 @@ serde_json = "1"
 # link, and an appliance build never pulls this crate in at all (see
 # `sampo-support` above).
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+
+# Encodes the mixed engine output for a Sonos target's CurrentURI
+# `[Sonos/SONOS005]`. Vendors and statically compiles LAME 3.100 -- no
+# dynamic system dependency, the same reasoning `rusqlite`'s `bundled`
+# feature already uses above `[Sonos/SONOS006]`. Optional: an appliance
+# build that never enables `sonos` never resolves this at all.
+mp3lame-encoder = { version = "0.2", optional = true }
+# Bridges the encoder's own background thread into an axum streaming
+# response body. A thin wrapper over a channel already in the dependency
+# tree via `tokio` itself, not a new class of dependency.
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"], optional = true }
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`: already in the
 # dependency tree via cpal/rusqlite, so this declares an existing compile
