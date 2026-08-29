@@ -54,7 +54,7 @@
 
 ## 8. One consideration that favors neither: both are LGPL
 
-**`[GDE-SONOS-500]` `mp3lame-encoder` is LGPL-3.0; shine is LGPL-2.** Whichever is chosen, statically linking an LGPL library into a single compiled appliance binary carries the same class of obligation — typically satisfied by dynamic linking, or by providing a way for a user to relink against a modified copy of the LGPL component. This is a real question for however Vaino's aarch64 build ultimately links it, worth a real look before shipping rather than assumed away — but it does not distinguish between the two candidates, since neither is more or less permissive than the other here.
+**`[GDE-SONOS-500]` `mp3lame-encoder` is LGPL-3.0; shine is LGPL-2.** Whichever is chosen, statically linking an LGPL library into a single compiled appliance binary carries the same class of obligation — typically satisfied by dynamic linking, or by providing a way for a user to relink against a modified copy of the LGPL component. This is a real question for however Vaino's aarch64 build ultimately links it, worth a real look before shipping rather than assumed away — but it does not distinguish between the two candidates, since neither is more or less permissive than the other here. Worked out in full, for LAME specifically, in [SONOS006](SONOS006-lame-linking.md).
 
 ---
 
