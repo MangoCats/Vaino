@@ -2123,7 +2123,7 @@ impl<S> Drop for LogOnClose<S> {
     }
 }
 
-/// A body that claims a large, fake length instead of the unknown one
+/// A body that claims a fake length instead of the unknown one
 /// `axum::body::Body::from_stream` reports on its own `[Sonos/SONOS012 §6]`.
 ///
 /// Real Sonos hardware is documented, independently of this project, to
@@ -2131,20 +2131,29 @@ impl<S> Drop for LogOnClose<S> {
 /// chunked encoding are fine -- reconnecting every few tens of seconds
 /// against exactly the kind of stream `axum` builds by default for a body
 /// of unknown size. `hyper` chooses `Content-Length` framing over
-/// `Transfer-Encoding: chunked` purely from `size_hint()`; claiming a size
-/// far larger than any session could ever reach, and letting the
-/// connection simply end (dropped, same as today) whenever the coordinator
-/// actually disconnects, is the documented workaround -- an accepted small
-/// lie about a number nothing will ever validate, not a change to what is
-/// actually sent.
+/// `Transfer-Encoding: chunked` purely from `size_hint()`; claiming a
+/// length nothing will ever validate against, and letting the connection
+/// simply end (dropped, same as today) whenever the coordinator actually
+/// disconnects, is the documented workaround -- not a change to what is
+/// actually sent, only to the header `hyper` advertises it with.
+///
+/// **`CLAIMED_BYTES` matters, not just its existence** `[Sonos/SONOS012
+/// §8]`: this session's first attempt claimed an arbitrary 100 GiB and the
+/// periodic reconnects it was meant to fix continued unchanged. Music
+/// Assistant's own `streams` controller -- proven, on this exact Office
+/// pair, per `[SONOS003]` -- uses its identical "forced content length"
+/// profile with a size computed from twelve hours at the stream's own
+/// bitrate, not an arbitrarily huge figure. Matched here rather than
+/// guessed again.
 #[cfg(feature = "sonos")]
 struct FakeLength(axum::body::Body);
 
 #[cfg(feature = "sonos")]
 impl FakeLength {
-    /// Comfortably beyond anything one session could produce -- at the
-    /// encoder's own 192 kbps, over eleven years of continuous play.
-    const CLAIMED_BYTES: u64 = 100 * 1024 * 1024 * 1024;
+    /// Twelve hours at the encoder's own 192 kbps (`Bitrate::Kbps192`,
+    /// `stream::encode_loop`) -- Music Assistant's own figure for the
+    /// identical purpose, not this session's first, much larger guess.
+    const CLAIMED_BYTES: u64 = (192_000 / 8) * 12 * 3600;
 
     fn wrap(inner: axum::body::Body) -> axum::body::Body {
         axum::body::Body::new(Self(inner))
