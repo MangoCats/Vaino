@@ -161,39 +161,51 @@ pub struct SonosSession {
     pub speaker: SonosSpeaker,
 }
 
-/// Everything switching output *to* Sonos requires, in order
-/// `[Sonos/SONOS008 §6]`: a ring the engine will feed, the encoder reading
-/// it, and the coordinator pointed at the result. Returns the running
-/// stream, which the caller holds for exactly as long as Sonos stays
-/// chosen -- dropping it stops the encoder thread.
+/// The first half of switching output *to* Sonos: a ring, and the encoder
+/// already reading it. Split from [`point_and_play`] rather than done
+/// together in one call, found necessary against the real Office pair
+/// `[Sonos/SONOS010 §6]`: a coordinator resolves the new `CurrentURI` as
+/// part of accepting `SetAVTransportURI`/`Play` themselves, which means the
+/// stream must already be *fetchable* -- the caller's own HTTP route
+/// subscribed to it -- before either SOAP call is made, not after both
+/// return. Calling this before the network round-trip, rather than folding
+/// it into one function the way `[Sonos/SONOS010 §2]`'s own fix first did,
+/// is what makes that ordering possible.
+pub fn start_stream(ring_capacity: usize) -> (crate::output::OutputRing, stream::SonosStream) {
+    let ring = crate::output::OutputRing::new(ring_capacity, crate::output::Volume::new(1.0));
+    let running = stream::SonosStream::start(ring.clone());
+    (ring, running)
+}
+
+/// The second half: point the coordinator at a stream already running,
+/// already reachable, and -- as of this fix -- already carrying real audio.
+///
+/// The engine must be told to feed the ring *before* this call, not after
+/// `[Sonos/SONOS010 §6]`, reversing what `[Sonos/SONOS010 §2]`'s own fix
+/// first tried: found against the real Office pair that `Play` itself reads
+/// from the stream to confirm it before acknowledging, so a ring nothing has
+/// fed yet leaves that handshake with nothing to read -- neither side able
+/// to finish first, which surfaced as a plain socket-read timeout on this
+/// end rather than any answer at all. The caller is responsible for the
+/// symmetric rollback a failure now needs: telling the engine to stop
+/// feeding the ring again, the same as [`deactivate`] already does, so a
+/// failed attempt is not left believing a ring is still wanted -- the actual
+/// property `[Sonos/SONOS010 §2]` existed to protect, kept here by undoing
+/// the optimistic send rather than by delaying it.
 ///
 /// `speaker` is expected freshly resolved by [`discover`], never the raw
 /// persisted [`SonosTarget`] `[GDE-SONOS-760]`: an IP that changed since
 /// the choice was made must read as "not found," not send a stream nobody
 /// asked for to a coordinator that has moved on to being someone's
 /// dishwasher's IP address by now.
-pub fn activate(
-    engine: &crate::engine::EngineHandle,
-    speaker: &SonosSpeaker,
-    stream_url: &str,
-    ring_capacity: usize,
-) -> Result<stream::SonosStream, String> {
-    let ring = crate::output::OutputRing::new(ring_capacity, crate::output::Volume::new(1.0));
-    let running = stream::SonosStream::start(ring.clone());
-    // The SOAP call first, `SetSonosRing` only once it has actually
-    // succeeded `[Sonos/SONOS010 §2]`: sending it earlier left the engine
-    // believing a ring was wanted after a failed call had already stopped
-    // the encoder that would have fed it -- a real state the engine and the
-    // caller disagreed about, found by inspection rather than by a report.
-    soap::set_uri_and_play(speaker.ip, stream_url, Duration::from_secs(5))?;
-    engine.send(crate::engine::Command::SetSonosRing(Some(ring)));
-    Ok(running)
+pub fn point_and_play(speaker: &SonosSpeaker, stream_url: &str) -> Result<(), String> {
+    soap::set_uri_and_play(speaker.ip, stream_url)
 }
 
-/// The reverse of [`activate`]: stop the coordinator (a courtesy, not a
-/// correctness requirement -- dropping `stream` already stops the encoder
-/// regardless of whether the speaker heard the `Stop`) and tell the engine
-/// to stop feeding a ring nothing is reading any more.
+/// The reverse of [`start_stream`]/[`point_and_play`]: stop the coordinator
+/// (a courtesy, not a correctness requirement -- dropping `stream` already
+/// stops the encoder regardless of whether the speaker heard the `Stop`) and
+/// tell the engine to stop feeding a ring nothing is reading any more.
 pub fn deactivate(engine: &crate::engine::EngineHandle, last_known_ip: IpAddr) {
     let _ = soap::stop(last_known_ip, Duration::from_secs(5));
     engine.send(crate::engine::Command::SetSonosRing(None));
@@ -332,23 +344,65 @@ pub mod soap {
             .replace('"', "&quot;")
     }
 
+    /// The scheme Sonos itself wants for a continuous, non-seekable source
+    /// `[GDE-SONOS-1180]` -- found against the real Office pair, not assumed:
+    /// a plain `http://` URI with empty metadata was refused outright with a
+    /// 500 before this fix, the same convention `node-sonos-http-api` and
+    /// `SoCo` already use for internet radio, cited as this integration's own
+    /// precedent in `[Sonos/SONOS002 §4]`. Sonos treats the substituted
+    /// scheme as its own internal signal that nothing here has a duration to
+    /// seek within; the real, fetchable `http://` address still has to appear
+    /// somewhere, which is what the DIDL-Lite `<res>` tag below is for.
+    pub(crate) fn radio_uri(stream_url: &str) -> String {
+        stream_url.replacen("http://", "x-rincon-mp3radio://", 1)
+    }
+
+    /// A minimal DIDL-Lite item, `object.item.audioItem.audioBroadcast`
+    /// `[GDE-SONOS-1180]` -- the class UPnP itself defines for a live source
+    /// with no fixed length. Escaped once for its own XML content, then
+    /// handed to `set_uri_and_play` to be escaped a second time as it goes
+    /// into the outer SOAP envelope's own text node -- ordinary
+    /// XML-in-XML-in-text, not a special case.
+    fn radio_metadata(stream_url: &str) -> String {
+        format!(
+            "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+             xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" \
+             xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">\
+             <item id=\"1\" parentID=\"0\" restricted=\"1\">\
+             <dc:title>Vaino</dc:title>\
+             <upnp:class>object.item.audioItem.audioBroadcast</upnp:class>\
+             <res protocolInfo=\"http-get:*:audio/mpeg:*\">{}</res>\
+             </item></DIDL-Lite>",
+            xml_escape(stream_url)
+        )
+    }
+
+    /// Longer than every other call in this module, deliberately -- found
+    /// necessary against the real Office pair `[Sonos/SONOS010 §6]`: both
+    /// calls below can have the coordinator itself connect back to Vaino's
+    /// own stream to validate it before acknowledging, and the ordinary 5 s
+    /// this module uses everywhere else clipped that round-trip mid-flight,
+    /// surfacing as a bare socket-read timeout rather than any answer at all.
+    const URI_SET_TIMEOUT: Duration = Duration::from_secs(15);
+
     /// Point the coordinator at Vaino's own continuous stream and start it
     /// playing -- called once per session, not once per track
     /// `[Sonos/SONOS008 §6]`.
-    pub fn set_uri_and_play(ip: IpAddr, stream_url: &str, timeout: Duration) -> Result<(), String> {
+    pub fn set_uri_and_play(ip: IpAddr, stream_url: &str) -> Result<(), String> {
         let body = format!(
             "<InstanceID>0</InstanceID><CurrentURI>{}</CurrentURI>\
-             <CurrentURIMetaData></CurrentURIMetaData>",
-            xml_escape(stream_url)
+             <CurrentURIMetaData>{}</CurrentURIMetaData>",
+            xml_escape(&radio_uri(stream_url)),
+            xml_escape(&radio_metadata(stream_url))
         );
-        post_raw(ip, AVTRANSPORT_PATH, AVTRANSPORT, "SetAVTransportURI", &body, timeout)?;
+        post_raw(ip, AVTRANSPORT_PATH, AVTRANSPORT, "SetAVTransportURI", &body, URI_SET_TIMEOUT)?;
         post_raw(
             ip,
             AVTRANSPORT_PATH,
             AVTRANSPORT,
             "Play",
             "<InstanceID>0</InstanceID><Speed>1</Speed>",
-            timeout,
+            URI_SET_TIMEOUT,
         )?;
         Ok(())
     }
@@ -428,6 +482,30 @@ pub mod soap {
             let escaped = xml_escape(url);
             assert!(!escaped.contains('&') || escaped.contains("&amp;"));
             assert!(escaped.contains("&amp;y=2"));
+        }
+
+        /// `[GDE-SONOS-1180]`: found against the real Office pair, which
+        /// refused a plain `http://` `CurrentURI` with empty metadata
+        /// outright (a 500, before ever attempting to fetch it) -- the
+        /// substitution `node-sonos-http-api` and `SoCo` already use for a
+        /// continuous, non-seekable source `[Sonos/SONOS002 §4]`.
+        #[test]
+        fn the_scheme_sonos_wants_for_a_live_stream_replaces_only_the_leading_http() {
+            assert_eq!(
+                radio_uri("http://vainopi:5720/audio/sonos/stream"),
+                "x-rincon-mp3radio://vainopi:5720/audio/sonos/stream"
+            );
+        }
+
+        /// The real, fetchable address still has to appear somewhere once
+        /// `CurrentURI` itself no longer carries an `http://` scheme -- the
+        /// DIDL-Lite `<res>` tag is that somewhere, tagged as a live
+        /// broadcast rather than a seekable track.
+        #[test]
+        fn the_metadata_names_a_live_broadcast_carrying_the_real_url() {
+            let didl = radio_metadata("http://vainopi:5720/audio/sonos/stream");
+            assert!(didl.contains("object.item.audioItem.audioBroadcast"));
+            assert!(didl.contains("http://vainopi:5720/audio/sonos/stream"));
         }
     }
 }
@@ -701,7 +779,20 @@ pub mod stream {
         };
 
         let mut pcm = vec![0f32; FRAMES_PER_PASS * CHANNELS];
-        let mut mp3 = Vec::new();
+        // LAME's own documented worst case for one call, `1.25 * samples +
+        // 7200` bytes -- found the hard way, against the real Office pair
+        // `[Sonos/SONOS010 §6]`: `Vec::new()` never allocates, so
+        // `encode_to_vec`'s own `output.spare_capacity_mut()` handed LAME's C
+        // encoder a zero-length buffer backed by a dangling pointer on every
+        // single call. Nothing crashed immediately only because LAME buffers
+        // several passes of lookahead before it has enough to emit its first
+        // real frame -- once it did, it wrote through that pointer anyway and
+        // took the whole process down with it (`SIGSEGV`), a good ten to
+        // fifteen seconds into the very first real activation this encoder
+        // had ever actually run against. Reserved once, not grown per pass:
+        // `clear()` below drops the *length*, never the *capacity*, so this
+        // stays the one allocation for the life of the thread.
+        let mut mp3 = Vec::with_capacity(FRAMES_PER_PASS * 5 / 4 + 7200);
         while !stop.load(Ordering::Relaxed) {
             let got = ring.read(&mut pcm);
             if got == 0 {

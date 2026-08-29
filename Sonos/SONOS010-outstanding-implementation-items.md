@@ -1,10 +1,10 @@
 # SONOS010: The Full List of What Is Not Yet Implemented
 
-**Development Record — consolidated on `Sonos`, 2026-08-28; nine of eleven items closed the same day by [SONOS011](SONOS011-closing-the-correctness-gaps.md)**
+**Development Record — consolidated on `Sonos`, 2026-08-28; nine of eleven items closed the same day by [SONOS011](SONOS011-closing-the-correctness-gaps.md); item 6 run for the first time the following day, per [SONOS012](SONOS012-real-hardware-findings.md)**
 
 Every gap named across [SONOS002](SONOS002-integration-options.md), [SONOS008](SONOS008-implementation-plan.md), and [SONOS009](SONOS009-implementation-record.md), plus two found by direct code inspection while answering a question about conflicting with Music Assistant — in one place, ranked by how much they matter rather than by which document first named them.
 
-> **Related:** [SONOS009](SONOS009-implementation-record.md) §3 · [SONOS011](SONOS011-closing-the-correctness-gaps.md) · `player/src/sonos.rs`, `player/src/engine.rs`, `player/src/path.rs`
+> **Related:** [SONOS009](SONOS009-implementation-record.md) §3 · [SONOS011](SONOS011-closing-the-correctness-gaps.md) · [SONOS012](SONOS012-real-hardware-findings.md) · `player/src/sonos.rs`, `player/src/engine.rs`, `player/src/path.rs`
 
 ---
 
@@ -22,7 +22,7 @@ Every gap named across [SONOS002](SONOS002-integration-options.md), [SONOS008](S
 
 ## Not yet exercised against reality
 
-**Never run end-to-end against the real Office pair, still true as of `[GDE-SONOS-990]` and left open by the user's own choice.** Every SOAP shape was validated read-only during the survey; the actual write path — `SetAVTransportURI` + `Play` from Vaino, triggered live — has never been executed against physical hardware, deliberately, to avoid disrupting the Music Assistant path just repaired on the household's own speakers. The user will run this personally.
+**Run for the first time against the real Office pair, at the user's own initiative — `[GDE-SONOS-990]`'s gap, partly closed by [SONOS012](SONOS012-real-hardware-findings.md).** Five real bugs found and fixed live (an outright-refused `SetAVTransportURI`, a stream-fetchability race, a SOAP deadlock, a process-crashing encoder buffer bug, and a too-eager loss-of-control watcher); a sixth and larger one — local-device backpressure silently starving whichever output is actually chosen, Sonos included — found and deliberately left unfixed pending review, since it touches the exact function a prior real bug (`[REQ-AUD-142]`) already lived in. Not yet reliably audible end to end; see [SONOS012](SONOS012-real-hardware-findings.md) for the full account, including what was checked against SoCo's and Home Assistant's own Sonos integrations.
 
 **Nothing re-activated a remembered Sonos target on startup, the gap `[GDE-SONOS-980]` named — closed by `[SONOS011]` §1.** `vaino.rs`'s own boot sequence now reads the persisted choice back and calls `sonos::activate` (after re-resolving it through discovery) before the web server starts serving, in the background so a slow or absent speaker never delays the first request.
 
@@ -44,8 +44,8 @@ Every gap named across [SONOS002](SONOS002-integration-options.md), [SONOS008](S
 
 ## What remains
 
-Two items, both requiring something this development environment cannot provide: real physical hardware, and a stopwatch against it. Both are the user's own to run — see [SONOS011](SONOS011-closing-the-correctness-gaps.md) §3.
+**Item 6, in progress rather than closed:** real hardware is now genuinely in the loop (`[SONOS012]`), and it is not yet reliably audible end to end — one found, well-evidenced root cause (`[GDE-SONOS-1230]`, `[SONOS012]` §3) is fixed nowhere yet, deliberately, pending review. **Item 11** (encoder latency) still requires a stopwatch against real hardware nobody has run yet, and remains entirely the user's own to measure.
 
 ---
 
-**Traceability:** `[GDE-SONOS-1010..1040]` · consolidates `[GDE-SONOS-860..880]`, `[GDE-SONOS-980..1000]`, `[GDE-SONOS-290]`, `[GDE-SONOS-400]` · nine of eleven closed by `[GDE-SONOS-1060..1160]` in [SONOS011](SONOS011-closing-the-correctness-gaps.md)
+**Traceability:** `[GDE-SONOS-1010..1040]` · consolidates `[GDE-SONOS-860..880]`, `[GDE-SONOS-980..1000]`, `[GDE-SONOS-290]`, `[GDE-SONOS-400]` · nine of eleven closed by `[GDE-SONOS-1060..1160]` in [SONOS011](SONOS011-closing-the-correctness-gaps.md) · item 6 run, partly closed, by `[GDE-SONOS-1180..1230]` in [SONOS012](SONOS012-real-hardware-findings.md)

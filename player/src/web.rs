@@ -1797,26 +1797,51 @@ async fn sonos_use(ui: Ui, udn: String) -> Response {
             .await;
     }
 
-    let stream = match tokio::task::spawn_blocking({
-        let handle = Arc::clone(&ui.handle);
-        let speaker = speaker.clone();
-        let stream_url = stream_url.clone();
-        move || crate::sonos::activate(&handle, &speaker, &stream_url, crate::BUFFER_FRAMES * 2)
-    })
-    .await
-    {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => return (StatusCode::BAD_REQUEST, e).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    // Superseding whichever generation an earlier session's own watcher
-    // (if any) was started under -- it will see this on its own next poll
-    // and quietly stop, rather than act on a session already replaced
+    // The encoder starts, and `/audio/sonos/stream` becomes fetchable,
+    // *before* either SOAP call -- found necessary against the real Office
+    // pair `[Sonos/SONOS010 §6]`: the coordinator resolves `CurrentURI` as
+    // part of accepting `SetAVTransportURI`/`Play` themselves, so a stream
+    // nobody can subscribe to yet reads as a 404 mid-handshake and both
+    // calls fail. Superseding whichever generation an earlier session's own
+    // watcher (if any) was started under -- it will see this on its own next
+    // poll and quietly stop, rather than act on a session already replaced
     // `[Sonos/SONOS010 §3]`.
+    let (ring, stream) = crate::sonos::start_stream(crate::BUFFER_FRAMES * 2);
     let generation = ui.sonos_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     if let Ok(mut guard) = ui.sonos.lock() {
         *guard = Some(crate::sonos::SonosSession { stream, speaker: speaker.clone() });
+    }
+    // Fed *before* the SOAP call, not after -- found necessary against the
+    // real Office pair `[Sonos/SONOS010 §6]`: `Play` itself reads from the
+    // stream to confirm it before acknowledging, so a ring nothing has fed
+    // yet leaves nothing for that handshake to read at all. A failure below
+    // rolls this back explicitly, which is what keeps the actual property
+    // `[Sonos/SONOS010 §2]` wanted -- the engine never left believing a ring
+    // is still wanted once a failure is known.
+    ui.handle.send(Command::SetSonosRing(Some(ring)));
+
+    match tokio::task::spawn_blocking({
+        let speaker = speaker.clone();
+        let stream_url = stream_url.clone();
+        move || crate::sonos::point_and_play(&speaker, &stream_url)
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            ui.handle.send(Command::SetSonosRing(None));
+            if let Ok(mut guard) = ui.sonos.lock() {
+                *guard = None;
+            }
+            return (StatusCode::BAD_REQUEST, e).into_response();
+        }
+        Err(e) => {
+            ui.handle.send(Command::SetSonosRing(None));
+            if let Ok(mut guard) = ui.sonos.lock() {
+                *guard = None;
+            }
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     }
     spawn_sonos_watcher(ui.clone(), speaker.ip, stream_url, generation);
 
@@ -1891,26 +1916,50 @@ async fn sonos_forget(ui: Ui) -> Response {
 ///
 /// A plain periodic re-read, not the fuller backoff/retry state machine
 /// `path.rs` runs for local output `[SPEC-APS-060]` -- deliberately simpler
-/// for a first version: any failure to confirm, network or mismatch alike,
-/// is treated as "no longer confirmed ours" and falls back once, rather
-/// than distinguishing a transient hiccup from a genuine takeover.
+/// for a first version, but not so simple it mistakes its own network for
+/// a takeover: two consecutive failures to confirm are required before
+/// falling back, not one `[GDE-SONOS-1190]`, found necessary against the
+/// real Office pair, where a single slow poll tore down a session that was
+/// never actually lost -- confirmed still correctly pointed at Vaino, by
+/// hand, moments after the watcher had already given up on it.
 #[cfg(feature = "sonos")]
 fn spawn_sonos_watcher(ui: Ui, ip: std::net::IpAddr, stream_url: String, generation: u64) {
     const POLL: std::time::Duration = std::time::Duration::from_secs(20);
+    // Generous, not the module's ordinary 3 s `[GDE-SONOS-1190]`: the same
+    // real pair that needed `soap::URI_SET_TIMEOUT` raised to 15 s for
+    // `SetAVTransportURI`/`Play` also answers `GetMediaInfo` slowly often
+    // enough that 3 s alone was indistinguishable from a genuine takeover.
+    const CONFIRM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+    // What the coordinator's own `CurrentURI` actually reads back as -- the
+    // `x-rincon-mp3radio://` form `soap::set_uri_and_play` substituted in,
+    // not the plain `http://` address activation was given `[GDE-SONOS-1180]`.
+    // Comparing against the un-substituted form would have this watcher
+    // declare a takeover on every single poll of an otherwise perfectly
+    // healthy session.
+    let expected_uri = crate::sonos::soap::radio_uri(&stream_url);
     tokio::spawn(async move {
+        let mut consecutive_failures = 0u32;
         loop {
             tokio::time::sleep(POLL).await;
             if ui.sonos_generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
                 return; // superseded by a later use/forget -- not this watcher's business any more
             }
             let confirmed = tokio::task::spawn_blocking(move || {
-                crate::sonos::soap::current_uri(ip, std::time::Duration::from_secs(3))
+                crate::sonos::soap::current_uri(ip, CONFIRM_TIMEOUT)
             })
             .await
             .ok()
             .and_then(Result::ok)
-            .is_some_and(|uri| uri == stream_url);
+            .is_some_and(|uri| uri == expected_uri);
             if confirmed {
+                consecutive_failures = 0;
+                continue;
+            }
+            consecutive_failures += 1;
+            if consecutive_failures < 2 {
+                eprintln!(
+                    "sonos: {ip} did not confirm on this poll (attempt {consecutive_failures}); trying again before falling back"
+                );
                 continue;
             }
             // Re-checked right before acting: a `forget` that landed while
@@ -1990,16 +2039,31 @@ pub fn spawn_restore_chosen_speaker(ui: Ui) {
         };
         let stream_url = format!("http://{ip}:{}/audio/sonos/stream", ui.port);
 
-        let stream = match tokio::task::spawn_blocking({
-            let handle = Arc::clone(&ui.handle);
+        // Stream running and fetchable, and fed, *before* the SOAP call --
+        // the same ordering `sonos_use` uses and for the same reason
+        // `[Sonos/SONOS010 §6]`: `Play` itself reads from the stream to
+        // confirm it before acknowledging, so a ring nothing has fed yet
+        // leaves nothing for that handshake to read at all.
+        let (ring, stream) = crate::sonos::start_stream(crate::BUFFER_FRAMES * 2);
+        let generation = ui.sonos_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        if let Ok(mut guard) = ui.sonos.lock() {
+            *guard = Some(crate::sonos::SonosSession { stream, speaker: speaker.clone() });
+        }
+        ui.handle.send(Command::SetSonosRing(Some(ring)));
+
+        match tokio::task::spawn_blocking({
             let speaker = speaker.clone();
             let stream_url = stream_url.clone();
-            move || crate::sonos::activate(&handle, &speaker, &stream_url, crate::BUFFER_FRAMES * 2)
+            move || crate::sonos::point_and_play(&speaker, &stream_url)
         })
         .await
         {
-            Ok(Ok(s)) => s,
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
+                ui.handle.send(Command::SetSonosRing(None));
+                if let Ok(mut guard) = ui.sonos.lock() {
+                    *guard = None;
+                }
                 eprintln!(
                     "sonos: could not resume {} at startup ({e}); staying on local output",
                     speaker.name
@@ -2007,21 +2071,16 @@ pub fn spawn_restore_chosen_speaker(ui: Ui) {
                 return;
             }
             Err(e) => {
+                ui.handle.send(Command::SetSonosRing(None));
+                if let Ok(mut guard) = ui.sonos.lock() {
+                    *guard = None;
+                }
                 eprintln!(
                     "sonos: could not resume {} at startup ({e}); staying on local output",
                     speaker.name
                 );
                 return;
             }
-        };
-
-        // Same bookkeeping `sonos_use` does on a fresh choice: a generation
-        // bump so a stale watcher can never mistake this for its own
-        // session, then the session stored, then the watcher started
-        // `[Sonos/SONOS010 §3]`.
-        let generation = ui.sonos_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        if let Ok(mut guard) = ui.sonos.lock() {
-            *guard = Some(crate::sonos::SonosSession { stream, speaker: speaker.clone() });
         }
         spawn_sonos_watcher(ui.clone(), speaker.ip, stream_url, generation);
         println!("sonos: resumed {} from the last session", speaker.name);

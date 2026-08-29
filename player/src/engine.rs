@@ -1232,6 +1232,19 @@ impl Engine {
         // whether the local device even exists `[Sonos/SONOS008 §6]`. The
         // mixer does not know or care who is on the other end -- only that
         // these are the same samples `path.ring` is about to receive.
+        //
+        // **That independence is not yet real**, found against the real
+        // Office pair `[Sonos/SONOS012 §3]`: `filled` above is sized by
+        // `path.ring.free()` alone (see `room`, above), so a local device
+        // that is `released()` -- mid-reopen, or endlessly re-hunting a
+        // Bluetooth speaker that is simply off -- reports zero free space,
+        // `mix_and_submit` returns `0`, and *nothing gets mixed for anyone*,
+        // Sonos included, for as long as that lasts. Local pacing the whole
+        // chain is deliberate and correct when local is the thing draining
+        // it `[REQ-AUD-142]`; it was never meant to also gate a completely
+        // different, currently-chosen output. Not fixed here -- see
+        // `[Sonos/SONOS012 §3]` for the proposed decoupling, held for review
+        // before it touches this path.
         #[cfg(feature = "sonos")]
         if let Some(r) = &self.sonos_ring {
             r.submit(&self.scratch[..filled]);

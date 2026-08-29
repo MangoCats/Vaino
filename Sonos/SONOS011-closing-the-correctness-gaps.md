@@ -41,6 +41,8 @@
 ## 3. Left open, on purpose
 
 **Never run end-to-end against the real Office pair, still true as `[GDE-SONOS-990]` already said, and still deliberately so.** Every write path built or changed in this pass — activation, deactivation, the loss-of-control watcher's own read, volume forwarding — has been exercised against the SOAP fixtures and unit tests only. The user has said this will be tested personally, against the physical household pair, rather than attempted here.
+>
+> **Addendum, the following day:** run for the first time, by the user, against the real pair. Five of the assumptions above did not survive contact with real hardware — see [SONOS012](SONOS012-real-hardware-findings.md) for the full account, including a larger, still-open finding this pass's own fixtures had no way to catch.
 
 **Encoder latency remains unmeasured, per `[GDE-SONOS-290]`/`[GDE-SONOS-400]`.** Nothing in this pass touched the encoder path; the user has said this will be measured personally, with a stopwatch against the real speaker, rather than attempted here.
 
