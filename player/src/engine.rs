@@ -862,6 +862,24 @@ impl Engine {
                 &overlay,
             );
         }
+        // `[Sonos/SONOS012 §7]` (`GDE-SONOS-1270`): a local listener never
+        // noticed this cut was missing here because `path.ring` above already
+        // carries it -- but nothing told `sonos_ring` a skip happened at all,
+        // so up to its own ~15 s of already-mixed backlog had to drain at
+        // real time (`stream::pacing_delay`, correct on its own) before the
+        // post-skip audio reached the front of the queue. Same overlay, same
+        // treatment: whatever Sonos had queued from the outgoing passage is
+        // cut to the fade and the incoming passage laid over its tail, same
+        // as local gets.
+        #[cfg(feature = "sonos")]
+        if let Some(r) = &self.sonos_ring {
+            r.begin_skip_transition(
+                self.skip_fade_ms,
+                self.skip_lead_ms,
+                Curve::Exponential,
+                &overlay,
+            );
+        }
     }
 
     /// Move to a point inside the passage that is sounding `[REQ-VIS-225]`.
@@ -2231,6 +2249,64 @@ mod tests {
             e.live.iter().map(|l| l.entry.passage_id).collect::<Vec<_>>(),
             before,
             "and returning to local output must not touch it either"
+        );
+
+        let _ = std::fs::remove_file(&wav_a);
+        let _ = std::fs::remove_file(&wav_b);
+    }
+
+    /// **A skip cuts `sonos_ring` too, not only `path.ring`**
+    /// `[Sonos/SONOS012 §7]` (`GDE-SONOS-1270`) -- a local listener never
+    /// noticed `cut_ring_to_incoming` only truncated `path.ring` because
+    /// `begin_skip_transition` there already did the cutting; nothing told
+    /// `sonos_ring` a skip had happened at all, so up to its own ~15 s
+    /// backlog had to drain at real time before the post-skip audio reached
+    /// the front of the queue. Built with `PathHandle::silent()` (no local
+    /// ring at all) so `sonos_ring`'s own free space is what paces the mix
+    /// (`mix_and_submit`'s `sonos_room` branch) and nothing else drains it,
+    /// letting a real backlog build up to prove the cut is real rather than
+    /// coincidental.
+    #[cfg(feature = "sonos")]
+    #[test]
+    fn a_skip_cuts_the_sonos_ring_too() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.skip_fade_ms = 300;
+        e.skip_lead_ms = 50;
+        let fade_samples = (e.skip_fade_ms * 44_100 / 1000) as usize * 2;
+
+        let sonos_ring = crate::output::OutputRing::new(60_000, crate::output::Volume::new(1.0));
+        e.sonos_ring = Some(sonos_ring.clone());
+
+        let wav_a = wav_of(5_000);
+        let mut a = entry(81, wav_a.to_str().unwrap());
+        a.end_ms = 5_000;
+        let wav_b = wav_of(5_000);
+        let mut b = entry(82, wav_b.to_str().unwrap());
+        b.end_ms = 5_000;
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        e.drain_commands();
+
+        assert!(
+            tick_until(&mut e, |_| sonos_ring.buffered() > fade_samples + 5_000),
+            "a real backlog should build up with nothing draining sonos_ring"
+        );
+        let before_skip = e.live.first().map(|l| l.entry.passage_id);
+
+        h.send(Command::Skip);
+        e.drain_commands();
+
+        assert_eq!(
+            e.live.first().map(|l| l.entry.passage_id),
+            Some(82),
+            "skip should have moved on to the second passage"
+        );
+        assert_ne!(before_skip, Some(82), "sanity: it was not already playing the second passage");
+        assert!(
+            sonos_ring.buffered() <= fade_samples,
+            "the sonos ring should be cut to the fade, not left with the old backlog: got {}",
+            sonos_ring.buffered()
         );
 
         let _ = std::fs::remove_file(&wav_a);
