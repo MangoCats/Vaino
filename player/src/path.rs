@@ -274,6 +274,18 @@ fn watch(out: &Output, playing: bool, watch_at: &mut Instant) {
 }
 
 /// Release, wait, reopen -- and only call it recovered if it is audible.
+///
+/// Gated on `playing` for the same reason `watch()` already is
+/// `[Sonos/SONOS012 §3]`: found against the real Office pair, where nothing
+/// here previously consulted `playing` at all, so a local device already
+/// marked failed kept releasing and reopening on its own backoff regardless
+/// of whether local was even the chosen output -- endlessly re-hunting a
+/// Bluetooth speaker that was simply off, for as long as Sonos was active
+/// and had silenced it. `watch()` stops *starting* a new failure while
+/// `!playing`; this stops an *already-armed* one from continuing to run.
+/// The next `SetPlaying(true)` -- Sonos being given up on, a plain pause
+/// ending -- re-arms `watch_at` immediately and this resumes exactly as
+/// before.
 fn recover(
     out: &mut Output,
     playing: bool,
@@ -281,7 +293,7 @@ fn recover(
     backoff: &mut Duration,
     recoveries: &Arc<AtomicU64>,
 ) {
-    if !out.failed() {
+    if !playing || !out.failed() {
         return;
     }
     let now = Instant::now();

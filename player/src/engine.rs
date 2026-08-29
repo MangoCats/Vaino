@@ -552,7 +552,19 @@ impl Engine {
         // managed, so the clock raced while the room stayed silent -- a player
         // that lies about what it is doing, which is the fault this whole
         // effort exists to remove `[PI3-API-030]`.
-        let audible = self.path.audible();
+        //
+        // `path.audible()` answers only for the LOCAL device, which is
+        // exactly wrong once Sonos is the chosen output `[Sonos/SONOS012
+        // §3]`: found against the real Office pair, where a local device
+        // failed all night (a Bluetooth speaker simply never came back) held
+        // this gate closed and stopped the queue advancing even while Sonos
+        // itself was healthy and someone genuinely could be listening to it.
+        // A chosen Sonos ring counts as its own, independent "audible" --
+        // its own loss-of-control watcher (`[Sonos/SONOS010 §3]`) is the
+        // thing already responsible for noticing if that stops being true,
+        // the same observed-not-inferred discipline `[PI3-API-030]` already
+        // asks of local output, just running on its own separate cycle.
+        let audible = self.path.audible() || self.sonos_room().is_some();
         let submitted = if self.playing && audible { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.record_play();
@@ -1185,24 +1197,71 @@ impl Engine {
     ///
     /// Limiting here is also what propagates back-pressure: the stream rings
     /// stay full, so the decoders stop, and the device paces the whole chain.
+    /// Sonos's own free space, when that ring exists -- `None` in a build
+    /// without the feature, or when Sonos is not the chosen output, either
+    /// of which means it has no opinion on how much room the mix needs.
+    #[cfg(feature = "sonos")]
+    fn sonos_room(&self) -> Option<usize> {
+        self.sonos_ring.as_ref().map(|r| r.free())
+    }
+    #[cfg(not(feature = "sonos"))]
+    fn sonos_room(&self) -> Option<usize> {
+        None
+    }
+
     fn mix_and_submit(&mut self) -> usize {
-        // Room is remembered from the last submit rather than asked for again.
-        // Between then and now the callback only ever DRAINS, so the remembered
-        // figure is a lower bound on what is free and writing it always fits --
-        // which is what keeps the assertion below honest. Asking cost a second
-        // lock acquisition on every pass, against a callback that must never
-        // wait for one.
-        let room = match &self.path.ring {
-            Some(o) => {
-                // Refreshed whenever the remembered figure is too small to act
-                // on. It only ever GROWS between submits, so a stale value that
-                // is already large enough needs no confirmation -- but one
-                // below the threshold must be re-read, or a ring that filled up
-                // once would never be topped up again.
-                if self.out_room < Self::MIN_SUBMIT { self.out_room = o.free(); }
-                self.out_room
-            }
-            None => self.scratch.len(),
+        // Whichever ring is actually being drained paces the mix
+        // `[Sonos/SONOS012 §3]`. The ordinary case, by far the most common,
+        // is unchanged: a real, healthy local device drains `path.ring`
+        // continuously -- silenced for Sonos or not -- so pacing on its own
+        // free space is still exactly right there.
+        //
+        // The case that is not unchanged: a `failed()` local ring --
+        // released, mid-reopen, endlessly re-hunting a Bluetooth speaker
+        // that is simply absent -- has nobody draining it at all. Trusting
+        // its `free()` there is indistinguishable from a device that is
+        // full and backed up, and `[REQ-AUD-142]`'s own protection (mixing
+        // more than an output can take permanently discards the surplus)
+        // then starves every output, Sonos included, so long as the hunt
+        // continues. Found against the real Office pair, not reasoned about
+        // in the abstract: the local speaker was off all night, and Sonos
+        // audio stopped in lockstep with `path.ring` filling up.
+        //
+        // Room is remembered from the last submit rather than asked for
+        // again while local is healthy -- between then and now the callback
+        // only ever DRAINS, so the remembered figure is a lower bound on
+        // what is free, which is what keeps the local assertion below
+        // honest. Asking cost a second lock acquisition on every pass,
+        // against a callback that must never wait for one; that reasoning
+        // never applied to the Sonos ring, which is re-read every pass.
+        let local_healthy = matches!(&self.path.ring, Some(o) if !o.failed());
+        // Whether `room` came from an actual consumer's own free space
+        // (local or Sonos) rather than the unconstrained discard-sink
+        // fallback -- only the former is worth the anti-thrash throttle
+        // below; an unconstrained mix has nothing to thrash against.
+        let bounded;
+        let room = if local_healthy {
+            bounded = true;
+            let o = self.path.ring.as_ref().expect("checked by local_healthy");
+            // Refreshed whenever the remembered figure is too small to act
+            // on. It only ever GROWS between submits, so a stale value that
+            // is already large enough needs no confirmation -- but one
+            // below the threshold must be re-read, or a ring that filled up
+            // once would never be topped up again.
+            if self.out_room < Self::MIN_SUBMIT { self.out_room = o.free(); }
+            self.out_room
+        } else if let Some(sonos_free) = self.sonos_room() {
+            bounded = true;
+            sonos_free
+        } else {
+            // Local failed and no Sonos ring either: `tick()`'s own
+            // `audible` gate (`[PI3-API-030]`) does not call this function
+            // in that case at all, so this branch is reachable only if
+            // `mix_and_submit` is ever called from somewhere else -- kept
+            // as the same honest fallback `path.ring == None` already gets
+            // below, rather than assuming a caller this function cannot see.
+            bounded = false;
+            self.scratch.len()
         };
         // Whole frames only; a partial frame would offset every later sample.
         let want = room.min(self.scratch.len()) / self.out_channels * self.out_channels;
@@ -1212,7 +1271,7 @@ impl Engine {
         // appeared since the last pass meant hundreds of passes a second, each
         // taking the output lock, on a machine with four slow cores. The
         // decoders already pace themselves this way `[DECODE_TOPUP_FRAMES]`.
-        if want == 0 || (want < Self::MIN_SUBMIT && self.path.ring.is_some()) {
+        if want == 0 || (want < Self::MIN_SUBMIT && bounded) {
             return 0;
         }
 
@@ -1232,29 +1291,26 @@ impl Engine {
         // whether the local device even exists `[Sonos/SONOS008 §6]`. The
         // mixer does not know or care who is on the other end -- only that
         // these are the same samples `path.ring` is about to receive.
-        //
-        // **That independence is not yet real**, found against the real
-        // Office pair `[Sonos/SONOS012 §3]`: `filled` above is sized by
-        // `path.ring.free()` alone (see `room`, above), so a local device
-        // that is `released()` -- mid-reopen, or endlessly re-hunting a
-        // Bluetooth speaker that is simply off -- reports zero free space,
-        // `mix_and_submit` returns `0`, and *nothing gets mixed for anyone*,
-        // Sonos included, for as long as that lasts. Local pacing the whole
-        // chain is deliberate and correct when local is the thing draining
-        // it `[REQ-AUD-142]`; it was never meant to also gate a completely
-        // different, currently-chosen output. Not fixed here -- see
-        // `[Sonos/SONOS012 §3]` for the proposed decoupling, held for review
-        // before it touches this path.
         #[cfg(feature = "sonos")]
         if let Some(r) = &self.sonos_ring {
             r.submit(&self.scratch[..filled]);
         }
         match &self.path.ring {
-            Some(o) => {
+            Some(o) if local_healthy => {
                 let (taken, free_after) = o.submit(&self.scratch[..filled]);
                 debug_assert_eq!(taken, filled, "output accepted less than it reported free");
                 self.out_room = free_after;
                 taken
+            }
+            // Failed/released: best-effort only, deliberately without the
+            // equality guarantee above `[Sonos/SONOS012 §3]`. `filled` was
+            // sized for whoever IS being drained (Sonos, or nobody); this
+            // ring gets whatever of it happens to fit and nothing chases the
+            // rest, because nothing is currently listening to it anyway. It
+            // resumes pacing normally the moment it recovers.
+            Some(o) => {
+                o.submit(&self.scratch[..filled]);
+                filled
             }
             None => filled, // discard sink: report accepted so callers advance
         }
@@ -2179,6 +2235,70 @@ mod tests {
 
         let _ = std::fs::remove_file(&wav_a);
         let _ = std::fs::remove_file(&wav_b);
+    }
+
+    /// **A local device nobody can drain must not starve Sonos too**
+    /// `[Sonos/SONOS012 §3]` -- found against the real Office pair: a
+    /// Bluetooth speaker absent all night left `path.ring` permanently
+    /// `failed()` (released, mid-reopen, endlessly re-hunting), and mixing
+    /// sized to its own free space alone meant nothing was ever mixed for
+    /// Sonos either, however healthy its own ring was.
+    #[cfg(feature = "sonos")]
+    #[test]
+    fn a_failed_local_ring_does_not_starve_a_healthy_sonos_ring() {
+        let local = crate::output::OutputRing::new(20_000, crate::output::Volume::new(1.0));
+        local.mark_failed(); // as if released, mid-reopen, hunting a device that never appears
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(local), 3);
+
+        let sonos_ring = crate::output::OutputRing::new(20_000, crate::output::Volume::new(1.0));
+        e.sonos_ring = Some(sonos_ring.clone());
+
+        let wav = wav_of(2_000);
+        let mut ent = entry(73, wav.to_str().unwrap());
+        ent.end_ms = 2_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+
+        let mut buf = [0.0f32; 1024];
+        assert!(
+            tick_until(&mut e, |_| sonos_ring.read(&mut buf) > 0),
+            "the sonos ring should receive real audio even though the local ring never will"
+        );
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// **Without Sonos in the picture, a failed local device must still
+    /// stop the queue advancing** `[PI3-API-030]` -- the fix above is
+    /// deliberately narrow. Mixing on into a device known to be broken, with
+    /// nothing else to hear it either, is the exact "player that lies about
+    /// what it is doing" this project already decided to refuse; only a
+    /// second, independently-audible chosen output (Sonos) should be able to
+    /// override that refusal, which is what this test pins down by NOT
+    /// giving it one.
+    #[test]
+    fn a_failed_local_ring_alone_still_stops_the_queue_advancing() {
+        let ring = crate::output::OutputRing::new(20_000, crate::output::Volume::new(1.0));
+        ring.mark_failed();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring), 3);
+
+        let wav = wav_of(2_000);
+        let mut ent = entry(74, wav.to_str().unwrap());
+        ent.end_ms = 2_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        for _ in 0..40 {
+            e.tick();
+        }
+
+        let (id, pos) = e.head_position().expect("admission does not depend on audibility");
+        assert_eq!(id, 74);
+        assert_eq!(
+            pos, 0,
+            "a failed local device with nothing else listening must not advance the clock"
+        );
+        let _ = std::fs::remove_file(&wav);
     }
 
     /// **The clock keeps running after the mixer has finished** `[REQ-VIS-240]`.
