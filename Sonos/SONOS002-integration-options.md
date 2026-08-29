@@ -80,7 +80,7 @@ followed by the same shape for `Play`, `SetVolume` (on `RenderingControl`), and 
 
 1. ~~**`[GDE-SONOS-270]` Which Home Assistant `media_player` entity currently represents the Office pair**~~ — answered in [SONOS003](SONOS003-repair-log.md): `media_player.office`, now added to `hass_players`.
 2. **`[GDE-SONOS-280]` What `media_player.upstairs_bedroom_speaker`** `[GDE-SONOS-100]` **actually is** — confirm it is unrelated before assuming every "Upstairs" reference in the historical logs is about the Office pair.
-3. **`[GDE-SONOS-290]` Which MP3 encoder crate to use for Option B**, and what latency it adds relative to `PassageDecoder`'s own frame cadence — partly answered in [SONOS004](SONOS004-direct-play-requirements.md) (a reasoned RAM estimate; latency itself remains unmeasured), the same honesty `[GDE-MSA-270]` already applied to a different endpoint's per-request cost.
+3. ~~**`[GDE-SONOS-290]` Which MP3 encoder crate to use for Option B**~~ — chosen in [SONOS005](SONOS005-encoder-choice.md): `mp3lame-encoder`. What latency it adds relative to `PassageDecoder`'s own frame cadence remains unmeasured, the same honesty `[GDE-MSA-270]` already applied to a different endpoint's per-request cost.
 
 ---
 
