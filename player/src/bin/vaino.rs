@@ -145,7 +145,15 @@ async fn main() {
         sonos: Arc::new(std::sync::Mutex::new(None)),
         #[cfg(feature = "sonos")]
         port: port as u16,
+        #[cfg(feature = "sonos")]
+        sonos_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
+
+    // Whatever Sonos speaker was still chosen at last shutdown, resumed in
+    // the background -- never worth delaying the first request over
+    // `[Sonos/SONOS010 §5]`.
+    #[cfg(feature = "sonos")]
+    web::spawn_restore_chosen_speaker(ui.clone());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port as u16));
     let listener = match tokio::net::TcpListener::bind(addr).await {

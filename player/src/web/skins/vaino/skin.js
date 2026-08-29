@@ -411,6 +411,14 @@
   // different rows because a speaker can be linked while the audio goes
   // somewhere else entirely, and showing a tick for that is the lie that hid
   // this fault for two days `[PI3-WHY-010]`.
+  //
+  // Sonos speakers are rows in this same list, not a panel of their own
+  // `[Sonos/SONOS010 §7]`: a wrong choice can strand a listener with no way
+  // to hear whether it worked either way `[PI3-UI-030]`, so a Sonos row gets
+  // the identical confirm-or-revert safety net below, not a simpler one just
+  // because it arrived later. A build without `sonos` compiled in simply
+  // never has one to show -- `fetchSonos` answers empty rather than erroring,
+  // since that build serves no `/audio/sonos` route at all.
   const STATE_TEXT = {
     playing:   ['Playing here', null],
     connected: ['Connected, but silent', 'Use this one'],
@@ -423,10 +431,14 @@
   let previous = null;   // the speaker to fall back to, for confirm-or-revert
   let countdown = null;
 
-  function speakerRow(d, output) {
+  function speakerRow(d, output, sonosActive) {
     const li = document.createElement('li');
-    // A device is only 'playing' if the audio is demonstrably reaching it.
-    const playing = d.state === 'connected' && output &&
+    d.kind = 'bt';
+    // A device is only 'playing' if the audio is demonstrably reaching it --
+    // and never while Sonos holds the floor `[Sonos/SONOS010 §1]`: choosing
+    // Sonos silences this device without closing it, so a stale sink match
+    // here is exactly as true and exactly as misleading as it sounds.
+    const playing = !sonosActive && d.state === 'connected' && output &&
                     output.sink && output.sink === d.name;
     const state = playing ? 'playing' : d.state;
     const [label, action] = STATE_TEXT[state] || [state, null];
@@ -452,17 +464,70 @@
       f.type = 'button';
       f.className = 'btforget';
       f.textContent = 'Forget';
-      f.onclick = () => act('forget', d.address);
+      f.onclick = () => act('forget', d);
       li.appendChild(f);
     }
     return li;
   }
 
-  async function act(verb, address) {
+  // One physical unit's channel, or its own name if Sonos never labelled it
+  // -- either is more of an answer than the bonded pair's own room name
+  // gives on its own `[Sonos/SONOS010 §9]`.
+  function memberLabel(m) { return m.channel || m.udn; }
+
+  function sonosRow(s, activeUdn) {
+    const li = document.createElement('li');
+    s.kind = 'sonos';
+    const active = s.udn === activeUdn;
+    const state = active ? 'playing' : 'found';
+    li.className = 'bt ' + state;
+
+    const name = document.createElement('span');
+    name.className = 'btname';
+    name.textContent = s.name;
+    const said = document.createElement('span');
+    said.className = 'btstate';
+    said.textContent = active ? 'Playing here' : 'In range';
+    li.append(name, said);
+
+    // Which physical units make up this choice, named -- shown only past a
+    // single speaker, since a lone unit has nothing worth adding to the room
+    // name it already carries `[Sonos/SONOS010 §9]`.
+    if (s.members && s.members.length > 1) {
+      const sub = document.createElement('span');
+      sub.className = 'btsub';
+      sub.textContent = s.members.map(memberLabel).join(' + ');
+      li.appendChild(sub);
+    }
+
+    if (!active) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Use';
+      b.onclick = () => choose(s, 'use');
+      li.appendChild(b);
+    } else {
+      const f = document.createElement('button');
+      f.type = 'button';
+      f.className = 'btforget';
+      f.textContent = 'Forget';
+      f.onclick = () => act('forget', s);
+      li.appendChild(f);
+    }
+    return li;
+  }
+
+  // One request shape per kind of speaker, dispatched on `device.kind` --
+  // stamped onto every row by `speakerRow`/`sonosRow` above, so nothing
+  // downstream has to re-derive which backend a device came from.
+  async function act(verb, device) {
     hint(verb === 'pair' ? 'Pairing — this takes about half a minute…'
                          : 'Working…');
     try {
-      const r = await fetch(`/audio/speakers/${verb}/${address}`, { method: 'POST' });
+      const url = device.kind === 'sonos'
+        ? `/audio/sonos/${verb}${verb === 'forget' ? '' : '/' + device.udn}`
+        : `/audio/speakers/${verb}/${device.address}`;
+      const r = await fetch(url, { method: 'POST' });
       const body = await r.json().catch(() => null);
       if (!r.ok) { hint(body || 'That did not work.'); return null; }
       return body;
@@ -477,8 +542,8 @@
   // until someone says they can hear it, and an unanswered question puts the
   // old one back rather than leaving a silent appliance.
   async function choose(device, verb) {
-    const before = await sinkNow();
-    const body = await act(verb, device.address);
+    const before = await activeNow();
+    const body = await act(verb, device);
     if (!body) { refresh(); return; }
     if (body.audible === false) {
       hint('Connected, but the sound is not reaching it yet.');
@@ -518,17 +583,41 @@
     // Nothing to go back TO is a real case: the previous sink may have been
     // the dummy, which is to say silence. Reopening is still right -- it is
     // how the player is told to look again.
-    if (back && back.address) await act('use', back.address);
+    if (back && (back.address || back.udn)) await act('use', back);
     else await fetch('/command/reopen-output', { method: 'POST' });
     refresh();
   }
 
-  async function sinkNow() {
+  // The Sonos half of "what is active right now" -- its own fetch, and its
+  // own quiet fallback: a build with no `sonos` feature answers this route
+  // with nothing at all, which must read as "no Sonos speakers", not as a
+  // reason to stop showing Bluetooth ones `[Sonos/SONOS010 §7]`.
+  async function fetchSonos(scan) {
+    try {
+      const r = await fetch(scan ? '/audio/sonos/scan' : '/audio/sonos',
+                            { method: scan ? 'POST' : 'GET' });
+      if (!r.ok) return { speakers: [], active_udn: null };
+      return await r.json();
+    } catch (e) {
+      return { speakers: [], active_udn: null };
+    }
+  }
+
+  async function activeNow() {
+    const sonosBody = await fetchSonos(false);
+    if (sonosBody.active_udn) {
+      const match = (sonosBody.speakers || []).find(s => s.udn === sonosBody.active_udn);
+      if (match) { match.kind = 'sonos'; return match; }
+      // Active but absent from this particular discovery pass -- still
+      // enough identity to ask `use` for it again.
+      return { kind: 'sonos', udn: sonosBody.active_udn, name: 'the Sonos speaker' };
+    }
     try {
       const r = await fetch('/audio/sink');
       const s = await r.json();
       const list = await (await fetch('/audio/speakers')).json();
       const match = (list.devices || []).find(d => d.name === s.sink);
+      if (match) match.kind = 'bt';
       return match || null;
     } catch (e) { return null; }
   }
@@ -539,21 +628,32 @@
     const list = $('bt-list');
     if (scan) hint('Looking for speakers — about twenty seconds…');
     try {
-      const r = await fetch(scan ? '/audio/speakers/scan' : '/audio/speakers',
-                            { method: scan ? 'POST' : 'GET' });
-      const body = await r.json();
+      const [btRes, sonosBody] = await Promise.all([
+        fetch(scan ? '/audio/speakers/scan' : '/audio/speakers',
+              { method: scan ? 'POST' : 'GET' }),
+        fetchSonos(scan),
+      ]);
+      const body = await btRes.json();
       list.textContent = '';
       const devices = body.devices || [];
-      if (!devices.length) {
+      const speakers = sonosBody.speakers || [];
+      const sonosActive = !!sonosBody.active_udn;
+      if (!devices.length && !speakers.length) {
         hint('No speakers known yet. Put yours in pairing mode, then look.');
         return;
       }
-      for (const d of devices) list.appendChild(speakerRow(d, body.output));
+      for (const d of devices) list.appendChild(speakerRow(d, body.output, sonosActive));
+      for (const s of speakers) list.appendChild(sonosRow(s, sonosBody.active_udn));
       if (!scan) {
-        const out = body.output;
-        hint(out && out.dummy
-             ? 'Nothing can hear the music right now.'
-             : out && out.sink ? `Playing on ${out.sink}.` : 'Where the music is playing.');
+        if (sonosActive) {
+          const active = speakers.find(s => s.udn === sonosBody.active_udn);
+          hint(`Playing on ${active ? active.name : 'the Sonos speaker'}.`);
+        } else {
+          const out = body.output;
+          hint(out && out.dummy
+               ? 'Nothing can hear the music right now.'
+               : out && out.sink ? `Playing on ${out.sink}.` : 'Where the music is playing.');
+        }
       } else {
         hint('Pick yours from the list.');
       }
@@ -680,92 +780,10 @@
 
   $('bt-scan').onclick = () => refresh(true);
 
-  // ----------------------------------------------------------------- sonos
-  // A separate list rather than folded into the Bluetooth one above
-  // `[Sonos/SONOS008 §7]`: Bluetooth's confirm-or-revert countdown exists
-  // because a wrong choice there can strand a listener with no way to hear
-  // whether it worked `[PI3-UI-030]` -- a risk a LAN speaker with its own
-  // still-running local output does not carry the same way. Hidden by
-  // default and only ever shown once a fetch to `/audio/sonos` actually
-  // answers, since a build without `sonos` compiled in serves no such
-  // route at all and the skin has no other way to know.
-  function sonosHint(text) { $('sonos-hint').textContent = text; }
-
-  function sonosRow(s, activeUdn) {
-    const li = document.createElement('li');
-    const active = s.udn === activeUdn;
-    li.className = 'bt' + (active ? ' playing' : '');
-    const name = document.createElement('span');
-    name.className = 'btname';
-    name.textContent = s.name;
-    const said = document.createElement('span');
-    said.className = 'btstate';
-    said.textContent = active ? 'Playing' : 'Found';
-    li.append(name, said);
-    if (!active) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = 'Use';
-      b.onclick = () => sonosUse(s);
-      li.appendChild(b);
-    } else {
-      const f = document.createElement('button');
-      f.type = 'button';
-      f.className = 'btforget';
-      f.textContent = 'Forget';
-      f.onclick = () => sonosAct('forget', '');
-      li.appendChild(f);
-    }
-    return li;
-  }
-
-  async function sonosAct(verb, udn) {
-    sonosHint('Working…');
-    try {
-      const r = await fetch(`/audio/sonos/${verb}${udn ? '/' + udn : ''}`, { method: 'POST' });
-      const body = await r.json().catch(() => null);
-      if (!r.ok) { sonosHint(body || 'That did not work.'); return null; }
-      return body;
-    } catch (e) {
-      sonosHint('Could not reach the player.');
-      return null;
-    }
-  }
-
-  async function sonosUse(s) {
-    const body = await sonosAct('use', s.udn);
-    if (body) sonosHint(`Playing on ${s.name}.`);
-    sonosRefresh();
-  }
-
-  async function sonosRefresh(scan) {
-    try {
-      const r = await fetch(scan ? '/audio/sonos/scan' : '/audio/sonos',
-                            { method: scan ? 'POST' : 'GET' });
-      if (!r.ok) { $('sonos').hidden = true; return; } // no `sonos` feature in this build
-      $('sonos').hidden = false;
-      if (scan) sonosHint('Looking for Sonos speakers…');
-      const body = await r.json();
-      const list = $('sonos-list');
-      list.textContent = '';
-      const speakers = body.speakers || [];
-      if (!speakers.length) {
-        sonosHint('No Sonos speakers found on this network yet.');
-        return;
-      }
-      for (const s of speakers) list.appendChild(sonosRow(s, body.active_udn));
-      if (!scan) sonosHint('Direct to a Sonos speaker, in stereo, instead of the local output.');
-    } catch (e) {
-      $('sonos').hidden = true;
-    }
-  }
-
-  $('sonos-scan').onclick = () => sonosRefresh(true);
-
   // Populated when the panel is opened rather than at load: it costs a
   // subprocess on the appliance, and most sessions never open the settings.
   gear.addEventListener('click', () => {
-    if (!$('panel-settings').hidden) { radios(); refresh(); sonosRefresh(); }
+    if (!$('panel-settings').hidden) { radios(); refresh(); }
   });
 
   // --------------------------------------------------------------- history

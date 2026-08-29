@@ -1325,74 +1325,40 @@ impl PlayerStore {
             .ok()
     }
 
-    /// Which output is authoritative right now `[Sonos/SONOS008 §3]`:
-    /// `"local"` or `"sonos"`. Exclusive by construction -- one row, one
-    /// value -- rather than two flags that could disagree with each other.
-    pub fn save_output_mode(&self, mode: &str) -> Result<(), DbError> {
+    /// Which output is chosen, as one `SpeakerId` value rather than
+    /// independent flags that could disagree `[Sonos/SONOS010 §10]` --
+    /// `path::SpeakerId` is plain data, not gated behind the `sonos`
+    /// feature, so this compiles and round-trips a stored choice
+    /// regardless of which features the reading build was compiled with
+    /// `[GDE-SONOS-860]`.
+    pub fn save_chosen_speaker(&self, id: &crate::path::SpeakerId) -> Result<(), DbError> {
+        let json = serde_json::to_string(id).map_err(|e| DbError::Query(e.to_string()))?;
         self.conn
             .execute(
                 "INSERT INTO player_settings (key, value, updated_at)
-                 VALUES ('output_mode', ?1, datetime('now'))
+                 VALUES ('chosen_speaker', ?1, datetime('now'))
                  ON CONFLICT(key) DO UPDATE SET
                      value = excluded.value, updated_at = excluded.updated_at",
-                rusqlite::params![mode],
+                rusqlite::params![json],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// `"local"` when nothing has ever chosen otherwise -- the same
-    /// fall-back-to-doing-nothing contract `load_speaker_address` keeps.
-    pub fn load_output_mode(&self) -> String {
+    /// `SpeakerId::Local` when nothing has ever chosen otherwise, or when
+    /// the stored value can no longer be parsed -- the same
+    /// fall-back-to-doing-nothing contract `load_speaker_address` keeps,
+    /// extended to "a malformed row is not a reason to refuse to start."
+    pub fn load_chosen_speaker(&self) -> crate::path::SpeakerId {
         self.conn
             .query_row(
-                "SELECT value FROM player_settings WHERE key = 'output_mode'",
+                "SELECT value FROM player_settings WHERE key = 'chosen_speaker'",
                 [],
-                |r| r.get(0),
-            )
-            .unwrap_or_else(|_| "local".to_string())
-    }
-
-    /// The Sonos speaker last chosen through `use`, if any
-    /// `[Sonos/SONOS008 §3]`. Stored as the small JSON object
-    /// `sonos::SonosTarget` serialises to -- one row, not a table, the same
-    /// reasoning `speaker_address` already uses for a single remembered
-    /// choice.
-    pub fn save_sonos_target(&self, target_json: &str) -> Result<(), DbError> {
-        self.conn
-            .execute(
-                "INSERT INTO player_settings (key, value, updated_at)
-                 VALUES ('sonos_target', ?1, datetime('now'))
-                 ON CONFLICT(key) DO UPDATE SET
-                     value = excluded.value, updated_at = excluded.updated_at",
-                rusqlite::params![target_json],
-            )
-            .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
-    }
-
-    /// The raw JSON, left for the caller to deserialise -- `db.rs` does not
-    /// otherwise know about `sonos::SonosTarget`'s shape, and `sonos` is
-    /// behind its own feature gate `[Sonos/SONOS008 §9]`, which this module
-    /// is not.
-    pub fn load_sonos_target(&self) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT value FROM player_settings WHERE key = 'sonos_target'",
-                [],
-                |r| r.get(0),
+                |r| r.get::<_, String>(0),
             )
             .ok()
-    }
-
-    /// Clears the remembered Sonos target and falls back to local output --
-    /// `forget`'s whole effect, in one statement.
-    pub fn clear_sonos_target(&self) -> Result<(), DbError> {
-        self.conn
-            .execute("DELETE FROM player_settings WHERE key = 'sonos_target'", [])
-            .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))?;
-        self.save_output_mode("local")
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default()
     }
 
     /// Set or clear "flag this for review" on a recording or a passage
@@ -3585,31 +3551,76 @@ mod tests {
         let _ = std::fs::remove_file(&dir);
     }
 
-    /// `[Sonos/SONOS008 §3]`: `output_mode` defaults to `"local"` on a
-    /// library nothing has ever chosen Sonos on -- the same "fall back to
-    /// doing nothing" contract every other persisted choice here keeps.
+    /// `[Sonos/SONOS010 §10]`: `SpeakerId` defaults to `Local` on a library
+    /// nothing has ever chosen Sonos on -- the same "fall back to doing
+    /// nothing" contract every other persisted choice here keeps -- and a
+    /// chosen Sonos target, members and all, round-trips exactly.
     #[test]
-    fn output_mode_defaults_local_and_a_chosen_target_round_trips() {
+    fn chosen_speaker_defaults_local_and_a_sonos_target_round_trips() {
+        use crate::path::{SonosMember, SonosTarget, SpeakerId};
+
         let dir = std::env::temp_dir().join(format!("vaino_sonos_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&dir);
         let st = PlayerStore::open(&dir).unwrap();
 
-        assert_eq!(st.load_output_mode(), "local");
-        assert_eq!(st.load_sonos_target(), None);
+        assert_eq!(st.load_chosen_speaker(), SpeakerId::Local);
 
-        let target = r#"{"udn":"RINCON_347E5CCAE44A01400","name":"Office","last_ip":"192.168.67.56"}"#;
-        st.save_sonos_target(target).unwrap();
-        st.save_output_mode("sonos").unwrap();
-        assert_eq!(st.load_output_mode(), "sonos");
-        assert_eq!(st.load_sonos_target().as_deref(), Some(target));
+        let target = SpeakerId::Sonos(SonosTarget {
+            udn: "RINCON_347E5CCAE44A01400".into(),
+            name: "Office".into(),
+            last_ip: "192.168.67.56".parse().unwrap(),
+            members: vec![
+                SonosMember { udn: "RINCON_347E5CCAE44A01400".into(), channel: "RF".into() },
+                SonosMember { udn: "RINCON_347E5CC5950801400".into(), channel: "LF".into() },
+            ],
+        });
+        st.save_chosen_speaker(&target).unwrap();
+        assert_eq!(st.load_chosen_speaker(), target);
 
-        // `forget` clears the target AND falls back to local in one step --
-        // a target lingering behind a mode already switched away from it
-        // would be exactly the stale-registration confusion `Sonos/SONOS001`
-        // found in a real Music Assistant instance.
-        st.clear_sonos_target().unwrap();
-        assert_eq!(st.load_output_mode(), "local");
-        assert_eq!(st.load_sonos_target(), None);
+        // A later choice replaces the row rather than adding to it -- the
+        // same property `a_chosen_speaker_round_trips_and_a_later_choice_
+        // replaces_it` already established for `speaker_address`.
+        st.save_chosen_speaker(&SpeakerId::Local).unwrap();
+        assert_eq!(st.load_chosen_speaker(), SpeakerId::Local);
+        let n: i64 = st
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM player_settings WHERE key = 'chosen_speaker'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "a later choice replaces the row rather than adding to it");
+
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A row written before members existed reads as an empty list, not a
+    /// parse failure that silently falls back to `Local` and loses the
+    /// choice entirely `[Sonos/SONOS010 §9]`.
+    #[test]
+    fn a_target_saved_before_members_existed_still_loads() {
+        use crate::path::SpeakerId;
+
+        let dir = std::env::temp_dir().join(format!("vaino_sonos_old_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+
+        let old_shape = r#"{"kind":"sonos","udn":"RINCON_X","name":"Office","last_ip":"192.168.67.56"}"#;
+        st.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at) VALUES ('chosen_speaker', ?1, datetime('now'))",
+                rusqlite::params![old_shape],
+            )
+            .unwrap();
+
+        match st.load_chosen_speaker() {
+            SpeakerId::Sonos(t) => {
+                assert_eq!(t.udn, "RINCON_X");
+                assert!(t.members.is_empty());
+            }
+            SpeakerId::Local => panic!("an old-shaped row must still parse as Sonos, not fall back"),
+        }
 
         let _ = std::fs::remove_file(&dir);
     }

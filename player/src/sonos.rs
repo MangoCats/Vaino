@@ -61,9 +61,12 @@ impl Verb {
     }
 }
 
+pub use crate::path::{SonosMember, SonosTarget};
+
 /// One Sonos target, already resolved to its group coordinator
 /// `[Sonos/SONOS008 §4]` -- a bonded stereo pair's satellite never appears
-/// here, so nothing downstream has to know pairs exist at all.
+/// as its own entry here, so nothing downstream has to know pairs exist at
+/// all; it appears instead, named, in `members` `[Sonos/SONOS010 §9]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SonosSpeaker {
     /// `RINCON_...` -- durable across an IP change, a reboot, a room rename.
@@ -71,18 +74,25 @@ pub struct SonosSpeaker {
     /// The room name as Sonos itself reports it, at the moment of discovery.
     pub name: String,
     pub ip: IpAddr,
+    /// Every unit in the group, coordinator included -- "Office" is one row
+    /// to choose, but a listener asking "which two speakers is that" gets a
+    /// real answer instead of a guess from the name.
+    pub members: Vec<SonosMember>,
 }
 
-/// What is persisted for a chosen Sonos target `[Sonos/SONOS008 §3]`.
-///
-/// `last_ip` is a hint for logging and a first guess, never trusted for
-/// control without being re-confirmed against a fresh discovery -- the same
-/// reasoning `[GDE-SONOS-760]` already gives for not binding by address.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SonosTarget {
-    pub udn: String,
-    pub name: String,
-    pub last_ip: IpAddr,
+impl SonosSpeaker {
+    /// The persisted shape -- `last_ip` named for what it actually is
+    /// `[GDE-SONOS-760]`: a hint for logging and a first guess, never
+    /// trusted for control without being re-confirmed against a fresh
+    /// discovery.
+    pub fn as_target(&self) -> SonosTarget {
+        SonosTarget {
+            udn: self.udn.clone(),
+            name: self.name.clone(),
+            last_ip: self.ip,
+            members: self.members.clone(),
+        }
+    }
 }
 
 /// Run a verb against the discovered/persisted world. `Err` carries a
@@ -170,8 +180,13 @@ pub fn activate(
 ) -> Result<stream::SonosStream, String> {
     let ring = crate::output::OutputRing::new(ring_capacity, crate::output::Volume::new(1.0));
     let running = stream::SonosStream::start(ring.clone());
-    engine.send(crate::engine::Command::SetSonosRing(Some(ring)));
+    // The SOAP call first, `SetSonosRing` only once it has actually
+    // succeeded `[Sonos/SONOS010 §2]`: sending it earlier left the engine
+    // believing a ring was wanted after a failed call had already stopped
+    // the encoder that would have fed it -- a real state the engine and the
+    // caller disagreed about, found by inspection rather than by a report.
     soap::set_uri_and_play(speaker.ip, stream_url, Duration::from_secs(5))?;
+    engine.send(crate::engine::Command::SetSonosRing(Some(ring)));
     Ok(running)
 }
 
@@ -343,6 +358,30 @@ pub mod soap {
         Ok(())
     }
 
+    /// What the coordinator's own `AVTransport` currently believes
+    /// `CurrentURI` is -- the one fact that says whether Vaino is still
+    /// actually in control, or whether something else already took over
+    /// with no other signal at all `[Sonos/SONOS010 §3]`. The same read
+    /// already used, by hand, throughout `Sonos/SONOS001`'s own survey.
+    pub fn current_uri(ip: IpAddr, timeout: Duration) -> Result<String, String> {
+        let xml =
+            post_raw(ip, AVTRANSPORT_PATH, AVTRANSPORT, "GetMediaInfo", "<InstanceID>0</InstanceID>", timeout)?;
+        extract_tag(&xml, "CurrentURI")
+            .ok_or_else(|| format!("{ip} answered GetMediaInfo with no CurrentURI in it"))
+    }
+
+    /// `<Tag>value</Tag>` -- SOAP's own XML entities already decoded by the
+    /// time this reads a response, so a plain string search is enough for
+    /// the one field this needs, the same reasoning `topology`'s own
+    /// hand-rolled parser already uses `[GDE-SONOS-020]`.
+    fn extract_tag(xml: &str, tag: &str) -> Option<String> {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        let start = xml.find(&open)? + open.len();
+        let end = xml[start..].find(&close)? + start;
+        Some(xml[start..end].to_string())
+    }
+
     /// `0..=100`, the range every Sonos unit's own `Master` volume uses.
     pub fn set_volume(ip: IpAddr, percent: u8, timeout: Duration) -> Result<(), String> {
         let body = format!(
@@ -363,6 +402,26 @@ pub mod soap {
             assert_eq!(xml_escape("<a & b>\"x\""), "&lt;a &amp; b&gt;&quot;x&quot;");
         }
 
+        /// The exact shape `GetMediaInfo` answered with while surveying the
+        /// real pair `[GDE-SONOS-040]`.
+        #[test]
+        fn current_uri_reads_out_of_a_real_get_media_info_response() {
+            let body = "<u:GetMediaInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">\
+                         <NrTracks>1</NrTracks><MediaDuration>NOT_IMPLEMENTED</MediaDuration>\
+                         <CurrentURI>http://192.168.67.70:8097/flow/media_player.office/x.mp3</CurrentURI>\
+                         <CurrentURIMetaData></CurrentURIMetaData></u:GetMediaInfoResponse>";
+            assert_eq!(
+                extract_tag(body, "CurrentURI").as_deref(),
+                Some("http://192.168.67.70:8097/flow/media_player.office/x.mp3")
+            );
+        }
+
+        #[test]
+        fn a_response_with_no_such_tag_reads_as_absent_not_a_panic() {
+            assert_eq!(extract_tag("<Envelope></Envelope>", "CurrentURI"), None);
+            assert_eq!(extract_tag("", "CurrentURI"), None);
+        }
+
         #[test]
         fn a_stream_url_with_reserved_characters_survives_the_envelope() {
             let url = "http://vainopi:5720/sonos-stream?x=1&y=2";
@@ -380,7 +439,7 @@ pub mod topology {
     use std::net::IpAddr;
     use std::time::Duration;
 
-    use super::SonosSpeaker;
+    use super::{SonosMember, SonosSpeaker};
 
     const ZGT_SERVICE: &str = "urn:schemas-upnp-org:service:ZoneGroupTopology:1";
     const ZGT_PATH: &str = "/ZoneGroupTopology/Control";
@@ -418,7 +477,19 @@ pub mod topology {
         let mut out = Vec::new();
         for group in split_between(&decoded, "<ZoneGroup ", "</ZoneGroup>") {
             let Some(coordinator_udn) = attr(group, "Coordinator") else { continue };
-            for member in split_between(group, "<ZoneGroupMember ", "/>") {
+            let raw_members = split_between(group, "<ZoneGroupMember ", "/>");
+
+            // Every member in a group carries the same ChannelMapSet -- one
+            // reading, from whichever member has it, is enough for the
+            // whole group's member list `[Sonos/SONOS010 §9]`.
+            let channel_map = raw_members
+                .iter()
+                .find_map(|m| attr(m, "ChannelMapSet"))
+                .map(|s| parse_channel_map(&s))
+                .unwrap_or_default();
+
+            let mut coordinator = None;
+            for member in &raw_members {
                 let Some(uuid) = attr(member, "UUID") else { continue };
                 if uuid != coordinator_udn {
                     continue; // a satellite, or another group's member entirely
@@ -435,10 +506,44 @@ pub mod topology {
                 else {
                     continue;
                 };
-                out.push(SonosSpeaker { udn: uuid, name, ip });
+                coordinator = Some(SonosSpeaker { udn: uuid, name, ip, members: Vec::new() });
             }
+            let Some(mut speaker) = coordinator else { continue };
+
+            // Every unit named in the group, coordinator included, labelled
+            // by its own channel where the map says one -- "Coordinator" for
+            // a lone unit's own single-member group, which carries no
+            // ChannelMapSet worth reading at all.
+            speaker.members = raw_members
+                .iter()
+                .filter_map(|m| attr(m, "UUID"))
+                .map(|udn| {
+                    let channel = channel_map
+                        .iter()
+                        .find(|(u, _)| *u == udn)
+                        .map(|(_, c)| c.clone())
+                        .unwrap_or_else(|| {
+                            if udn == coordinator_udn { "Coordinator".into() } else { "?".into() }
+                        });
+                    SonosMember { udn, channel }
+                })
+                .collect();
+            out.push(speaker);
         }
         out
+    }
+
+    /// `RINCON_A:RF,RF;RINCON_B:LF,LF` -> `[(RINCON_A, RF), (RINCON_B, LF)]`
+    /// -- takes the first of each pair's two channel labels, which are
+    /// identical in every response measured `[GDE-SONOS-020]`.
+    fn parse_channel_map(s: &str) -> Vec<(String, String)> {
+        s.split(';')
+            .filter_map(|entry| {
+                let (udn, chans) = entry.split_once(':')?;
+                let chan = chans.split(',').next()?;
+                Some((udn.to_string(), chan.to_string()))
+            })
+            .collect()
     }
 
     /// Every substring starting with `open` and ending at the next `close`,
@@ -484,6 +589,21 @@ pub mod topology {
             assert_eq!(office.udn, "RINCON_347E5CCAE44A01400");
             assert_eq!(office.name, "Office");
             assert_eq!(office.ip, "192.168.67.56".parse::<std::net::IpAddr>().unwrap());
+        }
+
+        /// `[Sonos/SONOS010 §9]`: the satellite is invisible as its own
+        /// selectable entry, but still named, with its own channel, inside
+        /// the coordinator's `members` -- read from the same real fixture,
+        /// not invented.
+        #[test]
+        fn both_units_of_the_bonded_pair_appear_as_members() {
+            let found = parse_coordinators(REAL_RESPONSE);
+            let members = &found[0].members;
+            assert_eq!(members.len(), 2, "a stereo pair has two members, not one");
+            let coordinator = members.iter().find(|m| m.udn == "RINCON_347E5CCAE44A01400").unwrap();
+            assert_eq!(coordinator.channel, "RF");
+            let satellite = members.iter().find(|m| m.udn == "RINCON_347E5CC5950801400").unwrap();
+            assert_eq!(satellite.channel, "LF");
         }
 
         #[test]

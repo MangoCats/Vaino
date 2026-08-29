@@ -257,6 +257,10 @@ body:has(#panel-history:not([hidden])) main {
 }
 #bt-list .btname  { flex: 1; font-weight: 600; }
 #bt-list .btstate { opacity: .75; font-size: .85em; }
+/* Which physical units a Sonos row's own name is standing in for
+   `[Sonos/SONOS010 §9]` -- present only past a single speaker, so it must
+   read as an aside, not compete with the state text beside it. */
+#bt-list .btsub  { opacity: .55; font-size: .8em; white-space: nowrap; }
 #bt-list li.playing   { border-left-color: #4caf50; }
 #bt-list li.connected { border-left-color: #e0a030; }
 #bt-list li.stale     { border-left-color: #c05050; }

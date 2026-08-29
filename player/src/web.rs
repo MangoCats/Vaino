@@ -50,6 +50,12 @@ pub struct Ui {
     /// `[Sonos/SONOS008 §6]`.
     #[cfg(feature = "sonos")]
     pub port: u16,
+    /// Bumped on every `use`/`forget` `[Sonos/SONOS010 §3]`, so a
+    /// loss-of-control watcher started for an earlier session can tell it
+    /// has been superseded and quietly stop, rather than act on a session
+    /// that is no longer the one running.
+    #[cfg(feature = "sonos")]
+    pub sonos_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// How often a connected browser is sent a snapshot. Fast enough that the
@@ -417,7 +423,30 @@ async fn set_volume(
     axum::extract::Path(db): axum::extract::Path<f32>,
 ) -> StatusCode {
     ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
+    // The mixer's own gain already applies to whatever `sonos_ring` carries
+    // `[Sonos/SONOS010 §4]` too -- but a Sonos speaker also has its own,
+    // separate hardware volume, which nothing before this touched. Told
+    // in the background, never awaited: a volume drag happens many times a
+    // second, and a slow or absent network response must not make the
+    // local control feel laggy over a speaker it does not even affect.
+    #[cfg(feature = "sonos")]
+    forward_volume_to_sonos(&ui, db);
     StatusCode::NO_CONTENT
+}
+
+/// dB (`-72.0..=0.0`, Vaino's own perceptual curve `[REQ-AUD-156]`) mapped
+/// onto Sonos's own `0..=100` `Master` volume -- linearly, since both ends
+/// are already perceptual scales rather than raw amplitude, not a precise
+/// loudness match between the two.
+#[cfg(feature = "sonos")]
+fn forward_volume_to_sonos(ui: &Ui, db: f32) {
+    let Ok(guard) = ui.sonos.lock() else { return };
+    let Some(session) = guard.as_ref() else { return };
+    let ip = session.speaker.ip;
+    let percent = (((db + 72.0) / 72.0) * 100.0).clamp(0.0, 100.0) as u8;
+    std::thread::spawn(move || {
+        let _ = crate::sonos::soap::set_volume(ip, percent, std::time::Duration::from_secs(3));
+    });
 }
 
 /// Start the underrun count again from now `[REQ-VIS-230]`.
@@ -1759,16 +1788,19 @@ async fn sonos_use(ui: Ui, udn: String) -> Response {
     let stream_url = format!("http://{ip}:{}/audio/sonos/stream", ui.port);
 
     // Whatever was running before is stopped first, so the coordinator
-    // never receives two SetAVTransportURI calls in flight at once.
-    if let Ok(mut guard) = ui.sonos.lock() {
-        if let Some(old) = guard.take() {
-            crate::sonos::deactivate(&ui.handle, old.speaker.ip);
-        }
+    // never receives two SetAVTransportURI calls in flight at once. Off the
+    // async runtime's own thread: `deactivate` makes a blocking SOAP call.
+    let old = ui.sonos.lock().ok().and_then(|mut g| g.take());
+    if let Some(old) = old {
+        let handle = Arc::clone(&ui.handle);
+        let _ = tokio::task::spawn_blocking(move || crate::sonos::deactivate(&handle, old.speaker.ip))
+            .await;
     }
 
     let stream = match tokio::task::spawn_blocking({
         let handle = Arc::clone(&ui.handle);
         let speaker = speaker.clone();
+        let stream_url = stream_url.clone();
         move || crate::sonos::activate(&handle, &speaker, &stream_url, crate::BUFFER_FRAMES * 2)
     })
     .await
@@ -1778,35 +1810,37 @@ async fn sonos_use(ui: Ui, udn: String) -> Response {
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
+    // Superseding whichever generation an earlier session's own watcher
+    // (if any) was started under -- it will see this on its own next poll
+    // and quietly stop, rather than act on a session already replaced
+    // `[Sonos/SONOS010 §3]`.
+    let generation = ui.sonos_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     if let Ok(mut guard) = ui.sonos.lock() {
         *guard = Some(crate::sonos::SonosSession { stream, speaker: speaker.clone() });
     }
+    spawn_sonos_watcher(ui.clone(), speaker.ip, stream_url, generation);
 
     // Best-effort, the same posture `speaker_verb_on` already uses for its
     // own remembered choice: a listener whose speaker just started working
     // should not be told it failed over a bookkeeping write.
-    let target = crate::sonos::SonosTarget {
-        udn: speaker.udn.clone(),
-        name: speaker.name.clone(),
-        last_ip: speaker.ip,
-    };
-    if let Ok(json) = serde_json::to_string(&target) {
-        let db = ui.db.clone();
-        let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
-            Ok(store) => {
-                if let Err(e) = store.save_sonos_target(&json) {
-                    eprintln!("save sonos target: {e}");
-                }
-                if let Err(e) = store.save_output_mode("sonos") {
-                    eprintln!("save output mode: {e}");
-                }
+    let chosen = crate::path::SpeakerId::Sonos(speaker.as_target());
+    let db = ui.db.clone();
+    let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
+        Ok(store) => {
+            if let Err(e) = store.save_chosen_speaker(&chosen) {
+                eprintln!("save chosen speaker: {e}");
             }
-            Err(e) => eprintln!("save sonos target: {e}"),
-        })
-        .await;
-    }
+        }
+        Err(e) => eprintln!("save chosen speaker: {e}"),
+    })
+    .await;
 
-    axum::Json(serde_json::json!({"ok": true, "speaker": speaker})).into_response()
+    // `audible: true` for the same reason `bt_reply` always carries the
+    // field `[PI3-API-020]`: the settings panel's confirm-or-revert flow
+    // reads `body.audible` uniformly across both kinds of speaker
+    // `[Sonos/SONOS010 §7]`, and the SOAP call above already *is* this
+    // path's proof of reachability -- there is no separate check left to run.
+    axum::Json(serde_json::json!({"ok": true, "speaker": speaker, "audible": true})).into_response()
 }
 
 /// Stop whatever Sonos session is running and fall back to local output --
@@ -1815,23 +1849,183 @@ async fn sonos_use(ui: Ui, udn: String) -> Response {
 /// gives a Bluetooth choice `[PI3-UI-020]`.
 #[cfg(feature = "sonos")]
 async fn sonos_forget(ui: Ui) -> Response {
-    if let Ok(mut guard) = ui.sonos.lock() {
-        if let Some(old) = guard.take() {
-            crate::sonos::deactivate(&ui.handle, old.speaker.ip);
-        }
+    // Bumped first: a watcher from the session about to be torn down must
+    // see this on its very next poll and quietly stop, never act on a
+    // session `forget` already ended `[Sonos/SONOS010 §3]`.
+    ui.sonos_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // `deactivate`'s own `SetSonosRing(None)` already restores local
+    // audibility immediately `[Sonos/SONOS010 §1]` -- a further
+    // `ReopenOutput` here would only cost the device a needless
+    // release-and-reopen cycle (~1 s, per `path.rs`'s own `SETTLE`) for a
+    // device that was never actually closed, only muted.
+    let old = ui.sonos.lock().ok().and_then(|mut g| g.take());
+    if let Some(old) = old {
+        let handle = Arc::clone(&ui.handle);
+        // Off the async runtime's own thread: `deactivate` makes a blocking
+        // SOAP call, which must never run directly on a tokio worker.
+        let _ = tokio::task::spawn_blocking(move || crate::sonos::deactivate(&handle, old.speaker.ip))
+            .await;
     }
     let db = ui.db.clone();
     let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
         Ok(store) => {
-            if let Err(e) = store.clear_sonos_target() {
-                eprintln!("clear sonos target: {e}");
+            if let Err(e) = store.save_chosen_speaker(&crate::path::SpeakerId::Local) {
+                eprintln!("save chosen speaker: {e}");
             }
         }
-        Err(e) => eprintln!("clear sonos target: {e}"),
+        Err(e) => eprintln!("save chosen speaker: {e}"),
     })
     .await;
-    ui.handle.send(Command::ReopenOutput);
     axum::Json(serde_json::json!({"ok": true})).into_response()
+}
+
+/// Detects losing the speaker to another controller `[Sonos/SONOS010 §3]`.
+///
+/// Sonos has no reservation concept: Music Assistant, the Sonos app, or an
+/// automation can call `SetAVTransportURI` against the same coordinator at
+/// any time, with no signal back to Vaino at all. Without this, Vaino's own
+/// state would keep saying "active" indefinitely while the speaker played
+/// something else -- exactly the gap `[SPEC-APS-030]` ("status must be
+/// observed, never inferred") already exists to close for local output,
+/// not carried over here until now.
+///
+/// A plain periodic re-read, not the fuller backoff/retry state machine
+/// `path.rs` runs for local output `[SPEC-APS-060]` -- deliberately simpler
+/// for a first version: any failure to confirm, network or mismatch alike,
+/// is treated as "no longer confirmed ours" and falls back once, rather
+/// than distinguishing a transient hiccup from a genuine takeover.
+#[cfg(feature = "sonos")]
+fn spawn_sonos_watcher(ui: Ui, ip: std::net::IpAddr, stream_url: String, generation: u64) {
+    const POLL: std::time::Duration = std::time::Duration::from_secs(20);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(POLL).await;
+            if ui.sonos_generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return; // superseded by a later use/forget -- not this watcher's business any more
+            }
+            let confirmed = tokio::task::spawn_blocking(move || {
+                crate::sonos::soap::current_uri(ip, std::time::Duration::from_secs(3))
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .is_some_and(|uri| uri == stream_url);
+            if confirmed {
+                continue;
+            }
+            // Re-checked right before acting: a `forget` that landed while
+            // the SOAP call was in flight must still win over this watcher
+            // declaring a loss for a session that, by now, no longer exists.
+            if ui.sonos_generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            eprintln!(
+                "sonos: {ip} is no longer playing what Vaino sent it; falling back to local output"
+            );
+            if let Ok(mut guard) = ui.sonos.lock() {
+                *guard = None;
+            }
+            ui.handle.send(Command::SetSonosRing(None));
+            return;
+        }
+    });
+}
+
+/// Re-activates a remembered Sonos target at startup, so a listener whose
+/// speaker was still chosen when Vaino last stopped does not have to visit
+/// the settings panel again to get it back `[Sonos/SONOS010 §5]`.
+///
+/// Runs in the background, off the accept loop: discovery and the SOAP call
+/// it may lead to can together take several seconds, and nothing about
+/// serving a browser's first request should wait on a speaker that might not
+/// even be powered on this morning. Local output is never muted unless and
+/// until this actually succeeds, so a listener gets sound either way.
+#[cfg(feature = "sonos")]
+pub fn spawn_restore_chosen_speaker(ui: Ui) {
+    tokio::spawn(async move {
+        let db = ui.db.clone();
+        let chosen = tokio::task::spawn_blocking(move || {
+            crate::db::PlayerStore::open(&db).map(|store| store.load_chosen_speaker())
+        })
+        .await;
+        let target = match chosen {
+            Ok(Ok(crate::path::SpeakerId::Sonos(target))) => target,
+            Ok(Ok(crate::path::SpeakerId::Local)) => return,
+            Ok(Err(e)) => {
+                eprintln!("sonos: could not read the remembered speaker ({e}); staying on local output");
+                return;
+            }
+            Err(e) => {
+                eprintln!("sonos: could not read the remembered speaker ({e}); staying on local output");
+                return;
+            }
+        };
+
+        // Re-resolved by discovery, never the persisted `last_ip` directly
+        // `[GDE-SONOS-760]`: the speaker may have moved, been renamed, or
+        // simply be off this morning, and any of those must read as "not
+        // found," not send a stream nobody asked for to whatever now holds
+        // that address.
+        let udn = target.udn.clone();
+        let found = tokio::task::spawn_blocking(move || {
+            crate::sonos::discover(std::time::Duration::from_secs(3))
+                .into_iter()
+                .find(|s| s.udn == udn)
+        })
+        .await
+        .unwrap_or(None);
+        let Some(speaker) = found else {
+            eprintln!(
+                "sonos: remembered speaker {} was not found on the network at startup; staying on local output",
+                target.name
+            );
+            return;
+        };
+
+        let Some(ip) = crate::sonos::local_ip() else {
+            eprintln!(
+                "sonos: could not determine this machine's own address; staying on local output"
+            );
+            return;
+        };
+        let stream_url = format!("http://{ip}:{}/audio/sonos/stream", ui.port);
+
+        let stream = match tokio::task::spawn_blocking({
+            let handle = Arc::clone(&ui.handle);
+            let speaker = speaker.clone();
+            let stream_url = stream_url.clone();
+            move || crate::sonos::activate(&handle, &speaker, &stream_url, crate::BUFFER_FRAMES * 2)
+        })
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                eprintln!(
+                    "sonos: could not resume {} at startup ({e}); staying on local output",
+                    speaker.name
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!(
+                    "sonos: could not resume {} at startup ({e}); staying on local output",
+                    speaker.name
+                );
+                return;
+            }
+        };
+
+        // Same bookkeeping `sonos_use` does on a fresh choice: a generation
+        // bump so a stale watcher can never mistake this for its own
+        // session, then the session stored, then the watcher started
+        // `[Sonos/SONOS010 §3]`.
+        let generation = ui.sonos_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        if let Ok(mut guard) = ui.sonos.lock() {
+            *guard = Some(crate::sonos::SonosSession { stream, speaker: speaker.clone() });
+        }
+        spawn_sonos_watcher(ui.clone(), speaker.ip, stream_url, generation);
+        println!("sonos: resumed {} from the last session", speaker.name);
+    });
 }
 
 /// The continuous MP3 stream itself -- what a Sonos coordinator's own

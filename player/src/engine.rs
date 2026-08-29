@@ -582,7 +582,20 @@ impl Engine {
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::ReopenOutput) => self.path.reopen(),
                 #[cfg(feature = "sonos")]
-                Ok(Command::SetSonosRing(ring)) => self.sonos_ring = ring,
+                Ok(Command::SetSonosRing(ring)) => {
+                    // Exclusivity, enforced here rather than left to the
+                    // caller `[Sonos/SONOS010 §1]`: choosing Sonos silences
+                    // the local device (the same mechanism pause already
+                    // uses -- the device stays attached, only quiet, so a
+                    // Bluetooth link survives it `[PI3-OPEN-020]`) without
+                    // touching whether the *session* is playing at all.
+                    // Restoring local audibility on the way back respects
+                    // whatever `self.playing` already was -- a listener who
+                    // paused before switching to Sonos does not have local
+                    // output resume just because Sonos output stopped.
+                    self.path.set_playing(ring.is_none() && self.playing);
+                    self.sonos_ring = ring;
+                }
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetSkipFade(ms)) => {
                     self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
@@ -2089,6 +2102,70 @@ mod tests {
         assert_eq!(plays(&st), 0, "and it did not earn a play either");
         let _ = std::fs::remove_file(&wav);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// **Switching to Sonos mid-crossfade disturbs nothing already sounding**
+    /// `[Sonos/SONOS010 §8]` -- the same guarantee `ReopenOutput` and a
+    /// Bluetooth reconnect already give, for the same reason: the handler
+    /// touches only `self.path` and `self.sonos_ring`, never `self.live`, so
+    /// there is nothing here that *could* restart, skip, or reorder a fade
+    /// already in flight.
+    #[cfg(feature = "sonos")]
+    #[test]
+    fn switching_to_sonos_mid_crossfade_leaves_the_fade_alone() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+
+        // Built to overlap: the first passage's lead-out and the second's
+        // lead-in both span nearly the whole first passage, so admission
+        // fires almost immediately rather than waiting out a full track.
+        let wav_a = wav_of(1_000);
+        let mut a = entry(61, wav_a.to_str().unwrap());
+        a.end_ms = 1_000;
+        a.lead_out_ms = 900;
+        let wav_b = wav_of(3_000);
+        let mut b = entry(62, wav_b.to_str().unwrap());
+        b.end_ms = 3_000;
+        b.lead_in_ms = 900;
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        e.drain_commands();
+
+        assert!(
+            tick_until(&mut e, |eng| eng.snapshot_live() == 2),
+            "both sides of the fade should be live at once"
+        );
+        let before: Vec<i64> = e.live.iter().map(|l| l.entry.passage_id).collect();
+        let head_before = e.head_position();
+
+        let ring = crate::output::OutputRing::new(2_000, crate::output::Volume::new(1.0));
+        h.send(Command::SetSonosRing(Some(ring)));
+        e.drain_commands();
+        assert_eq!(
+            e.live.iter().map(|l| l.entry.passage_id).collect::<Vec<_>>(),
+            before,
+            "choosing Sonos must not touch which passages are live"
+        );
+        assert!(e.playing, "the session is still playing; only the local device went quiet");
+
+        e.tick();
+        let head_mid = e.head_position();
+        assert_eq!(
+            head_mid.map(|(id, _)| id),
+            head_before.map(|(id, _)| id),
+            "the head did not jump to a different passage"
+        );
+
+        h.send(Command::SetSonosRing(None));
+        e.drain_commands();
+        assert_eq!(
+            e.live.iter().map(|l| l.entry.passage_id).collect::<Vec<_>>(),
+            before,
+            "and returning to local output must not touch it either"
+        );
+
+        let _ = std::fs::remove_file(&wav_a);
+        let _ = std::fs::remove_file(&wav_b);
     }
 
     /// **The clock keeps running after the mixer has finished** `[REQ-VIS-240]`.

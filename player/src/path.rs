@@ -23,7 +23,52 @@ use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 use crate::output::{Output, OutputRing};
+
+/// One physical unit inside a Sonos speaker or group, for display
+/// `[Sonos/SONOS010 §9]` -- a listener choosing "Office" should be able to
+/// see it is two units, not guess from the name alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SonosMember {
+    pub udn: String,
+    /// `RF`/`LF`/etc. from the unit's own `ChannelMapSet`, or `"Coordinator"`
+    /// for a group with no bonded channel of its own.
+    pub channel: String,
+}
+
+/// What is remembered about a chosen Sonos target `[Sonos/SONOS008 §3]`.
+/// Plain data, not gated behind the `sonos` feature: a build without it
+/// still needs to be able to *store* a choice made before the feature was
+/// compiled in, without losing what it meant `[GDE-SONOS-860]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SonosTarget {
+    pub udn: String,
+    pub name: String,
+    pub last_ip: std::net::IpAddr,
+    /// Every unit in the group, coordinator included -- empty on a target
+    /// persisted before `[Sonos/SONOS010 §9]` added this, which a listener
+    /// simply sees as no detail rather than a broken read.
+    #[serde(default)]
+    pub members: Vec<SonosMember>,
+}
+
+/// Which output is chosen, persisted as one value rather than independent
+/// flags that could disagree with each other `[SPEC-APS-060]`,
+/// `[Sonos/SONOS010 §10]` -- the `chosen: Option<SpeakerId>` `[SPEC011]`
+/// already named as the design this project is heading toward, brought
+/// forward far enough to store a real choice without waiting on the rest
+/// of that migration `[SPEC-APS-100]`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum SpeakerId {
+    /// The local device (or whatever Bluetooth/PipeWire has made default) --
+    /// today's behaviour, named rather than left as the absence of a choice.
+    #[default]
+    Local,
+    Sonos(SonosTarget),
+}
 
 /// Base spacing between recovery attempts, doubling to `RETRY_MAX`.
 ///
