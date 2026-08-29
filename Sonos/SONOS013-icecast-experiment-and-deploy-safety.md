@@ -87,4 +87,23 @@ Both were caused by the same shape of gap: **a piece of automation (the watcher,
 
 ---
 
-**Traceability:** `GDE-SONOS-1270` (closed) -- `player/src/engine.rs` (`cut_ring_to_incoming`, `a_skip_cuts_the_sonos_ring_too`) · `GDE-SONOS-1300` -- the Icecast experiment, transport/framing layer ruled out for `[SONOS012 §6]` · `GDE-SONOS-1310` -- `player/src/web.rs` (`sonos_redirect`), `VainoPi/sonos-soap-redirect.sh` · `GDE-SONOS-1320` -- `VainoPi/deploy.sh` (`FEATURES`, the pre-flight Sonos-downgrade guard) · commits `ee4f633`, `1d6f3f4`, `549ced9`
+## 7. A two-hour soak run: exact gap statistics, and the honest ceiling on further work (`GDE-SONOS-1330`)
+
+**Requested directly: measure the reconnect gap precisely over an extended real session, then work to minimize it toward inaudible.** Two hours of `journalctl` against the real Office pair, entirely after §2-§4's fixes were live, gave the cleanest data this investigation has produced -- 207 reconnect cycles, zero errors, zero `Lagged`, zero starvation warnings, zero anomalies of any kind:
+
+| Metric | Value (n = 207) |
+|---|---|
+| Connection duration | 25.3-36.9 s, mean 31.85 s, median 32.0 s |
+| Gap (drop → reconnect) | 2-4 s (journalctl's own second-granularity; the underlying figure is a real ~3 s, not literally discrete), mean 3.06 s, median 3.0 s, **stdev 0.27 s** |
+
+The tightness of that standard deviation across two hours and 207 independent cycles is itself the finding: this is not network jitter or an intermittent fault, it is a fixed timer, almost certainly in Sonos's own firmware, doing the same thing with mechanical regularity roughly every 32 seconds.
+
+**Traced where the ~3 s actually lives before proposing anything:** `encode_loop` (`player/src/sonos.rs`) runs continuously and independently of any HTTP connection, pacing itself to real time in ~104 ms passes (`FRAMES_PER_PASS = 1152 × 4` frames). A reconnecting client subscribes fresh to the broadcast channel and receives the next already-scheduled chunk -- worst case ~104 ms, no backlog to burst, no buffering found between "opened" and first bytes flowing. **Vaino's own serving latency is bounded at roughly 100 ms of the ~3060 ms average gap -- about 3%.** The remaining ~97% is the interval between Sonos deciding the stream ended and Sonos issuing a fresh `GET`; LAN round-trip latency is single-digit milliseconds, so this is Sonos's own internal backoff/retry timer, not connection-establishment overhead. This is not a new guess -- it is the same conclusion §2's three independent, exhausted attempts (chunked encoding, content-length magnitude, real Icecast with genuine ICY/Shoutcast framing) already reached: nothing at the transport layer moves this number, because the number is not determined at the transport layer.
+
+**What this means for "minimize to inaudible":** a pure server-side latency optimization, even done perfectly, caps out shaving tens of milliseconds off a ~3 s gap -- nowhere near inaudible on its own. The only remaining lever with a plausible path there is architectural, not a tuning knob: changing what *kind* of thing Sonos believes this stream is (a queued, bounded track it can gaplessly advance through via `SetNextAVTransportURI`, rather than one continuous, unbounded `x-rincon-mp3radio://` broadcast it periodically abandons and cold-restarts). That is a real redesign of how tracks/queue are presented to Sonos, with an uncertain payoff -- Music Assistant's own "queue flow" mitigation, the closest documented analog, is described by its own users as "usable but not ideal for live audio" even in a considerably more mature implementation, so it is not assumed here to reach zero either.
+
+**Deliberately not attempted tonight.** Asked directly, rather than picked unilaterally: the small serving-latency trim was on the table (real but marginal, ~100 ms, low risk) alongside the larger queue-based redesign (the only avenue with real headroom, but a genuine architecture change needing its own design pass, not a live experiment against real hardware in a session that had already had two live incidents). Chosen: neither, for now -- this section is the analysis and the record of that choice, not a change. `player/src/sonos.rs` is untouched by this section.
+
+---
+
+**Traceability:** `GDE-SONOS-1270` (closed) -- `player/src/engine.rs` (`cut_ring_to_incoming`, `a_skip_cuts_the_sonos_ring_too`) · `GDE-SONOS-1300` -- the Icecast experiment, transport/framing layer ruled out for `[SONOS012 §6]` · `GDE-SONOS-1310` -- `player/src/web.rs` (`sonos_redirect`), `VainoPi/sonos-soap-redirect.sh` · `GDE-SONOS-1320` -- `VainoPi/deploy.sh` (`FEATURES`, the pre-flight Sonos-downgrade guard) · `GDE-SONOS-1330` -- two-hour soak statistics (207 cycles), the ~3%/~97% split between Vaino's own serving latency and Sonos's own reconnect timer, no code change · commits `ee4f633`, `1d6f3f4`, `549ced9`
