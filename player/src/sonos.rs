@@ -699,7 +699,7 @@ pub mod topology {
 pub mod stream {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use mp3lame_encoder::{Bitrate, Builder, InterleavedPcm, Quality};
     use tokio::sync::broadcast;
@@ -793,6 +793,25 @@ pub mod stream {
         // `clear()` below drops the *length*, never the *capacity*, so this
         // stays the one allocation for the life of the thread.
         let mut mp3 = Vec::with_capacity(FRAMES_PER_PASS * 5 / 4 + 7200);
+        // A real local device paces the whole mixing chain for free -- its
+        // own hardware callback only drains at exactly the audio's own rate,
+        // which is what makes `path.ring.free()` a trustworthy throttle
+        // `[Sonos/SONOS012 §3]`. Nothing plays that role here: with local
+        // failed or silenced, `mix_and_submit` paces off `sonos_ring`'s own
+        // free space instead, which stays large (this ring holds ~15 s) for
+        // as long as THIS loop keeps draining it -- and this loop, run flat
+        // out, drains and encodes far faster than real time on any machine
+        // worth deploying to. The result, found against the real Office
+        // pair: encoding raced ahead, the `CHANNEL_DEPTH`-deep broadcast
+        // channel filled faster than Sonos's own network read could drain
+        // it, and the overflowed chunks were silently dropped (`.ok()` on a
+        // `Lagged` error, in `sonos_stream`) -- audible as continuous but
+        // "skippy" playback, not silence. `pacing_delay` below is this
+        // loop's own substitute for the hardware callback local output gets
+        // for free: never emit faster than the audio itself plays.
+        let sample_rate = ring.sample_rate();
+        let started = std::time::Instant::now();
+        let mut frames_encoded: u64 = 0;
         while !stop.load(Ordering::Relaxed) {
             let got = ring.read(&mut pcm);
             if got == 0 {
@@ -810,6 +829,56 @@ pub mod stream {
                 Ok(_) => {}
                 Err(e) => eprintln!("sonos: encode failed: {e:?}"),
             }
+            frames_encoded += (got / CHANNELS) as u64;
+            if let Some(d) = pacing_delay(frames_encoded, sample_rate, started) {
+                std::thread::sleep(d);
+            }
+        }
+    }
+
+    /// How long to sleep so this thread never gets ahead of the audio it is
+    /// producing -- `None` when it is already at or behind real time, which
+    /// is the ordinary case whenever the machine or the network is briefly
+    /// busy. Pure and separately tested `[Sonos/SONOS012 §3]`, since the real
+    /// timing this substitutes for (a hardware callback) is not something a
+    /// fast unit test can wait on directly.
+    fn pacing_delay(frames_encoded: u64, sample_rate: u32, started: Instant) -> Option<Duration> {
+        if sample_rate == 0 {
+            return None;
+        }
+        let target = Duration::from_secs_f64(frames_encoded as f64 / sample_rate as f64);
+        target.checked_sub(started.elapsed())
+    }
+
+    #[cfg(test)]
+    mod pacing_tests {
+        use super::*;
+
+        #[test]
+        fn running_far_ahead_of_real_time_asks_for_a_real_wait() {
+            let started = Instant::now();
+            // A full second of audio claimed encoded, though no real time
+            // has passed at all -- exactly what an unthrottled loop does
+            // against a ring with plenty of backlog to read from.
+            let delay = pacing_delay(44_100, 44_100, started);
+            assert!(
+                delay.is_some_and(|d| d.as_millis() > 900),
+                "should ask to wait close to a second, got {delay:?}"
+            );
+        }
+
+        #[test]
+        fn already_behind_real_time_asks_for_nothing() {
+            let started = Instant::now() - Duration::from_secs(2);
+            // One second of audio encoded, but two real seconds have
+            // actually elapsed -- already slower than real time, the
+            // ordinary case whenever the machine or network is briefly busy.
+            assert_eq!(pacing_delay(44_100, 44_100, started), None);
+        }
+
+        #[test]
+        fn an_unconfigured_sample_rate_never_panics_on_the_division() {
+            assert_eq!(pacing_delay(1000, 0, Instant::now()), None);
         }
     }
 }
