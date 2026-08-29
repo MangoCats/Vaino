@@ -1,6 +1,6 @@
 # SONOS012: Real-Hardware Findings — First Live Session Against the Office Pair
 
-**Development Record — `Sonos`, 2026-08-29**
+**Development Record — `Sonos`, 2026-08-29 — §7's skip-lag gap closed and §8's Icecast experiment run the same day, per [SONOS013](SONOS013-icecast-experiment-and-deploy-safety.md)**
 
 `[Sonos/SONOS010]` item 6 -- "never run end-to-end against the real Office pair" -- run for the first time this weekend, at the user's own initiative, across several sessions as each finding led to the next. Six of eight real issues found are fixed and confirmed live; the periodic-silence gap (§6) survived two well-evidenced fix attempts unchanged, and research into why (`[GDE-SONOS-1290]`) found the same class of problem unsolved in a much larger project's own tracker -- reframing the goal rather than yielding a third attempt; the last (§7, skip lag) is diagnosed to a specific cause and deliberately deferred rather than folded into an already-large session of changes to the same sensitive code. This document is additive: nothing in `[SONOS002]`, `[SONOS008]`, `[SONOS009]`, `[SONOS010]`, or `[SONOS011]` is wrong so much as untested against a condition none of them anticipated -- a local output device that is not briefly absent but **entirely, indefinitely absent** for the whole session.
 
