@@ -51,6 +51,9 @@ def main() -> int:
     ap.add_argument("db")
     ap.add_argument("flags", help="flags.json from export_flags.py")
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--json", action="store_true",
+                     help="also print one final JSON summary line, for a caller "
+                          "(the Sampo console's remote-pull job) rather than a person")
     args = ap.parse_args()
 
     with open(args.flags, encoding="utf-8") as f:
@@ -111,6 +114,8 @@ def main() -> int:
         say("committed" if matched else "nothing to write")
     else:
         say("nothing was written. Re-run with --commit to do it.")
+    if args.json:
+        say(json.dumps({"matched": matched, "already": already, "unmatched": unmatched}))
     return 0
 
 

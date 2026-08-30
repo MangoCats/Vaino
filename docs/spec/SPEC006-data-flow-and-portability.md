@@ -244,42 +244,10 @@ If the receiver's current value carries no review row at all — ordinary Sampo 
 
 ---
 
-## 10. Syncing a flag's fate to a remote installation
+## 10. Syncing a flag's fate to a remote installation — moved
 
-Designed 2026-08-27, against `[REQ-LIB-195]`. §9 answers "a correction made on the desktop reaches an appliance that already holds the music." It assumes the desktop already knows *which* track to correct. `listener_flags` (`[REQ-VIS-265]`) is how a listener names one from vainopi's own chair, mid-play, on a machine with no Sampo to act on it — this is the leg that gets the name off the appliance, onto the desktop where Sampo can act on it, and the resulting correction back, closing a loop §9 alone cannot: nothing in it starts from "here is what to look at" rather than "here is what changed."
-
-**`[SPEC-DF-107]` The portable form of a flag is the same shape §9 already uses for a decision — an anchor, not a local key.** `listener_flags` keys a recording-kind flag by its mbid (already portable) and a passage-kind flag by a local `passage_id` (not portable at all — the same gap `[SPEC-DF-103]` closed for `boundary_review`). A flag has no baseline or target to compare, so it borrows only the anchor half of §9's shape, not the three-way merge: `{"subject_kind": "recording", "anchor": {"recording_mbid": "..."}}` or `{"subject_kind": "passage", "anchor": {"audio_md5": "...", "passage_kind": "...", "start_ms": 0, "end_ms": 0}}`, plus `flagged_at` and `origin`. `tools/apply_changes.py`'s existing `resolve_passage()` — already exactly "anchor in, local `passage_id` out" — resolves the second case unchanged; nothing new was needed for it.
-
-**`[SPEC-DF-108]` vainopi has no Python, and nothing here asks it to grow one.** The appliance ships `sqlite3` (the CLI, for `[PI5-LIB-010]`-style maintenance) but not `python3` `[VainoPi/setup-vainopi.sh]` — deliberately: an appliance that never runs Sampo has no reason to carry a runtime `[REQ-LIB-175]`'s own `sampo-support` gate already established for the player itself. Both new tools below therefore run on the *desktop*, against a **copy** of vainopi's database (`scp pi@vainopi:/srv/library/vaino.db .`, the plain version) — the same posture §9's own transport already uses, and the copy needed here is no extra cost: it is the same copy the push-back leg below needs anyway, pulled fresh immediately before it is read.
-
-**`[SPEC-DF-109]` Two tools, the same rehearse-by-default shape as every tool here:**
-
-```
-scp pi@vainopi:/srv/library/vaino.db /tmp/vainopi-copy.db
-python tools/export_flags.py /tmp/vainopi-copy.db -o flags.json
-
-python tools/import_flags.py <desktop's own db> flags.json               # rehearsal
-python tools/import_flags.py <desktop's own db> flags.json --commit
-```
-
-`export_flags.py` is read-only, mirrors `export_changes.py`'s envelope (`{"format_version": 1, "flags": [...]}`), and silently drops a passage-kind flag the copy itself can no longer resolve to a live passage — there is nothing to anchor it to, the same reasoning `[SPEC-DF-102]` already applies to a review row missing its baseline. `import_flags.py` resolves each anchor against the desktop's *own* library and reports, rather than silently drops, whatever does not match — libraries that "overlap" are not identical by definition, and a flag Sampo's own `/flags` page could not resolve would be exactly the blank rendering `[REQ-LIB-190]` was built to avoid. A flag already present locally (matched by the same resolved subject) is skipped, so a second pull after the first is harmless. Landing a new one stamps `origin` with vainopi's hostname (added to `listener_flags` as a nullable column, migrated the same way `[SPEC-DF-104]` added it to the three review tables) — a pulled flag reads identically to a local one everywhere except there, the same provenance discipline as `[SPEC-DF-104]`.
-
-**`[SPEC-DF-110]` The write back to vainopi still cannot be a whole-file copy — `[PI005]`'s own precedent already says why.** vainopi's live database is not disposable: `[PI5-LIB-010]` explicitly named `[SPEC-SUI-100]`'s merge-don't-overwrite rule as the one a straight copy would otherwise have violated, spared only because that swap's own listening history was deliberately being discarded. A patch made between the two pulls above — a play, a new flag, an appliance that has kept running for days while the desktop review happened — is exactly what a second whole-file copy would erase. §9's `apply_changes.py` already never does this (`passages`, `passage_recordings`, `recording_artists`, and the review journals only); it only had no way to *run* on a target with no Python.
-
-**`[SPEC-DF-111]` `apply_changes.py --emit-sql OUT.sql` replaces "commit through this process's own connection" with "commit through vainopi's own `sqlite3` CLI, later."** Given a **read-only** copy to compare against, it runs the identical three-way merge §9 already does — every `apply_id_review` / `apply_boundary_review` / `apply_artist_review` call unchanged — and captures the literal, fully-quoted statements SQLite actually executed (via `sqlite3.Connection.set_trace_callback`, which expands bound parameters into safe literal SQL, not the placeholder form) into a file instead of committing them, then rolls the compare copy back untouched. The result is an ordinary, idempotent SQL script — including the `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN` statements `ensure_review_tables` already always ran, so a target missing the review tables entirely still gets them — applied with the one command vainopi already has:
-
-```
-scp pi@vainopi:/srv/library/vaino.db /tmp/vainopi-copy.db          # fresh -- not the Hop-1 copy
-python tools/export_changes.py <desktop db> -o changes.json
-python tools/apply_changes.py /tmp/vainopi-copy.db changes.json --commit --emit-sql patch.sql --clear-flags
-scp patch.sql pi@vainopi:/tmp/patch.sql
-ssh pi@vainopi 'systemctl stop vaino && sqlite3 /srv/library/vaino.db < /tmp/patch.sql && systemctl start vaino'
-```
-
-**`[SPEC-DF-112]` `--clear-flags` closes the loop the checkbox itself already models.** `[REQ-VIS-265]`'s flag is "please look at this," not a judgement, cleared the same way it was set: by hand, at any time. A change landing here for exactly the subject a flag named is that looking-at having happened, so `--clear-flags` deletes the plausible `listener_flags` rows for a change it successfully applies: `('passage', <the resolved local passage_id>)` always, and for an `id_review`, `('recording', ...)` under *both* the target mbid and the baseline one — a listener most often flags a misidentification while it still carries the wrong id, so the id being corrected away from is at least as likely to be what was flagged as the id it becomes. It is opt-in and additive to what `--emit-sql`/`--commit` already write, never assumed: not every applied change originated from a flag, and a change that did not still clears nothing that was never set.
-
-**`[SPEC-DF-113]` Neither tool here needs Sampo's console to touch vainopi at all.** Every command above is exactly the text a "Pull flags…" / "Push changes…" button in Sampo could print for `open_terminal()` `[IMPL007 Stage 5]` to open, the identical shape the export page already uses for Case 1 — Sampo prepares, a person's own terminal runs. A GUI wrapper is a later convenience, not a prerequisite: every command is a plain, typeable line today.
+Split out to [SPEC022: Syncing a Flag's Fate, and a Console GUI Over It](SPEC022-flag-and-edit-sync.md) once this document passed its own 300-line limit `[GOV-DOC-010]`. Covers `listener_flags`'s own portable form (`[SPEC-DF-107..113]`), the pull/push tools built on it, a console GUI over both (`[SPEC-DF-114..115]`), and the settled-but-not-yet-built design for targeted remote reads at edit-open time rather than push time (`[SPEC-DF-116..118]`).
 
 ---
 
-**Traceability:** `[SPEC-DF-010..113]` · derived from `[GDE-BMK-050]`, `[GDE-ARC-010]`, `[GDE-CHT-045]`, `[GDE-FBD-020]`
+**Traceability:** `[SPEC-DF-010..106]` · derived from `[GDE-BMK-050]`, `[GDE-ARC-010]`, `[GDE-CHT-045]`, `[GDE-FBD-020]` · `[SPEC-DF-107..118]` continue in [SPEC022](SPEC022-flag-and-edit-sync.md)

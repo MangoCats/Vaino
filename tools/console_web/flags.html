@@ -21,6 +21,24 @@
     <span id="count" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
   </div>
   <div id="list"></div>
+
+  <h2>Sync with a remote</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Pull brings vainopi's own flags here, resolved by audio content rather than
+    a local number — a flag on a track this library doesn't have yet is
+    counted and reported, not silently dropped. Push lands whatever
+    identification/boundary/artist edits have accumulated here since the last
+    push, and clears the flags they answer — batched, on request only:
+    it briefly stops and restarts vainopi's own player, so it never runs on
+    its own.
+  </p>
+  <div class="controls">
+    <input type="search" id="remote" placeholder="pi@vainopi:/srv/library/vaino.db" style="min-width:24rem">
+    <button class="chip" id="save-remote">save</button>
+    <button class="chip" id="pull">pull flags from remote</button>
+    <button class="chip" id="push">push edits to remote</button>
+  </div>
+  <div id="sync-result"></div>
 </main>
 <script src="/console.js"></script>
 <script>
@@ -58,4 +76,66 @@ async function load() {
 
 document.getElementById('refresh').onclick = load;
 load();
+
+// -- sync with a remote --------------------------------------------------
+
+async function loadRemote() {
+  try {
+    const d = await S.get('/api/remote');
+    if (d.remote) document.getElementById('remote').value = d.remote;
+  } catch (e) { /* nothing configured yet -- the input just stays empty */ }
+}
+loadRemote();
+
+document.getElementById('save-remote').onclick = async () => {
+  const remote = document.getElementById('remote').value.trim();
+  const r = await (await fetch('/api/remote', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remote }),
+  })).json();
+  if (r.error) return S.fail('#sync-result', new Error(r.error));
+};
+
+async function runSync(path) {
+  const box = document.getElementById('sync-result');
+  box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+  const r = await (await fetch(path, { method: 'POST' })).json();
+  if (r.error) return S.fail('#sync-result', new Error(r.error));
+  watchSync(r.job_id, box);
+}
+
+document.getElementById('pull').onclick = () => runSync('/api/remote/pull');
+document.getElementById('push').onclick = () => runSync('/api/remote/push');
+
+// A thinner version of jobs.html's own watch(): the log while it runs, the
+// job's own `result` once it stops -- that JSON is exactly what
+// import_flags.py/apply_changes.py's own --json line already computed, not
+// re-derived here.
+function watchSync(id, box) {
+  const log = S.el('div', { class: 'list' });
+  box.replaceChildren(log);
+  const es = new EventSource(`/api/jobs/${id}/stream`);
+  es.onmessage = m => {
+    const e = JSON.parse(m.data);
+    if (e.kind === 'counts') return;
+    const line = e.kind === 'stage' ? `── ${e.text} ──`
+      : e.kind === 'done' ? `── finished: ${e.text} ──` : e.text;
+    log.append(S.el('div', {
+      style: e.kind === 'error' ? 'color:var(--bad)'
+        : (e.kind === 'stage' || e.kind === 'done') ? 'color:var(--accent)' : '',
+      text: line,
+    }));
+    log.scrollTop = log.scrollHeight;
+    if (e.kind === 'done') { es.close(); showResult(id, box); }
+  };
+}
+
+async function showResult(id, box) {
+  const j = await S.get(`/api/jobs/${id}`);
+  if (!j.result) return;
+  box.append(S.el('div', { class: 'tiles' },
+    ...Object.entries(j.result).map(([k, v]) =>
+      S.el('div', { class: 'tile' }, S.el('b', { text: S.n(v) }), S.el('span', { text: k })))));
+  if (j.state === 'done') load(); // the pull may have just changed what /api/flags shows
+}
 </script>

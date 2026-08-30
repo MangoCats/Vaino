@@ -530,6 +530,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file("flags.html", "text/html; charset=utf-8")
             if p == "/api/flags":
                 return self.send_json(flags(conn))
+            if p == "/api/remote":
+                return self.send_json({"remote": STATE["jobs"].get_remote()})
             if p == "/api/jobs":
                 return self.send_json(STATE["jobs"].recent())
             if p.startswith("/api/jobs/") and p.endswith("/stream"):
@@ -602,6 +604,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"job_id": STATE["jobs"].submit("induct", prev["target"])})
             if p.startswith("/api/jobs/") and p.endswith("/stop"):
                 return self.send_json({"stopped": STATE["jobs"].stop(int(p.split("/")[3]))})
+            if p == "/api/remote":
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                remote = ((json.loads(body or b"{}") or {}).get("remote") or "").strip()
+                if not remote or ":" not in remote:
+                    return self.send_json({"error": "expected user@host:/path/to/vaino.db"}, code=400)
+                STATE["jobs"].set_remote(remote)
+                return self.send_json({"remote": remote})
+            if p == "/api/remote/pull":
+                # Direction one `[SPEC-DF-109]`: vainopi's own flags, resolved
+                # against this library. A count of flags on tracks that do
+                # not exist here yet is the job's own `result`, not an error.
+                remote = STATE["jobs"].get_remote()
+                if not remote:
+                    return self.send_json({"error": "no remote configured yet"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("remote-pull", remote)})
+            if p == "/api/remote/push":
+                # Direction two `[SPEC-DF-108..112]`: whatever review edits
+                # have accumulated locally, landed on the remote through its
+                # own sqlite3 CLI. Batched -- only ever run on request.
+                remote = STATE["jobs"].get_remote()
+                if not remote:
+                    return self.send_json({"error": "no remote configured yet"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("remote-push", remote)})
             if p == "/api/export/bundle":
                 # A GUI over `export_bundle.py` `[IMPL007 Stage 4]`. `q`
                 # becomes a `LIKE` pattern the same way `library()`'s own

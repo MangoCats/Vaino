@@ -36,7 +36,8 @@ DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id     INTEGER PRIMARY KEY,
     kind       TEXT NOT NULL,          -- 'propose' | 'induct' | 'export-bundle'
-    target     TEXT NOT NULL,          -- the folder
+                                        -- | 'remote-pull' | 'remote-push'
+    target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
     result     TEXT,
@@ -53,6 +54,15 @@ CREATE TABLE IF NOT EXISTS job_events (
     text     TEXT
 );
 CREATE INDEX IF NOT EXISTS job_events_job ON job_events(job_id, event_id);
+-- One remembered remote per library, console-owned bookkeeping like the rest
+-- of this sidecar -- never a table Vaino itself reads [SPEC-SC-015]. A single
+-- row, key='sync_remote', value='user@host:/path/to/vaino.db' -- the exact
+-- form `scp`/`ssh` already want, so nothing here parses or validates it
+-- beyond what the remote-pull/remote-push jobs need to split off a host.
+CREATE TABLE IF NOT EXISTS remote_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 # Stage 0 ran these by hand in this order and the transcript is the reference
@@ -177,6 +187,19 @@ class Runner:
         d["events"] = [dict(e) for e in ev]
         return d
 
+    def get_remote(self) -> str | None:
+        db = self._db()
+        r = db.execute("SELECT value FROM remote_config WHERE key='sync_remote'").fetchone()
+        db.close()
+        return r["value"] if r else None
+
+    def set_remote(self, value: str) -> None:
+        db = self._db()
+        db.execute("INSERT INTO remote_config (key, value) VALUES ('sync_remote', ?1) "
+                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (value,))
+        db.commit()
+        db.close()
+
     def recent(self, limit: int = 25) -> list:
         db = self._db()
         rows = db.execute("SELECT job_id,kind,target,state,created_at,started_at,ended_at "
@@ -266,6 +289,12 @@ class Runner:
             db.close()
             return self._finish(job_id, "done" if code == 0 else "failed")
 
+        if kind == "remote-pull":
+            return self._remote_pull(job_id, target)
+
+        if kind == "remote-push":
+            return self._remote_push(job_id, target)
+
         result = {}
         for stage, argv in steps_for(self.library, target):
             if self._stopped(job_id):
@@ -288,6 +317,129 @@ class Runner:
         db.commit()
         db.close()
         self._finish(job_id, "done")
+
+    def _remote_pull(self, job_id: int, target: str):
+        """A GUI over `export_flags.py`/`import_flags.py` `[SPEC006 SS10]` --
+        `target` is `user@host:/path/to/vaino.db`, the exact form `scp`
+        already wants, so nothing here parses it further than `scp` itself
+        will. Pulls a fresh copy (never assumes yesterday's), exports that
+        copy's flags by their portable anchor, then lands whatever resolves
+        against the local library -- reporting, not silently dropping,
+        whatever does not `[SPEC-DF-109]`. That `unmatched` count is exactly
+        "flags on tracks that don't exist locally," already computed by
+        `import_flags.py`, not re-derived here.
+        """
+        tools = os.path.dirname(os.path.abspath(__file__))
+        work = os.path.join(os.path.dirname(tools), "out", f"remote-pull-{job_id}")
+        os.makedirs(work, exist_ok=True)
+        copy_db = os.path.join(work, "remote-copy.db")
+        flags_json = os.path.join(work, "flags.json")
+
+        self._emit(job_id, "stage", "fetch", stage="fetch")
+        code, _ = self._spawn(job_id, "fetch", ["scp", target, copy_db])
+        if code != 0:
+            return self._finish(job_id, "failed")
+        self._emit(job_id, "stage", "export", stage="export")
+        code, _ = self._spawn(job_id, "export", [
+            sys.executable, os.path.join(tools, "export_flags.py"), copy_db, "-o", flags_json])
+        if code != 0:
+            return self._finish(job_id, "failed")
+        self._emit(job_id, "stage", "import", stage="import")
+        code, out = self._spawn(job_id, "import", [
+            sys.executable, os.path.join(tools, "import_flags.py"),
+            self.library, flags_json, "--commit", "--json"])
+        result = parse_json_tail(out) or {}
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if code == 0 else "failed")
+
+    def _remote_push(self, job_id: int, target: str):
+        """A GUI over `export_changes.py`/`apply_changes.py --emit-sql`
+        `[SPEC-DF-108..112]` -- the *edits* leg (id/boundary/artist reviews),
+        not a raw flag push: Sampo never sets a flag itself, only clears one
+        (`--clear-flags`) when the correction it named actually lands. `target`
+        splits into an ssh host and the remote's own db path -- the two
+        things `scp`/`ssh` need that a single `scp`-style argument does not
+        carry on its own.
+
+        Batched, not automatic: this runs only when asked, applying whatever
+        has accumulated in the review tables since the last push -- the
+        three-way merge already makes a second push of the same edits a
+        no-op, so nothing here needs its own queue of "what changed since
+        last time."
+        """
+        tools = os.path.dirname(os.path.abspath(__file__))
+        work = os.path.join(os.path.dirname(tools), "out", f"remote-push-{job_id}")
+        os.makedirs(work, exist_ok=True)
+        copy_db = os.path.join(work, "remote-copy.db")
+        changes_json = os.path.join(work, "changes.json")
+        patch_sql = os.path.join(work, "patch.sql")
+
+        host, sep, remote_path = target.partition(":")
+        if not sep or not remote_path:
+            self._emit(job_id, "error", f"target must be user@host:/path, got {target!r}")
+            return self._finish(job_id, "failed")
+
+        self._emit(job_id, "stage", "fetch", stage="fetch")
+        code, _ = self._spawn(job_id, "fetch", ["scp", target, copy_db])
+        if code != 0:
+            return self._finish(job_id, "failed")
+        self._emit(job_id, "stage", "export", stage="export")
+        code, _ = self._spawn(job_id, "export", [
+            sys.executable, os.path.join(tools, "export_changes.py"), self.library, "-o", changes_json])
+        if code != 0:
+            return self._finish(job_id, "failed")
+        # `--emit-sql`: `copy_db` is a disposable comparison, never the
+        # target of the write itself `[SPEC-DF-111]` -- the real write to
+        # vainopi happens two stages further down, via its own `sqlite3` CLI.
+        self._emit(job_id, "stage", "compare", stage="compare")
+        code, out = self._spawn(job_id, "compare", [
+            sys.executable, os.path.join(tools, "apply_changes.py"), copy_db, changes_json,
+            "--commit", "--emit-sql", patch_sql, "--clear-flags", "--json"])
+        result = parse_json_tail(out) or {}
+        if code != 0:
+            db = self._db()
+            db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+            db.commit()
+            db.close()
+            return self._finish(job_id, "failed")
+
+        if not result.get("landed") and not result.get("cleared"):
+            # Nothing to land -- vainopi is never stopped for an empty patch.
+            # `patch_statements` alone cannot tell this: it always includes
+            # `ensure_review_tables`'s own schema-setup statements, so it is
+            # never zero even when nothing actually changed. A second push
+            # after the first, with nothing edited since, must cost the
+            # household nothing `[SPEC-SUI-082]`'s own posture toward the
+            # player applied to its live service instead of just its write
+            # lock.
+            self._emit(job_id, "log", "nothing to push -- the remote was not touched")
+            db = self._db()
+            db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+            db.commit()
+            db.close()
+            return self._finish(job_id, "done")
+
+        self._emit(job_id, "stage", "send", stage="send")
+        code, _ = self._spawn(job_id, "send", ["scp", patch_sql, f"{host}:/tmp/vaino-sync-patch.sql"])
+        if code != 0:
+            return self._finish(job_id, "failed")
+        # The one command vainopi already has `[SPEC-DF-111]`: stop so the
+        # patch is never applied underneath a live writer, apply it through
+        # vainopi's own `sqlite3`, restart. Briefly interrupts whatever is
+        # playing -- why this job runs only on explicit request, never per edit.
+        self._emit(job_id, "stage", "apply-remote", stage="apply-remote")
+        code, _ = self._spawn(job_id, "apply-remote", [
+            "ssh", host,
+            f"systemctl stop vaino && sqlite3 {remote_path} < /tmp/vaino-sync-patch.sql "
+            f"&& systemctl start vaino"])
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if code == 0 else "failed")
 
     def _spawn(self, job_id, stage, argv):
         # UTF-8 on both sides. `ingest_folder.say()` falls back to the console

@@ -348,6 +348,9 @@ def main() -> int:
     ap.add_argument("--clear-flags", action="store_true",
                      help="delete the listener_flags row(s) a successfully-applied change "
                           "plausibly named `[SPEC-DF-112]`")
+    ap.add_argument("--json", action="store_true",
+                     help="also print one final JSON summary line, for a caller "
+                          "(the Sampo console's remote-push job) rather than a person")
     args = ap.parse_args()
 
     resolutions = {}
@@ -475,6 +478,7 @@ def main() -> int:
         + (f", {counts['cleared']} flag(s) cleared" if args.clear_flags else ""))
 
     landed = counts["fastforward"] or counts["resolved"]
+    patch_statements = None
     if args.emit_sql:
         # `db` is never the destination here `[SPEC-DF-111]` -- whatever this
         # comparison wrote to it (including the schema setup above, already
@@ -492,6 +496,7 @@ def main() -> int:
         # which of those to keep.
         WRITE_KEYWORDS = ("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "REPLACE")
         patch = [s for s in sql_log if s.lstrip().upper().startswith(WRITE_KEYWORDS)]
+        patch_statements = len(patch)
         with open(args.emit_sql, "w", encoding="utf-8") as f:
             f.write("BEGIN IMMEDIATE;\n")
             for stmt in patch:
@@ -503,6 +508,12 @@ def main() -> int:
         say("committed" if landed else "nothing to write")
     else:
         say("nothing was written. Re-run with --commit to do it.")
+    if args.json:
+        # `landed` is the one figure that answers "is there anything a
+        # remote actually needs" -- `patch_statements` alone is not: it
+        # always includes `ensure_review_tables`'s own schema-setup
+        # statements, so it is never zero even when nothing changed.
+        say(json.dumps({**counts, "patch_statements": patch_statements, "landed": bool(landed)}))
     return 0
 
 
