@@ -833,6 +833,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not folder or not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("reanalyze", folder)})
+            if p == "/api/analyze-amplitude":
+                # `[SPEC-SA-075]`, deliberately opt-in -- see `jobs.py`'s own
+                # `SKIPPED` entry for why this is never part of `/api/reanalyze`
+                # or fresh induction. `folder` is optional here (unlike
+                # `/api/reanalyze`'s own required one): an empty/absent value
+                # means the whole library, matching `analyze_amplitude.py`'s
+                # own CLI default.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                folder = (json.loads(body or b"{}") or {}).get("folder", "") or ""
+                if folder and not os.path.isdir(folder):
+                    return self.send_json({"error": f"not a folder: {folder}"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("analyze-amplitude", folder)})
             if p == "/api/release/suggest":
                 # Discovery only `[SPEC-SUI-215]` -- never touches
                 # passage_recordings, so no confirmation step belongs here.

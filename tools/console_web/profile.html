@@ -265,6 +265,28 @@ function releaseSuggestBox(pid, folder) {
       S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
     };
 
+    // [SPEC-SA-075] -- built, but deliberately never run silently by induct
+    // or reanalyze (see jobs.py's own SKIPPED entry): offered here as its
+    // own explicit action instead.
+    m.append(S.el('div', { class: 'controls' },
+      S.el('button', { class: 'chip', id: 'analyze-amplitude' },
+        `analyze amplitude for this folder (${folder})`)));
+    m.append(S.el('div', { id: 'amplitude-result' }));
+    document.getElementById('analyze-amplitude').onclick = async () => {
+      const box = document.getElementById('amplitude-result');
+      box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+      let r;
+      try {
+        r = await (await fetch('/api/analyze-amplitude', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder }),
+        })).json();
+      } catch (e) { return S.fail('#amplitude-result', e); }
+      if (r.error) return S.fail('#amplitude-result', new Error(r.error));
+      // Changes this page's own "lead in / out" row directly.
+      S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
+    };
+
     // A short-run replacement for AcoustID fingerprinting when it comes up
     // unmatched [SPEC-SUI-215] -- searches by the folder's own tags, scores
     // each candidate release against the folder's actual files, and applies

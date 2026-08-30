@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'export-bundle' | 'remote-pull'
                                         -- | 'remote-push' | 'accept-remote'
                                         -- | 'suggest-release' | 'accept-release'
+                                        -- | 'analyze-amplitude'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -98,6 +99,8 @@ SKIPPED = [
     ("segment", "for DAO captures; these are single-track files [SPEC-SA-070]"),
     ("releases", "needs a MusicBrainz id, which ingest does not invent"),
     ("cover art", "needs a release id; art beside the file is found by the player"),
+    ("amplitude", "built [SPEC-SA-075], not yet measured for Vaino -- offered as its "
+                  "own action (\"Analyze amplitude\"), never run silently by induct"),
 ]
 
 
@@ -316,6 +319,9 @@ class Runner:
         if kind == "accept-release":
             return self._accept_release(job_id, target)
 
+        if kind == "analyze-amplitude":
+            return self._analyze_amplitude(job_id, target)
+
         # 'induct' and 'reanalyze' `[SPEC-SUI-214]` are the same four-stage
         # pipeline, differing only in whether `identify` is told to retry
         # what it already tried -- anything else unrecognized also lands
@@ -529,6 +535,27 @@ class Runner:
                 "--commit", "--json"]
         self._emit(job_id, "stage", "apply", stage="apply")
         code, out = self._spawn(job_id, "apply", argv)
+        result = parse_json_tail(out) or {}
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+
+    def _analyze_amplitude(self, job_id: int, target: str):
+        """`[SPEC-SA-075]` -- `target` is a folder path, or empty for the
+        whole library. Deliberately its own job kind rather than folded into
+        `steps_for()`: named in `SKIPPED` for the same reason `segment`,
+        `releases` and `cover art` already are there -- not yet measured for
+        Vaino, so never run silently by `induct`/`reanalyze`, only by this
+        explicit action.
+        """
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "analyze_amplitude.py"), self.library, "--json"]
+        if target:
+            argv += ["--folder", target]
+        self._emit(job_id, "stage", "analyze", stage="analyze")
+        code, out = self._spawn(job_id, "analyze", argv)
         result = parse_json_tail(out) or {}
         db = self._db()
         db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))

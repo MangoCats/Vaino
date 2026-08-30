@@ -109,6 +109,17 @@
 
     const theirs = el('div', 'claim');
     theirs.appendChild(el('h2', null, 'The audio says'));
+    // What kind of check this actually is, and when it ran -- found needed
+    // live: a passage identified by a *different* method afterward (a
+    // release-tracklist match, a hand pick) still shows its old AcoustID
+    // verdict here unless that pass is re-run, and without a date on it
+    // that reads as a live, current answer rather than the dated one it is.
+    theirs.appendChild(el('div', 'sub',
+      `AcoustID's own audio fingerprint match, checked ${item.checked_at} — ` +
+      'a separate, automatic check, not the same thing as a manual pick or ' +
+      'a release-tracklist match made elsewhere. Nothing here re-verifies ' +
+      'itself if the stored id changes by some other means after this date; ' +
+      'only re-running the fingerprint pass does.'));
     const opts = el('ul', 'opts');
     // Radio rather than a button per candidate: picking is not deciding, and
     // a row of "use this one" buttons makes an irreversible-feeling choice out

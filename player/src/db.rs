@@ -1675,6 +1675,13 @@ pub struct Suggestion {
 pub struct ReviewItem {
     pub passage_id: i64,
     pub stored_mbid: String,
+    /// When this row's own fingerprint check actually ran -- so the page can
+    /// say what kind of check this is and how current it is, rather than
+    /// leaving both to be inferred `[SPEC-SUI-198]`. A passage identified by
+    /// some other means since (a release-tracklist match, a hand pick) does
+    /// not retroactively update this: it is the AcoustID pass's own answer,
+    /// timestamped, not a live view of the current id.
+    pub checked_at: String,
     /// What the library currently believes, by the ordinary naming rules --
     /// which is what the listener sees, and so what is actually in question.
     pub title: Option<String>,
@@ -1981,7 +1988,7 @@ impl Library {
             "SELECT c.passage_id, c.stored_mbid, c.score, c.suggested, \
                     {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
                     v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
-                    a.artist_name, a.applied_at \
+                    a.artist_name, a.applied_at, c.checked_at \
                FROM id_checks c \
                JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
                LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
@@ -2011,9 +2018,11 @@ impl Library {
                 let applied_at: Option<String> = r.get(10)?;
                 let artist_review: Option<String> = r.get(11)?;
                 let artist_review_applied_at: Option<String> = r.get(12)?;
+                let checked_at: String = r.get(13)?;
                 Ok(ReviewItem {
                     passage_id: r.get(0)?,
                     stored_mbid,
+                    checked_at,
                     score: r.get(2)?,
                     suggested,
                     title,
