@@ -200,6 +200,24 @@
          means the source tree had uncommitted changes, so the hash names where
          the build started rather than what was compiled.</p>
     </div>
+    <div class="setting">
+      <label>Branch</label>
+      <span><small id="branchtext">&mdash;</small></span>
+      <p>The branch this build was compiled from.</p>
+    </div>
+    <div class="setting">
+      <label>Commit date</label>
+      <span><small id="commitdatetext">&mdash;</small></span>
+      <p>When the commit this build came from was made, and its subject line.</p>
+    </div>
+    <div class="setting">
+      <label>Working tree</label>
+      <span><small id="workingtreetext">&mdash;</small></span>
+      <p>Whether the source tree had uncommitted changes at build time, and how
+         many files. A build from a dirty tree carries <code>+dirty</code> in
+         its Server build hash above, since the commit alone no longer names
+         what was actually compiled.</p>
+    </div>
     <div class="setting" id="radios">
       <label>Radios</label>
       <span id="radio-controls"></span>

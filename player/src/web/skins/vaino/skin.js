@@ -181,6 +181,17 @@
   // any other means.
   function renderBuild(s) {
     if (s.build) $('buildtext').textContent = s.build;
+    if (s.branch) $('branchtext').textContent = s.branch;
+    if (s.commit_date) {
+      $('commitdatetext').textContent = s.commit_subject
+        ? `${s.commit_date} — ${s.commit_subject}`
+        : s.commit_date;
+    }
+    if (typeof s.dirty_files === 'number') {
+      $('workingtreetext').textContent = s.dirty_files === 0
+        ? 'clean'
+        : `${s.dirty_files} file${s.dirty_files === 1 ? '' : 's'} uncommitted`;
+    }
   }
 
   function renderCue(s) {

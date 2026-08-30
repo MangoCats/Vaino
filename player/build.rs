@@ -79,13 +79,30 @@ fn main() {
     // binary, and the stamp will say so only at the next rebuild. That is the
     // right way round: the stamp describes the sources the binary was built
     // from, and those have not changed.
-    let dirty = Command::new("git")
-        .args(["diff", "--quiet", "--ignore-cr-at-eol", "HEAD"])
-        .status()
-        .ok()
-        .map(|st| !st.success())
-        .unwrap_or(false);
+    //
+    // Counted, not just asked yes/no `[REQ-VIS-200]`: the Settings page names
+    // *how many* files, the same figure Sampo's own `/system` page already
+    // shows `[SPEC-SUI-211]`, one `git diff` rather than the two a count-then-
+    // ask-again pair would cost.
+    let dirty_files = git(&["diff", "--name-only", "--ignore-cr-at-eol", "HEAD"])
+        .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    let dirty = dirty_files > 0;
 
     let stamp = if dirty { format!("{hash}+dirty") } else { hash };
     println!("cargo:rustc-env=VAINO_GIT={stamp}");
+
+    // Branch, commit date and subject -- the same fields Sampo's own
+    // `/system` page shows `[SPEC-SUI-210..213]`, so "which build is this"
+    // reads the same way from either side of the handoff. Compile-time,
+    // matching `VAINO_GIT` above: a running binary's own answer cannot
+    // change from under it, the same reasoning that made `[SPEC-SUI-211]`
+    // read Sampo's build once at startup rather than per request.
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    let commit_date = git(&["show", "-s", "--format=%cI", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    let commit_subject = git(&["show", "-s", "--format=%s", "HEAD"]).unwrap_or_default();
+    println!("cargo:rustc-env=VAINO_BRANCH={branch}");
+    println!("cargo:rustc-env=VAINO_COMMIT_DATE={commit_date}");
+    println!("cargo:rustc-env=VAINO_COMMIT_SUBJECT={commit_subject}");
+    println!("cargo:rustc-env=VAINO_DIRTY_FILES={dirty_files}");
 }

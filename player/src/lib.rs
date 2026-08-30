@@ -19,6 +19,16 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GIT: &str = env!("VAINO_GIT");
 
+/// The branch, commit date, and commit subject the build came from, and how
+/// many files the tree had uncommitted at build time -- the same fields
+/// Sampo's own `/system` page already shows `[SPEC-SUI-210..213]`, so the
+/// Settings page can say which build this is the same way from either side
+/// of the handoff.
+pub const BRANCH: &str = env!("VAINO_BRANCH");
+pub const COMMIT_DATE: &str = env!("VAINO_COMMIT_DATE");
+pub const COMMIT_SUBJECT: &str = env!("VAINO_COMMIT_SUBJECT");
+pub const DIRTY_FILES: &str = env!("VAINO_DIRTY_FILES");
+
 /// `0.1.0 (45b74a6952de)`, or with `+dirty` when the tree was not clean.
 pub fn build_id() -> String {
     format!("{VERSION} ({GIT})")

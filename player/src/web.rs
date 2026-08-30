@@ -154,6 +154,13 @@ pub struct Snapshot {
     /// looking at a page can say which build drew it, rather than being asked
     /// to remember.
     pub build: String,
+    /// Branch, commit date, commit subject, and uncommitted-file count the
+    /// build came from -- the same fields the Settings page's "Server build"
+    /// row expands into, matching Sampo's own `/system` page `[REQ-VIS-200]`.
+    pub branch: String,
+    pub commit_date: String,
+    pub commit_subject: String,
+    pub dirty_files: u32,
     pub reload_status: Option<String>,
     /// Which backend is playing, whether a guest exists, and what the last
     /// switch did `[SPEC-BK-025]`.
@@ -267,6 +274,10 @@ impl From<&PlayerState> for Snapshot {
             },
             program: None,
             build: crate::build_id(),
+            branch: crate::BRANCH.to_string(),
+            commit_date: crate::COMMIT_DATE.to_string(),
+            commit_subject: crate::COMMIT_SUBJECT.to_string(),
+            dirty_files: crate::DIRTY_FILES.parse().unwrap_or(0),
             reload_status: None,
             backend: None,
             guest_available: false,
@@ -1979,7 +1990,8 @@ mod tests {
             "playing", "passage_id", "title", "artist", "album", "plays",
             "last_played", "position_ms", "duration_ms", "queue_len", "queue",
             "volume_db", "fader_min_db", "skip", "program", "program_manual",
-            "programs", "underrun_samples",
+            "programs", "underrun_samples", "branch", "commit_date",
+            "commit_subject", "dirty_files",
         ] {
             assert!(json.contains(&format!("\"{field}\"")), "snapshot lost {field}");
         }
