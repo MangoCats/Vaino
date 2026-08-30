@@ -144,6 +144,8 @@ Identification review is the first case. The review page can **play the passage*
 
 The affordance is therefore always drawn — a launch that has not been attempted cannot be known to fail — and step 3 is where the operator learns, in the words of the thing they wanted: *this passage cannot be played here because the local player would not start.*
 
+**`[SPEC-SUI-213]` Built 2026-08-30, narrowing "not a route question" by exactly one route: a reachable port is not necessarily a *capable* one.** Found live the same day: a plain, appliance-equivalent `vaino.exe` (`sampo-support` is opt-in, `default = []` `[SPEC-SUI-190]`) answers step 1's socket check identically to a desktop build, then 404s every review/edit link — a dead page in the browser with no reason given, indistinguishable from a working handoff until clicked. `_vaino_has_sampo_support()` asks one further, narrow question before declaring either step 1 or step 2 a success: does `GET /review.js` — a static asset that exists at all only because that build feature compiled it in — answer below 400. Nothing about *this library or any library* is read, which is the boundary `[SPEC-SUI-025]` actually protects, not "no route is ever asked about" read literally; the distinction is build **capability** versus application **data**, and only the latter is off limits. A capability miss is reported exactly like a start failure already is — by name, pointing at `HOWTO.md §2` — rather than left for a click to discover.
+
 **`[SPEC-SUI-145]` The round trip closes through the database, not through the browser.** Sampo hands off; the operator works in the player; Sampo learns what changed by re-reading the shared file — `id_reviews`, `passage_recordings` — on its next scan. Nothing reports back, because `[SPEC-SA-015]`'s one channel is the file and it is sufficient. This is what keeps a link from quietly becoming an integration: no callback, no postMessage, no polling a Vaino route.
 
 The division of labour that follows is worth stating plainly, because it is not the obvious one:
@@ -259,4 +261,4 @@ Rejection is whole and it is loud: one transaction, the target unchanged, and a 
 
 ---
 
-**Traceability:** `[SPEC-SUI-010..212]` · derived from `[REQ-LIB-170]`, `[SPEC-SA-015]`, `[SPEC-DF-035]`, `[SPEC-DF-050]`, `[SPEC-DF-080]`, `[SPEC-RLK-140]`, `[GDE-CHT-030]` · `[SPEC-SUI-210..212]` built 2026-08-29 (`tools/console.py`'s `build_info()`/`system_status()`, `tools/console_web/system.html`)
+**Traceability:** `[SPEC-SUI-010..213]` · derived from `[REQ-LIB-170]`, `[SPEC-SA-015]`, `[SPEC-DF-035]`, `[SPEC-DF-050]`, `[SPEC-DF-080]`, `[SPEC-RLK-140]`, `[GDE-CHT-030]` · `[SPEC-SUI-210..212]` built 2026-08-29 (`tools/console.py`'s `build_info()`/`system_status()`, `tools/console_web/system.html`) · `[SPEC-SUI-213]` built 2026-08-30 (`tools/console.py`'s `_vaino_has_sampo_support()`/`_vaino_ready()`)

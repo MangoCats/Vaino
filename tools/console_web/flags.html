@@ -35,11 +35,16 @@
     its own, and it still fetches a full comparison copy first.
   </p>
   <div class="controls">
-    <input type="search" id="remote" placeholder="pi@vainopi:/srv/library/vaino.db" style="min-width:24rem">
+    <input type="search" id="remote" placeholder="user@host:/path/to/vaino.db" style="min-width:24rem">
     <button class="chip" id="save-remote">save</button>
     <button class="chip" id="pull">pull flags from remote</button>
     <button class="chip" id="push">push edits to remote</button>
   </div>
+  <p style="font-size:.8rem;color:var(--dim);margin:.3rem 0 0">
+    e.g. <code style="font:12px var(--mono)">pi@vainopi:/srv/library/vaino.db</code>
+    — an input's own placeholder text can't be selected or copied; this can.
+  </p>
+  <p id="remote-status" style="font-size:.8rem;color:var(--dim);margin:.2rem 0 0"></p>
   <div id="sync-result"></div>
 </main>
 <script src="/console.js"></script>
@@ -81,21 +86,39 @@ load();
 
 // -- sync with a remote --------------------------------------------------
 
+// A real, worked example used to sit only in the input's own `placeholder`
+// attribute -- gray text that (a) no browser lets you select or copy, and
+// (b) reads exactly like an already-typed value at a glance, which is
+// precisely what led someone to click "save" on an untouched, actually-
+// empty field. The placeholder is generic now; the real example lives in
+// ordinary page text above, and #remote-status exists so *whether anything
+// is actually saved* is never something only gray text answers either way.
+function showRemoteStatus(remote) {
+  const el = document.getElementById('remote-status');
+  el.textContent = remote ? `configured: ${remote}` : 'not configured yet -- type an address above and save';
+}
+
 async function loadRemote() {
   try {
     const d = await S.get('/api/remote');
     if (d.remote) document.getElementById('remote').value = d.remote;
-  } catch (e) { /* nothing configured yet -- the input just stays empty */ }
+    showRemoteStatus(d.remote);
+  } catch (e) { showRemoteStatus(null); }
 }
 loadRemote();
 
 document.getElementById('save-remote').onclick = async () => {
   const remote = document.getElementById('remote').value.trim();
+  if (!remote) {
+    return S.fail('#sync-result', new Error(
+      'the field is empty -- that gray text is only an example, type the real address first'));
+  }
   const r = await (await fetch('/api/remote', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ remote }),
   })).json();
   if (r.error) return S.fail('#sync-result', new Error(r.error));
+  showRemoteStatus(r.remote);
 };
 
 async function runSync(path) {

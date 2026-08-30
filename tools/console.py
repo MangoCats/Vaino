@@ -27,6 +27,7 @@ stays `mode=ro` throughout.
 
 import argparse
 import html
+import http.client
 import json
 import os
 import shutil
@@ -396,16 +397,43 @@ def _shutdown_soon(httpd) -> None:
 
 # ----------------------------------------------------------------- handoff ---
 # Reaching the player's own pages from inside Sampo's workflow `[SPEC-SUI-140]`,
-# `[SPEC-SUI-135]`. Sampo never asks Vaino anything about the library it is
+# `[SPEC-SUI-135]`. Sampo never asks Vaino anything about the *library* it is
 # running -- only the operating system, whether the port answers at all
-# `[SPEC-SUI-025]`, `[SPEC-SUI-170]`. The round trip closes through the shared
-# database on Sampo's next scan, not through this connection `[SPEC-SUI-145]`.
+# `[SPEC-SUI-025]`, `[SPEC-SUI-170]`, plus one narrow capability probe
+# `[SPEC-SUI-213]` a socket alone cannot answer. The round trip closes through
+# the shared database on Sampo's next scan, not through this connection
+# `[SPEC-SUI-145]`.
 
 def _vaino_reachable(port: int, timeout: float = 0.5) -> bool:
     """A socket question, not a route question `[SPEC-SUI-170]`."""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout):
             return True
+    except OSError:
+        return False
+
+
+def _vaino_has_sampo_support(port: int, timeout: float = 2.0) -> bool:
+    """Whether *this* running Vaino was built with `--features sampo-support`
+    `[SPEC-SUI-213]` -- the one thing `_vaino_reachable`'s socket question
+    cannot tell apart: an appliance-equivalent build and a desktop build
+    listen identically, and only one of them has anywhere for a handoff to
+    land. `/review.js` is a static asset compiled in only by that feature
+    `[SPEC-SUI-190]`, so its presence is a build-capability question, not a
+    library one -- nothing about *this* library, or any library, is read
+    here, which is the boundary `[SPEC-SUI-025]` actually protects. A
+    real-world dead handoff (a Vaino running, answering, and 404ing every
+    review link) is what this exists to catch before a person clicks it.
+    """
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.request("GET", "/review.js")
+            r = conn.getresponse()
+            r.read()  # drain -- the body is never inspected, only the status
+            return r.status < 400
+        finally:
+            conn.close()
     except OSError:
         return False
 
@@ -428,6 +456,28 @@ def _vaino_binary() -> str | None:
     return shutil.which("vaino")
 
 
+def _vaino_ready(port: int, started: bool) -> dict:
+    """A reachable Vaino is not necessarily a *useful* one for this handoff
+    `[SPEC-SUI-213]` -- found live several times over on 2026-08-30: a plain
+    appliance-equivalent build answers every socket check `ensure_vaino()`
+    could make and still 404s every review/edit link, which read in a
+    browser as a dead page with no explanation. Named here instead, the same
+    "say which capability is unavailable, and why" `[SPEC-SUI-170]` already
+    commits to for a missing binary or a start that timed out.
+    """
+    if _vaino_has_sampo_support(port):
+        return {"ok": True, "port": port, "started": started}
+    binary = _vaino_binary()
+    return {"ok": False, "port": port, "started": started,
+            "error": ("Sampo just started a local Vaino, but " if started else
+                      "a Vaino is already running on this port, but ")
+                     + (f"{binary} " if binary else "the binary ")
+                     + "was built without --features sampo-support, so the review page "
+                       "and waveform editor don't exist in it (see HOWTO.md §2). "
+                       "Rebuild player/ with that flag, then " +
+                       ("restart it" if started else "stop this one and reopen this page")}
+
+
 def ensure_vaino(port: int = VAINO_PORT) -> dict:
     """Start the co-resident player if one is not already there `[SPEC-SUI-170]`.
 
@@ -438,11 +488,12 @@ def ensure_vaino(port: int = VAINO_PORT) -> dict:
        what makes `[SPEC-SUI-150]`'s passage-id handoff sound: the player
        reads the exact file the id came from because Sampo told it to, not
        because a configuration happened to agree.
-    3. **Start failed?** Say which capability is unavailable, and why.
-       Silent degradation is its own failure `[SPEC-DF-095]`.
+    3. **Start failed, or started without the routes this handoff needs?**
+       Say which capability is unavailable, and why. Silent degradation is
+       its own failure `[SPEC-DF-095]`.
     """
     if _vaino_reachable(port):
-        return {"ok": True, "port": port, "started": False}
+        return _vaino_ready(port, started=False)
 
     if not STATE["path"]:
         return {"ok": False, "port": port, "error": "no library open"}
@@ -467,7 +518,7 @@ def ensure_vaino(port: int = VAINO_PORT) -> dict:
     deadline = time.time() + 20
     while time.time() < deadline:
         if _vaino_reachable(port):
-            return {"ok": True, "port": port, "started": True}
+            return _vaino_ready(port, started=True)
         time.sleep(0.25)
     return {"ok": False, "port": port,
             "error": "vaino did not answer within 20s of starting"}

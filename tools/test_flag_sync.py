@@ -188,6 +188,37 @@ def test_pull(tmp: str) -> None:
           "a rehearsal must not write any flag")
     c.close()
 
+    # A real regression, not a hypothetical: `ensure_origin_column()` ran
+    # only `ALTER TABLE listener_flags ADD COLUMN origin`, wrapped in a
+    # blanket `except OperationalError: pass` that swallowed "no such
+    # table: listener_flags" the same as "already has the column" -- so a
+    # desktop that had never once had a listener flag anything locally,
+    # and was only ever pulled *into*, looked fine right up until the very
+    # next SELECT against the table it never created.
+    print("a desktop with no listener_flags table at all -- not merely missing origin -- still lands the pull")
+    desk4 = os.path.join(tmp, "desk4.db")
+    c4 = sqlite3.connect(desk4)
+    schema_without_flags = ";".join(
+        stmt for stmt in SCHEMA.split(";") if "listener_flags" not in stmt)
+    c4.executescript(schema_without_flags)
+    c4.execute("INSERT INTO files VALUES (10,'md5-a','/home/a.mp3',1,1.0,'mp3',300000,'t','t')")
+    c4.execute("INSERT INTO passages VALUES (10,10,'radio',1000,200000,0,900,-1.0,'src')")
+    c4.execute("INSERT INTO recordings VALUES (?,'Song A',NULL,'inherited:mulib')", (SONG_A,))
+    c4.execute("INSERT INTO passage_recordings VALUES (10,?,1.0,'inherited:mulib')", (SONG_A,))
+    have = {r[0] for r in c4.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    check("listener_flags" not in have, "the fixture must genuinely lack the table, or this proves nothing")
+    c4.commit()
+    c4.close()
+
+    r = run(IMPORT_FLAGS, desk4, flags_json, "--commit")
+    check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:400]}")
+    check("Traceback" not in r.stderr, f"must not crash, got {r.stderr[:400]}")
+    check("1 new flag(s)" in r.stdout, f"expected the recording flag to land, got {r.stdout!r}")
+    c4 = sqlite3.connect(desk4)
+    got = flags_here(c4)
+    check(("recording", SONG_A) in got, f"the table must exist and hold the pulled flag, got {got}")
+    c4.close()
+
 
 def test_push_back_emit_sql(tmp: str) -> None:
     print("Hop 3: --emit-sql never writes to the compare copy, and the script "

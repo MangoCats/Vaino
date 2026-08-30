@@ -34,12 +34,30 @@ def say(text: str) -> None:
     print(text.encode(enc, "replace").decode(enc), flush=True)
 
 
-def ensure_origin_column(conn: sqlite3.Connection) -> None:
-    """The same migration `player/src/db.rs`'s `ensure_flags_columns` runs on
+def ensure_flags_table(conn: sqlite3.Connection) -> None:
+    """The identical schema `player/src/db.rs`'s `FLAGS_TABLE` creates on
     every Vaino start `[SPEC-DF-107]` -- needed here too, since this writes
     directly to the SQLite path and cannot assume any particular Vaino has
-    opened this file since the column was added.
+    ever opened this file at all. A desktop that has never had a listener
+    flag anything locally, and is only ever pulled *into*, is exactly the
+    case where the table is missing outright, not merely missing a column
+    -- `CREATE TABLE IF NOT EXISTS` covers that; `ALTER TABLE ADD COLUMN`
+    still runs after, to bring an older table (built before `origin` was
+    added) up to date, the same two-step `ensure_flags_columns` documents
+    on the Rust side.
+
+    Previously this ran only the `ALTER TABLE`, wrapped in a blanket
+    `except OperationalError: pass` that silently treated "no such table:
+    listener_flags" the same as "already has the column" -- so a pull
+    against a library missing the table outright looked like it was
+    landing flags right up until the very next `SELECT` against it failed
+    for real.
     """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS listener_flags ("
+        "subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','passage')), "
+        "subject_id TEXT NOT NULL, flagged_at TEXT NOT NULL, origin TEXT, "
+        "PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID")
     try:
         conn.execute("ALTER TABLE listener_flags ADD COLUMN origin TEXT")
     except sqlite3.OperationalError:
@@ -62,7 +80,7 @@ def main() -> int:
 
     conn = sqlite3.connect(args.db, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
-    ensure_origin_column(conn)
+    ensure_flags_table(conn)
     conn.commit()
 
     say(f"{len(flags)} flagged track(s) in {args.flags}")
