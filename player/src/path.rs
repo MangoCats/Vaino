@@ -229,6 +229,16 @@ fn watch(out: &Output, playing: bool, watch_at: &mut Instant) {
 }
 
 /// Release, wait, reopen -- and only call it recovered if it is audible.
+///
+/// Gated on `playing` for the same reason `watch()` already is: nothing
+/// here previously consulted it at all, so an already-failed device kept
+/// releasing and reopening on its own backoff regardless of whether
+/// anything was even asking to play -- endlessly re-hunting a device that
+/// simply isn't there while a plain pause, or nothing chosen to play at
+/// all, made the answer not matter either way. `watch()` stops *starting*
+/// a new failure while `!playing`; this stops an *already-armed* one from
+/// continuing to run. The next `SetPlaying(true)` re-arms `watch_at`
+/// immediately and this resumes exactly as before.
 fn recover(
     out: &mut Output,
     playing: bool,
@@ -236,7 +246,7 @@ fn recover(
     backoff: &mut Duration,
     recoveries: &Arc<AtomicU64>,
 ) {
-    if !out.failed() {
+    if !playing || !out.failed() {
         return;
     }
     let now = Instant::now();
