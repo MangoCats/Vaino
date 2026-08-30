@@ -438,6 +438,16 @@
 
   function stopPreview() {
     if (source) {
+      // Detach `onended` before stopping it: the event still fires
+      // asynchronously after `.stop()`, and by the time it does, `source`
+      // may already have moved on to a newer node started in the meantime.
+      // A callback still watching the old node would then see `source ===`
+      // that stale node and wrongly null out the *current* one -- this is
+      // the actual cause a click could seem to "start another stream" that
+      // never got silenced: the reference to it was lost, so a later
+      // `stopPreview()` had nothing to call `.stop()` on, even though the
+      // node itself was still actually playing.
+      source.onended = null;
       try { source.stop(); } catch (e) { /* already stopped */ }
       source.disconnect();
       source = null;
@@ -448,14 +458,20 @@
   function playFrom(offsetMs) {
     stopPreview();
     const preview = renderPreview();
-    source = audioCtx.createBufferSource();
-    source.buffer = preview;
-    source.connect(audioCtx.destination);
+    const node = audioCtx.createBufferSource();
+    node.buffer = preview;
+    node.connect(audioCtx.destination);
     const offSec = clamp(offsetMs, 0, preview.duration * 1000) / 1000;
     playedAt = audioCtx.currentTime;
     playedFromMs = offSec * 1000;
-    source.onended = () => { source = null; $('play').textContent = 'Play'; };
-    source.start(0, offSec);
+    // Guarded by identity, not just detached above: a node that runs to its
+    // own natural end (never stopped by hand) must still clear `source`, but
+    // only if nothing newer has already taken its place.
+    node.onended = () => {
+      if (source === node) { source = null; $('play').textContent = 'Play'; }
+    };
+    node.start(0, offSec);
+    source = node;
     $('play').textContent = 'Pause';
     requestAnimationFrame(tick);
   }
