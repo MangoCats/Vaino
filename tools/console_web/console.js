@@ -42,7 +42,49 @@ const S = {
   },
 
   fail(where, e) {
-    const box = document.querySelector(where);
+    // `where` is a CSS selector everywhere this was first written, but a
+    // caller that already holds the element (a per-candidate result box
+    // with no id of its own, e.g.) has no selector to give it -- accepting
+    // either avoids inventing one just to satisfy this signature.
+    const box = typeof where === 'string' ? document.querySelector(where) : where;
     if (box) box.replaceChildren(S.el('p', { class: 'err', text: String(e.message || e) }));
+  },
+
+  // A live job's log while it runs, then whatever the caller wants once it
+  // stops -- factored out of flags.html's own watchSync()/showResult(),
+  // which a second job-launching page (profile.html's reanalyze button) was
+  // about to duplicate rather than share [SPEC-SUI-214].
+  watchJob(id, box, onDone) {
+    const log = S.el('div', { class: 'list' });
+    box.replaceChildren(log);
+    const es = new EventSource(`/api/jobs/${id}/stream`);
+    es.onmessage = async m => {
+      const e = JSON.parse(m.data);
+      if (e.kind === 'counts') return;
+      const line = e.kind === 'stage' ? `── ${e.text} ──`
+        : e.kind === 'done' ? `── finished: ${e.text} ──` : e.text;
+      log.append(S.el('div', {
+        style: e.kind === 'error' ? 'color:var(--bad)'
+          : (e.kind === 'stage' || e.kind === 'done') ? 'color:var(--accent)' : '',
+        text: line,
+      }));
+      log.scrollTop = log.scrollHeight;
+      if (e.kind === 'done') {
+        es.close();
+        const job = await S.get(`/api/jobs/${id}`);
+        if (onDone) onDone(job, box);
+      }
+    };
+  },
+
+  // The default `onDone`: flat numeric tiles -- what most job results
+  // already are (flags pull/push's matched/already/unmatched, and so on).
+  // A caller whose `result` is structured differently passes its own
+  // `onDone` to `watchJob` instead of using this.
+  tileResult(job, box) {
+    if (!job.result) return;
+    box.append(S.el('div', { class: 'tiles' },
+      ...Object.entries(job.result).map(([k, v]) =>
+        S.el('div', { class: 'tile' }, S.el('b', { text: S.n(v) }), S.el('span', { text: k })))));
   },
 };

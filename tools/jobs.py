@@ -35,8 +35,10 @@ import time
 DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id     INTEGER PRIMARY KEY,
-    kind       TEXT NOT NULL,          -- 'propose' | 'induct' | 'export-bundle'
-                                        -- | 'remote-pull' | 'remote-push' | 'accept-remote'
+    kind       TEXT NOT NULL,          -- 'propose' | 'induct' | 'reanalyze'
+                                        -- | 'export-bundle' | 'remote-pull'
+                                        -- | 'remote-push' | 'accept-remote'
+                                        -- | 'suggest-release' | 'accept-release'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -71,13 +73,23 @@ CREATE TABLE IF NOT EXISTS remote_config (
 # are absent because they need a real MBID, which self-published audio does not
 # get `[SPEC-SUI-075]`. The plan says which it skips and why, rather than
 # quietly running seven things.
-def steps_for(db: str, folder: str) -> list:
+def steps_for(db: str, folder: str, recheck: bool = False) -> list:
+    """`recheck=True` is the one thing plain `induct` cannot do `[IMPL-SUI-020]`
+    reused for `[SPEC-SUI-214]`'s `reanalyze` job: `fingerprint_ids.py` already
+    skips any passage already in `id_checks`, `unmatched` included, so a
+    second `induct` over an already-ingested folder can never retry one --
+    `--recheck` is the tool's own existing flag for exactly that, simply never
+    wired to a caller before now.
+    """
     tools = os.path.dirname(os.path.abspath(__file__))
+    identify = [sys.executable, os.path.join(tools, "fingerprint_ids.py"), db]
+    if recheck:
+        identify.append("--recheck")
     return [
         ("ingest", [sys.executable, os.path.join(tools, "ingest_folder.py"),
                     db, folder, "--commit", "--json"]),
         ("extract", [sys.executable, os.path.join(tools, "extract_library.py"), db]),
-        ("identify", [sys.executable, os.path.join(tools, "fingerprint_ids.py"), db]),
+        ("identify", identify),
         ("merge", [sys.executable, os.path.join(tools, "fingerprint_ids.py"), db, "--merge"]),
     ]
 
@@ -298,8 +310,21 @@ class Runner:
         if kind == "accept-remote":
             return self._accept_remote(job_id, target)
 
+        if kind == "suggest-release":
+            return self._suggest_release(job_id, target)
+
+        if kind == "accept-release":
+            return self._accept_release(job_id, target)
+
+        # 'induct' and 'reanalyze' `[SPEC-SUI-214]` are the same four-stage
+        # pipeline, differing only in whether `identify` is told to retry
+        # what it already tried -- anything else unrecognized also lands
+        # here, matching this method's own long-standing fallthrough.
+        return self._run_pipeline(job_id, target, recheck=(kind == "reanalyze"))
+
+    def _run_pipeline(self, job_id: int, target: str, recheck: bool):
         result = {}
-        for stage, argv in steps_for(self.library, target):
+        for stage, argv in steps_for(self.library, target, recheck=recheck):
             if self._stopped(job_id):
                 return self._finish(job_id, "stopped")
             self._emit(job_id, "stage", stage, stage=stage)
@@ -460,6 +485,50 @@ class Runner:
                 "--commit", "--json"]
         self._emit(job_id, "stage", "accept", stage="accept")
         code, out = self._spawn(job_id, "accept", argv)
+        result = parse_json_tail(out) or {}
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+
+    def _suggest_release(self, job_id: int, target: str):
+        """Discovery only `[SPEC-SUI-215]` -- `target` is
+        `{"folder", "query"}`, `query` optional (the "browse" half: a
+        person's own search overriding the algorithm's guessed one).
+        `suggest_release.py` itself never touches `passage_recordings`
+        without `--accept`, so this is safe to run as freely as a search.
+        """
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "suggest_release.py"),
+                self.library, payload["folder"], "--json"]
+        if payload.get("query"):
+            argv += ["--query", payload["query"]]
+        self._emit(job_id, "stage", "search", stage="search")
+        code, out = self._spawn(job_id, "search", argv)
+        result = parse_json_tail(out) or {}
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+
+    def _accept_release(self, job_id: int, target: str):
+        """The write half `[SPEC-SUI-215]` -- `target` is
+        `{"folder", "release_mbid"}`, the same JSON-in-`target` shape
+        `accept-remote` already uses. `suggest_release.py --accept` re-derives
+        the same per-file matches from the release now cached by the
+        discovery job (or fetches it fresh if this MBID was picked from
+        outside the top candidates) and applies them.
+        """
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "suggest_release.py"),
+                self.library, payload["folder"], "--accept", payload["release_mbid"],
+                "--commit", "--json"]
+        self._emit(job_id, "stage", "apply", stage="apply")
+        code, out = self._spawn(job_id, "apply", argv)
         result = parse_json_tail(out) or {}
         db = self._db()
         db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))

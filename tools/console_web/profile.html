@@ -131,6 +131,100 @@ function remoteBasisBox(pid) {
   return box;
 }
 
+// A candidate release the folder-level score named, rendered whether it is
+// the top pick or an alternative -- one shape, styled differently
+// [SPEC-SUI-215]. `best` only affects the border; every candidate gets its
+// own "use this release" button, since the algorithm's own top guess is a
+// starting point, not a decision [SPEC-SA-080]'s own "automation sets the
+// default; it does not remove the decision" already argued for boundaries,
+// and applies just as much to an album.
+function candidateCard(pid, folder, c, best) {
+  const pct = Math.round(c.score * 100);
+  const card = S.el('div', { class: 'candidate' + (best ? ' best' : '') },
+    S.el('h3', {},
+      S.el('a', { href: `https://musicbrainz.org/release/${c.mbid}`, target: '_blank', rel: 'noopener' },
+        c.title || '(untitled)'),
+      ' ', S.el('span', { class: 'pill', text: `${c.matches.length}/${c.track_count} tracks` }),
+      ' ', S.el('span', { class: 'pill ' + (pct >= 70 ? 'ok' : pct >= 35 ? 'warn' : 'bad'),
+                          text: `${pct}% fit` })),
+    S.el('p', { class: 'meta' }, `${c.artist || 'unknown artist'} — ${c.date || 'no date'} — ${c.mbid}`));
+
+  if (c.matches.length) {
+    card.append(S.el('table', {},
+      S.el('thead', {}, S.el('tr', {}, ...['file', 'matched to', 'similarity', 'Δ duration']
+        .map(h => S.el('th', { text: h })))),
+      S.el('tbody', {}, ...c.matches.map(m => S.el('tr', {},
+        S.el('td', { text: m.file.split(/[\\/]/).pop() }),
+        S.el('td', { text: `#${m.track_position} ${m.track_title}` }),
+        S.el('td', { class: 'num', text: m.similarity.toFixed(2) }),
+        S.el('td', { class: 'num', text: m.duration_delta_ms == null ? '—' : `${Math.round(m.duration_delta_ms / 1000)}s` }))))));
+  }
+  if (c.unmatched_files.length) {
+    card.append(S.el('p', { class: 'meta' },
+      'not matched: ', c.unmatched_files.map(f => f.split(/[\\/]/).pop()).join(', ')));
+  }
+
+  const btn = S.el('button', { class: 'chip' }, 'use this release');
+  const result = S.el('div', {});
+  card.append(S.el('div', { class: 'controls', style: 'margin-top:.4rem' }, btn), result);
+  btn.onclick = async () => {
+    result.replaceChildren(S.el('p', { class: 'empty', text: 'applying…' }));
+    let r;
+    try {
+      r = await (await fetch('/api/release/accept', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder, release_mbid: c.mbid }),
+      })).json();
+    } catch (e) { return S.fail(result, e); }
+    if (r.error) return S.fail(result, new Error(r.error));
+    S.watchJob(r.job_id, result, job => {
+      // A newly-assigned recording changes the "Recording" section and the
+      // "no MusicBrainz entry" pill above it -- reload rather than patch.
+      if (job.state === 'done') location.reload();
+    });
+  };
+  return card;
+}
+
+function releaseSuggestBox(pid, folder) {
+  const box = S.el('div', {});
+  const controls = S.el('div', { class: 'controls' },
+    S.el('input', { type: 'search', id: 'release-query',
+                    placeholder: 'leave blank to guess from this folder\'s own file tags',
+                    style: 'min-width:24rem' }),
+    S.el('button', { class: 'chip', id: 'suggest-release' }, 'suggest a MusicBrainz release'));
+  const result = S.el('div', { id: 'release-result' });
+  box.append(controls, result);
+
+  const run = async () => {
+    result.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+    const query = document.getElementById('release-query').value.trim();
+    let r;
+    try {
+      r = await (await fetch('/api/release/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder, query: query || undefined }),
+      })).json();
+    } catch (e) { return S.fail('#release-result', e); }
+    if (r.error) return S.fail('#release-result', new Error(r.error));
+    S.watchJob(r.job_id, result, job => {
+      if (job.state !== 'done' || !job.result || !job.result.ok) return;
+      const cands = job.result.candidates || [];
+      document.getElementById('release-query').value = job.result.query || '';
+      const list = S.el('div', {});
+      if (!cands.length) {
+        list.append(S.el('p', { class: 'empty',
+          text: 'Nothing found. Try a different search above.' }));
+      } else {
+        list.append(...cands.map((c, i) => candidateCard(pid, folder, c, i === 0)));
+      }
+      result.append(list);
+    });
+  };
+  controls.querySelector('#suggest-release').onclick = run;
+  return box;
+}
+
 (async () => {
   const m = document.getElementById('main');
   try {
@@ -141,6 +235,42 @@ function remoteBasisBox(pid) {
 
     m.append(S.el('h2', {}, `${t.title || '(untitled)'} `,
       S.el('small', { text: `— passage ${pid}, ${t.artist || 'no artist'}` })));
+
+    // The folder this passage's own file lives in -- the scope both the
+    // reanalyze button and the release-suggestion section below act on.
+    // Last path segment stripped, `\` or `/`, since library paths are
+    // Windows-real (`C:\...\Album\NN - Title.mp3`) but nothing here assumes
+    // one separator only.
+    const folder = p.path.replace(/[\\/][^\\/]*$/, '');
+
+    m.append(S.el('div', { class: 'controls' },
+      S.el('button', { class: 'chip', id: 'reanalyze' },
+        `reanalyze this folder (${folder})`)));
+    m.append(S.el('div', { id: 'reanalyze-result' }));
+    document.getElementById('reanalyze').onclick = async () => {
+      const box = document.getElementById('reanalyze-result');
+      box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+      let r;
+      try {
+        r = await (await fetch('/api/reanalyze', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder }),
+        })).json();
+      } catch (e) { return S.fail('#reanalyze-result', e); }
+      if (r.error) return S.fail('#reanalyze-result', new Error(r.error));
+      // `--recheck` [SPEC-SUI-214] means this can genuinely change what this
+      // very page shows (a fresh id, newly-cached flavor) -- reload once
+      // finished rather than trying to patch each section by hand. Only on
+      // a clean finish: a failure's own log is worth reading, not discarding.
+      S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
+    };
+
+    // A short-run replacement for AcoustID fingerprinting when it comes up
+    // unmatched [SPEC-SUI-215] -- searches by the folder's own tags, scores
+    // each candidate release against the folder's actual files, and applies
+    // nothing until a specific release is picked.
+    m.append(S.el('h2', {}, 'Suggest a MusicBrainz release for this folder'));
+    m.append(releaseSuggestBox(pid, folder));
 
     m.append(kv([
       ['audio_md5', p.audio_md5],

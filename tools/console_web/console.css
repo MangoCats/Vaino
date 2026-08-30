@@ -107,6 +107,13 @@ h2 small { font-weight: 400; color: var(--dim); }
 .err { color: var(--bad); font-family: var(--mono); font-size: .85rem; }
 .empty { color: var(--dim); font-style: italic; padding: 1rem 0; }
 
+/* a MusicBrainz release candidate [SPEC-SUI-215] */
+.candidate { border: 1px solid var(--line); border-radius: 4px;
+             padding: .6rem .9rem; margin-bottom: .7rem; }
+.candidate.best { border-color: var(--accent); }
+.candidate h3 { margin: 0 0 .3rem; font-size: .9rem; }
+.candidate .meta { font-size: .8rem; color: var(--dim); margin-bottom: .4rem; }
+
 /* the targeted remote read at open time [SPEC-DF-116..118] */
 .diverge { border-left: 3px solid var(--warn); background: var(--panel);
            padding: .5rem .9rem; margin: 0 0 1.2rem; font-size: .85rem; }

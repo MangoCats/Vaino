@@ -126,41 +126,14 @@ async function runSync(path) {
   box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
   const r = await (await fetch(path, { method: 'POST' })).json();
   if (r.error) return S.fail('#sync-result', new Error(r.error));
-  watchSync(r.job_id, box);
+  // import_flags.py/apply_changes.py's own --json line already computed
+  // matched/already/unmatched etc; tileResult renders it, not re-derived here.
+  S.watchJob(r.job_id, box, (job, box) => {
+    S.tileResult(job, box);
+    if (job.state === 'done') load(); // the pull may have just changed what /api/flags shows
+  });
 }
 
 document.getElementById('pull').onclick = () => runSync('/api/remote/pull');
 document.getElementById('push').onclick = () => runSync('/api/remote/push');
-
-// A thinner version of jobs.html's own watch(): the log while it runs, the
-// job's own `result` once it stops -- that JSON is exactly what
-// import_flags.py/apply_changes.py's own --json line already computed, not
-// re-derived here.
-function watchSync(id, box) {
-  const log = S.el('div', { class: 'list' });
-  box.replaceChildren(log);
-  const es = new EventSource(`/api/jobs/${id}/stream`);
-  es.onmessage = m => {
-    const e = JSON.parse(m.data);
-    if (e.kind === 'counts') return;
-    const line = e.kind === 'stage' ? `── ${e.text} ──`
-      : e.kind === 'done' ? `── finished: ${e.text} ──` : e.text;
-    log.append(S.el('div', {
-      style: e.kind === 'error' ? 'color:var(--bad)'
-        : (e.kind === 'stage' || e.kind === 'done') ? 'color:var(--accent)' : '',
-      text: line,
-    }));
-    log.scrollTop = log.scrollHeight;
-    if (e.kind === 'done') { es.close(); showResult(id, box); }
-  };
-}
-
-async function showResult(id, box) {
-  const j = await S.get(`/api/jobs/${id}`);
-  if (!j.result) return;
-  box.append(S.el('div', { class: 'tiles' },
-    ...Object.entries(j.result).map(([k, v]) =>
-      S.el('div', { class: 'tile' }, S.el('b', { text: S.n(v) }), S.el('span', { text: k })))));
-  if (j.state === 'done') load(); // the pull may have just changed what /api/flags shows
-}
 </script>

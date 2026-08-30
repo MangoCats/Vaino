@@ -823,6 +823,41 @@ class Handler(BaseHTTPRequestHandler):
                 if not prev or prev["kind"] != "propose" or prev["state"] != "done":
                     return self.send_json({"error": "no completed proposal to confirm"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("induct", prev["target"])})
+            if p == "/api/reanalyze":
+                # No propose/plan step, unlike fresh induction `[SPEC-SUI-070]`
+                # -- this folder is already known, there is no "new files
+                # discovered" surprise to preview, only whether to retry what
+                # `identify` already gave up on `[SPEC-SUI-214]`.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                folder = (json.loads(body or b"{}") or {}).get("folder", "")
+                if not folder or not os.path.isdir(folder):
+                    return self.send_json({"error": f"not a folder: {folder}"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("reanalyze", folder)})
+            if p == "/api/release/suggest":
+                # Discovery only `[SPEC-SUI-215]` -- never touches
+                # passage_recordings, so no confirmation step belongs here.
+                # `query` is optional -- the "browse" half of the feature:
+                # a person overriding the algorithm's own guessed search.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                folder = payload.get("folder", "")
+                if not folder or not os.path.isdir(folder):
+                    return self.send_json({"error": f"not a folder: {folder}"}, code=400)
+                target = json.dumps({"folder": folder, "query": payload.get("query") or None})
+                return self.send_json({"job_id": STATE["jobs"].submit("suggest-release", target)})
+            if p == "/api/release/accept":
+                # The write half `[SPEC-SUI-215]` -- the one place this
+                # feature touches the library, and only for whichever
+                # release the operator actually picked, never automatically.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                folder, release_mbid = payload.get("folder", ""), payload.get("release_mbid", "")
+                if not folder or not os.path.isdir(folder):
+                    return self.send_json({"error": f"not a folder: {folder}"}, code=400)
+                if not release_mbid:
+                    return self.send_json({"error": "no release_mbid given"}, code=400)
+                target = json.dumps({"folder": folder, "release_mbid": release_mbid})
+                return self.send_json({"job_id": STATE["jobs"].submit("accept-release", target)})
             if p.startswith("/api/jobs/") and p.endswith("/stop"):
                 return self.send_json({"stopped": STATE["jobs"].stop(int(p.split("/")[3]))})
             if p == "/api/remote":
