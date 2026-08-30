@@ -36,7 +36,7 @@ DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id     INTEGER PRIMARY KEY,
     kind       TEXT NOT NULL,          -- 'propose' | 'induct' | 'export-bundle'
-                                        -- | 'remote-pull' | 'remote-push'
+                                        -- | 'remote-pull' | 'remote-push' | 'accept-remote'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -295,6 +295,9 @@ class Runner:
         if kind == "remote-push":
             return self._remote_push(job_id, target)
 
+        if kind == "accept-remote":
+            return self._accept_remote(job_id, target)
+
         result = {}
         for stage, argv in steps_for(self.library, target):
             if self._stopped(job_id):
@@ -319,29 +322,26 @@ class Runner:
         self._finish(job_id, "done")
 
     def _remote_pull(self, job_id: int, target: str):
-        """A GUI over `export_flags.py`/`import_flags.py` `[SPEC006 SS10]` --
-        `target` is `user@host:/path/to/vaino.db`, the exact form `scp`
-        already wants, so nothing here parses it further than `scp` itself
-        will. Pulls a fresh copy (never assumes yesterday's), exports that
-        copy's flags by their portable anchor, then lands whatever resolves
-        against the local library -- reporting, not silently dropping,
-        whatever does not `[SPEC-DF-109]`. That `unmatched` count is exactly
-        "flags on tracks that don't exist locally," already computed by
-        `import_flags.py`, not re-derived here.
+        """A GUI over `remote_flags.py`/`import_flags.py` `[SPEC-DF-119]` --
+        `target` is `user@host:/path/to/vaino.db`. No `scp`, no database
+        copy: `listener_flags` is one small table, fetched over one `ssh
+        ... sqlite3 -json ...` round trip, the same targeted-read mechanism
+        `[SPEC-DF-116]` already gave a single review anchor -- what
+        `[SPEC-DF-114]` measured at over an hour was the copy, never the
+        actual data. Whatever comes back is landed against the local
+        library -- reporting, not silently dropping, whatever does not
+        `[SPEC-DF-109]`. That `unmatched` count is exactly "flags on tracks
+        that don't exist locally," already computed by `import_flags.py`,
+        not re-derived here.
         """
         tools = os.path.dirname(os.path.abspath(__file__))
         work = os.path.join(os.path.dirname(tools), "out", f"remote-pull-{job_id}")
         os.makedirs(work, exist_ok=True)
-        copy_db = os.path.join(work, "remote-copy.db")
         flags_json = os.path.join(work, "flags.json")
 
-        self._emit(job_id, "stage", "fetch", stage="fetch")
-        code, _ = self._spawn(job_id, "fetch", ["scp", target, copy_db])
-        if code != 0:
-            return self._finish(job_id, "failed")
-        self._emit(job_id, "stage", "export", stage="export")
-        code, _ = self._spawn(job_id, "export", [
-            sys.executable, os.path.join(tools, "export_flags.py"), copy_db, "-o", flags_json])
+        self._emit(job_id, "stage", "fetch-flags", stage="fetch-flags")
+        code, _ = self._spawn(job_id, "fetch-flags", [
+            sys.executable, os.path.join(tools, "remote_flags.py"), target, "-o", flags_json])
         if code != 0:
             return self._finish(job_id, "failed")
         self._emit(job_id, "stage", "import", stage="import")
@@ -440,6 +440,32 @@ class Runner:
         db.commit()
         db.close()
         return self._finish(job_id, "done" if code == 0 else "failed")
+
+    def _accept_remote(self, job_id: int, target: str):
+        """`[SPEC-DF-116..117]`'s one deliberate exception to "the console
+        never writes the library" -- kept to that discipline's own shape:
+        `accept_remote_basis.py` does the write, spawned the same way every
+        other write here is, never this process's own (`mode=ro`)
+        connection. `target` carries the small JSON the profile page's own
+        POST already resolved server-side -- kind, anchor, and the remote
+        value fetched moments before by `/api/profile/:id/remote`.
+        """
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        anchor = payload["anchor"]
+        argv = [sys.executable, os.path.join(tools, "accept_remote_basis.py"), self.library,
+                "--kind", payload["kind"], "--audio-md5", anchor["audio_md5"],
+                "--passage-kind", anchor["passage_kind"], "--start-ms", str(anchor["start_ms"]),
+                "--end-ms", str(anchor["end_ms"]), "--value", json.dumps(payload["value"]),
+                "--commit", "--json"]
+        self._emit(job_id, "stage", "accept", stage="accept")
+        code, out = self._spawn(job_id, "accept", argv)
+        result = parse_json_tail(out) or {}
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
 
     def _spawn(self, job_id, stage, argv):
         # UTF-8 on both sides. `ingest_folder.say()` falls back to the console

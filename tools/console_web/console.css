@@ -65,6 +65,8 @@ input[type=search] {
   background: var(--panel); color: var(--dim); cursor: pointer; font-size: .82rem;
 }
 .chip.on { color: var(--fg); border-color: var(--accent); }
+.chip.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.chip.danger:hover { background: color-mix(in srgb, var(--bad) 10%, var(--panel)); }
 
 table { border-collapse: collapse; width: 100%; font-size: .87rem; }
 th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
@@ -104,6 +106,13 @@ h2 small { font-weight: 400; color: var(--dim); }
 .flavor .row span:last-child { font-family: var(--mono); color: var(--dim); }
 .err { color: var(--bad); font-family: var(--mono); font-size: .85rem; }
 .empty { color: var(--dim); font-style: italic; padding: 1rem 0; }
+
+/* the targeted remote read at open time [SPEC-DF-116..118] */
+.diverge { border-left: 3px solid var(--warn); background: var(--panel);
+           padding: .5rem .9rem; margin: 0 0 1.2rem; font-size: .85rem; }
+.diverge .row { display: flex; justify-content: space-between; align-items: center;
+                gap: .8rem; padding: .4rem 0; border-bottom: 1px dotted var(--line); }
+.diverge .row:last-child { border-bottom: none; }
 
 /* the handoff [SPEC-SUI-140]: Vaino's own review page, framed in place */
 .handoff-frame {

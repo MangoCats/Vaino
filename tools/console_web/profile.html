@@ -5,7 +5,7 @@
 <link rel="stylesheet" href="/console.css">
 <header>
   <h1>Sampo</h1>
-  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a></nav>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/system">system</a></nav>
   <span class="ro">library read-only</span>
 </header>
 <main id="main"><p class="empty">loading…</p></main>
@@ -66,6 +66,66 @@ function handoffBox(passageId, route, label) {
         // this frame, and does not ask to. The round trip closes through the
         // shared database on the next scan, not through the browser.
       }));
+  })();
+
+  return box;
+}
+
+// The targeted remote read `[SPEC-DF-116..118]`: at open time, not push
+// time, and never a database copy -- a `remote_peek.py` subprocess per
+// identity this page can hand off (id review, boundary editing). Returns
+// synchronously, like `handoffBox`, so the rest of the page never waits on
+// a flaky Pi Zero's own WiFi to render.
+function remoteBasisBox(pid) {
+  const box = S.el('div', {});
+
+  (async () => {
+    let d;
+    try {
+      d = await S.get(`/api/profile/${pid}/remote`);
+    } catch (e) {
+      box.replaceChildren(S.el('p', { class: 'err', text: `Could not check vainopi: ${e.message}` }));
+      return;
+    }
+    if (!d.remote) return;                 // no remote configured -- nothing to say
+    if (!d.reachable) {
+      box.replaceChildren(S.el('p', { class: 'empty' },
+        S.el('span', { class: 'pill warn', text: 'could not reach vainopi' }),
+        ' — editing against the local baseline only.'));
+      return;
+    }
+    const diverged = Object.entries(d.checks || {}).filter(([, c]) => c.diverged);
+    if (!diverged.length) return;          // in agreement -- nothing extra to show
+
+    const LABEL = { id_review: 'recording id', boundary_review: 'boundary' };
+    const describe = (kind, v) => v == null ? '(none)' : kind === 'id_review'
+      ? (v.mbid || '(none)')
+      : `${v.start_ms}–${v.end_ms}, lead-in ${v.lead_in_ms}, lead-out ${v.lead_out_ms}, gain ${v.gain_db}`;
+
+    box.replaceChildren(S.el('div', { class: 'diverge' },
+      S.el('p', { class: 'empty', style: 'padding:.2rem 0 .3rem' },
+        'Diverged on vainopi since this library last saw it — offered here, before editing, '
+        + 'rather than only caught at push time.'),
+      ...diverged.map(([kind, c]) => {
+        const row = S.el('div', { class: 'row' },
+          S.el('span', {}, S.el('b', { text: LABEL[kind] || kind }),
+            ': here — ', describe(kind, c.local), ', vainopi — ', describe(kind, c.current)),
+          S.el('button', { class: 'chip' }, "accept vainopi's value"));
+        row.querySelector('button').onclick = async () => {
+          row.replaceChildren(S.el('span', { class: 'empty', text: 'accepting…' }));
+          try {
+            const r = await (await fetch(`/api/profile/${pid}/accept-remote`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ kind, value: c.current }),
+            })).json();
+            if (r.error) throw new Error(r.error);
+            location.reload();   // simplest correct thing -- everything above was read at open time
+          } catch (e) {
+            row.replaceChildren(S.el('span', { class: 'err', text: e.message }));
+          }
+        };
+        return row;
+      })));
   })();
 
   return box;
@@ -135,6 +195,12 @@ function handoffBox(passageId, route, label) {
         m.append(box);
       }
     }
+
+    // Offered *before* the handoff, not after and not only at push time
+    // [SPEC-DF-116..118] -- accepting it is a small local write, so whatever
+    // Vaino's own editor captures as its baseline a moment later already
+    // matches what vainopi had.
+    m.append(remoteBasisBox(pid));
 
     // Where a capability is naturally Vaino's, it is built there and
     // *presented* through Sampo's workflow [SPEC-SUI-140]: id review and

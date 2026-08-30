@@ -1,6 +1,6 @@
 # IMPL008: Targeted Remote Reads at Edit-Open Time
 
-**Implementation Guide — the build order for [SPEC022 §2](spec/SPEC022-flag-and-edit-sync.md#2-a-console-gui-for-1-its-measured-cost-and-a-design-to-keep-it-fast)'s `[SPEC-DF-116..118]`, settled design, nothing built**
+**Implementation Guide — the build order for [SPEC022 §2](spec/SPEC022-flag-and-edit-sync.md#2-a-console-gui-for-1-its-measured-cost-and-a-design-to-keep-it-fast)'s `[SPEC-DF-116..118]`, built 2026-08-29 as specified below**
 
 > **Related:** [SPEC022](spec/SPEC022-flag-and-edit-sync.md) — read this first, in full, it is short · `tools/apply_changes.py` (the anchors and `classify()` this reuses) · `tools/console.py`, `tools/console_web/profile.html` (where this lands) · commit `abb41c0` (the pull/push GUI this builds past)
 
@@ -20,19 +20,23 @@ A GUI for pulling vainopi's flags and pushing local edits back is already built 
 
 **Degrading gracefully, per `[SPEC-DF-118]`:** if vainopi doesn't answer, show *"could not reach vainopi — editing against the local baseline only"* and proceed. Never block. Household WiFi to this hardware has already proven unreliable all through the Sonos investigation on this same branch history — a check that can't run must not stop someone from working.
 
-## 3. Build order
+## 3. Build order — built as specified
 
-1. **`tools/remote_peek.py`** — the one new read primitive everything else depends on. Given a remote (`user@host:/path`) and one anchor (recording mbid, or `audio_md5`+kind+start/end), builds the right `SELECT` and runs it via `ssh <host> sqlite3 -json <path> "..."`, returning the parsed row or `None`. Mirror `apply_changes.py`'s own `current_recording()`/`current_boundary()`/`current_artist()` for what "current value" means per kind — reuse those shapes, don't reinvent them. Handle unreachable/timeout explicitly (a caught exception or non-zero exit, not a hang) — `[SPEC-DF-118]` depends on this failing cleanly and fast.
-2. **A small write tool** (name it plainly, e.g. `tools/accept_remote_basis.py`) — given a local db, an anchor, and the remote's value just fetched, writes it as the new local value for exactly that row. Small and boring on purpose; it exists only so `console.py` itself never opens the library for writing.
-3. **`console.py` + `profile.html` wiring** — on opening a profile, call `remote_peek.py` (as a subprocess, matching every other write/read-adjacent action in this console) against the configured remote (already stored — `STATE["jobs"].get_remote()`, from the work already committed). Three outcomes to render: unreachable (warning, proceed), no divergence (nothing to show), diverged (offer the choice, and call the accept-tool if taken).
+1. **`tools/remote_peek.py`** — the one new read primitive everything else depends on. Given a remote (`user@host:/path`) and one anchor (recording mbid, or `audio_md5`+kind+start/end), builds the right `SELECT` and runs it via `ssh <host> sqlite3 -json <path> "..."`, returning the parsed row or `None`. Mirrors `apply_changes.py`'s own `current_recording()`/`current_boundary()`/`current_artist()` for what "current value" means per kind — proven identical against a real fixture, not just argued, by `tools/test_remote_peek.py`. Unreachable/timeout is handled explicitly (`BatchMode=yes`, a connect timeout, and a subprocess timeout as backstop) — never a hang, per `[SPEC-DF-118]`.
+2. **`tools/accept_remote_basis.py`** — given a local db, an anchor, and the remote's value just fetched (`--value`, the exact JSON `remote_peek.py` printed), writes it as the new local value for exactly that row. Small and boring on purpose; it exists only so `console.py` itself never opens the library for writing. Reuses `apply_changes.py`'s own `resolve_passage()` rather than reimplementing anchor resolution.
+3. **`console.py` + `profile.html` wiring** — opening a profile calls `remote_peek.py` (as a subprocess) against the configured remote (`STATE["jobs"].get_remote()`) for the two identities this page can hand off (id review, boundary editing). Three outcomes render: unreachable (warning, proceed), no divergence (nothing shown), diverged (offered, with an "accept vainopi's value" button that POSTs to `/api/profile/:id/accept-remote`, which resolves the anchor server-side and runs `accept_remote_basis.py` through the job model — `jobs.py`'s new `accept-remote` kind — the same posture every other write in this console already takes).
+
+A boundary whose *identity itself* moved on vainopi (its own `start_ms`/`end_ms` changed independently) is not discoverable by this mechanism — the anchor that would find it is exactly what moved. This is a known, accepted gap, not an oversight: the anchor is the one `apply_changes.py` already resolves locally, unchanged, and a passage that has not been re-trimmed (an id correction, or an amplitude re-analysis that leaves `start_ms`/`end_ms` alone) is unaffected. `[SPEC-DF-117]`'s own full-copy read at push time is still the backstop for whatever this narrower check misses.
 
 ## 4. What "done" looks like — a measurable claim, not a demo
 
-- A profile page opened while vainopi is reachable and in agreement shows nothing extra.
-- A profile page opened for an item deliberately diverged on vainopi (set a flag or edit directly there, or against a scratch copy first) shows the difference and correctly writes the accepted value locally when taken.
-- A profile page opened with vainopi unreachable (pull the network cable, or point the remote config at a bad host) shows the warning and does not block reaching Vaino's own editor.
-- After accepting a remote value and then making a local edit, a subsequent `remote-push` (already built) classifies it as fast-forward, not conflict — this is the actual point of the feature, worth checking end to end once, not assumed from the pieces working separately.
+- A profile page opened while vainopi is reachable and in agreement shows nothing extra. **Automated** — `tools/test_console_remote_status.py`.
+- A profile page opened for an item deliberately diverged on vainopi (set a flag or edit directly there, or against a scratch copy first) shows the difference and correctly writes the accepted value locally when taken. **Automated** at the tool layer — `tools/test_accept_remote_basis.py`, `tools/test_console_remote_status.py`; the HTTP round trip itself still wants one live click-through against a real profile page.
+- A profile page opened with vainopi unreachable (pull the network cable, or point the remote config at a bad host) shows the warning and does not block reaching Vaino's own editor. **Automated** the failure-handling half — `tools/test_remote_peek.py`'s faked `subprocess.run`; not yet run against a genuinely unplugged vainopi.
+- After accepting a remote value and then making a local edit, a subsequent `remote-push` (already built) classifies it as fast-forward, not conflict — this is the actual point of the feature, worth checking end to end once, not assumed from the pieces working separately. **Automated end to end**, real SQLite fixtures standing in for vainopi and the desktop — `tools/test_accept_remote_basis.py::test_closes_the_loop`.
+
+None of the above has been run against the real appliance yet (`ssh`/`sqlite3 -json` against actual vainopi hardware) — everything here is proven against fixtures standing in for it, the same gap `[SPEC-DF-114]` closed for the full-copy jobs by measuring live. That live pass is still owed.
 
 ---
 
-**Traceability:** implements `[SPEC-DF-116..118]` · depends on `abb41c0` (already committed) · nothing in this document is built yet
+**Traceability:** implements `[SPEC-DF-116..118]` · depends on `abb41c0` (already committed) · built 2026-08-29 (`tools/remote_peek.py`, `tools/accept_remote_basis.py`, `tools/jobs.py`, `tools/console.py`, `tools/console_web/profile.html`, `console.css`) · tested (`tools/test_remote_peek.py`, `tools/test_accept_remote_basis.py`, `tools/test_console_remote_status.py`) · live verification against real vainopi hardware still owed

@@ -5,7 +5,7 @@
 <link rel="stylesheet" href="/console.css">
 <header>
   <h1>Sampo</h1>
-  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags" class="on">flags</a></nav>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags" class="on">flags</a><a href="/system">system</a></nav>
   <span class="ro">library read-only</span>
 </header>
 <main>
@@ -26,11 +26,13 @@
   <p class="empty" style="font-size:.85rem;padding:.2rem 0">
     Pull brings vainopi's own flags here, resolved by audio content rather than
     a local number — a flag on a track this library doesn't have yet is
-    counted and reported, not silently dropped. Push lands whatever
+    counted and reported, not silently dropped. It reads only the flags
+    themselves over ssh, never a copy of the whole library, so it's quick
+    even over vainopi's own slow WiFi. Push lands whatever
     identification/boundary/artist edits have accumulated here since the last
     push, and clears the flags they answer — batched, on request only:
     it briefly stops and restarts vainopi's own player, so it never runs on
-    its own.
+    its own, and it still fetches a full comparison copy first.
   </p>
   <div class="controls">
     <input type="search" id="remote" placeholder="pi@vainopi:/srv/library/vaino.db" style="min-width:24rem">

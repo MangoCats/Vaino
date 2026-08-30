@@ -186,6 +186,14 @@ This is why the waveform editor and the MusicBrainz search of [SPEC010 §4](SPEC
 
 Keyed the way `flavor` already is — a recording when the play had one, a passage when it did not — because the unidentified case is often exactly the one worth flagging, and a flag with nowhere stable to attach would be no flag at all `[SPEC-DF-035]`. A passage-keyed flag surviving a rescan that renumbers passages is not promised; the page says so plainly rather than showing a blank row when it happens.
 
+### 3.6 System — which instance this is, and stopping it
+
+**`[SPEC-SUI-210]` Built 2026-08-29, out of a real incident.** Two stale `console.py` processes were found both alive against the same library, both bound to `:5730` via a Windows `SO_REUSEADDR` quirk, and telling them apart took forensic process-listing by hand. `GET /system` answers "which instance is this" at a glance: the PID, when it started, the port and database path it was given, and a "shut down this instance" button — the operator's own equivalent of the `taskkill` that incident actually needed.
+
+**`[SPEC-SUI-211]` The commit shown is a startup snapshot, not a live `git status`.** This tool has no compiled build to embed a version into; the checkout it runs from is the closest honest equivalent, read once via `git rev-parse HEAD` (and `git status --porcelain`, for whether the working tree was clean) when the process starts. It cannot change under a process already running from it, so it is not re-read per request — the same reasoning a compiled binary's own version string does not change at runtime.
+
+**`[SPEC-SUI-212]` Shutdown is refused outright while any job is running, not merely warned about.** `remote-push` briefly stops vainopi's own player mid-sync `[SPEC-DF-111]`; killing this process between that `systemctl stop` and its own `systemctl start` would leave the appliance silent with nothing left running to issue the restart. The check is not scoped to `remote-push` alone — every job kind is refused while active, since telling "safe to interrupt" apart from "not" costs more than just asking whether one is running at all. `POST /api/system/shutdown` calls `BaseServer.shutdown()` from the request's own thread (a different thread than `serve_forever()`'s, which is what makes the call safe rather than a deadlock), after a short delay lets the confirming response actually reach the browser.
+
 ---
 
 ## 4. Jobs
@@ -251,4 +259,4 @@ Rejection is whole and it is loud: one transaction, the target unchanged, and a 
 
 ---
 
-**Traceability:** `[SPEC-SUI-010..203]` · derived from `[REQ-LIB-170]`, `[SPEC-SA-015]`, `[SPEC-DF-035]`, `[SPEC-DF-050]`, `[SPEC-DF-080]`, `[SPEC-RLK-140]`, `[GDE-CHT-030]`
+**Traceability:** `[SPEC-SUI-010..212]` · derived from `[REQ-LIB-170]`, `[SPEC-SA-015]`, `[SPEC-DF-035]`, `[SPEC-DF-050]`, `[SPEC-DF-080]`, `[SPEC-RLK-140]`, `[GDE-CHT-030]` · `[SPEC-SUI-210..212]` built 2026-08-29 (`tools/console.py`'s `build_info()`/`system_status()`, `tools/console_web/system.html`)

@@ -90,3 +90,10 @@ go/vaino-arm64
 # in one. Ignored mainly so that `git add -A` cannot stage a gigabyte of
 # somebody's listening history by accident.
 scratch/
+
+# Sampo console job output: bundle exports, remote-pull/push work dirs
+# (flags.json, patch.sql, a compare-copy database) [SPEC-SUI-080]. Runtime
+# state beside the tools it runs from, the same "none reproducible, none
+# belonging in one" reasoning as scratch/ above -- and some of it can carry
+# real listener data (a flagged track's own title/artist), not just paths.
+/out/
