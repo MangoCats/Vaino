@@ -87,3 +87,19 @@ Created by Vaino on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 - Whether dragging start/end across a passage boundary that abuts another passage in the same file needs a visible marker for the *neighbour's* span, so an edit here cannot silently create or close a gap the neighbour did not ask for.
 
 Both are measurement questions for whoever builds this, not open design questions — the shape above does not change based on either answer.
+
+---
+
+## 7. Usability, corrected against real use — built 2026-08-30
+
+Working actual boundaries on a real multi-minute file surfaced that §4's design, while correctly *specified*, was hard to actually *use*: a fixed-width canvas mapped the whole file to one screen, so a lead-in a few hundred milliseconds wide was a few pixels wide; the only way to grab a marker was a blind ~10px guess on a bare line; there was no way back from a mistake; and the server's own transport kept playing underneath the browser's own preview with no way to silence it from this page.
+
+**`[SPEC-SUI-217]` Two audio engines, one silenced on entry.** Vaino's engine plays through the server's own audio device continuously, independent of any browser tab — a fact this document did not name, because it did not need to for the interaction model in §4 to be correct on paper. The editor's preview (§4's `AudioBufferSourceNode`) is a *second*, independent stream to the same output. Rather than threading the editor through the real-time mixer to unify them — the exact cost §1 already ruled out — `edit.js` posts `POST /command/pause` once on load (the same route the main skin's own pause button uses) and says so in the page. No auto-resume on unload: unreliable to detect, and the main page's own Play button is one click away.
+
+**`[SPEC-SUI-218]` A viewport, not just a buffer.** `msOf`/`draw` now map the canvas against `view = {fromMs, toMs}` rather than always `[0, totalMs()]` — zoom (buttons, and mouse wheel centred on the cursor) narrows or widens the span; **Whole passage** and **Whole file** jump to the two spans actually worth naming; a drag that starts on empty canvas (not a marker) pans the viewport, told apart from a click-to-jump by whether the pointer actually moved past a small threshold before release. Below the top ~28px "knob rail" a canvas click always means pan-or-jump, never a marker grab, closing the ambiguity between "drag a boundary" and "seek here" that a single bare-line hit-test left the person to guess at.
+
+**`[SPEC-SUI-219]` A knob looks grabbable; a numeric field is exact.** Markers gained an actual circular knob shape near the top of the canvas rather than being a bare vertical line indistinguishable from the waveform beside it. A second row of plain ms fields (start/end/lead-in/lead-out) sits beside the existing gain field, wired through the identical clamps `applyDrag` already enforces — the same five values, typed instead of dragged, which is most of what "how do I place these" was actually asking for.
+
+**`[SPEC-SUI-220]` One undo stack, pushed on completed edits only.** A pre-change snapshot of the draft is pushed before a drag begins, and before a field's `change` fires — never on a drag's own motion, matching the "preview on release, not per-pixel" rule §4 already stated for playback. Undo pops the stack, stops any playing preview so heard and shown state never disagree, and restores the prior values.
+
+None of the above changes what §2's `boundary_reviews` row looks like, what `/edit/:passage_id/review` accepts, or what `apply_boundary_reviews.py` does with it — this section is entirely the interaction layer in §4, corrected against actually using it.

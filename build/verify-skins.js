@@ -917,10 +917,19 @@ async function runReviewHandoff() {
         severity: 'different-id', rank: 3, suggested: [] },
     ],
   };
+  // A passage the queue never carries at all -- never fingerprinted -- but
+  // that the on-demand route `[SPEC-SUI-199]` still has a real card for.
+  const ON_DEMAND = { passage_id: 30, stored_mbid: 'aaaaaaaa-0000-0000-0000-000000000030',
+    checked_at: 'never', title: 'Opened By Hand', artist: 'Some Artist', album: null,
+    score: null, suggested: [], severity: 'on-demand', rank: 6, decision: null,
+    chosen_mbid: null, chosen_release_mbid: null, applied: false,
+    artist_review: null, artist_review_applied: false };
   window.fetch = url => {
     if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
     if (url === '/review/queue')
       return Promise.resolve({ ok: true, json: () => Promise.resolve(QUEUE) });
+    if (url === '/review/passage/30')
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(ON_DEMAND) });
     return Promise.resolve({ ok: false, status: 404 });
   };
   const runScript = src => {
@@ -967,8 +976,36 @@ async function runReviewHandoff() {
   check(/999/.test(dom2.window.document.getElementById('note').textContent),
         'the explanation must name the passage that was not found');
 
+  // A passage never in the queue at all, but reachable on demand
+  // `[SPEC-SUI-199]` -- the case `profile.html`'s "Review in Vaino" button
+  // could not actually serve before this route existed.
+  const dom3 = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost/review?passage=30' });
+  dom3.window.console.error = (...a) => errors.push('(30) ' + a.join(' '));
+  const create3 = dom3.window.document.createElement.bind(dom3.window.document);
+  dom3.window.document.createElement = tag => {
+    const el = create3(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  dom3.window.fetch = window.fetch;
+  const runScript3 = src => {
+    const el = create3('script');
+    el.textContent = src;
+    dom3.window.document.body.appendChild(el);
+  };
+  runScript3(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript3(fs.readFileSync(path.join(ROOT, 'review.js'), 'utf8'));
+  await new Promise(r => setTimeout(r, 30));
+  const onDemandCards = [...dom3.window.document.querySelectorAll('.card')];
+  check(onDemandCards.length === 1,
+        `an on-demand passage must render its own card, got ${onDemandCards.length}`);
+  check(onDemandCards[0] && /opened by hand/i.test(onDemandCards[0].textContent),
+        'an on-demand card must say it was opened by hand, not read as a real finding');
+  check(onDemandCards[0] && onDemandCards[0].querySelector('.search input'),
+        'the search-and-reassign box must be offered on an on-demand card too');
+
   console.log(`${'handoff'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
-              `deep-linked to passage 22 and to an absent 999`);
+              `deep-linked to passage 22, an absent 999, and an on-demand 30`);
   for (const e of errors) console.log('    ! ' + e);
   if (errors.length) failures++;
 }
@@ -1020,7 +1057,9 @@ async function runEdit() {
 
   const INFO = { passage_id: 22, start_ms: 1000, end_ms: 181000, file_ms: 200000,
                  lead_in_ms: 5, lead_out_ms: 946, gain_db: -1.2 };
-  window.fetch = url => {
+  const posted = [];
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') { posted.push(url); return Promise.resolve({ ok: true }); }
     if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
     if (url === '/edit/22/info')
       return Promise.resolve({ ok: true, json: () => Promise.resolve(INFO) });
@@ -1043,11 +1082,39 @@ async function runEdit() {
   check(facts.includes('946 ms'), `facts missing lead-out, got "${facts}"`);
   check(facts.includes('-1.20 dB'), `facts missing gain, got "${facts}"`);
 
+  // The precise ms fields `[SPEC-SUI-219]` populate from the same `/info`
+  // response the facts line reads, and are usable before the audio itself
+  // ever decodes -- neither depends on Web Audio, unlike the canvas below.
+  const $ = id => window.document.getElementById(id);
+  check($('startms').value === '1000', `start field should read 1000, got ${$('startms').value}`);
+  check($('endms').value === '181000', `end field should read 181000, got ${$('endms').value}`);
+  check($('leadinms').value === '5', `lead-in field should read 5, got ${$('leadinms').value}`);
+  check($('leadoutms').value === '946', `lead-out field should read 946, got ${$('leadoutms').value}`);
+  check(!$('leadoutms').disabled, 'the precise fields must be usable once /info has loaded');
+
+  // Undo `[SPEC-SUI-220]`: a completed field edit is undoable, and the undo
+  // button reflects whether there is anything to undo.
+  check($('undo').disabled, 'undo must start with nothing to undo');
+  $('leadoutms').value = '2000';
+  $('leadoutms').dispatchEvent(new window.Event('change'));
+  check(!$('undo').disabled, 'a completed edit must arm undo');
+  check($('facts').textContent.includes('2000 ms'), 'the edit must reach the facts line');
+  $('undo').dispatchEvent(new window.Event('click'));
+  check($('facts').textContent.includes('946 ms'), 'undo must restore the prior value');
+  check($('leadoutms').value === '946', 'undo must restore the field along with the draft');
+  check($('undo').disabled, 'undo must disable itself once the stack is empty again');
+
   // jsdom has no `AudioContext`; decoding fails there the same way it would
   // in a browser without Web Audio, and that must read as an explanation, not
   // a crash the page swallows silently.
   const note = window.document.getElementById('note').textContent;
   check(note.length > 0, 'a page that cannot decode audio must say so, not sit blank');
+
+  // The main transport is silenced on entry regardless of whether the audio
+  // itself ever decodes `[SPEC-SUI-217]` -- it happens before the audio
+  // fetch, not after.
+  check(posted.includes('/command/pause'), `expected a pause command, got ${JSON.stringify(posted)}`);
+  check(/paused/i.test($('pausenote').textContent), 'the page must say the main player was paused');
 
   // A second instance for the passage the server does not have -- its own
   // fixture, since the query differs before the page's own script ever runs.

@@ -1741,13 +1741,17 @@ pub struct ReleaseOption {
 /// tags -- title agrees, artist agrees, neither -- applied here to evidence
 /// that is actually independent.
 #[cfg(feature = "sampo-support")]
-pub const SEVERITIES: [(&str, u8, &str); 6] = [
+pub const SEVERITIES: [(&str, u8, &str); 7] = [
     ("no-mbid", 0, "no MusicBrainz id at all -- a migration placeholder"),
     ("wrong-song", 1, "neither the title nor the performer matches"),
     ("wrong-artist", 2, "same title, different performer"),
     ("wrong-title", 3, "same performer, different title"),
     ("different-id", 4, "the same recording under another MBID"),
     ("unverified", 5, "AcoustID does not know this audio; not evidence"),
+    // Not a finding at all -- opened by hand, `[SPEC-SUI-199]`, on a passage
+    // the fingerprint queue never flagged (or never checked). Ranked last:
+    // if a passage is ALSO a real finding, that grade should win, not this.
+    ("on-demand", 6, "opened by hand, not flagged by any automatic check"),
 ];
 
 /// Does this even look like a MusicBrainz id?
@@ -2047,6 +2051,83 @@ impl Library {
         // ordering survives.
         items.sort_by_key(|i| i.rank);
         Ok(items)
+    }
+
+    /// One passage's own review card, whether or not the fingerprint pass
+    /// ever flagged it `[SPEC-SUI-199]`.
+    ///
+    /// `review_queue` above is deliberately narrow -- CONTRADICTED findings
+    /// only, so a person is never shown the thousands of passages nothing is
+    /// wrong with. That narrowness was also, by accident, the only door: a
+    /// passage that is simply unchecked, or whose stored id is merely not
+    /// the one a person wants, had no way to reach the search-and-reassign
+    /// box at all `[SPEC-SUI-196]` even though nothing about that box
+    /// actually depends on being a finding. This is the same card, built
+    /// for one named passage regardless of `id_checks`.
+    ///
+    /// The live recording link (`m.mbid`), not `id_checks.stored_mbid` --
+    /// that column is the id *at the time the fingerprint check ran*, which
+    /// for a never-checked passage does not exist, and for a since-reassigned
+    /// one would be stale. `checked_at` absent means never checked, not
+    /// "checked and found nothing to say" -- the two are different states, so
+    /// severity becomes its own `on-demand` grade rather than either
+    /// `unverified` (which claims AcoustID looked and shrugged) or a
+    /// fabricated timestamp.
+    #[cfg(feature = "sampo-support")]
+    pub fn review_item_for(&self, passage_id: i64) -> Option<ReviewItem> {
+        if !self.has_table("id_checks") || !self.has_table("id_reviews")
+            || !self.has_table("artist_reviews")
+        {
+            return None;
+        }
+        let sql = format!(
+            "SELECT m.passage_id, COALESCE(m.mbid, 'local:none'), c.score, c.suggested, \
+                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
+                    v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
+                    a.artist_name, a.applied_at, c.checked_at \
+               FROM ({NAMED}) m \
+               LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
+               LEFT JOIN id_checks c ON c.passage_id = m.passage_id \
+               LEFT JOIN id_reviews v ON v.passage_id = m.passage_id \
+               LEFT JOIN artist_reviews a ON a.recording_mbid = m.mbid \
+              WHERE m.passage_id = ?1"
+        );
+        self.conn
+            .query_row(&sql, [passage_id], |r| {
+                let raw: Option<String> = r.get(3)?;
+                let suggested: Vec<Suggestion> =
+                    raw.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                let title: Option<String> = r.get(4)?;
+                let artist: Option<String> = r.get(5)?;
+                let stored_mbid: String = r.get(1)?;
+                let checked_at: Option<String> = r.get(13)?;
+                let (severity, rank) = match &checked_at {
+                    Some(_) => grade(&stored_mbid, title.as_deref(), artist.as_deref(), &suggested),
+                    None => ("on-demand", 6),
+                };
+                let applied_at: Option<String> = r.get(10)?;
+                let artist_review: Option<String> = r.get(11)?;
+                let artist_review_applied_at: Option<String> = r.get(12)?;
+                Ok(ReviewItem {
+                    passage_id: r.get(0)?,
+                    stored_mbid,
+                    checked_at: checked_at.unwrap_or_else(|| "never".to_string()),
+                    score: r.get(2)?,
+                    suggested,
+                    title,
+                    artist,
+                    album: r.get(6)?,
+                    severity,
+                    rank,
+                    decision: r.get(7)?,
+                    chosen_mbid: r.get(8)?,
+                    chosen_release_mbid: r.get(9)?,
+                    applied: applied_at.is_some(),
+                    artist_review,
+                    artist_review_applied: artist_review_applied_at.is_some(),
+                })
+            })
+            .ok()
     }
 
     /// Releases this recording appears on, for choosing which album to call it
@@ -2431,6 +2512,37 @@ mod tests {
         assert_eq!(q[0].suggested[0].title.as_deref(), Some("Right Song"));
     }
 
+    /// The case `review_queue` cannot reach at all: a passage nobody has ever
+    /// fingerprinted, opened by a direct link rather than found in the queue
+    /// `[SPEC-SUI-199]`. `review_item_for` must still build a real card for
+    /// it -- the search box does not need a fingerprint opinion to work.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn on_demand_reaches_a_passage_the_queue_never_flagged() {
+        let c = reviewable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES (9,1,'radio',0,1000,NULL,NULL,NULL,'src');
+             INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','On Demand',NULL,'s');
+             INSERT INTO passage_recordings VALUES (9,'aaaaaaaa-0000-0000-0000-00000000000a',1.0,'s');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+
+        // Absent entirely from the queue -- no `id_checks` row exists for it.
+        let q = lib.review_queue(50).unwrap();
+        assert!(q.iter().all(|i| i.passage_id != 9), "not a queue finding");
+
+        let item = lib.review_item_for(9).expect("a card for a named passage");
+        assert_eq!(item.passage_id, 9);
+        assert_eq!(item.stored_mbid, "aaaaaaaa-0000-0000-0000-00000000000a",
+                   "the live recording link, not a stale id_checks snapshot");
+        assert_eq!(item.checked_at, "never", "distinct from a real, dated check");
+        assert_eq!(item.severity, "on-demand");
+        assert!(item.suggested.is_empty(), "AcoustID has no opinion to offer here");
+
+        assert!(lib.review_item_for(999_999).is_none(), "no such passage, no card");
+    }
+
     /// Most contradictions on this library are the same song under a different
     /// recording id -- another pressing, a remaster, a 5.1 mix. That is a much
     /// smaller problem than a passage playing under the wrong name, and the
@@ -2512,9 +2624,12 @@ mod tests {
         assert_eq!(g(Some("Why Worry"), Some("Dire Straits"),
                      &[s(Some("Why Worry"), Some("Someone Else")), s(Some("Why Worry"), None)]),
                    "wrong-artist");
-        // And the grades stay in step with the table the page reads.
+        // And the grades stay in step with the table the page reads. `grade`
+        // itself only ever returns 0..=5 -- `on-demand` at rank 6 is assigned
+        // directly by `review_item_for`, never by this function, for a
+        // passage the fingerprint queue never flagged at all `[SPEC-SUI-199]`.
         for (name, rank, _) in SEVERITIES {
-            assert!(rank < 6, "{name} has no place in the order");
+            assert!(rank < 6 || name == "on-demand", "{name} has no place in the order");
         }
     }
 

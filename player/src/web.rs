@@ -338,6 +338,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/review", get(|| async { ([REVALIDATE], Html(REVIEW_HTML)) }))
         .route("/review.js", get(|| async { js(REVIEW_JS) }))
         .route(REVIEW_QUEUE_ROUTE, get(review_queue))
+        .route("/review/passage/:passage_id", get(review_passage))
         .route("/review/releases/:mbid", get(review_releases))
         .route("/review/:passage_id/:decision", post(record_review))
         .route("/review/:passage_id/artist/:verb", post(artist_review_verb))
@@ -654,6 +655,31 @@ async fn review_queue(State(ui): State<Ui>) -> axum::response::Response {
     match out {
         Ok(Some(v)) => axum::Json(v).into_response(),
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// One passage's own review card, on demand `[SPEC-SUI-199]`.
+///
+/// Reached from a deep link (`/review?passage=X`) for a passage the
+/// CONTRADICTED-only queue above would never surface itself -- never
+/// fingerprinted, or simply not what someone wants it to say. Same shape as
+/// a queue row, so the page renders it with the exact same card.
+#[cfg(feature = "sampo-support")]
+async fn review_passage(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let item = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        lib.review_item_for(passage_id)
+    })
+    .await
+    .ok()
+    .flatten();
+    match item {
+        Some(v) => axum::Json(v).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -1905,6 +1931,9 @@ mod tests {
     fn the_review_routes_match_what_the_page_asks_for() {
         assert!(REVIEW_JS.contains(REVIEW_QUEUE_ROUTE));
         assert!(REVIEW_JS.contains(REVIEW_DECIDE_PREFIX));
+        // The on-demand handoff card `[SPEC-SUI-199]` -- reached by a route
+        // the deep-link case asks for directly, not through the queue batch.
+        assert!(REVIEW_JS.contains("/review/passage/"), "page cannot ask for a single card");
         // The three decisions the page can send, and the only three
         // `PlayerStore::record_review` accepts. One added on either side alone
         // is the bug this is here to catch.
@@ -2017,6 +2046,9 @@ mod tests {
         assert!(EDIT_JS.contains("/edit/${passageId}/info"));
         assert!(EDIT_JS.contains("/edit/${passageId}/audio"));
         assert!(EDIT_JS.contains("/edit/${passageId}/review"));
+        // Silences the server's own transport on entry `[SPEC-SUI-217]` --
+        // the same route the main skin's own pause button sends.
+        assert!(EDIT_JS.contains("/command/pause"));
     }
 
     /// The wire shape `edit_review` accepts must be exactly what the store

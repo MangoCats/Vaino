@@ -321,7 +321,9 @@ function releaseSuggestBox(pid, folder) {
       m.append(S.el('h2', {}, 'Recording ',
         S.el('small', { text: `— weight ${r.credit.weight}, via ${r.credit.source}` })));
       m.append(kv([
-        ['mbid', mb ? r.credit.mbid
+        ['mbid', mb
+          ? S.el('a', { href: `https://musicbrainz.org/recording/${r.credit.mbid}`,
+                        target: '_blank', rel: 'noopener' }, r.credit.mbid)
           : S.el('span', {}, S.el('span', { class: 'pill', text: r.credit.mbid }),
               ' — no MusicBrainz entry exists for this audio, so no id was invented')],
         ['title', r.recording ? r.recording.title : null],

@@ -67,6 +67,11 @@
                       why: 'the same recording under another MBID' },
     'unverified':   { label: 'unverified',    on: false,
                       why: 'AcoustID does not know this audio; not evidence either way' },
+    // Reached only by a deep link `[SPEC-SUI-199]`, never by the queue itself
+    // — `showFilters()` counts it, but nothing ever puts it `on` by default
+    // since it can only appear one card at a time anyway.
+    'on-demand':    { label: 'set by hand',   on: true,
+                      why: 'opened directly, not flagged by any automatic check' },
   };
   const ORDER = Object.keys(GRADE);
   const showing = new Set(ORDER.filter(k => GRADE[k].on));
@@ -115,11 +120,16 @@
     // verdict here unless that pass is re-run, and without a date on it
     // that reads as a live, current answer rather than the dated one it is.
     theirs.appendChild(el('div', 'sub',
-      `AcoustID's own audio fingerprint match, checked ${item.checked_at} — ` +
-      'a separate, automatic check, not the same thing as a manual pick or ' +
-      'a release-tracklist match made elsewhere. Nothing here re-verifies ' +
-      'itself if the stored id changes by some other means after this date; ' +
-      'only re-running the fingerprint pass does.'));
+      item.checked_at === 'never'
+        ? 'AcoustID has not been run against this audio — this card was ' +
+          'opened by hand, not because any automatic check found something ' +
+          'to say. Searching below reassigns the recording directly; ' +
+          'nothing here needs a fingerprint match first.'
+        : `AcoustID's own audio fingerprint match, checked ${item.checked_at} — ` +
+          'a separate, automatic check, not the same thing as a manual pick or ' +
+          'a release-tracklist match made elsewhere. Nothing here re-verifies ' +
+          'itself if the stored id changes by some other means after this date; ' +
+          'only re-running the fingerprint pass does.'));
     const opts = el('ul', 'opts');
     // Radio rather than a button per candidate: picking is not deciding, and
     // a row of "use this one" buttons makes an irreversible-feeling choice out
@@ -471,6 +481,16 @@
     tally = data.progress || {};
     showTally();
     items = data.items || [];
+    // A handoff passage the queue itself would never surface -- never
+    // fingerprinted, or simply not what someone wants it to say
+    // `[SPEC-SUI-199]`. One extra request, only for the deep-link case, and
+    // only when the queue didn't already carry it.
+    if (wantPassage != null && !items.some(i => i.passage_id === wantPassage)) {
+      try {
+        const r = await fetch(`/review/passage/${wantPassage}`);
+        if (r.ok) items.push(await r.json());
+      } catch { /* falls through to showCards()'s own "nothing to do" message */ }
+    }
     showFilters();
     showCards();
   }
@@ -531,9 +551,8 @@
         note.appendChild(all);
       } else {
         note.className = 'note';
-        note.textContent = `Passage ${wantPassage} is not a review finding — ` +
-          'either the audio matches, or it has never been checked. There is ' +
-          'nothing to do about it here.';
+        note.textContent = `Passage ${wantPassage} does not exist in this ` +
+          'library, or the fingerprint-review tables have not been created yet.';
       }
       return;
     }
