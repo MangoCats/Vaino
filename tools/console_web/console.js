@@ -23,6 +23,23 @@ const S = {
     return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   },
 
+  // `ingest_decisions.decided_at` is a real Unix epoch -- seconds since
+  // 1970 UTC, written that way by every stage that fills the table
+  // (`analyze_amplitude.py`, `choose_release.py`, `suggest_release.py`,
+  // `ingest_folder.py`) -- unlike the naive-local strings the review
+  // tables use elsewhere in this console, an epoch is unambiguous, so
+  // converting it to this browser's own local wall clock is exactly
+  // right here, not the mistake `system.html`'s own `agoText` was
+  // written to avoid repeating.
+  when(x) {
+    const n = Number(x);
+    if (!x || !Number.isFinite(n)) return x || '';
+    const d = new Date(n * 1000);
+    const p = v => String(v).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+           `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  },
+
   el(tag, attrs = {}, ...kids) {
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {

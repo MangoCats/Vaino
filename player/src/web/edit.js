@@ -121,7 +121,7 @@
   // both blue markers *exactly* on the canvas boundary, where a knob drawn
   // centred on the edge is half off-canvas and a line there reads as the
   // canvas's own border, not as a marker at all.
-  const EDGE_PAD_CSS = 8;
+  const EDGE_PAD_CSS = 2;
   const msToX = (ms, widthCss) => {
     const span = Math.max(1, view.toMs - view.fromMs);
     const usable = Math.max(1, widthCss - 2 * EDGE_PAD_CSS);
@@ -225,6 +225,33 @@
     $('play').disabled = false;
     for (const id of ['zoomout', 'zoomin', 'zoompassage', 'zoomfile']) $(id).disabled = false;
     setView(0, totalMs());
+
+    // A VBR file with no valid Xing/Info header cannot be duration-probed
+    // without decoding it -- Sampo's own ingest-time probe fell back to
+    // estimating from bitrate for exactly one real file this session,
+    // over-stating a 3:58 recording as 4:54. The browser has just fully
+    // decoded the real content, so this is the one moment this page can
+    // actually catch that disagreement, rather than leaving "the end marker
+    // is not there" looking like an unexplained rendering fault: end_ms or
+    // lead_out sitting past what decoded audio actually contains is not
+    // reachable at any zoom, on any browser, until the library's own
+    // stored duration is corrected.
+    const decodedMs = totalMs();
+    const overrunMs = Math.max(draft.end_ms, fileMs) - decodedMs;
+    if (overrunMs > 1000) {
+      note(
+        `This browser decoded ${fmt(decodedMs)} of real audio, but the library ` +
+        `says this file is ${fmt(fileMs)} (end at ${fmt(draft.end_ms)}) -- ` +
+        `${fmt(overrunMs)} longer than what actually decodes. The end and any ` +
+        `lead-out past ${fmt(decodedMs)} cannot be shown or reached at any zoom ` +
+        `until the library's own stored duration is corrected; likely an ` +
+        `ingest-time duration estimate off a missing or bad VBR header, not a ` +
+        `fault in this page.`,
+        'bad',
+      );
+      return;
+    }
+
     note(info.edited ? 'Showing a saved-but-not-yet-applied edit.' : '');
   }
 

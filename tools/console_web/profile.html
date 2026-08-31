@@ -385,7 +385,7 @@ function releaseSuggestBox(pid, folder) {
           S.el('td', { text: x.outcome }),
           S.el('td', { class: 'num', text: x.confidence ?? '—' }),
           S.el('td', { style: 'font:12px var(--mono);word-break:break-all', text: x.detail || '' }),
-          S.el('td', { class: 'num', text: x.decided_at || '' }))))));
+          S.el('td', { class: 'num', text: S.when(x.decided_at) }))))));
     }
   } catch (e) { S.fail('#main', e); }
 })();
