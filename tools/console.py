@@ -456,6 +456,64 @@ def _vaino_binary() -> str | None:
     return shutil.which("vaino")
 
 
+def _vaino_build(port: int, timeout: float = 2.0) -> dict | None:
+    """This co-resident Vaino's own build identity `[SPEC-SUI-227]` -- `GET
+    /build`, the machine-readable sibling of the Settings page's "Server
+    build" row `player/src/web.rs`'s `build_identity` serves. `None` on
+    anything that stops this from being read -- an older Vaino with no such
+    route, a non-JSON body, a closed connection -- and the caller treats an
+    unknown build the same honest way `build_info()` already treats a
+    missing git checkout: silently skipping a check it cannot make, never
+    guessing `[SPEC-DF-095]`.
+    """
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.request("GET", "/build")
+            r = conn.getresponse()
+            body = r.read()
+            if r.status >= 400:
+                return None
+            return json.loads(body)
+        finally:
+            conn.close()
+    except (OSError, ValueError):
+        return None
+
+
+def _vaino_staleness(port: int) -> str | None:
+    """Whether the co-resident Vaino was built from a different commit than
+    *this* Sampo is running from `[SPEC-SUI-227]` -- found live 2026-08-31: a
+    Vaino that was the only one running, and was sampo-support-capable, was
+    still hours behind the checkout, so a boundary edit saved through it
+    silently failed to reappear on reopening the editor -- the merge-with-
+    draft logic that fixed did not exist in that build. Neither
+    `[SPEC-SUI-170]`'s reuse check nor `[SPEC-SUI-213]`'s capability probe
+    would have caught that; both ask "is something there," never "is it the
+    same something this checkout would build."
+
+    `None` -- no mismatch, or nothing to compare -- whenever either side's
+    identity is unknown: no git checkout, git missing from `PATH`, or a
+    Vaino too old to serve `/build` at all. A silent skip, not a guess,
+    matching `build_info()`'s own posture toward an absent checkout.
+    """
+    sampo = STATE.get("build") or {}
+    sampo_commit = sampo.get("commit") if sampo.get("available") else None
+    if not sampo_commit:
+        return None
+    vaino = _vaino_build(port)
+    vaino_git = (vaino or {}).get("git")
+    if not vaino_git or vaino_git == "unknown":
+        return None
+    vaino_hash = vaino_git.removesuffix("+dirty")
+    if sampo_commit.startswith(vaino_hash):
+        return None
+    return (f"Sampo is running from commit {sampo.get('commit_short') or sampo_commit[:12]}, "
+            f"but the co-resident Vaino on this port was built from a different commit "
+            f"({vaino_git}, {vaino.get('commit_date', 'date unknown')}) -- "
+            "rebuild whichever one is behind (see HOWTO.md §2) and restart it")
+
+
 def _vaino_ready(port: int, started: bool) -> dict:
     """A reachable Vaino is not necessarily a *useful* one for this handoff
     `[SPEC-SUI-213]` -- found live several times over on 2026-08-30: a plain
@@ -465,17 +523,20 @@ def _vaino_ready(port: int, started: bool) -> dict:
     "say which capability is unavailable, and why" `[SPEC-SUI-170]` already
     commits to for a missing binary or a start that timed out.
     """
-    if _vaino_has_sampo_support(port):
-        return {"ok": True, "port": port, "started": started}
-    binary = _vaino_binary()
-    return {"ok": False, "port": port, "started": started,
-            "error": ("Sampo just started a local Vaino, but " if started else
-                      "a Vaino is already running on this port, but ")
-                     + (f"{binary} " if binary else "the binary ")
-                     + "was built without --features sampo-support, so the review page "
-                       "and waveform editor don't exist in it (see HOWTO.md §2). "
-                       "Rebuild player/ with that flag, then " +
-                       ("restart it" if started else "stop this one and reopen this page")}
+    if not _vaino_has_sampo_support(port):
+        binary = _vaino_binary()
+        return {"ok": False, "port": port, "started": started,
+                "error": ("Sampo just started a local Vaino, but " if started else
+                          "a Vaino is already running on this port, but ")
+                         + (f"{binary} " if binary else "the binary ")
+                         + "was built without --features sampo-support, so the review page "
+                           "and waveform editor don't exist in it (see HOWTO.md §2). "
+                           "Rebuild player/ with that flag, then " +
+                           ("restart it" if started else "stop this one and reopen this page")}
+    stale = _vaino_staleness(port)
+    if stale:
+        return {"ok": False, "port": port, "started": started, "error": stale}
+    return {"ok": True, "port": port, "started": started}
 
 
 def ensure_vaino(port: int = VAINO_PORT) -> dict:

@@ -316,6 +316,7 @@ impl From<&PlayerState> for Snapshot {
 pub fn router(ui: Ui) -> Router {
     let router = Router::new()
         .route("/", get(|| async { Html(SHELL) }))
+        .route("/build", get(build_identity))
         .route("/core.js", get(|| async { js(CORE) }))
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
@@ -475,6 +476,29 @@ async fn browse(
 /// unbounded `LIMIT`.
 const HISTORY_PAGE_SIZES: [i64; 3] = [10, 100, 1000];
 const HISTORY_DEFAULT_SIZE: i64 = 100;
+
+/// This build's identity, machine-readable `[SPEC-SUI-227]` -- the same
+/// fields the Settings page already shows a person, in a shape Sampo can
+/// compare against its own without a websocket handshake (`PlayerState`,
+/// which carries these same values, only ever travels over `/ws`). Build
+/// capability, not library data, so it needs no `sampo-support` gate --
+/// the same boundary `[SPEC-SUI-213]`'s `/review.js` probe already draws.
+///
+/// The JSON body is built by a plain function so a test can check its shape
+/// without spinning up a router or a runtime for an async fn that touches
+/// nothing but compile-time constants.
+fn build_identity_json() -> serde_json::Value {
+    serde_json::json!({
+        "git": crate::GIT,
+        "branch": crate::BRANCH,
+        "commit_date": crate::COMMIT_DATE,
+        "dirty_files": crate::DIRTY_FILES.parse::<u32>().unwrap_or(0),
+    })
+}
+
+async fn build_identity() -> axum::response::Response {
+    axum::Json(build_identity_json()).into_response()
+}
 
 /// One page of the play-history panel, with enough to draw the pager without
 /// a second request `[REQ-VIS-250]`.
@@ -2061,6 +2085,18 @@ mod tests {
         // Silences the server's own transport on entry `[SPEC-SUI-217]` --
         // the same route the main skin's own pause button sends.
         assert!(EDIT_JS.contains("/command/pause"));
+    }
+
+    /// `GET /build`'s body carries what Sampo's own staleness check needs
+    /// `[SPEC-SUI-227]` -- unconditional, unlike the test above, since this
+    /// route exists in every build, sampo-support or not.
+    #[test]
+    fn build_identity_carries_what_sampo_compares() {
+        let v = build_identity_json();
+        assert_eq!(v["git"], crate::GIT, "must be the same hash the Settings page shows");
+        assert_eq!(v["branch"], crate::BRANCH);
+        assert_eq!(v["commit_date"], crate::COMMIT_DATE);
+        assert!(v["dirty_files"].is_u64(), "must be a number, not the raw env string");
     }
 
     /// The wire shape `edit_review` accepts must be exactly what the store

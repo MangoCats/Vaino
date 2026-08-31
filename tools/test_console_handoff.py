@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the Sampo→Vaino handoff in `console.py` [SPEC-SUI-170],
-[SPEC-SUI-213].
+[SPEC-SUI-213], [SPEC-SUI-227].
 
 Exercises the contract on its own -- liveness is a socket question, not a
 route question; a missing library or a missing binary is reported, not
-guessed past; an already-reachable port is used, never duplicated; and, per
+guessed past; an already-reachable port is used, never duplicated; per
 `[SPEC-SUI-213]`, a *reachable* port whose Vaino was built without
 `--features sampo-support` is named as such rather than left to 404 on the
-next click -- without needing a real Vaino binary on the machine running the
-test. A minimal fake HTTP server stands in for the two builds that matter:
-one that serves `/review.js`, one that 404s it, both otherwise identical.
+next click; and, per `[SPEC-SUI-227]`, a capable port whose Vaino was built
+from a *different commit* than this Sampo is named as stale, while an
+unknowable comparison (no `/build` route, no git checkout under Sampo
+itself) is silently skipped rather than guessed at -- all without needing a
+real Vaino binary on the machine running the test. A minimal fake HTTP
+server stands in for the builds that matter: one that serves `/review.js`,
+one that 404s it, and a `/build` body set per test.
 
     python tools/test_console_handoff.py
 """
 
 import http.server
+import json
 import os
 import socket
 import sys
@@ -44,22 +49,39 @@ def free_port() -> int:
 class _FakeVaino(http.server.BaseHTTPRequestHandler):
     """Answers every path 200 except `/review.js`, whose status is set per
     instance -- the one difference between a sampo-support build and a plain
-    one that matters to `_vaino_has_sampo_support`.
+    one that matters to `_vaino_has_sampo_support`. `/build` answers with
+    `build_json` when set, or 404s -- standing in for a Vaino too old to have
+    the route at all, which `_vaino_staleness` must treat as "unknown," not
+    "mismatched" `[SPEC-SUI-227]`.
     """
     review_status = 200
+    build_json = None
 
     def log_message(self, fmt, *args):
         pass  # quiet -- a passing test has nothing to say
 
     def do_GET(self):
+        if self.path == "/build":
+            if self.build_json is None:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = json.dumps(self.build_json).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         status = self.review_status if self.path == "/review.js" else 200
         self.send_response(status)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
 
-def fake_vaino(review_status: int) -> http.server.HTTPServer:
-    handler = type("Handler", (_FakeVaino,), {"review_status": review_status})
+def fake_vaino(review_status: int = 200, build_json: dict | None = None) -> http.server.HTTPServer:
+    handler = type("Handler", (_FakeVaino,), {"review_status": review_status, "build_json": build_json})
     srv = http.server.HTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
@@ -117,6 +139,85 @@ def main() -> int:
     finally:
         srv.shutdown()
         srv.server_close()
+
+    print()
+    print("same commit as this Sampo: capable and current, no staleness reported "
+          "[SPEC-SUI-227]")
+    old_build = console.STATE["build"]
+    console.STATE["build"] = {"available": True, "commit": "a" * 40, "commit_short": "aaaaaaaaaaaa"}
+    srv = fake_vaino(build_json={"git": "a" * 12, "branch": "main", "commit_date": "2026-08-31"})
+    try:
+        result = console.ensure_vaino(port=srv.server_port)
+        check(result == {"ok": True, "port": srv.server_port, "started": False},
+              f"a matching commit must not be reported as stale, got {result}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        console.STATE["build"] = old_build
+
+    print()
+    print("different commit than this Sampo: named as stale, not silently served "
+          "[SPEC-SUI-227]")
+    old_build = console.STATE["build"]
+    console.STATE["build"] = {"available": True, "commit": "a" * 40, "commit_short": "aaaaaaaaaaaa"}
+    srv = fake_vaino(build_json={"git": "b" * 12, "branch": "main", "commit_date": "2026-08-30"})
+    try:
+        result = console.ensure_vaino(port=srv.server_port)
+        check(result["ok"] is False, f"expected a refusal, got {result}")
+        err = result.get("error", "")
+        check("different commit" in err, f"the reason must name the mismatch, got {result}")
+        check("bbbbbbbbbbbb" in err, f"the reason must name the Vaino's own commit, got {result}")
+        check("aaaaaaaaaaaa" in err, f"the reason must name Sampo's own commit, got {result}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        console.STATE["build"] = old_build
+
+    print()
+    print("a dirty build's hash still compares against the bare commit -- the "
+          "+dirty suffix names the working tree, not a different commit "
+          "[SPEC-SUI-227]")
+    old_build = console.STATE["build"]
+    console.STATE["build"] = {"available": True, "commit": "a" * 40, "commit_short": "aaaaaaaaaaaa"}
+    srv = fake_vaino(build_json={"git": ("a" * 12) + "+dirty", "branch": "main", "commit_date": "2026-08-31"})
+    try:
+        result = console.ensure_vaino(port=srv.server_port)
+        check(result == {"ok": True, "port": srv.server_port, "started": False},
+              f"a dirty build of the same commit must not be reported as stale, got {result}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        console.STATE["build"] = old_build
+
+    print()
+    print("no /build route at all (an older Vaino): unknowable, so skipped rather "
+          "than guessed at [SPEC-SUI-227]")
+    old_build = console.STATE["build"]
+    console.STATE["build"] = {"available": True, "commit": "a" * 40, "commit_short": "aaaaaaaaaaaa"}
+    srv = fake_vaino()  # build_json=None -> /build 404s
+    try:
+        result = console.ensure_vaino(port=srv.server_port)
+        check(result == {"ok": True, "port": srv.server_port, "started": False},
+              f"an unreadable /build must not block a capable handoff, got {result}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        console.STATE["build"] = old_build
+
+    print()
+    print("Sampo itself has no git checkout: unknowable, so skipped rather than "
+          "guessed at [SPEC-SUI-227]")
+    old_build = console.STATE["build"]
+    console.STATE["build"] = {"available": False}
+    srv = fake_vaino(build_json={"git": "b" * 12, "branch": "main", "commit_date": "2026-08-30"})
+    try:
+        result = console.ensure_vaino(port=srv.server_port)
+        check(result == {"ok": True, "port": srv.server_port, "started": False},
+              f"an unknown Sampo commit must not block a capable handoff, got {result}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        console.STATE["build"] = old_build
 
     print()
     print("a bare listening socket with no HTTP behind it is not mistaken for a working Vaino")
