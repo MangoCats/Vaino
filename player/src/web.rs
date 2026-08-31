@@ -1191,131 +1191,113 @@ async fn edit_review(
     }
 }
 
-/// The raw bytes of a passage's file, `Range`-aware `[SPEC021 §3]` -- the
-/// file, not the passage. Vaino already resolves a passage to a file path for
-/// playback; this reuses that resolution and streams bytes back rather than
-/// decoding them, so `decodeAudioData` in the browser can fetch only the span
-/// it needs instead of Vaino deciding that for it.
+/// A decoded WAV window around a passage, never the raw file
+/// `[SPEC021 §3]`, `[SPEC-SUI-224]`.
+///
+/// **Was** the raw file's bytes, `Range`-aware in principle. `edit.js` never
+/// actually sent a `Range` header, so every load fetched the *whole* file and
+/// asked the browser to `decodeAudioData` it -- fine for a single-track
+/// library, catastrophic for `GoodbyeYellowBrickRoad.mp3`: a 324.7 MB, 4h05m
+/// single-file DAO capture, meaning ~10 GB of interleaved f32 PCM asked of
+/// the browser to produce one waveform. Exactly the risk this section's own
+/// prior note left unmeasured -- confirmed live against passage 16379, no
+/// waveform, no response from Play, the browser simply never finishing.
+///
+/// Decoding through `PassageDecoder` (`crate::decoder`) instead -- the same
+/// seek-accurate, bounded-memory decoder the real player already uses
+/// `[REQ-AUD-110]`, `[GDE-FBD-010]` -- costs nothing new to trust and closes
+/// two problems at once: the window is bounded regardless of the file's own
+/// size, and there is no byte-range-from-time-range arithmetic to get wrong
+/// for a VBR file, which this session's own duration audit already showed
+/// cannot be done reliably by estimate (`[REQ-LIB-145]`).
 #[cfg(feature = "sampo-support")]
 async fn edit_audio(
     State(ui): State<Ui>,
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
-    headers: axum::http::HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
-    let range = headers.get(axum::http::header::RANGE).and_then(|v| v.to_str().ok()).map(str::to_owned);
-    // Both the path lookup and the file read block, so they belong off the
-    // runtime -- the same reasoning `art_response` above already applies.
-    let chunk = tokio::task::spawn_blocking(move || {
+    let want_from: Option<u64> = q.get("from_ms").and_then(|s| s.parse().ok());
+    let want_to: Option<u64> = q.get("to_ms").and_then(|s| s.parse().ok());
+
+    let wav = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
         let lib = crate::db::Library::open(&db).ok()?;
-        let path = lib.passage_path(passage_id).ok()?;
-        read_audio_range(&path, range.as_deref()).ok()
+        let entry = lib.passage(passage_id).ok()?;
+        // The client is expected to send both, padded around the passage
+        // `[SPEC-SUI-224]`; the passage's own span is the fallback for a
+        // request that omits them, not the primary path.
+        let from = want_from.unwrap_or(entry.start_ms);
+        let to = want_to.unwrap_or(entry.end_ms).max(from + 1);
+        decode_window_wav(&entry.path, from, to)
     })
     .await
     .ok()
     .flatten();
 
-    match chunk {
-        Some(c) if c.partial => (
-            StatusCode::PARTIAL_CONTENT,
-            [
-                (axum::http::header::CONTENT_TYPE, c.content_type.to_string()),
-                (axum::http::header::ACCEPT_RANGES, "bytes".to_string()),
-                (axum::http::header::CONTENT_RANGE, format!("bytes {}-{}/{}", c.start, c.end, c.total)),
-            ],
-            c.bytes,
-        )
-            .into_response(),
-        Some(c) => (
+    match wav {
+        Some(bytes) => (
             StatusCode::OK,
-            [
-                (axum::http::header::CONTENT_TYPE, c.content_type.to_string()),
-                (axum::http::header::ACCEPT_RANGES, "bytes".to_string()),
-            ],
-            c.bytes,
+            [(axum::http::header::CONTENT_TYPE, "audio/wav".to_string())],
+            bytes,
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-/// One slice of a file's bytes, and where it sits in the whole `[SPEC021 §3]`.
+/// 30 minutes -- generous for any real edit (a passage's own span plus
+/// `edit.js`'s own padding is ordinarily a few minutes at most) and small
+/// next to what a 4-hour capture was costing before this existed.
 #[cfg(feature = "sampo-support")]
-struct AudioChunk {
-    bytes: Vec<u8>,
-    start: u64,
-    end: u64,
-    total: u64,
-    /// Whether this is less than the whole file -- decides `206` vs `200`.
-    partial: bool,
-    content_type: &'static str,
-}
+const EDIT_AUDIO_MAX_MS: u64 = 30 * 60 * 1000;
 
-/// Read one byte range of `path`, or the whole file when `range` is absent,
-/// unparseable, or a multi-range request -- the same "serve something useful
-/// rather than refuse" choice most static file servers make, since a client
-/// that cannot parse `Content-Range` back still gets a correct, if larger,
-/// answer.
+/// Decode `[from_ms, to_ms)` of `path` through `PassageDecoder` and return it
+/// as a WAV, or `None` if the file cannot be opened. Split out from the
+/// handler above so it can be tested against a real fixture file without an
+/// HTTP round trip -- the same shape `read_audio_range` (its predecessor)
+/// used to keep the filesystem-touching logic reachable from a plain test.
 #[cfg(feature = "sampo-support")]
-fn read_audio_range(path: &std::path::Path, range: Option<&str>) -> std::io::Result<AudioChunk> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path)?;
-    let total = file.metadata()?.len();
-    let content_type = mime_for_ext(path.extension().and_then(|e| e.to_str()).unwrap_or(""));
-    if total == 0 {
-        return Ok(AudioChunk { bytes: Vec::new(), start: 0, end: 0, total: 0, partial: false, content_type });
+fn decode_window_wav(path: &std::path::Path, from_ms: u64, to_ms: u64) -> Option<Vec<u8>> {
+    // A cap independent of what is asked for: a malformed or malicious
+    // request cannot reintroduce the whole-file problem this exists to fix,
+    // no matter what `from_ms`/`to_ms` claim.
+    let to_ms = to_ms.min(from_ms + EDIT_AUDIO_MAX_MS);
+    let mut dec = crate::decoder::PassageDecoder::open(path, from_ms, Some(to_ms)).ok()?;
+    let (sr, ch) = (dec.sample_rate, dec.channels as u16);
+    let mut samples: Vec<f32> = Vec::new();
+    while let Ok(Some(chunk)) = dec.next() {
+        samples.extend_from_slice(chunk);
     }
-    let (start, end, partial) = match range.and_then(|r| parse_byte_range(r, total)) {
-        Some((s, e)) => (s, e, true),
-        None => (0, total - 1, false),
-    };
-    file.seek(SeekFrom::Start(start))?;
-    let mut bytes = vec![0u8; (end - start + 1) as usize];
-    file.read_exact(&mut bytes)?;
-    Ok(AudioChunk { bytes, start, end, total, partial, content_type })
+    Some(write_wav_pcm16(sr, ch, &samples))
 }
 
-/// Parses one `Range: bytes=...` value against a known file length, per
-/// [RFC 7233 §2.1](https://httpwg.org/specs/rfc7233.html#header.range):
-/// `START-END`, `START-` (to the end), or `-SUFFIX` (the last SUFFIX bytes).
-/// A second range after a comma is ignored rather than honoured -- multi-range
-/// responses are a different wire format (`multipart/byteranges`) this route
-/// does not speak, and pretending to would be worse than not trying.
+/// A minimal 16-bit PCM WAV -- the same header shape
+/// `decoder::tests::ramp_wav` already writes as a *test* fixture, written
+/// here as the real response body a browser's `decodeAudioData` reads back.
+/// `samples` is already interleaved, already `f32` in `[-1, 1]` -- exactly
+/// what `PassageDecoder::next` yields -- so the only work left is the
+/// int16 conversion and the 44-byte header.
 #[cfg(feature = "sampo-support")]
-fn parse_byte_range(header: &str, total: u64) -> Option<(u64, u64)> {
-    let spec = header.strip_prefix("bytes=")?.split(',').next()?.trim();
-    let (start_s, end_s) = spec.split_once('-')?;
-    let last = total - 1;
-    let (start, end) = if start_s.is_empty() {
-        let suffix: u64 = end_s.parse().ok()?;
-        if suffix == 0 {
-            return None;
-        }
-        (last.saturating_sub(suffix - 1), last)
-    } else {
-        let start: u64 = start_s.parse().ok()?;
-        let end = if end_s.is_empty() { last } else { end_s.parse::<u64>().ok()?.min(last) };
-        (start, end)
-    };
-    (start <= end && start <= last).then_some((start, end))
-}
-
-/// The `Content-Type` for a file extension Vaino might be asked to stream
-/// raw, so the browser's `<audio>`/`decodeAudioData` picks the right decoder
-/// instead of guessing from bytes. Unknown extensions still serve -- the
-/// bytes are correct either way, just without a hint.
-#[cfg(feature = "sampo-support")]
-fn mime_for_ext(ext: &str) -> &'static str {
-    match ext.to_ascii_lowercase().as_str() {
-        "flac" => "audio/flac",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" => "audio/ogg",
-        "opus" => "audio/opus",
-        "m4a" | "aac" => "audio/mp4",
-        "wma" => "audio/x-ms-wma",
-        _ => "application/octet-stream",
+fn write_wav_pcm16(sample_rate: u32, channels: u16, samples: &[f32]) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut b = Vec::with_capacity(44 + data_len as usize);
+    b.extend(b"RIFF");
+    b.extend(&(36 + data_len).to_le_bytes());
+    b.extend(b"WAVEfmt ");
+    b.extend(&16u32.to_le_bytes());
+    b.extend(&1u16.to_le_bytes()); // PCM
+    b.extend(&channels.to_le_bytes());
+    b.extend(&sample_rate.to_le_bytes());
+    b.extend(&(sample_rate * channels as u32 * 2).to_le_bytes());
+    b.extend(&(channels * 2).to_le_bytes());
+    b.extend(&16u16.to_le_bytes());
+    b.extend(b"data");
+    b.extend(&data_len.to_le_bytes());
+    for s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        b.extend(&v.to_le_bytes());
     }
+    b
 }
 
 /// How long a skip fades the outgoing passage out, in ms. Clamped by the
@@ -2066,56 +2048,70 @@ mod tests {
         assert!((draft.gain_db - -1.5).abs() < 1e-9);
     }
 
-    /// `bytes=START-END`, `bytes=START-` and `bytes=-SUFFIX` per RFC 7233 --
-    /// the three forms a real browser actually sends, plus the malformed and
-    /// out-of-bounds cases that must fall back to "serve the whole file"
-    /// rather than panic or serve garbage.
+    /// A round trip through `write_wav_pcm16`: known samples in, a header
+    /// that names the right format/rate/channels, and the same samples back
+    /// out (bit-exact for int16, since the fixture values already land
+    /// exactly on int16 steps).
     #[cfg(feature = "sampo-support")]
     #[test]
-    fn byte_ranges_parse_the_way_a_browser_sends_them() {
-        assert_eq!(parse_byte_range("bytes=0-99", 1000), Some((0, 99)));
-        assert_eq!(parse_byte_range("bytes=500-", 1000), Some((500, 999)));
-        assert_eq!(parse_byte_range("bytes=-100", 1000), Some((900, 999)));
-        // Past the end of the file clamps rather than overruns.
-        assert_eq!(parse_byte_range("bytes=900-99999", 1000), Some((900, 999)));
-        // A second range is ignored, not honoured -- this route does not
-        // speak `multipart/byteranges`.
-        assert_eq!(parse_byte_range("bytes=0-9,20-29", 1000), Some((0, 9)));
-        // Malformed or inverted inputs report "could not parse" so the
-        // caller serves the whole file instead of guessing.
-        assert_eq!(parse_byte_range("nonsense", 1000), None);
-        assert_eq!(parse_byte_range("bytes=", 1000), None);
-        assert_eq!(parse_byte_range("bytes=-0", 1000), None);
-        assert_eq!(parse_byte_range("bytes=500-100", 1000), None);
-        assert_eq!(parse_byte_range("bytes=5000-", 1000), None);
+    fn wav_header_names_what_write_wav_pcm16_was_given() {
+        let samples = [0.5f32, -0.5, 1.0, -1.0, 0.0, 0.25];
+        let wav = write_wav_pcm16(44_100, 2, &samples);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 2, "channel count");
+        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), 44_100, "sample rate");
+        assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16, "bits per sample");
+        let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_len as usize, samples.len() * 2);
+        let got: Vec<i16> = wav[44..]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(got, vec![16384, -16384, 32767, -32767, 0, 8192]);
     }
 
-    /// A real file on disk, read whole and read in a slice -- the seam
-    /// `parse_byte_range`'s unit tests cannot reach, since it never touches
-    /// the filesystem.
+    /// A real file on disk, decoded through the exact path the route uses --
+    /// the seam a pure-function test of `write_wav_pcm16` alone cannot reach,
+    /// since it never touches `PassageDecoder` or the filesystem. Reuses
+    /// `decoder::tests`' own WAV fixture rather than building a second one.
     #[cfg(feature = "sampo-support")]
     #[test]
-    fn read_audio_range_serves_the_whole_file_or_the_asked_for_slice() {
-        let path = std::env::temp_dir().join(format!("vaino-edit-audio-{}.bin", std::process::id()));
-        std::fs::write(&path, b"0123456789").unwrap();
+    fn decode_window_wav_serves_only_the_requested_span() {
+        let f = crate::decoder::tests::tmp("edit_audio"); // 5s of 44.1kHz stereo
+        let wav = decode_window_wav(&f, 1_000, 2_000).expect("a readable fixture");
+        assert_eq!(&wav[0..4], b"RIFF");
+        let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
+        let got_frames = data_len / 2 / 2; // bytes -> int16 samples -> stereo frames
+        let want_frames = 44_100; // 1000ms at 44.1kHz
+        assert!(
+            (got_frames as i64 - want_frames as i64).abs() < 4096,
+            "decoded {got_frames} frames for a 1000ms window, wanted ~{want_frames}"
+        );
+        std::fs::remove_file(&f).ok();
+    }
 
-        let whole = read_audio_range(&path, None).unwrap();
-        assert_eq!(whole.bytes, b"0123456789");
-        assert!(!whole.partial);
-        assert_eq!(whole.total, 10);
-
-        let slice = read_audio_range(&path, Some("bytes=2-4")).unwrap();
-        assert_eq!(slice.bytes, b"234");
-        assert!(slice.partial);
-        assert_eq!((slice.start, slice.end, slice.total), (2, 4, 10));
-
-        // A range this route cannot parse falls back to the whole file rather
-        // than an error -- a client that sent it still gets a correct answer.
-        let garbled = read_audio_range(&path, Some("garbage")).unwrap();
-        assert!(!garbled.partial);
-        assert_eq!(garbled.bytes, b"0123456789");
-
-        std::fs::remove_file(&path).ok();
+    /// A window asking for more than `EDIT_AUDIO_MAX_MS` is clamped, not
+    /// honoured -- the actual defence this route exists to add back after
+    /// removing the raw-file route that had no such limit at all.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn decode_window_wav_caps_an_oversized_request() {
+        let f = crate::decoder::tests::tmp("edit_audio_cap"); // 5s fixture
+        // Ask for far more than the fixture even contains -- the cap must
+        // still be the thing that bounds the *request*, not merely the
+        // fixture's own short length standing in for it by coincidence.
+        let wav = decode_window_wav(&f, 0, EDIT_AUDIO_MAX_MS * 10).expect("a readable fixture");
+        let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
+        let got_frames = data_len / 2 / 2;
+        // The fixture itself is only 5s, so this mostly confirms decoding
+        // stopped at real end-of-stream rather than hanging or erroring on
+        // an oversized request -- `EDIT_AUDIO_MAX_MS` is minutes, the
+        // fixture is seconds, so the cap is never the binding constraint
+        // here, and that asymmetry is the point: a real 4-hour file is what
+        // the cap is for, which no test fixture should actually contain.
+        assert!(got_frames > 0 && got_frames < 44_100 * 6, "got {got_frames} frames");
+        std::fs::remove_file(&f).ok();
     }
 
     /// A recording search response, in MusicBrainz's own shape -- `title`,
@@ -2180,14 +2176,5 @@ mod tests {
     fn the_review_page_sends_artist_verbs_the_router_serves() {
         assert!(REVIEW_JS.contains("/artist/correct"));
         assert!(REVIEW_JS.contains("/artist/reopen"));
-    }
-
-    #[cfg(feature = "sampo-support")]
-    #[test]
-    fn mime_for_ext_knows_the_formats_this_library_actually_has() {
-        assert_eq!(mime_for_ext("flac"), "audio/flac");
-        assert_eq!(mime_for_ext("MP3"), "audio/mpeg");
-        assert_eq!(mime_for_ext("wav"), "audio/wav");
-        assert_eq!(mime_for_ext("xyz"), "application/octet-stream");
     }
 }

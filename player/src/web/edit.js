@@ -48,6 +48,19 @@
   let playedFromMs = 0; // draft-relative ms the current playback began at
   let dragging = null; // 'start' | 'end' | 'leadIn' | 'leadOut' | null
   let fileMs = 0;      // the file's own duration, for the facts line only
+  // The decoded `buffer`'s own sample 0 is this many ms into the file, not
+  // necessarily ms 0 `[SPEC-SUI-224]` -- a DAO capture is only ever decoded
+  // in a bounded window around the passage being edited, never the whole
+  // file. Every place converting an absolute ms (draft/view, both still
+  // file-absolute throughout, matching what the server stores and what the
+  // facts line shows) into a *sample index* has to subtract this first;
+  // everywhere else -- view bounds, drag math, zoom -- stays in the same
+  // absolute space it already used and needs no change.
+  let windowFromMs = 0;
+  // How much context to decode on each side of the passage's own span
+  // `[SPEC-SUI-224]` -- generous for any real edit, small next to what an
+  // hours-long capture was costing before this existed.
+  const WINDOW_PAD_MS = 60_000;
   // The boundary as loaded, captured once and never overwritten by a save --
   // unlike `base`, which resets to `draft` on every commit `[SPEC-SUI-140]`.
   // The best available stand-in, without a new server read, for "the span
@@ -71,13 +84,21 @@
     const total = totalMs();
     const cap = total || MIN_SPAN_MS;
     let span = clamp(toMs - fromMs, Math.min(MIN_SPAN_MS, cap), cap);
-    const from = clamp(fromMs, 0, Math.max(0, total - span));
+    // Bounded by the decoded window, not by ms 0 -- `windowFromMs` is 0 for
+    // the ordinary case (decoding starts at the file's own beginning) and
+    // only ever nonzero for a bounded window into a large DAO capture
+    // `[SPEC-SUI-224]`.
+    const from = clamp(fromMs, windowFromMs, Math.max(windowFromMs, windowFromMs + total - span));
     return { fromMs: from, toMs: from + span };
   }
   function setView(fromMs, toMs) {
     view = clampView(fromMs, toMs);
+    // Against `fileMs` (the file's own true duration, from `/info`), not
+    // `totalMs()` -- the latter is only the *decoded window's* own
+    // duration, which reads as nonsense beside two absolute positions once
+    // that window does not start at ms 0 `[SPEC-SUI-224]`.
     $('viewrange').textContent =
-      `showing ${fmt(view.fromMs)} – ${fmt(view.toMs)} of ${fmt(totalMs())}`;
+      `showing ${fmt(view.fromMs)} – ${fmt(view.toMs)} of ${fmt(fileMs || null)}`;
     draw();
   }
   function zoomStep(factor) {
@@ -123,7 +144,7 @@
   // view's own boundary is never clipped in half against the canvas edge
   // `[SPEC-SUI-222]` -- real, not hypothetical: `start_ms` is 0 and `end_ms`
   // is the file's own duration for most passages in this library (one
-  // track, one file), so "Whole passage" and "Whole file" routinely put
+  // track, one file), so "Whole passage" and "Zoom out" routinely put
   // both blue markers *exactly* on the canvas boundary, where a knob drawn
   // centred on the edge is half off-canvas and a line there reads as the
   // canvas's own border, not as a marker at all.
@@ -213,7 +234,21 @@
     for (const id of ['startms', 'endms', 'leadinms', 'leadoutms']) $(id).disabled = false;
 
     note('Loading audio…');
-    const audioResp = await fetch(`/edit/${passageId}/audio`).catch(() => null);
+    // A bounded window around the passage, never the whole file
+    // `[SPEC-SUI-224]` -- decoding a real 4h05m, 324.7 MB DAO capture
+    // client-side left the page with no waveform and an unresponsive Play,
+    // hanging on ~10 GB of interleaved f32 PCM the browser was asked to
+    // produce for one waveform. The server now decodes only this span,
+    // through the same seek-accurate decoder the real player uses, and
+    // returns it as a WAV. For the near-totality of the library --
+    // single-track files where `start_ms=0`/`end_ms=file_ms` already --
+    // this window already equals the whole file, so nothing about the
+    // ordinary case changes beyond "now decoded server-side."
+    windowFromMs = Math.max(0, base.start_ms - WINDOW_PAD_MS);
+    const windowToMs = Math.min(fileMs || Infinity, base.end_ms + WINDOW_PAD_MS);
+    const audioResp = await fetch(
+      `/edit/${passageId}/audio?from_ms=${windowFromMs}&to_ms=${windowToMs}`,
+    ).catch(() => null);
     if (!audioResp || !audioResp.ok) {
       note('Could not read the audio for this passage.', 'bad');
       return;
@@ -231,29 +266,26 @@
 
     $('play').disabled = false;
     for (const id of ['zoomout', 'zoomin', 'zoompassage', 'zoomfile']) $(id).disabled = false;
-    setView(0, totalMs());
+    setView(windowFromMs, windowFromMs + totalMs());
+    updateFacts(); // the partial-window note depends on `windowFromMs`/`totalMs()`, both just set
 
-    // A VBR file with no valid Xing/Info header cannot be duration-probed
-    // without decoding it -- Sampo's own ingest-time probe fell back to
-    // estimating from bitrate for exactly one real file this session,
-    // over-stating a 3:58 recording as 4:54. The browser has just fully
-    // decoded the real content, so this is the one moment this page can
-    // actually catch that disagreement, rather than leaving "the end marker
-    // is not there" looking like an unexplained rendering fault: end_ms or
-    // lead_out sitting past what decoded audio actually contains is not
-    // reachable at any zoom, on any browser, until the library's own
-    // stored duration is corrected.
+    // The server clamps to `EDIT_AUDIO_MAX_MS` regardless of what was asked,
+    // and a library not yet repaired can still store an `end_ms` past what
+    // `PassageDecoder` actually finds -- caught here against the *requested*
+    // window rather than the file's own stored duration, since decoding
+    // always goes through real seeking now, never trusting stored duration
+    // at all `[SPEC-SUI-224]`.
     const decodedMs = totalMs();
-    const overrunMs = Math.max(draft.end_ms, fileMs) - decodedMs;
+    const requestedMs = windowToMs - windowFromMs;
+    const overrunMs = requestedMs - decodedMs;
     if (overrunMs > 1000) {
       note(
-        `This browser decoded ${fmt(decodedMs)} of real audio, but the library ` +
-        `says this file is ${fmt(fileMs)} (end at ${fmt(draft.end_ms)}) -- ` +
-        `${fmt(overrunMs)} longer than what actually decodes. The end and any ` +
-        `lead-out past ${fmt(decodedMs)} cannot be shown or reached at any zoom ` +
-        `until the library's own stored duration is corrected; likely an ` +
-        `ingest-time duration estimate off a missing or bad VBR header, not a ` +
-        `fault in this page.`,
+        `This browser decoded ${fmt(decodedMs)} of real audio, but ` +
+        `${fmt(requestedMs)} was requested around this passage -- ` +
+        `${fmt(overrunMs)} short. The end and any lead-out past ${fmt(decodedMs)} ` +
+        `cannot be shown or reached at any zoom until the library's own stored ` +
+        `boundary is corrected (see tools/repair_durations.py); not a fault in ` +
+        `this page.`,
         'bad',
       );
       return;
@@ -266,7 +298,18 @@
     $('facts').innerHTML =
       `start <b>${fmt(draft.start_ms)}</b> · end <b>${fmt(draft.end_ms)}</b> · ` +
       `lead-in <b>${draft.lead_in_ms} ms</b> · lead-out <b>${draft.lead_out_ms} ms</b> · ` +
-      `gain <b>${draft.gain_db.toFixed(2)} dB</b> · file <b>${fmt(fileMs || null)}</b>`;
+      `gain <b>${draft.gain_db.toFixed(2)} dB</b> · file <b>${fmt(fileMs || null)}</b>` +
+      // Only a bounded window around the passage is ever decoded for a
+      // large DAO capture `[SPEC-SUI-224]` -- said plainly here, since
+      // "Zoom out" quietly stopping short of the file's own edges would
+      // otherwise look like a bug rather than the deliberate limit it is.
+      // Expanding the window on request is real future work, not solved
+      // here, the same honest-deferral shape `[SPEC021 §6]` already uses
+      // for the neighbour-passage question.
+      (buffer && totalMs() < (fileMs || 0) - 1000
+        ? ` · <b class="win">showing ±${Math.round(WINDOW_PAD_MS / 1000)}s around ` +
+          `this passage, not the whole file</b>`
+        : '');
     updateFlavorNote();
   }
 
@@ -339,8 +382,8 @@
     for (let x = Math.floor(padPx); x < w - padPx; x++) {
       const msLo = view.fromMs + ((x - padPx) / usable) * span;
       const msHi = view.fromMs + ((x + 1 - padPx) / usable) * span;
-      const lo = Math.max(0, Math.floor((msLo / 1000) * sr));
-      const hi = Math.min(data.length, Math.max(lo + 1, Math.ceil((msHi / 1000) * sr)));
+      const lo = Math.max(0, Math.floor(((msLo - windowFromMs) / 1000) * sr));
+      const hi = Math.min(data.length, Math.max(lo + 1, Math.ceil(((msHi - windowFromMs) / 1000) * sr)));
       let min = 1, max = -1;
       for (let i = lo; i < hi; i++) {
         const v = data[i];
@@ -421,9 +464,11 @@
   }
 
   function applyDrag(which, ms) {
-    const total = totalMs();
-    if (which === 'start') draft.start_ms = clamp(ms, 0, draft.end_ms - 1);
-    else if (which === 'end') draft.end_ms = clamp(ms, draft.start_ms + 1, total);
+    // Bounded by the decoded window's own absolute span, not by ms 0 --
+    // `windowFromMs` is 0 for the ordinary whole-file case `[SPEC-SUI-224]`.
+    const windowToMs = windowFromMs + totalMs();
+    if (which === 'start') draft.start_ms = clamp(ms, windowFromMs, draft.end_ms - 1);
+    else if (which === 'end') draft.end_ms = clamp(ms, draft.start_ms + 1, windowToMs);
     else if (which === 'leadIn')
       draft.lead_in_ms = Math.round(clamp(ms - draft.start_ms, 0, draft.end_ms - draft.start_ms));
     else if (which === 'leadOut')
@@ -523,7 +568,13 @@
   $('zoomin').addEventListener('click', () => zoomStep(0.5));
   $('zoomout').addEventListener('click', () => zoomStep(2));
   $('zoompassage').addEventListener('click', () => setView(draft.start_ms, draft.end_ms));
-  $('zoomfile').addEventListener('click', () => setView(0, totalMs()));
+  // Labelled "Zoom out" in the page, not "Whole file" -- it reaches the
+  // edge of what was actually decoded, which is the whole file for the
+  // ordinary single-track case and a bounded window around the passage for
+  // a large DAO capture `[SPEC-SUI-224]`; the id stays `zoomfile` since
+  // nothing else needs to change for that. See the partial-window note
+  // `updateFacts` adds when the two differ.
+  $('zoomfile').addEventListener('click', () => setView(windowFromMs, windowFromMs + totalMs()));
 
   // The preview player: a fresh `AudioBuffer` sliced at the draft's
   // boundaries with the draft's fades and gain baked in sample-by-sample,
@@ -531,8 +582,8 @@
   // `[SPEC021 §4]` -- so what changes on a drag is also what is heard.
   function renderPreview() {
     const sr = buffer.sampleRate;
-    const startSample = Math.max(0, Math.floor((draft.start_ms / 1000) * sr));
-    const endSample = Math.min(buffer.length, Math.ceil((draft.end_ms / 1000) * sr));
+    const startSample = Math.max(0, Math.floor(((draft.start_ms - windowFromMs) / 1000) * sr));
+    const endSample = Math.min(buffer.length, Math.ceil(((draft.end_ms - windowFromMs) / 1000) * sr));
     const n = Math.max(1, endSample - startSample);
     const leadIn = Math.round((draft.lead_in_ms / 1000) * sr);
     const leadOut = Math.round((draft.lead_out_ms / 1000) * sr);
@@ -629,7 +680,7 @@
     const v = Number($('startms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
-    draft.start_ms = clamp(Math.round(v), 0, draft.end_ms - 1);
+    draft.start_ms = clamp(Math.round(v), windowFromMs, draft.end_ms - 1);
     updateFacts(); updatePreciseFields(); ensureVisible(draft.start_ms); draw(); refreshCommitState();
   });
   $('endms').addEventListener('focus', () => ensureVisible(draft.end_ms));
@@ -637,7 +688,7 @@
     const v = Number($('endms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
-    draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, totalMs());
+    draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, windowFromMs + totalMs());
     updateFacts(); updatePreciseFields(); ensureVisible(draft.end_ms); draw(); refreshCommitState();
   });
   $('leadinms').addEventListener('focus', () =>

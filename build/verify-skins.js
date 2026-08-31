@@ -1058,13 +1058,18 @@ async function runEdit() {
   const INFO = { passage_id: 22, start_ms: 1000, end_ms: 181000, file_ms: 200000,
                  lead_in_ms: 5, lead_out_ms: 946, gain_db: -1.2 };
   const posted = [];
+  let audioUrl = null;
   window.fetch = (url, opts) => {
     if (opts && opts.method === 'POST') { posted.push(url); return Promise.resolve({ ok: true }); }
     if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
     if (url === '/edit/22/info')
       return Promise.resolve({ ok: true, json: () => Promise.resolve(INFO) });
-    if (url === '/edit/22/audio')
+    // A windowed request now, not the bare route -- `from_ms`/`to_ms`
+    // query params around the passage, never the whole file [SPEC-SUI-224].
+    if (url.startsWith('/edit/22/audio?')) {
+      audioUrl = url;
       return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) });
+    }
     return Promise.resolve({ ok: false, status: 404 });
   };
   const runScript = src => {
@@ -1081,6 +1086,13 @@ async function runEdit() {
   check(facts.includes('5 ms'), `facts missing lead-in, got "${facts}"`);
   check(facts.includes('946 ms'), `facts missing lead-out, got "${facts}"`);
   check(facts.includes('-1.20 dB'), `facts missing gain, got "${facts}"`);
+
+  // A windowed request, padded around the passage `[SPEC-SUI-224]` -- not
+  // the bare file. `start_ms=1000` padded 60s under clamps to 0; `end_ms=
+  // 181000` padded 60s over would exceed `file_ms=200000`, so it clamps
+  // there instead.
+  check(audioUrl === '/edit/22/audio?from_ms=0&to_ms=200000',
+        `expected a padded, clamped window, got ${audioUrl}`);
 
   // The precise ms fields `[SPEC-SUI-219]` populate from the same `/info`
   // response the facts line reads, and are usable before the audio itself
