@@ -7,7 +7,7 @@
 
 ## 📻 Overview
 
-**Vaino** is a continuous, automated music playback system designed to transform a music collection into a personal, 24/7 radio station experience. Rather than requiring users to manually construct playlists or stop between tracks, Vaino dynamically arranges songs, sound-bite clips, and long capture files (such as Disc-At-Once DAO files) into a seamless audio stream with custom crossfades, fade ramps, and trim points.
+**Vaino** is a continuous, automated music playback system designed to transform a music collection into a personal, 24/7 radio station experience. Rather than requiring users to manually construct playlists or stop between tracks, Vaino dynamically arranges songs and long capture files (such as Disc-At-Once DAO files) into a seamless audio stream with custom crossfades, fade ramps, and trim points. *(Station-ID/jingle-style clip injection was part of an earlier, pre-rearchitecture plan; it is unbuilt and its status is an open question — [`GDE-OPN-060`](docs/GUIDE002-rearchitecture-plan.md#6-open-questions).)*
 
 Vaino is built for both dedicated, low-power embedded appliances (such as a Raspberry Pi Zero 2W connected to high-fidelity audio equipment) and standard desktop computers (Windows, Linux, macOS).
 
@@ -23,21 +23,19 @@ Vaino draws its name and spiritual concept from **Väinämöinen**, the elementa
 2. **The Singing Sorcerer (Automated Music Stream)**:  
    Rather than asking the user to manually control every track, Vaino acts as an automated digital shaman. It reads the context of the moment—listener preferences, play history, time of day, day of week, and day of year—along with high-level audio characteristics to curate a continuous, harmonious stream of sound.
 
-Vaino is a fresh project and the spiritual successor to the abandoned `McRhythm` project. While drawing inspiration from `McRhythm`, Vaino operates with a clean slate, unconstrained by legacy design choices.
+Vaino is the third attempt at this idea, not the first. **MuLibPlay** — a Qt5 C++ player — has run this listener's library continuously since 2020 and is the benchmark every measured decision here is checked against. **McRhythm** was an ambitious, stalled six-microservice rewrite; its requirements were the most refined in the lineage and are inherited deliberately, while its architecture is explicitly rejected. An earlier **Vaino v1** attempt also failed, on measured grounds (whole-file decode, silently-inherited descriptors). None of this is a clean slate: it is a rearchitecture built on three prior systems' evidence. See [GUIDE001: Project Lineage & Lessons Learned](docs/GUIDE001-lineage-and-lessons.md) for the measurements behind every claim in this paragraph.
 
 ---
 
 ## 🔑 Key Features & Architecture Pillars
 
-- **Continuous Audio Stream Engine**: Seamlessly transitions across standard single-track audio files, DAO (Disc-at-Once) full album captures, and quick sound-bite clips using configured trim points and custom crossfade ramp profiles.
+- **Continuous Audio Stream Engine**: Seamlessly transitions across standard single-track audio files and DAO (Disc-at-Once) full album captures, played as trimmed passages with per-passage gain and configurable crossfade ramp profiles.
 - **Strict Co-Located Audio Output**: Where the Vaino server runs is strictly where audio streams out. Remote devices act as controllers, not streaming endpoints.
 - **Dual Target Platforms**:
-  - **Embedded Appliance**: Designed for 24-7 operation on Raspberry Pi Zero 2W with D/A HAT audio or Bluetooth, fast-boot audio priority, and a power-loss-resilient 3-partition storage strategy.
-  - **Desktop Application**: Provides an identical playback and control experience on Windows, Linux, and macOS systems.
-- **Web-Based Control & Wall Art Interface**:
-  - **Quick Control**: Responsive control layout for queue editing, playlist shaping, and manual overrides on phone, tablet, or desktop browsers.
-  - **Wall Art / Kiosk Mode**: Fullscreen visual display showcasing high-resolution album artwork, upcoming queue, clock, and ambient visual decorations for dedicated wall-mounted displays.
-- **Context-Aware Playlist Intelligence**: Uses track metadata (MusicBrainz IDs), AudioBrainz-inspired high-level music descriptors, play history, and temporal context (time/day/season) to select optimal upcoming songs.
+  - **Embedded Appliance**: Designed for 24/7 operation on Raspberry Pi Zero 2W (`≤150MB` RSS) with D/A HAT audio or Bluetooth, best-effort fast-boot audio priority, and a power-loss-resilient 3-partition storage strategy.
+  - **Desktop Application**: Provides an identical playback and control experience on Windows, Linux, and macOS systems, treated as a first-class target rather than a by-product of the appliance.
+- **Skinnable Web Interface**: One shared contract (`core.js`) over a WebSocket snapshot, worn by three interchangeable skins — a quiet reference UI, a MuLibPlay-styled reproduction, and a WinAmp-styled fixed-width appliance skin — each chosen per browser. A fullscreen wall-mounted "kiosk" skin was part of an earlier, pre-rearchitecture plan; it was never built and its status is an open question — [`GDE-OPN-050`](docs/GUIDE002-rearchitecture-plan.md#6-open-questions).
+- **Context-Aware Playlist Intelligence**: Uses track metadata (MusicBrainz IDs), a 71-dimension flavor vector reproducing AcousticBrainz's own classifiers from locally-run analysis, play history, and temporal context (time/day/season) to select upcoming songs — see [SPEC009: Program Director](docs/spec/SPEC009-program-director.md).
 
 ---
 
@@ -54,7 +52,7 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - 📋 **[GOV001: Document Hygiene & Governance Standard](docs/GOV001-document-hygiene.md)** — identifier taxonomy (`REQ`, `SPEC`, `UT`, `ENT`), modularity rules, and master search index.
 - ⚖️ **[GOV002: Sources of Truth](docs/GOV002-sources-of-truth.md)** — how to rank two disagreeing answers to the same question, and the register of rankings already made.
 - 📥 **[Inherited Documents Register](docs/inherited/README.md)** — design material copied in from MuLibPlay and McRhythm, classified as active design input vs historical evidence, with collision hazards noted.
-- 📜 **[LICENSING.md](LICENSING.md)** — **two licences in this one repository**: `player/` and `docs/` are MIT; `tools/` (Sampo) is AGPL-3.0-or-later, because it invokes Essentia. Read this before assuming the root `LICENSE` file covers everything.
+- 📜 **[LICENSING.md](LICENSING.md)** — **two licences in this one repository**, not one. See [§ License](#-license) below before assuming the root `LICENSE` file covers everything.
 
 **Design guidance:**
 - 🔬 **[GUIDE003: Feature Extraction Strategy](docs/GUIDE003-feature-extraction-strategy.md)** — **P0 critical path.** Replacing AcousticBrainz: harvest the archived dumps, reproduce the pipeline, two-stage validation.
