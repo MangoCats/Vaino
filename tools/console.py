@@ -845,6 +845,18 @@ class Handler(BaseHTTPRequestHandler):
                 if folder and not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("analyze-amplitude", folder)})
+            if p == "/api/analyze-flavor":
+                # Scoped to one passage, not a folder -- refreshing flavor
+                # after a boundary edit is a per-passage question, and
+                # re-running extraction over an entire folder just to reach
+                # one changed passage would redo work on everything else
+                # that is already cached and unaffected.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                passage_id = (json.loads(body or b"{}") or {}).get("passage_id")
+                if not isinstance(passage_id, int) or passage_id <= 0:
+                    return self.send_json({"error": f"not a passage id: {passage_id!r}"}, code=400)
+                return self.send_json(
+                    {"job_id": STATE["jobs"].submit("analyze-flavor", str(passage_id))})
             if p == "/api/release/suggest":
                 # Discovery only `[SPEC-SUI-215]` -- never touches
                 # passage_recordings, so no confirmation step belongs here.

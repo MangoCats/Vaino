@@ -1104,6 +1104,26 @@ async function runEdit() {
   check($('leadoutms').value === '946', 'undo must restore the field along with the draft');
   check($('undo').disabled, 'undo must disable itself once the stack is empty again');
 
+  // The flavor-refresh suggestion: quiet for a small move, present for a
+  // substantial one, gone again once undone -- compared against the
+  // boundary as loaded, not the last save.
+  // `startms`, not `endms`: the end field clamps against `totalMs()`, which
+  // is 0 with no decoded buffer here (jsdom has no Web Audio) and would
+  // clamp any value down to almost nothing -- the start field's own clamp
+  // does not depend on it.
+  check($('flavornote').textContent === '', 'no suggestion before any edit');
+  $('startms').value = '1400';   // 400ms off the loaded 1000 -- small
+  $('startms').dispatchEvent(new window.Event('change'));
+  check($('flavornote').textContent === '', 'a small move must not suggest a re-analysis');
+  $('startms').value = '12000';  // 11000ms off the loaded 1000 -- substantial
+  $('startms').dispatchEvent(new window.Event('change'));
+  check(/re-analyz/i.test($('flavornote').textContent),
+        `a substantial move must suggest one, got "${$('flavornote').textContent}"`);
+  $('undo').dispatchEvent(new window.Event('click'));
+  $('undo').dispatchEvent(new window.Event('click'));
+  check($('flavornote').textContent === '',
+        'undoing back to the loaded boundary must clear the suggestion');
+
   // jsdom has no `AudioContext`; decoding fails there the same way it would
   // in a browser without Web Audio, and that must read as an explanation, not
   // a crash the page swallows silently.

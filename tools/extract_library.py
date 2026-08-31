@@ -17,6 +17,7 @@ measurement, never for listening.
 
 Usage:
   python tools/extract_library.py <vaino.db> [--limit N] [--jobs N]
+  python tools/extract_library.py <vaino.db> --passage <passage_id>
 """
 
 from __future__ import annotations
@@ -159,6 +160,11 @@ def main() -> int:
     db = Path(args[0])
     limit = int(args[args.index("--limit") + 1]) if "--limit" in args else 0
     jobs = int(args[args.index("--jobs") + 1]) if "--jobs" in args else max(1, (os.cpu_count() or 4) - 1)
+    # One passage, not the whole library or a folder -- for refreshing a
+    # single passage's own flavor after its boundaries change, without
+    # re-running extraction over everything else that is already cached
+    # and unaffected `[GDE-FEX-105]`.
+    passage_id = int(args[args.index("--passage") + 1]) if "--passage" in args else None
 
     con = sqlite3.connect(db)
     con.execute(
@@ -173,11 +179,14 @@ def main() -> int:
     # Per PASSAGE, not per file [GDE-FEX-105]: one feature vector for a
     # 40-track compilation describes the average of 40 songs, which is wrong
     # flavor for every one of them.
-    rows = con.execute(
-        "SELECT f.audio_md5, f.path, pr.mbid, p.start_ms, p.end_ms, f.duration_ms "
-        "FROM files f JOIN passages p USING (file_id) "
-        "JOIN passage_recordings pr USING (passage_id) WHERE p.kind = 'radio'"
-    ).fetchall()
+    sql = ("SELECT f.audio_md5, f.path, pr.mbid, p.start_ms, p.end_ms, f.duration_ms "
+           "FROM files f JOIN passages p USING (file_id) "
+           "JOIN passage_recordings pr USING (passage_id) WHERE p.kind = 'radio'")
+    params: tuple = ()
+    if passage_id is not None:
+        sql += " AND p.passage_id = ?"
+        params = (passage_id,)
+    rows = con.execute(sql, params).fetchall()
     todo = [r for r in rows if (r[0], r[3], r[4]) not in done]
     if limit:
         todo = todo[:limit]

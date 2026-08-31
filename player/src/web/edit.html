@@ -75,6 +75,9 @@
   .note.bad { opacity: 1; }
   .note.good { opacity: 1; color: #8c8; }
   .note.quiet { opacity: .55; margin-top: .4rem; }
+  /* Same amber as the lead-in/lead-out markers -- a boundary-timing concern
+     reads through the same color it is drawn in on the canvas above. */
+  .note.warn { opacity: 1; color: #fb6; }
 </style>
 
 <div class="edit">
@@ -112,6 +115,7 @@
     <label>lead-out <input type="number" id="leadoutms" step="1" min="0" disabled> ms</label>
   </div>
   <p class="note" id="note"></p>
+  <p class="note" id="flavornote"></p>
   <p class="note quiet" id="pausenote"></p>
 </div>
 

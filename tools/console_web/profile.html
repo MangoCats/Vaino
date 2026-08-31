@@ -350,6 +350,35 @@ function releaseSuggestBox(pid, folder) {
       }
     }
 
+    // Scoped to this one passage, not the folder [GDE-FEX-105] -- flavor is
+    // per-passage, and refreshing it after a boundary edit should not mean
+    // re-running extraction over everything else in the folder that is
+    // already cached and unaffected `[SPEC-SUI-223]`. `d.cached` above
+    // already answers whether this passage's own span is current; framed
+    // here rather than repeated, since the button is the next step either
+    // way.
+    m.append(S.el('div', { class: 'controls' },
+      S.el('button', { class: 'chip', id: 'analyze-flavor' },
+        d.cached ? 're-analyze flavor for this passage'
+                 : 're-analyze flavor for this passage (not cached for its current span)')));
+    m.append(S.el('div', { id: 'flavor-result' }));
+    document.getElementById('analyze-flavor').onclick = async () => {
+      const box = document.getElementById('flavor-result');
+      box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+      let r;
+      try {
+        r = await (await fetch('/api/analyze-flavor', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ passage_id: pid }),
+        })).json();
+      } catch (e) { return S.fail('#flavor-result', e); }
+      if (r.error) return S.fail('#flavor-result', new Error(r.error));
+      // New flavor values, and `d.cached` above both change -- reload
+      // rather than patch, the same reasoning `reanalyze`'s own handler
+      // already uses.
+      S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
+    };
+
     // Offered *before* the handoff, not after and not only at push time
     // [SPEC-DF-116..118] -- accepting it is a small local write, so whatever
     // Vaino's own editor captures as its baseline a moment later already

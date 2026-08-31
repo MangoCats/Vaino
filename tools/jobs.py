@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'export-bundle' | 'remote-pull'
                                         -- | 'remote-push' | 'accept-remote'
                                         -- | 'suggest-release' | 'accept-release'
-                                        -- | 'analyze-amplitude'
+                                        -- | 'analyze-amplitude' | 'analyze-flavor'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -322,6 +322,9 @@ class Runner:
         if kind == "analyze-amplitude":
             return self._analyze_amplitude(job_id, target)
 
+        if kind == "analyze-flavor":
+            return self._analyze_flavor(job_id, target)
+
         # 'induct' and 'reanalyze' `[SPEC-SUI-214]` are the same four-stage
         # pipeline, differing only in whether `identify` is told to retry
         # what it already tried -- anything else unrecognized also lands
@@ -562,6 +565,27 @@ class Runner:
         db.commit()
         db.close()
         return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+
+    def _analyze_flavor(self, job_id: int, target: str):
+        """Refresh one passage's own flavor, `target` its passage id.
+
+        Unlike `analyze-amplitude`, `extract_library.py` is already part of
+        `steps_for()`'s normal induct/reanalyze pipeline -- this is not a new
+        capability, only a narrower way to reach the same tool for one
+        passage, offered from its own profile page rather than requiring a
+        library- or folder-wide re-run just to pick up a boundary edit.
+        """
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "extract_library.py"), self.library,
+                "--passage", target]
+        self._emit(job_id, "stage", "extract", stage="extract")
+        code, out = self._spawn(job_id, "extract", argv)
+        result = parse_json_tail(out) or {}
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if code == 0 else "failed")
 
     def _spawn(self, job_id, stage, argv):
         # UTF-8 on both sides. `ingest_folder.say()` falls back to the console

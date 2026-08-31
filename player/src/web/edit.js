@@ -48,6 +48,12 @@
   let playedFromMs = 0; // draft-relative ms the current playback began at
   let dragging = null; // 'start' | 'end' | 'leadIn' | 'leadOut' | null
   let fileMs = 0;      // the file's own duration, for the facts line only
+  // The boundary as loaded, captured once and never overwritten by a save --
+  // unlike `base`, which resets to `draft` on every commit `[SPEC-SUI-140]`.
+  // The best available stand-in, without a new server read, for "the span
+  // flavor was last computed against": correct for the ordinary case of one
+  // edit, one save, since nothing else moves `passages.end_ms` in between.
+  let loadedBoundary = null;
 
   const canvas = $('wave');
 
@@ -198,6 +204,7 @@
       gain_db: info.gain_db,
     };
     draft = { ...base };
+    loadedBoundary = { start_ms: base.start_ms, end_ms: base.end_ms };
     fileMs = info.file_ms;
     $('gain').value = draft.gain_db.toFixed(1);
     $('gain').disabled = false;
@@ -260,6 +267,32 @@
       `start <b>${fmt(draft.start_ms)}</b> · end <b>${fmt(draft.end_ms)}</b> · ` +
       `lead-in <b>${draft.lead_in_ms} ms</b> · lead-out <b>${draft.lead_out_ms} ms</b> · ` +
       `gain <b>${draft.gain_db.toFixed(2)} dB</b> · file <b>${fmt(fileMs || null)}</b>`;
+    updateFlavorNote();
+  }
+
+  // A small trim -- a few hundred ms off a click or a pop -- does not make
+  // flavor meaningfully wrong, and offering a re-analysis for every such
+  // edit would train a person to ignore the offer. A boundary that has
+  // actually moved a long way is a different question, worth surfacing
+  // before the save that makes it easy to forget about `[SPEC-SUI-223]`.
+  // 5000ms, the same number `WHOLE_FILE_SLACK_MS` uses elsewhere in this
+  // codebase for an unrelated reason -- coincidence, not a shared constant.
+  const FLAVOR_SUGGEST_MS = 5000;
+  function updateFlavorNote() {
+    const el = $('flavornote');
+    if (!draft || !loadedBoundary) { el.textContent = ''; return; }
+    const movedStart = Math.abs(draft.start_ms - loadedBoundary.start_ms);
+    const movedEnd = Math.abs(draft.end_ms - loadedBoundary.end_ms);
+    if (Math.max(movedStart, movedEnd) > FLAVOR_SUGGEST_MS) {
+      el.textContent =
+        'This moves the boundary well past where flavor was last analysed. ' +
+        'Consider re-analyzing flavor for this passage from its profile page ' +
+        'in Sampo after saving.';
+      el.className = 'note warn';
+    } else {
+      el.textContent = '';
+      el.className = 'note';
+    }
   }
 
   function updatePreciseFields() {
