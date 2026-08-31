@@ -395,19 +395,31 @@ class Runner:
         not a raw flag push: Sampo never sets a flag itself, only clears one
         (`--clear-flags`) when the correction it named actually lands. `target`
         splits into an ssh host and the remote's own db path -- the two
-        things `scp`/`ssh` need that a single `scp`-style argument does not
-        carry on its own.
+        things `ssh`/`sqlite3` need that a single `scp`-style argument does
+        not carry on its own.
 
         Batched, not automatic: this runs only when asked, applying whatever
         has accumulated in the review tables since the last push -- the
         three-way merge already makes a second push of the same edits a
         no-op, so nothing here needs its own queue of "what changed since
         last time."
+
+        No full-copy `scp` `[SPEC-DF-120]` -- measured at ~1.16 GB / over an
+        hour `[SPEC-DF-114]`, and left standing when `[SPEC-DF-119]` gave
+        `remote-pull` the identical fix, exactly because "converting it to a
+        batch of targeted reads... remains future work" at the time. This is
+        that work: `remote_snapshot.py` fetches, over one `ssh ... sqlite3
+        -json` round trip per exported change, only what `apply_changes.py`'s
+        own comparison ever reads for that change, and reconstructs a
+        disposable local db just complete enough for that same, unmodified
+        merge logic to run against. `export_changes.py`/`apply_changes.py`
+        themselves are untouched by this -- `snapshot_db` is a drop-in
+        replacement for what used to be a full `scp` copy, nothing more.
         """
         tools = os.path.dirname(os.path.abspath(__file__))
         work = os.path.join(os.path.dirname(tools), "out", f"remote-push-{job_id}")
         os.makedirs(work, exist_ok=True)
-        copy_db = os.path.join(work, "remote-copy.db")
+        snapshot_db = os.path.join(work, "remote-snapshot.db")
         changes_json = os.path.join(work, "changes.json")
         patch_sql = os.path.join(work, "patch.sql")
 
@@ -416,21 +428,23 @@ class Runner:
             self._emit(job_id, "error", f"target must be user@host:/path, got {target!r}")
             return self._finish(job_id, "failed")
 
-        self._emit(job_id, "stage", "fetch", stage="fetch")
-        code, _ = self._spawn(job_id, "fetch", ["scp", target, copy_db])
-        if code != 0:
-            return self._finish(job_id, "failed")
         self._emit(job_id, "stage", "export", stage="export")
         code, _ = self._spawn(job_id, "export", [
             sys.executable, os.path.join(tools, "export_changes.py"), self.library, "-o", changes_json])
         if code != 0:
             return self._finish(job_id, "failed")
-        # `--emit-sql`: `copy_db` is a disposable comparison, never the
+        self._emit(job_id, "stage", "snapshot", stage="snapshot")
+        code, _ = self._spawn(job_id, "snapshot", [
+            sys.executable, os.path.join(tools, "remote_snapshot.py"), target, changes_json,
+            "-o", snapshot_db, "--json"])
+        if code != 0:
+            return self._finish(job_id, "failed")
+        # `--emit-sql`: `snapshot_db` is a disposable comparison, never the
         # target of the write itself `[SPEC-DF-111]` -- the real write to
         # vainopi happens two stages further down, via its own `sqlite3` CLI.
         self._emit(job_id, "stage", "compare", stage="compare")
         code, out = self._spawn(job_id, "compare", [
-            sys.executable, os.path.join(tools, "apply_changes.py"), copy_db, changes_json,
+            sys.executable, os.path.join(tools, "apply_changes.py"), snapshot_db, changes_json,
             "--commit", "--emit-sql", patch_sql, "--clear-flags", "--json"])
         result = parse_json_tail(out) or {}
         if code != 0:
