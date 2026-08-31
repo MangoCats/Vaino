@@ -3,11 +3,16 @@
 **Design Specification — Tier 2 · PROVISIONAL**
 
 How a Raspberry Pi Zero 2W is laid out so that pulling its power is a normal
-event rather than an incident. Implements `[REQ-HW-020]`'s three-partition
-model and the storage discussion in [embedded-hardware.md](embedded-hardware.md).
+event rather than an incident. Implements the three-partition model this
+document proposes to satisfy `[REQ-HW-120]` ("survive repeated hard power loss
+without database corruption") and the storage discussion in
+[embedded-hardware.md](embedded-hardware.md). *(Corrected 2026-08-30: this
+previously cited REQ001's own `[REQ-HW-020]`, deleted the same day per
+`[GDE-DIS-010]` — REQ001 named the three-partition model directly, where
+REQ002 states the outcome and leaves the mechanism to this document.)*
 
 > **Related:** [IMPL001 appliance setup](IMPL001-appliance-setup.md) ·
-> [REQ001 §HW](../docs/spec/REQ001-system-requirements.md) ·
+> [REQ002 §6 Appliance](../docs/spec/REQ002-functional-requirements.md#6-appliance--hw) ·
 > [SPEC006 data flow](../docs/spec/SPEC006-data-flow-and-portability.md) ·
 > [SPEC008 schema](../docs/spec/SPEC008-database-schema.md)
 

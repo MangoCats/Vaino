@@ -4,7 +4,7 @@
 
 Defines how the distance between two Musical Flavor vectors is computed. This metric is what the Program Director consumes when it prunes, gathers and orders candidates ([GDE-PD-050](../GUIDE001-lineage-and-lessons.md)), so its quality directly determines whether "most similar" actually finds the most similar-sounding track.
 
-> **Related:** [GUIDE003: Feature Extraction Strategy](../GUIDE003-feature-extraction-strategy.md) · [SPEC003: Program Director Intelligence](SPEC003-program-director-intelligence.md) · McRhythm [SPEC003: Musical Flavor](../inherited/mcrhythm/MCR-SPEC003-musical_flavor.md)
+> **Related:** [GUIDE003: Feature Extraction Strategy](../GUIDE003-feature-extraction-strategy.md) · [SPEC009: Program Director](SPEC009-program-director.md) · McRhythm [SPEC003: Musical Flavor](../inherited/mcrhythm/MCR-SPEC003-musical_flavor.md) *(link corrected 2026-08-30 — pointed at Vaino's own v1 `SPEC003-program-director-intelligence.md`, deleted per `[GDE-DIS-010]`; the live document is `SPEC009`)*
 
 ---
 

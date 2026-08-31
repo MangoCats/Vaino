@@ -2,7 +2,7 @@
 
 **Requirements Specification — Tier 1**
 
-What Vaino and Sampo must do. **Supersedes [REQ001](REQ001-system-requirements.md)**, a v1 artifact retained only until mined `[GDE-DIS-010]`.
+What Vaino and Sampo must do. **Supersedes REQ001**, a v1 artifact fully mined and deleted 2026-08-30 per `[GDE-DIS-010]` — its ideas either live here or are tracked as open questions in [GUIDE002 §6](../GUIDE002-rearchitecture-plan.md#6-open-questions).
 
 Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhythm's refined functional work `[GDE-MCR-050]`, inherited as [MCR-REQ001](../inherited/mcrhythm/MCR-REQ001-requirements.md). McRhythm's *requirements* are inherited; its *architecture* is rejected `[GDE-CHT-050]`.
 

@@ -27,7 +27,7 @@ To ensure that both human contributors and AI coding assistants can quickly insp
    - Tags MUST be consistent across specifications, source code comments, and automated test names.
 
 4. **Direct Markdown Hyperlinks**:
-   - All references to other documents MUST use standard GitHub Markdown file links with explicit relative paths (e.g., `[SPEC001: Audio Engine](SPEC001-audio-engine.md)`).
+   - All references to other documents MUST use standard GitHub Markdown file links with explicit relative paths (e.g., `[SPEC009: Program Director](SPEC009-program-director.md)`).
 
 5. **`[GOV-DOC-020]` Synchronous Specification & Test Maintenance Rule**:
    - Whenever an interactive conversation or prompt results in new code creation, architectural refinement, or settled design decisions, the corresponding formal requirements/specifications (`docs/spec/`) and automated test suites (`tests/`) MUST be updated synchronously within the same conversation turn.
@@ -148,12 +148,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |
-| `[REQ-AUD-010]` | Gapless Audio File Decoding | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
-| `[REQ-AUD-020]` | Passage Timestamp Trimming | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
-| `[REQ-AUD-040]` | Dual-Buffer Crossfade Ramp Mixing | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#21-audio-engine--pipeline) |
-| `[REQ-DB-020]` | Fast Incremental File Check | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#1-requirement-enumeration--mapping) |
-| `[REQ-MB-010]` | Chromaprint Fingerprinting | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#22-metadata--musicbrainz-identifier-database) |
-| `[REQ-PD-010]` | Candidate Fitness Scoring Model | [REQ001-system-requirements.md](spec/REQ001-system-requirements.md#23-program-director--selection-algorithm) |
+| ~~`[REQ-AUD-010]`, `[REQ-AUD-020]`, `[REQ-AUD-040]`, `[REQ-DB-020]`, `[REQ-MB-010]`, `[REQ-PD-010]`~~ | v1 requirements, `REQ001` | ⚠️ **Dead entries — `REQ001-system-requirements.md` deleted 2026-08-30**, per `[GDE-DIS-010]`. Superseded, with different tags and numbering, by [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md): audio playback is `[REQ-AUD-100..164]`, incremental scanning is `[REQ-LIB-*]`, fingerprinting is `[SPEC-SA-060]`, selection scoring is `[SPEC-DIR-*]`. No tag-for-tag mapping exists; read REQ002 fresh rather than hunting for an equivalent number. |
 | `[SPEC-APS-060]` | Audio path supervisor: one owner, one snapshot | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#3-the-design) |
 | `[SPEC-RLK-030]` | Relink: hash the target, match audio_md5, write the path | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#2-the-mechanism) |
 | `[SPEC-RLK-050]` | Relink outcomes: matched / moved / missing / unknown | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#3-what-it-reports) |
@@ -166,8 +161,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-PL-060]` | Acceptance: required set plus unresolvable conflict | [SPEC014-payload-schema.md](spec/SPEC014-payload-schema.md#4-acceptance) |
 | `[SPEC-PL-090]` | Measured payload size, and the SPEC-DF-093 correction | [SPEC014-payload-schema.md](spec/SPEC014-payload-schema.md#5-size-and-a-correction) |
 | `[SPEC-APS-100]` | Supervisor migration order | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#4-migration-order) |
-| `[SPEC-AUD-010]`| Audio Engine Trait Contracts | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#1-interface-trait-contracts-rust--python-specs) |
-| `[SPEC-AUD-040]`| Mathematical Ramp Profiles | [SPEC001-audio-engine.md](spec/SPEC001-audio-engine.md#2-mathematical-ramp-profile-models) |
-| ~~`[SPEC-DB-010]`~~ | Relational DDL & Indexes | ⚠️ **Dead entry.** `SPEC002-data-schema-and-ipc.md` contains no `[SPEC-*]` tags; this row was aspirational. The document is a v1 artifact on the disposal path `[GDE-DIS-010]`. |
-| `[SPEC-PD-010]` | Acoustic Transition Flow Scoring | [SPEC003-program-director-intelligence.md](spec/SPEC003-program-director-intelligence.md#21-acoustic-transition-flow-s_flow) |
-| ~~`[SPEC-RUST-010]`~~| Python to Rust Module Mapping | ⚠️ **Dead entry.** `SPEC004-rust-migration-guide.md` contains no `[SPEC-*]` tags; this row was aspirational. Superseded by `[GDE-ARC-020]`. |
+| ~~`[SPEC-AUD-010]`, `[SPEC-AUD-040]`~~ | Audio Engine Trait Contracts, Ramp Profiles | ⚠️ **Dead entries — `SPEC001-audio-engine.md` deleted 2026-08-30**, per `[GDE-DIS-010]`. The Rust/Python trait-mirroring design is obsolete (Rust from day one, `[GDE-ARC-020]`); the ramp math is superseded by [`player/src/fade.rs`](../player/src/fade.rs) and the newly-registered [`MCR-SPEC002-crossfade.md`](inherited/mcrhythm/MCR-SPEC002-crossfade.md) (`[INH-*]`) — note the actual curve formulas differ from both old documents; `fade.rs` is the one that runs. |
+| ~~`[SPEC-DB-010]`~~ | Relational DDL & Indexes | ⚠️ **Dead entry.** `SPEC002-data-schema-and-ipc.md` deleted 2026-08-30, per `[GDE-DIS-010]`. Superseded by [SPEC008-database-schema.md](spec/SPEC008-database-schema.md). |
+| ~~`[SPEC-PD-010]`~~ | Acoustic Transition Flow Scoring | ⚠️ **Dead entry — `SPEC003-program-director-intelligence.md` deleted 2026-08-30**, per `[GDE-DIS-010]`. Superseded, with a different metric entirely (total variation over flavor, not squared Euclidean over four scalars), by [SPEC009-program-director.md](spec/SPEC009-program-director.md) — see `[SPEC-DIR-160]` for flow ordering. |
+| ~~`[SPEC-RUST-010]`~~| Python to Rust Module Mapping | ⚠️ **Dead entry.** `SPEC004-rust-migration-guide.md` deleted 2026-08-30, per `[GDE-DIS-010]`. Superseded by `[GDE-ARC-020]`. |
