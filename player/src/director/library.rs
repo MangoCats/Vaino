@@ -276,9 +276,27 @@ impl Director {
 
         // Absent settings are the defaults, not an error: a library that has
         // never been tuned must still play [SPEC-DIR-158].
+        //
+        // `recording_time_scale` was `track_time_scale` until `[SPEC-VOC-010]`
+        // renamed it; `tools/rename_recording_time_scale.py` migrates an
+        // existing database in place, but reading the new name unconditionally
+        // would reset every unmigrated installation's tuned value to the
+        // default until someone thought to run it. Reading around the gap,
+        // the same way `export_changes.py`'s `has_column` already does for a
+        // `boundary_reviews` table too old to have a column it wants.
+        let recording_scale_col = if conn
+            .prepare("SELECT recording_time_scale FROM listener_settings")
+            .is_ok()
+        {
+            "recording_time_scale"
+        } else {
+            "track_time_scale"
+        };
         let scales = conn
             .query_row(
-                "SELECT artist_time_scale, track_time_scale FROM listener_settings WHERE id = 1",
+                &format!(
+                    "SELECT artist_time_scale, {recording_scale_col} FROM listener_settings WHERE id = 1"
+                ),
                 [],
                 |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)),
             )
@@ -301,9 +319,6 @@ impl Director {
 
         let policy = Policy {
             artist_scale: scales.map(|s| TimeScale::new(s.0)).unwrap_or_default(),
-            // Column is `track_time_scale` -- the SQL name predates this
-            // rename and is left alone here, since renaming a schema column
-            // is a migration, not a naming fix. See SPEC023's Track entry.
             recording_scale: scales.map(|s| TimeScale::new(s.1)).unwrap_or_default(),
             skip_suppress_s: crate::SKIP_SUPPRESS_H as f64 * 3600.0,
             dequeue_suppress_s: crate::DEQUEUE_SUPPRESS_H as f64 * 3600.0,
@@ -908,7 +923,7 @@ mod tests {
              CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
                  played_at INTEGER, passage_id INTEGER, mbid TEXT);
              CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
-                 artist_time_scale REAL, track_time_scale REAL, updated_at TEXT);
+                 artist_time_scale REAL, recording_time_scale REAL, updated_at TEXT);
              CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT);
              CREATE TABLE listener_occasion_points (characteristic TEXT, class TEXT,
                  month INTEGER, day INTEGER, multiplier REAL);
@@ -1055,6 +1070,24 @@ mod tests {
         let d = Director::load(&c).unwrap();
         assert_eq!(d.policy().artist_scale.get(), 0.5);
         assert_eq!(d.policy().recording_scale.get(), 0.25);
+    }
+
+    /// `[SPEC-VOC-010]` A database `tools/rename_recording_time_scale.py`
+    /// has not yet reached still has `track_time_scale` -- unmigrated, not
+    /// broken, so the value must still be read, not silently reset to the
+    /// default `[SPEC-DIR-158]`.
+    #[test]
+    fn a_pre_migration_column_name_still_reads_the_tuned_value() {
+        let c = fixture();
+        c.execute_batch(
+            "ALTER TABLE listener_settings RENAME COLUMN recording_time_scale TO track_time_scale;
+             INSERT INTO listener_settings VALUES (1, 0.5, 0.25, 't');",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        assert_eq!(d.policy().artist_scale.get(), 0.5, "the unrenamed column reads as before");
+        assert_eq!(d.policy().recording_scale.get(), 0.25,
+                   "the old column name must still populate the new field");
     }
 
     /// Halving the recording scale must actually shorten a block, not merely load.

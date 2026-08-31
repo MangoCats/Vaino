@@ -253,23 +253,27 @@ CREATE TABLE IF NOT EXISTS listener_preferences (
 ) WITHOUT ROWID;
 
 -- Master multipliers over every block and ramp DURATION [SPEC-DIR-118]. One
--- dial each for artists and tracks: 1.0 is inert, 0.5 halves every window,
--- 2.0 doubles it. Per-subject values are log-scale, so "everything a bit
--- sooner" is not otherwise expressible without editing thousands of rows.
+-- dial each for artists and recordings: 1.0 is inert, 0.5 halves every
+-- window, 2.0 doubles it. Per-subject values are log-scale, so "everything a
+-- bit sooner" is not otherwise expressible without editing thousands of rows.
 -- The range is enforced here as well as in code -- a stored value out of
 -- range would silently change selection everywhere.
+--
+-- `recording_time_scale` was `track_time_scale` until [SPEC-VOC-010]; an
+-- existing database is migrated by `tools/rename_recording_time_scale.py`,
+-- not by re-running this file.
 CREATE TABLE IF NOT EXISTS listener_settings (
-    id                INTEGER PRIMARY KEY CHECK (id = 1),
-    artist_time_scale REAL NOT NULL DEFAULT 1.0
-                      CHECK (artist_time_scale BETWEEN 0.0001 AND 100.0),
-    track_time_scale  REAL NOT NULL DEFAULT 1.0
-                      CHECK (track_time_scale  BETWEEN 0.0001 AND 100.0),
+    id                    INTEGER PRIMARY KEY CHECK (id = 1),
+    artist_time_scale     REAL NOT NULL DEFAULT 1.0
+                          CHECK (artist_time_scale BETWEEN 0.0001 AND 100.0),
+    recording_time_scale  REAL NOT NULL DEFAULT 1.0
+                          CHECK (recording_time_scale BETWEEN 0.0001 AND 100.0),
     -- Programme start times are wall-clock [SPEC-DIR-180]: a 22:00 programme
     -- means ten at night where the listener is. std has no timezone, so the
     -- appliance stores its offset rather than the player guessing.
-    utc_offset_minutes INTEGER NOT NULL DEFAULT 0
-                      CHECK (utc_offset_minutes BETWEEN -1440 AND 1440),
-    updated_at        TEXT NOT NULL
+    utc_offset_minutes    INTEGER NOT NULL DEFAULT 0
+                          CHECK (utc_offset_minutes BETWEEN -1440 AND 1440),
+    updated_at            TEXT NOT NULL
 );
 
 -- Seasonal curves [SPEC-DIR-130]. Data, not code: a new occasion is rows here
