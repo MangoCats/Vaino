@@ -4,7 +4,7 @@
 
 How a passage's start, end, lead-in, lead-out, fade-in, fade-out and gain are reviewed and corrected by hand, hearing the edit as it is made `[REQ-LIB-175]`, `[REQ-VIS-130]`, `[SPEC-SA-080]`.
 
-> **Related:** [SPEC013 §3.4](SPEC013-sampo-console.md#34-handoff--the-players-own-pages-inside-sampos-workflow) for where this is reached from · [SPEC010](SPEC010-identification-review.md) for the sibling feature it was designed alongside · [SPEC008 §3](SPEC008-database-schema.md) for `passages` · [`player/src/fade.rs`](../../player/src/fade.rs) for the fade curves this must not disagree with (design context in the inherited [`MCR-SPEC002-crossfade.md`](../inherited/mcrhythm/MCR-SPEC002-crossfade.md), `[INH-*]` — its curve *formulas* are not what `fade.rs` implements, only its lead/fade point model).
+> **Related:** [SPEC013 §3.4](SPEC013-sampo-console.md#34-handoff--the-players-own-pages-inside-sampos-workflow) for where this is reached from · [SPEC010](SPEC010-identification-review.md) for the sibling feature it was designed alongside · [SPEC008 §3](SPEC008-database-schema.md) for `passages` · [`player/src/fade.rs`](../../player/src/fade.rs) for the fade curves this must not disagree with (design context in the inherited [`MCR-SPEC002-crossfade.md`](../inherited/mcrhythm/MCR-SPEC002-crossfade.md), `[INH-*]` — its curve *formulas* are not what `fade.rs` implements, only its lead/fade orthogonality (`[XFD-ORTH-010]`) — Vaino stores each as an independent duration from `start_ms`/`end_ms` `[SPEC-SC-043]`, not McRhythm's six ordered absolute points, and enforces no cross-pair ordering: fade-in/fade-out may legitimately overlap, resolved by `Envelope`'s gain multiplication rather than by clamping).
 
 ---
 

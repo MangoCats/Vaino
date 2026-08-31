@@ -46,7 +46,7 @@ What the rule prevents is silent by construction. A stale or foreign `passage_id
 **`[SPEC-DF-040]` Match by the narrowest key that fits the data.**
 
 - **Recording-scope data** — flavor vector, MBIDs, artist/album/title, work relations. A property of *the music*, so it binds by `recording_mbid` and is valid for anyone holding that recording in any encoding.
-- **Encoding-scope data** — DAO passage boundaries, Album/Radio trim points, segue frames, replay gain, decoded duration. A property of *this rip*, meaningless against a different encode, so it binds by `audio_md5`.
+- **Encoding-scope data** — passage `start_ms`/`end_ms` (DAO segmentation and the `album`/`radio`-kind split alike), `lead_in_ms`/`lead_out_ms`, replay gain, decoded duration. A property of *this rip*, meaningless against a different encode, so it binds by `audio_md5`.
 - **Machine-scope data** — `file_path`, mtime, size. Never leaves the installation.
 
 `audio_md5` is the workhorse: it is exactly MuLibPlay's `files.sig` idea `[GDE-BMK-050]`, corrected. MuLibPlay could relocate a known file; hashing decoded audio additionally survives the tag writes that `[SPEC-DF-060]` depends on.
@@ -61,7 +61,7 @@ What the rule prevents is silent by construction. A stale or foreign `passage_id
 | :--- | :--- | :--- |
 | **A · Derived facts** | flavor vector, `audio_md5`, decoded duration, replay gain, chromaprint | **Yes.** Deterministic from audio; expensive; identical for everyone. |
 | **B · Identification** | recording/release MBIDs, artist, album, title | **Yes.** Costs network lookups and human correction. |
-| **C · Segmentation** | DAO passage boundaries, Album/Radio duality, segue points | **Yes — the highest-value payload.** This is the manual labour that made induction painful `[GDE-BMK-050]`. Sharing it is the single biggest convenience win. |
+| **C · Segmentation** | DAO passage boundaries, Album/Radio duality, `lead_in_ms`/`lead_out_ms` | **Yes — the highest-value payload.** This is the manual labour that made induction painful `[GDE-BMK-050]`. Sharing it is the single biggest convenience win. |
 | **D · Listener state** | rotation/recovery/restraint, likes/dislikes, play history, programs | **Never.** |
 
 **`[SPEC-DF-055]` Class D never travels with music.** It describes *the listener*, not the music: personal, private, and meaningless to anyone else. A shared file carrying someone's play history would be both a privacy leak and noise. Listener state moves only by deliberate whole-`vaino.db` migration `[SPEC-DF-080]` or the class-D export `[SPEC-DF-090]`, both between a user's own machines.

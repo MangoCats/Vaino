@@ -36,7 +36,7 @@ Plausible hosts, all of which let you both enqueue and read back what played:
 
 **`[GDE-EXT-025]` The fidelity cost is real and specific: passages become tracks.** Vaino selects a *span* — `start_ms` to `end_ms`, with lead-in, lead-out, fade-in, fade-out and gain `[SPEC-SC-040]`, `[SPEC-SC-046]` — and MPD and Subsonic address whole files. Three consequences:
 
-- the **Album/Radio duality is lost** `[GDE-BMK-030]`, which is MuLibPlay's best structural idea and the thing the trim points exist for;
+- the **Album/Radio duality is lost** `[GDE-BMK-030]`, which is MuLibPlay's best structural idea and the thing the `radio`-kind's own `start_ms`/`end_ms` exist for;
 - **DAO captures cannot be played at all** as single songs, because the file is forty songs and the host has no way to be told which one;
 - gain and the de-click ramps fall to the host, which will not have them.
 

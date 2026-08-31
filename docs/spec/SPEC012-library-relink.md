@@ -59,8 +59,9 @@ file-level hash would orphan every row the moment metadata was written back.
 **`[SPEC-RLK-040]` Match by the narrowest key that fits `[SPEC-DF-040]`, then
 stop.** `audio_md5` is this exact encoding — certain, and the only rung that
 justifies a silent update. `recording_mbid` is the same recording re-encoded: a
-*candidate*, not a match, because passage boundaries, trim points and replay
-gain are encoding-scope and do not transfer to a different rip. It is reported
+*candidate*, not a match, because passage `start_ms`/`end_ms` (both `album`- and
+`radio`-kind rows), `lead_in_ms`/`lead_out_ms` and replay gain are encoding-scope
+and do not transfer to a different rip. It is reported
 for a person to decide, never applied. Neither means the file is unknown here —
 ingest, not relink `[SPEC-RLK-090]`.
 
