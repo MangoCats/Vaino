@@ -78,6 +78,14 @@
   const canvas = $('wave');
 
   const totalMs = () => (buffer ? buffer.duration * 1000 : 0);
+  // The decoded window's own end, in whole ms `[SPEC-SUI-228]` -- wherever
+  // `totalMs()` becomes a *boundary* for `start_ms`/`end_ms` rather than
+  // just a view extent, it has to be rounded first: `buffer.duration` comes
+  // from a sample count over a sample rate and is essentially never an
+  // integer, so a drag or a typed value landing exactly on this ceiling
+  // otherwise saves as a float, which the server's `u64` fields reject
+  // outright rather than truncating.
+  const windowEndMs = () => Math.round(windowFromMs + totalMs());
 
   // The viewport: what span of the file the canvas currently shows. Distinct
   // from the passage's own start/end -- "what you can see" and "what the
@@ -504,9 +512,20 @@
   function applyDrag(which, ms) {
     // Bounded by the decoded window's own absolute span, not by ms 0 --
     // `windowFromMs` is 0 for the ordinary whole-file case `[SPEC-SUI-224]`.
-    const windowToMs = windowFromMs + totalMs();
-    if (which === 'start') draft.start_ms = clamp(ms, windowFromMs, draft.end_ms - 1);
-    else if (which === 'end') draft.end_ms = clamp(ms, draft.start_ms + 1, windowToMs);
+    // Rounded, like the ceiling it bounds `[SPEC-SUI-228]`: `totalMs()` comes
+    // from the buffer's sample count over its sample rate and is essentially
+    // never a whole millisecond, so a drag that lands exactly on this edge
+    // would otherwise hand `start`/`end` that same fraction.
+    const windowToMs = windowEndMs();
+    // `ms` itself is pixel-derived (`xToMs`), so it is fractional on every
+    // ordinary drag, not just at a clamped edge -- rounded here for the same
+    // reason `leadIn`/`leadOut`/`fadeIn`/`fadeOut` already round just below:
+    // `start_ms`/`end_ms` are the server's `u64` fields `[SPEC-SUI-228]`,
+    // and a fractional value that was never caught here reached `/review`'s
+    // JSON body unrounded, which the server rejects outright rather than
+    // truncating -- found live, dragging the end marker.
+    if (which === 'start') draft.start_ms = Math.round(clamp(ms, windowFromMs, draft.end_ms - 1));
+    else if (which === 'end') draft.end_ms = Math.round(clamp(ms, draft.start_ms + 1, windowToMs));
     else if (which === 'leadIn')
       draft.lead_in_ms = Math.round(clamp(ms - draft.start_ms, 0, draft.end_ms - draft.start_ms));
     else if (which === 'leadOut')
@@ -749,7 +768,7 @@
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
     const before = draft.end_ms;
-    draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, windowFromMs + totalMs());
+    draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, windowEndMs());
     updateFacts(); updatePreciseFields();
     ensureVisible(draft.end_ms, revealSpan(Math.abs(draft.end_ms - before)));
     draw(); refreshCommitState();
@@ -816,6 +835,17 @@
 
   $('commit').addEventListener('click', async () => {
     $('commit').disabled = true;
+    // Belt-and-braces `[SPEC-SUI-228]`: whatever produced `draft`, its six
+    // duration fields are rounded again here, at the wire -- the one place a
+    // fractional value is *certain* to be caught, since the server's `u64`
+    // columns reject one outright rather than truncating it. Mutates `draft`
+    // itself, not just the outgoing body, so the precise fields and the
+    // dirty check agree with what was actually saved rather than silently
+    // disagreeing with it by a fraction of a millisecond.
+    for (const f of ['start_ms', 'end_ms', 'lead_in_ms', 'lead_out_ms', 'fade_in_ms', 'fade_out_ms']) {
+      draft[f] = Math.round(draft[f]);
+    }
+    updatePreciseFields();
     const resp = await fetch(`/edit/${passageId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
