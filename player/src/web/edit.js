@@ -80,10 +80,59 @@
     setView(mid - span / 2, mid + span / 2);
   }
 
-  const msOf = x => {
-    const w = canvas.getBoundingClientRect().width || canvas.width;
-    return view.fromMs + (x / w) * (view.toMs - view.fromMs);
+  // A marker outside the current view is not "hard to see," it is not drawn
+  // at all -- `px(ms)` maps it off the edge of the canvas, and nothing about
+  // that looks different from the marker simply not existing. A lead-in a
+  // few hundred ms wide and a lead-out four minutes away on the same file
+  // are rarely both in frame at once at any zoom worth looking at either one
+  // closely with, so touching a field for one re-centres the view on it,
+  // rather than requiring a person to already know this page has separate
+  // zoom controls at all.
+  //
+  // `minSpanMs`, when given, also re-zooms even when `ms` is technically
+  // already in view: a 4.5s lead-out on a five-minute file is ~1.5% of a
+  // whole-passage view -- a handful of pixels, present but indistinguishable
+  // from the end marker beside it, which reads exactly like "not there."
+  // Bringing a point on screen is not the same claim as making it legible.
+  // A ramp given six times its own length of breathing room reads as a
+  // ramp; the same 4.5s stretch inside a five-minute whole-passage view
+  // reads as a stray pixel. The floor keeps a near-zero lead (the common
+  // case: most tracks start and end abruptly, not with a fade) from zooming
+  // in absurdly far.
+  const revealSpan = leadMs => Math.max(leadMs * 6, 1500);
+
+  function ensureVisible(ms, minSpanMs) {
+    if (!buffer) return;
+    const spanNow = view.toMs - view.fromMs;
+    const inView = ms >= view.fromMs && ms <= view.toMs;
+    if (inView && (!minSpanMs || spanNow <= minSpanMs)) return;
+    const span = minSpanMs ? Math.max(minSpanMs, MIN_SPAN_MS) : spanNow;
+    setView(ms - span / 2, ms + span / 2);
+  }
+
+  // CSS-pixel space, shared by drawing, hit-testing and click/pan math, so
+  // all three agree about where a millisecond actually sits.
+  //
+  // `EDGE_PAD_CSS` reserves a margin at each side so a marker exactly at the
+  // view's own boundary is never clipped in half against the canvas edge
+  // `[SPEC-SUI-222]` -- real, not hypothetical: `start_ms` is 0 and `end_ms`
+  // is the file's own duration for most passages in this library (one
+  // track, one file), so "Whole passage" and "Whole file" routinely put
+  // both blue markers *exactly* on the canvas boundary, where a knob drawn
+  // centred on the edge is half off-canvas and a line there reads as the
+  // canvas's own border, not as a marker at all.
+  const EDGE_PAD_CSS = 8;
+  const msToX = (ms, widthCss) => {
+    const span = Math.max(1, view.toMs - view.fromMs);
+    const usable = Math.max(1, widthCss - 2 * EDGE_PAD_CSS);
+    return EDGE_PAD_CSS + ((ms - view.fromMs) / span) * usable;
   };
+  const xToMs = (xCss, widthCss) => {
+    const span = Math.max(1, view.toMs - view.fromMs);
+    const usable = Math.max(1, widthCss - 2 * EDGE_PAD_CSS);
+    return view.fromMs + ((xCss - EDGE_PAD_CSS) / usable) * span;
+  };
+  const msOf = x => xToMs(x, canvas.getBoundingClientRect().width || canvas.width);
 
   const dirty = () =>
     !base ||
@@ -215,12 +264,21 @@
     const sr = buffer.sampleRate;
     const span = Math.max(1, view.toMs - view.fromMs);
     const mid = h / 2;
+    // The same padded coordinate space `msOf`/`handleAt` use, scaled from
+    // CSS to canvas pixels -- the waveform, its shading and its markers all
+    // have to agree about where a millisecond sits, edge padding included,
+    // or a peak drawn flush to the raw canvas edge would visibly disagree
+    // with a start/end line now deliberately inset from it.
+    const padPx = EDGE_PAD_CSS * dpr;
+    const usable = Math.max(1, w - 2 * padPx);
+    const px = ms => padPx + ((ms - view.fromMs) / span) * usable;
+
     g.strokeStyle = '#9ad';
     g.lineWidth = Math.max(1, dpr);
     g.beginPath();
-    for (let x = 0; x < w; x++) {
-      const msLo = view.fromMs + (x / w) * span;
-      const msHi = view.fromMs + ((x + 1) / w) * span;
+    for (let x = Math.floor(padPx); x < w - padPx; x++) {
+      const msLo = view.fromMs + ((x - padPx) / usable) * span;
+      const msHi = view.fromMs + ((x + 1 - padPx) / usable) * span;
       const lo = Math.max(0, Math.floor((msLo / 1000) * sr));
       const hi = Math.min(data.length, Math.max(lo + 1, Math.ceil((msHi / 1000) * sr)));
       let min = 1, max = -1;
@@ -234,8 +292,6 @@
       g.lineTo(x, mid + max * mid);
     }
     g.stroke();
-
-    const px = ms => ((ms - view.fromMs) / span) * w;
     const shade = (fromMs, toMs) => {
       if (toMs <= fromMs) return;
       g.fillStyle = 'rgba(255,187,102,.18)';
@@ -289,7 +345,6 @@
   function handleAt(x, y) {
     if (y > HANDLE_BAND_PX) return null;
     const w = canvas.getBoundingClientRect().width || canvas.width;
-    const span = Math.max(1, view.toMs - view.fromMs);
     const tolerancePx = 12;
     const candidates = [
       ['leadIn', draft.start_ms + draft.lead_in_ms],
@@ -299,7 +354,7 @@
     ];
     let best = null, bestDist = tolerancePx;
     for (const [name, ms] of candidates) {
-      const d = Math.abs(((ms - view.fromMs) / span) * w - x);
+      const d = Math.abs(msToX(ms, w) - x);
       if (d < bestDist) { bestDist = d; best = name; }
     }
     return best;
@@ -356,7 +411,7 @@
         canvas.classList.add('panning');
         const span = panStart.toMs - panStart.fromMs;
         const w = rect.width || canvas.width;
-        const deltaMs = (dx / w) * span;
+        const deltaMs = (dx / Math.max(1, w - 2 * EDGE_PAD_CSS)) * span;
         setView(panStart.fromMs - deltaMs, panStart.toMs - deltaMs);
       }
       return;
@@ -400,7 +455,8 @@
     const anchorMs = msOf(x);
     const factor = e.deltaY > 0 ? 1.25 : 0.8;
     const span = (view.toMs - view.fromMs) * factor;
-    const ratio = (rect.width || canvas.width) ? x / (rect.width || canvas.width) : 0.5;
+    const usable = Math.max(1, (rect.width || canvas.width) - 2 * EDGE_PAD_CSS);
+    const ratio = clamp((x - EDGE_PAD_CSS) / usable, 0, 1);
     setView(anchorMs - span * ratio, anchorMs + span * (1 - ratio));
   }, { passive: false });
 
@@ -500,33 +556,51 @@
   // instead of dragged -- most of what "how do I place these" was really
   // asking for `[SPEC-SUI-219]`. Same clamps `applyDrag` already enforces,
   // so a typed value cannot reach a state a drag could not also reach.
+  //
+  // Each field also reveals its own marker `[SPEC-SUI-221]` -- on focus, so
+  // simply clicking into "lead-out" answers "where is that" before a single
+  // character is typed, and again after a change, in case the new value
+  // moved somewhere the old view no longer reaches. A start near 0 and an
+  // end four minutes later are rarely both worth looking at closely at the
+  // same zoom, and nothing on screen tells a person that a marker off the
+  // current edge is merely off-screen rather than absent.
+  $('startms').addEventListener('focus', () => ensureVisible(draft.start_ms));
   $('startms').addEventListener('change', () => {
     const v = Number($('startms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
     draft.start_ms = clamp(Math.round(v), 0, draft.end_ms - 1);
-    updateFacts(); updatePreciseFields(); draw(); refreshCommitState();
+    updateFacts(); updatePreciseFields(); ensureVisible(draft.start_ms); draw(); refreshCommitState();
   });
+  $('endms').addEventListener('focus', () => ensureVisible(draft.end_ms));
   $('endms').addEventListener('change', () => {
     const v = Number($('endms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
     draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, totalMs());
-    updateFacts(); updatePreciseFields(); draw(); refreshCommitState();
+    updateFacts(); updatePreciseFields(); ensureVisible(draft.end_ms); draw(); refreshCommitState();
   });
+  $('leadinms').addEventListener('focus', () =>
+    ensureVisible(draft.start_ms + draft.lead_in_ms, revealSpan(draft.lead_in_ms)));
   $('leadinms').addEventListener('change', () => {
     const v = Number($('leadinms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
     draft.lead_in_ms = Math.round(clamp(v, 0, draft.end_ms - draft.start_ms));
-    updateFacts(); updatePreciseFields(); draw(); refreshCommitState();
+    updateFacts(); updatePreciseFields();
+    ensureVisible(draft.start_ms + draft.lead_in_ms, revealSpan(draft.lead_in_ms));
+    draw(); refreshCommitState();
   });
+  $('leadoutms').addEventListener('focus', () =>
+    ensureVisible(draft.end_ms - draft.lead_out_ms, revealSpan(draft.lead_out_ms)));
   $('leadoutms').addEventListener('change', () => {
     const v = Number($('leadoutms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
     draft.lead_out_ms = Math.round(clamp(v, 0, draft.end_ms - draft.start_ms));
-    updateFacts(); updatePreciseFields(); draw(); refreshCommitState();
+    updateFacts(); updatePreciseFields();
+    ensureVisible(draft.end_ms - draft.lead_out_ms, revealSpan(draft.lead_out_ms));
+    draw(); refreshCommitState();
   });
 
   $('commit').addEventListener('click', async () => {
