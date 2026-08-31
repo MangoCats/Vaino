@@ -150,7 +150,7 @@ pub struct QueuedNote {
 pub struct Director {
     rows: Vec<Row>,
     policy: Policy,
-    track_tuning: HashMap<String, Tuning>,
+    recording_tuning: HashMap<String, Tuning>,
     artist_tuning: HashMap<String, Tuning>,
     /// recording → its artist. One artist per recording, as migrated.
     artist_of: HashMap<String, String>,
@@ -190,7 +190,7 @@ impl Director {
             .map_err(q)?;
         drop(stmt);
 
-        let mut track_tuning = HashMap::new();
+        let mut recording_tuning = HashMap::new();
         let mut artist_tuning = HashMap::new();
         let mut stmt = conn
             .prepare(
@@ -217,7 +217,7 @@ impl Director {
             // it must fall back to the default, not suppress the subject.
             let (base, map) = match kind.as_str() {
                 "artist" => (Tuning::artist_defaults(), &mut artist_tuning),
-                _ => (Tuning::track_defaults(), &mut track_tuning),
+                _ => (Tuning::recording_defaults(), &mut recording_tuning),
             };
             map.insert(
                 id,
@@ -301,7 +301,10 @@ impl Director {
 
         let policy = Policy {
             artist_scale: scales.map(|s| TimeScale::new(s.0)).unwrap_or_default(),
-            track_scale: scales.map(|s| TimeScale::new(s.1)).unwrap_or_default(),
+            // Column is `track_time_scale` -- the SQL name predates this
+            // rename and is left alone here, since renaming a schema column
+            // is a migration, not a naming fix. See SPEC023's Track entry.
+            recording_scale: scales.map(|s| TimeScale::new(s.1)).unwrap_or_default(),
             skip_suppress_s: crate::SKIP_SUPPRESS_H as f64 * 3600.0,
             dequeue_suppress_s: crate::DEQUEUE_SUPPRESS_H as f64 * 3600.0,
             ..Default::default()
@@ -312,7 +315,7 @@ impl Director {
             policy,
             last_skipped,
             last_dequeued,
-            track_tuning,
+            recording_tuning,
             artist_tuning,
             artist_of,
             last_played,
@@ -414,10 +417,10 @@ impl Director {
             .iter()
             .map(|row| {
                 let mbid = row.mbid.as_deref();
-                let track = mbid
-                    .and_then(|m| self.track_tuning.get(m))
+                let recording = mbid
+                    .and_then(|m| self.recording_tuning.get(m))
                     .copied()
-                    .unwrap_or_else(Tuning::track_defaults);
+                    .unwrap_or_else(Tuning::recording_defaults);
                 let artist_id = mbid.and_then(|m| self.artist_of.get(m));
                 let artist = artist_id
                     .and_then(|a| self.artist_tuning.get(a))
@@ -439,9 +442,9 @@ impl Director {
                 let c = Candidate {
                     length_s: row.entry.duration_ms() as f64 / 1000.0,
                     depth_s: row.entry.start_ms as f64 / 1000.0,
-                    track,
+                    recording,
                     artist,
-                    track_age_s: mbid.and_then(|m| self.age(&self.last_played, m, now)),
+                    recording_age_s: mbid.and_then(|m| self.age(&self.last_played, m, now)),
                     skip_age_s: mbid.and_then(|m| self.age(&self.last_skipped, m, now)),
                     dequeue_age_s: mbid.and_then(|m| self.age(&self.last_dequeued, m, now)),
                     artist_age_s: artist_id
@@ -459,8 +462,8 @@ impl Director {
     /// Called when a passage is QUEUED, not when it finishes -- MuLibPlay's own
     /// note says the structures update "as each new track finishes playing (or
     /// is put in the play queue)". Without it, topping up five slots at once
-    /// would happily queue five tracks by one artist, because every pick would
-    /// weigh against the same stale history.
+    /// would happily queue five recordings by one artist, because every pick
+    /// would weigh against the same stale history.
     pub fn note_queued(&mut self, passage_id: i64, at: i64) -> Option<QueuedNote> {
         let mbid = self
             .rows
@@ -470,8 +473,8 @@ impl Director {
         let artist = self.artist_of.get(&mbid).cloned();
         // Both previous values are kept so the note can be taken back exactly.
         // `max` is not invertible: without the old value, undoing a note would
-        // have to guess, and guessing at rotation history is how a track that
-        // never played ends up suppressed.
+        // have to guess, and guessing at rotation history is how a recording
+        // that never played ends up suppressed.
         let note = QueuedNote {
             mbid: mbid.clone(),
             prev_recording: self.last_played.get(&mbid).copied(),
@@ -669,8 +672,12 @@ impl Director {
                 roulette_target,
                 artist_weight: w.artist_weight,
                 artist_blocked: w.artist_blocked,
-                track_restraint: w.track_restraint,
-                track_ramp: w.track_ramp,
+                // `Explanation`'s own fields keep the `track_*` names here --
+                // they are the `/why/:id` JSON contract `skin.js` reads by
+                // key, so renaming them is a wire change, not a naming fix.
+                // See SPEC023's Track entry, and the report this review left.
+                track_restraint: w.recording_restraint,
+                track_ramp: w.recording_ramp,
                 related_damping: w.related_damping,
                 length_bonus: w.length_bonus,
                 occasion: w.occasion,
@@ -728,7 +735,7 @@ impl Director {
                     c.total_weight += w.weight;
                 }
                 Some(Exclusion::ArtistRotationBlock) => c.artist_blocked += 1,
-                Some(Exclusion::TrackRotationBlock) => c.track_blocked += 1,
+                Some(Exclusion::RecordingRotationBlock) => c.recording_blocked += 1,
                 Some(Exclusion::RelatedRotationBlock) => c.related_blocked += 1,
                 Some(Exclusion::BelowMinWeight) => c.below_min_weight += 1,
                 // Counted apart from `filtered`, which means "the wrong shape".
@@ -752,7 +759,7 @@ pub struct Census {
     /// Temporary by construction, unlike `filtered`.
     pub suppressed: usize,
     pub artist_blocked: usize,
-    pub track_blocked: usize,
+    pub recording_blocked: usize,
     pub related_blocked: usize,
     pub below_min_weight: usize,
     pub filtered: usize,
@@ -989,7 +996,7 @@ mod tests {
         let d = Director::load(&c).unwrap();
         let cen = d.census(NOW);
         assert_eq!(cen.eligible, 2, "the played recording drops out");
-        assert_eq!(cen.artist_blocked + cen.track_blocked, 1);
+        assert_eq!(cen.artist_blocked + cen.recording_blocked, 1);
     }
 
     /// The repair, end to end: a play of rec-b blocks rec-a through their
@@ -1016,7 +1023,7 @@ mod tests {
         let w = d.weigh_all(NOW);
         let (_, a) = w.iter().find(|(e, _)| e.passage_id == 1).unwrap();
         assert!(a.is_eligible(), "10 days is past the 4.2-day rotation: {:?}", a.excluded);
-        assert!(a.track_ramp > 0.0 && a.track_ramp < 1.0, "mid-ramp, got {}", a.track_ramp);
+        assert!(a.recording_ramp > 0.0 && a.recording_ramp < 1.0, "mid-ramp, got {}", a.recording_ramp);
     }
 
     /// A play stamped in the future -- clock skew, a restored backup -- must
@@ -1041,7 +1048,7 @@ mod tests {
         let d = Director::load(&c).unwrap();
         let w = d.weigh_all(NOW);
         let (_, a) = w.iter().find(|(e, _)| e.passage_id == 1).unwrap();
-        assert_eq!(a.excluded, Some(Exclusion::TrackRotationBlock),
+        assert_eq!(a.excluded, Some(Exclusion::RecordingRotationBlock),
                    "a 41-day rotation must still block a 10-day-old play");
     }
 
@@ -1051,19 +1058,19 @@ mod tests {
         c.execute("INSERT INTO listener_settings VALUES (1, 0.5, 0.25, 't')", []).unwrap();
         let d = Director::load(&c).unwrap();
         assert_eq!(d.policy().artist_scale.get(), 0.5);
-        assert_eq!(d.policy().track_scale.get(), 0.25);
+        assert_eq!(d.policy().recording_scale.get(), 0.25);
     }
 
-    /// Halving the track scale must actually shorten a block, not merely load.
+    /// Halving the recording scale must actually shorten a block, not merely load.
     #[test]
     fn a_scaled_block_expires_sooner() {
         let c = fixture();
         // 3 days: inside the 4.2-day default rotation, outside a halved one.
         c.execute("INSERT INTO listener_play_history VALUES (1, ?1, 1, 'rec-a')",
                   [NOW - 3 * DAY]).unwrap();
-        assert_eq!(Director::load(&c).unwrap().census(NOW).track_blocked, 1);
+        assert_eq!(Director::load(&c).unwrap().census(NOW).recording_blocked, 1);
         c.execute("INSERT INTO listener_settings VALUES (1, 1.0, 0.5, 't')", []).unwrap();
-        assert_eq!(Director::load(&c).unwrap().census(NOW).track_blocked, 0,
+        assert_eq!(Director::load(&c).unwrap().census(NOW).recording_blocked, 0,
                    "half the rotation means the block has expired");
     }
 
@@ -1122,7 +1129,7 @@ mod tests {
         let (_, b) = w.iter().find(|(e, _)| e.passage_id == 2).unwrap();
         assert!(a.occasion < 0.001, "christmasy out of season: {}", a.occasion);
         assert_eq!(a.excluded, Some(Exclusion::BelowMinWeight));
-        assert_eq!(b.occasion, 1.0, "a track with no occasion value is untouched");
+        assert_eq!(b.occasion, 1.0, "a recording with no occasion value is untouched");
         assert!(b.is_eligible());
     }
 
@@ -1272,7 +1279,7 @@ mod tests {
     }
 
     /// Queueing must feed back into selection, or a five-slot top-up could
-    /// queue five tracks by one artist.
+    /// queue five recordings by one artist.
     #[test]
     fn queueing_a_passage_blocks_it_for_the_next_pick() {
         let mut d = Director::load(&fixture()).unwrap();

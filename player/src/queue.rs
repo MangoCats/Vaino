@@ -26,9 +26,9 @@ use crate::fade::Curve;
 /// **Lead durations are usually milliseconds, and that is correct.** Measured
 /// across the migrated library: lead-in median 5 ms, lead-out median 946 ms.
 /// That looks like missing data but is the preferred configuration — the ramps
-/// exist mainly to hide the short, sometimes loud pops at a track's start and
-/// end, which takes only a few milliseconds. Audible crossfade is the rare
-/// case, wanted where a track genuinely fades out slowly and the alternative
+/// exist mainly to hide the short, sometimes loud pops at a passage's start
+/// and end, which takes only a few milliseconds. Audible crossfade is the
+/// rare case, wanted where a passage genuinely fades out slowly and the alternative
 /// would be a long near-silent gap.
 ///
 /// So `overlap_ms` yielding ~0 for most pairs is the intended outcome, not a

@@ -35,7 +35,7 @@ struct Live {
     /// `gain_db` as a linear factor, applied per passage `[REQ-AUD-130]`.
     /// Per passage rather than at the mix, so each side of a crossfade carries
     /// its own level -- applying it after mixing would level the blend, not the
-    /// tracks, and the whole point is that they meet at a matched loudness.
+    /// passages, and the whole point is that they meet at a matched loudness.
     gain: f32,
 }
 
@@ -46,7 +46,7 @@ struct Live {
 /// leaves `live` the instant its decoder is exhausted, which is up to a
 /// ring's depth -- `BUFFER_FRAMES`, ~15 s here -- before its last sample
 /// actually reaches the speaker `[REQ-VIS-240]`. Finalising there froze the
-/// figure at "decoded", not "heard": a track played all the way through and
+/// figure at "decoded", not "heard": a passage played all the way through and
 /// left with 15 s of itself still queued behind it read as ~94%, never 100%,
 /// however completely it was listened to. `at_ms`/`since` are the same pair
 /// `draining` carries, so the estimate advances exactly as the position
@@ -313,7 +313,7 @@ pub struct Engine {
     /// A passage leaves `live` when its decoder is exhausted, which is up to a
     /// ring's depth before its last sample reaches the speaker. Without this
     /// the displayed position simply stopped there — fifteen seconds short of
-    /// the end, every track.
+    /// the end, every passage.
     ///
     /// **Advanced by the clock, not by the ring.** The obvious measure — what
     /// it had mixed, less what is still buffered — is wrong here: during a
@@ -1285,7 +1285,7 @@ impl Engine {
     /// **Not at the start of playback.** *(Changed 2026-08-21.)* This used to
     /// write the moment a passage began sounding, following MuLibPlay, whose
     /// note says history updates "as each new track finishes playing (or is put
-    /// in the play queue)" — and it argued that a track skipped after ten
+    /// in the play queue)" — and it argued that a passage skipped after ten
     /// seconds had been *encountered*, so suppressing it was wanted.
     ///
     /// That is now a **measured divergence from MuLibPlay** `[GDE-PHS-030]`.
@@ -1309,7 +1309,7 @@ impl Engine {
         // **Read even when there is no head.** An empty `live` is not "nothing
         // to do": it is the strongest evidence a passage has just departed. An
         // earlier version returned here, so skipping the *last* queued passage
-        // judged nothing at all — the track was abandoned and suppressed
+        // judged nothing at all — the passage was abandoned and suppressed
         // nothing, and the Director could offer it straight back
         // `[SPEC-PLAY-050]`.
         let head_now: Option<(i64, Option<String>, u64, u64)> = self.live.first().map(|live| {
@@ -1587,8 +1587,8 @@ impl Engine {
             s.position_ms = self.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);
             // What is still to come FOR THE LISTENER `[REQ-AUD-164]`. A
             // passage leaves the queue when the mixer admits it, which is up to
-            // a ring's depth before anyone hears it -- so the next track used
-            // to vanish from "Coming up" while the current one was still
+            // a ring's depth before anyone hears it -- so the next passage
+            // used to vanish from "Coming up" while the current one was still
             // playing. Anything admitted but not yet audible belongs at the
             // top of the list, not gone from it.
             let shown_id = self.shown.as_ref().map(|(e, _)| e.passage_id);
@@ -2020,7 +2020,7 @@ mod tests {
     /// The suspicious case: `record_play` reads the head to do its work, so a
     /// queue that empties leaves it nothing to read. If the rejection is only
     /// written when some *other* passage takes the head, then skipping the last
-    /// track of an evening suppresses nothing and the Director may offer it
+    /// passage of an evening suppresses nothing and the Director may offer it
     /// straight back.
     #[test]
     fn skipping_the_last_passage_still_suppresses_it() {
@@ -2091,7 +2091,7 @@ mod tests {
     ///
     /// A passage leaves `live` when its decoder is exhausted, a ring's depth
     /// before its last sample is heard. The display used to stop there — about
-    /// fifteen seconds short of the end of every track.
+    /// fifteen seconds short of the end of every passage.
     #[test]
     fn a_finished_passage_keeps_its_position_moving_while_it_is_heard() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
@@ -2603,7 +2603,7 @@ mod tests {
 
     /// Resuming must report position within the PASSAGE. If it restarted at
     /// zero, the next save would move backwards and resume would walk to the
-    /// start of the track a restart at a time.
+    /// start of the passage a restart at a time.
     #[test]
     fn resume_reports_position_within_the_passage() {
         let f = crate::decoder::tests::tmp("resume");

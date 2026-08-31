@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Export flagged tracks for a remote installation `[SPEC006 §10]`.
+"""Export flagged recordings and passages for a remote installation `[SPEC006 §10]`.
 
 `[REQ-VIS-265]`'s checkbox is set on vainopi's own play-history page --
 exactly the machine with no Sampo to act on it. This gets the name of a
-flagged track off that installation and onto a portable form a *different*
-installation's own library can resolve, the same way `export_changes.py`
+flagged recording or passage off that installation and onto a portable form a
+*different* installation's own library can resolve, the same way `export_changes.py`
 already does for an applied decision rather than a mere identity.
 
 vainopi has no Python `[SPEC-DF-108]`, so this never runs there -- it reads a
@@ -85,7 +85,7 @@ def main() -> int:
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump({"format_version": 1, "flags": flags}, f, indent=2)
 
-    say(f"{len(flags)} flagged track(s) exported to {args.out}")
+    say(f"{len(flags)} flag(s) exported to {args.out}")
     if not flags:
         say("nothing flagged there yet")
     return 0

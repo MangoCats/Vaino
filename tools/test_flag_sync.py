@@ -142,7 +142,7 @@ def test_pull(tmp: str) -> None:
     flags_json = os.path.join(tmp, "flags.json")
     r = run(EXPORT_FLAGS, vainopi, "-o", flags_json)
     check(r.returncode == 0, f"export exited {r.returncode}: {r.stderr[:300]}")
-    check("2 flagged track(s)" in r.stdout, f"expected 2 flags, got {r.stdout!r}")
+    check("2 flag(s)" in r.stdout, f"expected 2 flags, got {r.stdout!r}")
 
     # --- overlapping desktop: both flags resolve ---
     desk1 = os.path.join(tmp, "desk1.db")

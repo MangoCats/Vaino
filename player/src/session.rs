@@ -382,7 +382,7 @@ impl Session {
     /// Put the pool size where the browser can see it.
     fn publish_pool(&self) {
         let Some(c) = self.census() else { return };
-        let total = c.eligible + c.artist_blocked + c.track_blocked + c.related_blocked
+        let total = c.eligible + c.artist_blocked + c.recording_blocked + c.related_blocked
             + c.below_min_weight + c.filtered;
         if let Ok(mut ctl) = self.controls.lock() {
             ctl.pool = Some((c.eligible, total));
@@ -463,7 +463,7 @@ impl Session {
     ///
     /// Picks one at a time, telling the Director about each as it goes. Asking
     /// for five at once would weigh all five against the same stale history and
-    /// could queue five tracks by one artist `[SPEC-DIR-115]`.
+    /// could queue five recordings by one artist `[SPEC-DIR-115]`.
     /// Takes a **backend**, not the engine `[SPEC-BK-020]`. The suppression
     /// windows arrive as an argument because they are the *listener's*
     /// settings, not the backend's: whoever is playing, they are the same.

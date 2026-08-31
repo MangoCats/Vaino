@@ -83,7 +83,7 @@ def main() -> int:
     ensure_flags_table(conn)
     conn.commit()
 
-    say(f"{len(flags)} flagged track(s) in {args.flags}")
+    say(f"{len(flags)} flag(s) in {args.flags}")
     matched = already = unmatched = 0
     if args.commit:
         conn.execute("BEGIN IMMEDIATE")

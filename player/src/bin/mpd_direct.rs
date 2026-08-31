@@ -505,8 +505,8 @@ fn main() {
     }
     let c = director.census(now());
     println!(
-        "pool now: {} eligible, {} suppressed, {} track-blocked, {} artist-blocked",
-        c.eligible, c.suppressed, c.track_blocked, c.artist_blocked
+        "pool now: {} eligible, {} suppressed, {} recording-blocked, {} artist-blocked",
+        c.eligible, c.suppressed, c.recording_blocked, c.artist_blocked
     );
 }
 

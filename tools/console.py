@@ -893,8 +893,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"remote": remote})
             if p == "/api/remote/pull":
                 # Direction one `[SPEC-DF-109]`: vainopi's own flags, resolved
-                # against this library. A count of flags on tracks that do
-                # not exist here yet is the job's own `result`, not an error.
+                # against this library. A count of flags on recordings or
+                # passages that do not exist here yet is the job's own
+                # `result`, not an error.
                 remote = STATE["jobs"].get_remote()
                 if not remote:
                     return self.send_json({"error": "no remote configured yet"}, code=400)

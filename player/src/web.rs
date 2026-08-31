@@ -33,8 +33,9 @@ use crate::session::{Explanations, SharedControls};
 pub struct Ui {
     pub handle: Arc<EngineHandle>,
     /// The library file, for serving cover art. A path rather than a
-    /// connection: `rusqlite`'s is not `Sync`, art is asked for once per track
-    /// change, and opening one for that is cheaper than sharing one forever.
+    /// connection: `rusqlite`'s is not `Sync`, art is asked for once per
+    /// passage change, and opening one for that is cheaper than sharing one
+    /// forever.
     pub db: std::path::PathBuf,
     pub why: Explanations,
     pub controls: SharedControls,
@@ -488,7 +489,7 @@ struct HistoryPage {
 /// What has actually sounded, paged `[REQ-VIS-250]`.
 ///
 /// Off the engine entirely, like `browse`: a history read must never get in
-/// the way of playing the next track.
+/// the way of playing the next passage.
 async fn history(
     State(ui): State<Ui>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -1075,7 +1076,7 @@ async fn art_response(ui: Ui, passage_id: i64, back: bool) -> axum::response::Re
             [
                 (axum::http::header::CONTENT_TYPE, art.media_type),
                 // The art of a given passage does not change; let the browser
-                // keep it rather than re-reading the file on every track change.
+                // keep it rather than re-reading the file on every passage change.
                 (axum::http::header::CACHE_CONTROL, "public, max-age=86400".into()),
             ],
             art.data,

@@ -154,7 +154,7 @@ pub(crate) const REJECTION_TABLE: &str = "
 /// and cleared from the play-history page at any time -- a plain flag, not a
 /// judgement, so it carries no verdict of its own. Keyed the way `flavor`
 /// already is: a recording when the play had one, a passage when it did not,
-/// because a track worth flagging is often exactly the one with no MBID yet.
+/// because a passage worth flagging is often exactly the one with no MBID yet.
 pub(crate) const FLAGS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS listener_flags (
         subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','passage')),
@@ -2866,8 +2866,8 @@ mod tests {
                 "self-published + unmatched: nothing can name it, so do not ask");
         assert!(ids.contains(&8), "a migration placeholder must still be queued");
 
-        // But a locally-ingested track AcoustID *can* name is the most useful
-        // row there is: a placeholder with the real recording beside it.
+        // But a locally-ingested recording AcoustID *can* name is the most
+        // useful row there is: a placeholder with the real recording beside it.
         lib.conn.execute_batch(
             "INSERT INTO passages VALUES (9,1,'radio',0,1000,NULL,NULL,NULL,'ingest:whole-file',20,20,'exponential','exponential');
              INSERT INTO recordings VALUES ('local:audio:def','Some Album Track',NULL,'local:ingest');
@@ -3813,7 +3813,7 @@ mod tests {
         assert!((rows[1].played_pct.unwrap() - 83.333).abs() < 1e-2);
 
         // Both rows are the same recording, so both offer the same flag
-        // subject `[REQ-VIS-265]` -- one checkbox state per track, not per play.
+        // subject `[REQ-VIS-265]` -- one checkbox state per recording, not per play.
         assert_eq!(rows[0].flag_kind, Some("recording"));
         assert_eq!(rows[0].flag_id.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000001"));
         assert_eq!(rows[1].flag_kind, rows[0].flag_kind);

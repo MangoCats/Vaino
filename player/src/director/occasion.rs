@@ -160,8 +160,8 @@ impl Occasions {
 
     /// The combined multiplier for one subject on one day.
     ///
-    /// Occasions compose multiplicatively, as MuLibPlay's did: a track that is
-    /// both christmasy and wintry gets both. A subject with no occasion values,
+    /// Occasions compose multiplicatively, as MuLibPlay's did: a passage that
+    /// is both christmasy and wintry gets both. A subject with no occasion values,
     /// or a value of zero, gets exactly 1.0 — the neutral, not a placeholder.
     pub fn multiplier(&self, mbid: Option<&str>, ord: u16) -> f64 {
         let Some(mbid) = mbid else { return 1.0 };
@@ -248,7 +248,7 @@ mod tests {
     }
 
     /// The characteristic value scales the curve's departure from 1.0, so a
-    /// half-christmasy track gets half the seasonal push.
+    /// half-christmasy passage gets half the seasonal push.
     #[test]
     fn the_characteristic_value_scales_the_curve() {
         let mut curves = HashMap::new();

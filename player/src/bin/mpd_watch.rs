@@ -34,9 +34,9 @@ use vaino_player::scrobble::{counts_as_play_s, FOUR_MINUTES_MS};
 ///
 /// **MPD's own `duration` is not trustworthy enough to judge against.** For an
 /// MP3 without a Xing header MPD estimates it as size over bitrate, and
-/// embedded cover art is part of that size — so a 12.07 s track carrying a
+/// embedded cover art is part of that size — so a 12.07 s passage carrying a
 /// picture was reported as 22.8 s (546659 bytes x 8 / 192000 bps). Judged
-/// against that, a track that played *in full* needed 11.4 s, reached 10.8 s at
+/// against that, a passage that played *in full* needed 11.4 s, reached 10.8 s at
 /// its last sample, and was recorded as a skip. Vaino's duration comes from a
 /// decode, so it is the one to use, and stage 2 replaces even this with the
 /// passage span, which is authoritative by construction `[SPEC-DF-030]`.
@@ -155,9 +155,9 @@ fn main() {
         let state = status.get("state").cloned().unwrap_or_default();
         let stopped = state == "stop";
         // MPD **retains `songid` across a stop**, so an absent id is not how a
-        // stop announces itself. Watching only the id let a track the listener
-        // stopped 57% of the way through go unjudged until some later song
-        // started, and never at all if none did.
+        // stop announces itself. Watching only the id let a passage the
+        // listener stopped 57% of the way through go unjudged until some
+        // later song started, and never at all if none did.
         let songid = if stopped { None } else { status.get("songid").cloned() };
         let elapsed: f64 = status.get("elapsed").and_then(|v| v.parse().ok()).unwrap_or(0.0);
         let duration: f64 = status.get("duration").and_then(|v| v.parse().ok()).unwrap_or(0.0);

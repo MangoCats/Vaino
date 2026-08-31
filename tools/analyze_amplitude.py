@@ -5,9 +5,9 @@
 A direct translation of the inherited McRhythm algorithm
 (`docs/inherited/mcrhythm/MCR-SPEC025-amplitude_analysis.md`) -- an RMS
 envelope over 100 ms windows, absolute-dB thresholds, a "quick ramp"
-shortcut for tracks that start or end at full volume already. Not the
+shortcut for passages that start or end at full volume already. Not the
 segmentation cascade (`MCR-SPEC033`, still PROVISIONAL/P4 in `SPEC007` §6,
-genuinely unbuilt): that solves "where are the track boundaries inside one
+genuinely unbuilt): that solves "where are the passage boundaries inside one
 continuous file"; this solves "how long does *this* passage's own amplitude
 take to ramp up or down", a self-contained, much smaller question.
 

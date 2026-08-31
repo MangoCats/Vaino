@@ -364,9 +364,9 @@ class Runner:
         `[SPEC-DF-114]` measured at over an hour was the copy, never the
         actual data. Whatever comes back is landed against the local
         library -- reporting, not silently dropping, whatever does not
-        `[SPEC-DF-109]`. That `unmatched` count is exactly "flags on tracks
-        that don't exist locally," already computed by `import_flags.py`,
-        not re-derived here.
+        `[SPEC-DF-109]`. That `unmatched` count is exactly "flags on
+        recordings or passages that don't exist locally," already computed
+        by `import_flags.py`, not re-derived here.
         """
         tools = os.path.dirname(os.path.abspath(__file__))
         work = os.path.join(os.path.dirname(tools), "out", f"remote-pull-{job_id}")
