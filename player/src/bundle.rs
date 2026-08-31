@@ -190,6 +190,20 @@ fn str_of(o: &Value, k: &str) -> String {
     o.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string()
 }
 
+/// A fade field with the schema's own fallback `[SPEC-SC-046]`, for a sender
+/// too old to have carried `fade_in_ms`/`fade_out_ms` at all. Unlike `num`,
+/// this never yields `None`: `passages.fade_in_ms`/`fade_out_ms` are `NOT
+/// NULL DEFAULT 20`, so there is no absent state to preserve, only a value a
+/// bare INSERT omitting the column would have produced anyway.
+fn fade_ms(o: &Value, k: &str) -> i64 {
+    num(o, k).unwrap_or(20)
+}
+
+/// `fade_in_curve`/`fade_out_curve` with the same fallback, `'exponential'`.
+fn fade_curve<'a>(o: &'a Value, k: &str) -> &'a str {
+    o.get(k).and_then(|v| v.as_str()).unwrap_or("exponential")
+}
+
 // ---------------------------------------------------------------- import ---
 
 /// Import a bundle. `audio_root` is where arriving audio lives — the bundle's
@@ -315,14 +329,23 @@ pub fn import(
 
         for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
             tx.execute(
-                "INSERT INTO passages (file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src)\
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                // NULL stays NULL: it means "not analysed", which is not zero,
-                // and the player acts on lead-out timing `[SPEC-PL-030]`.
+                "INSERT INTO passages \
+                     (file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src,\
+                      fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve)\
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                // NULL stays NULL for lead/gain: it means "not analysed",
+                // which is not zero, and the player acts on lead-out timing
+                // `[SPEC-PL-030]`. Fade `[SPEC-SC-046]` has no such state --
+                // `passages.fade_in_ms` etc. are `NOT NULL DEFAULT`, so a
+                // sender too old to have carried them `[SPEC-PL-060]` gets
+                // exactly the value a bare INSERT omitting the columns would
+                // have produced, not a constraint violation.
                 params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms"),
                         num(p, "lead_in_ms"), num(p, "lead_out_ms"),
                         p.get("gain_db").and_then(|v| v.as_f64()),
-                        str_of(p, "boundary_src")],
+                        str_of(p, "boundary_src"),
+                        fade_ms(p, "fade_in_ms"), fade_ms(p, "fade_out_ms"),
+                        fade_curve(p, "fade_in_curve"), fade_curve(p, "fade_out_curve")],
             )
             .map_err(|e| e.to_string())?;
             let passage_id = tx.last_insert_rowid();
@@ -501,5 +524,44 @@ mod tests {
              "passages":[{"kind":"radio","start_ms":10,"end_ms":10,"boundary_src":"x",
                           "recordings":[]}]}],"recordings":[]}"#);
         assert!(unacceptable(&d).iter().any(|s| s.contains("end_ms")));
+    }
+
+    // `[SPEC-SUI-226]` fade travelling through the bundle payload: present
+    // values are carried, and a sender too old to have carried them at all
+    // (fade predates this payload version) falls back to `passages`' own
+    // schema default rather than a NOT NULL violation.
+    #[test]
+    fn fade_present_is_carried() {
+        let p = doc(r#"{"fade_in_ms":5,"fade_out_ms":2000,
+                         "fade_in_curve":"linear","fade_out_curve":"cosine"}"#);
+        assert_eq!(fade_ms(&p, "fade_in_ms"), 5);
+        assert_eq!(fade_ms(&p, "fade_out_ms"), 2000);
+        assert_eq!(fade_curve(&p, "fade_in_curve"), "linear");
+        assert_eq!(fade_curve(&p, "fade_out_curve"), "cosine");
+    }
+
+    #[test]
+    fn fade_absent_falls_back_to_the_schema_default() {
+        let p = doc(r#"{"kind":"radio","start_ms":0,"end_ms":10,"boundary_src":"x"}"#);
+        assert_eq!(fade_ms(&p, "fade_in_ms"), 20);
+        assert_eq!(fade_ms(&p, "fade_out_ms"), 20);
+        assert_eq!(fade_curve(&p, "fade_in_curve"), "exponential");
+        assert_eq!(fade_curve(&p, "fade_out_curve"), "exponential");
+    }
+
+    /// `[SPEC-PL-032]` The cross-language conformance fixture: Sampo's
+    /// `tools/test_payload.py` checks the same file with `compatible()`, and
+    /// this checks it with `unacceptable()` -- one file, both implementations,
+    /// per `fixtures/payload/README.md`'s own stated purpose.
+    #[test]
+    fn the_fade_fields_fixture_is_accepted_by_the_rust_side_too() {
+        let text = include_str!("../../fixtures/payload/09-fade-fields.json");
+        let d: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(unacceptable(&d), Vec::<String>::new());
+        let p = &d["encodings"][0]["passages"][0];
+        assert_eq!(fade_ms(p, "fade_in_ms"), 15);
+        assert_eq!(fade_ms(p, "fade_out_ms"), 1200);
+        assert_eq!(fade_curve(p, "fade_in_curve"), "linear");
+        assert_eq!(fade_curve(p, "fade_out_curve"), "cosine");
     }
 }

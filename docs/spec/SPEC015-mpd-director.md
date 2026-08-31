@@ -81,9 +81,10 @@ Proposed namespace, all under `vaino.`:
 | Vaino has | MPD has | Verdict |
 | :--- | :--- | :--- |
 | per-passage `gain_db` `[SPEC-SC-040]` | `replay_gain_mode`, **per file** | **cannot express** — two passages in one file may differ |
-| `lead_in_ms` / `lead_out_ms`, per passage | `crossfade` (global seconds), `mixrampdb` | **approximation only** — the median lead-out is 946 ms `[SPEC-SC-043]` and a global crossfade is one number for every track |
+| `lead_in_ms` / `lead_out_ms`, per passage — *timing* only `[SPEC-SC-043]` | `crossfade` (global seconds), `mixrampdb` | **approximation only** — the median lead-out is 946 ms and a global crossfade is one number for every track |
+| `fade_in_ms` / `fade_out_ms`, per passage — the actual gain ramp `[SPEC-SC-046]` | nothing analogous | **cannot express at all** — MPD's `crossfade`/`mixrampdb` only blend between two adjacent files; they shape nothing on a passage played alone, which is what fade does on every passage regardless of a neighbour |
 
-Both are declared through `Capabilities` `[GDE-BAK-040]` rather than silently dropped: `Capabilities::MPD` is `{ spans: true, gain: false, ramps: false }`. A run that cannot honour gain says so once at startup, not never.
+All three are declared through `Capabilities` `[GDE-BAK-040]` rather than silently dropped: `Capabilities::MPD` is `{ spans: true, gain: false, ramps: false }` — `ramps` covering both lead's timing and fade's envelope, since neither survives the handoff. A run that cannot honour gain or ramps says so once at startup, not never.
 
 ---
 

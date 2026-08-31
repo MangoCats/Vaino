@@ -1,5 +1,5 @@
-// The three ramp curves, ported from `fade.rs`'s `Curve` `[SPEC-AUD-040]`,
-// `[SPEC-SUI-226]`. Checked against `fixtures/fade/{linear,cosine,exponential}.json`,
+// The three ramp curves, ported from `fade.rs`'s `Curve` `[SPEC-SUI-226]`.
+// Checked against `fixtures/fade/{linear,cosine,exponential}.json`,
 // the same tables `fade.rs`'s own tests check against -- one formula per
 // curve, computed twice, kept from drifting apart silently `[SPEC021 §4]`.
 //

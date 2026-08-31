@@ -53,10 +53,27 @@ REQUIRED = {
 }
 
 
+def has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Same reasoning as `export_changes.py`'s own `has_column`: this tool opens
+    `mode=ro`, so it cannot `ALTER TABLE` a source database still short a
+    column `[SPEC-SUI-226]` added after it was created. It reads around the
+    gap instead of refusing to run against an older library.
+    """
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
 def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
     """The payload for a set of encodings, plus everything they reference."""
     conn.row_factory = sqlite3.Row
     q = ",".join("?" * len(md5s))
+    # `fade_*` `[SPEC-SUI-226]` predate this on any source database still on a
+    # pre-fade schema -- read around the gap the same way `export_changes.py`
+    # already does for `boundary_reviews`. Unlike `lead_in_ms`/`gain_db`,
+    # there is no "not analysed" state to preserve here: a migrated database
+    # always has a real value, so the only reason to omit the keys is that
+    # this source predates the columns entirely, and a receiver seeing them
+    # absent falls back to `passages`' own schema default `[SPEC008 §3]`.
+    have_fade = has_column(conn, "passages", "fade_in_ms")
 
     encodings, wanted = [], set()
     for f in conn.execute(
@@ -71,7 +88,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                     "SELECT * FROM passage_recordings WHERE passage_id = ? ORDER BY mbid",
                     (p["passage_id"],))]
             wanted.update(c["mbid"] for c in credits)
-            passages.append({
+            passage = {
                 "kind": p["kind"],
                 "start_ms": p["start_ms"],
                 "end_ms": p["end_ms"],
@@ -81,8 +98,18 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                 "lead_out_ms": p["lead_out_ms"],
                 "gain_db": p["gain_db"],
                 "boundary_src": p["boundary_src"],
-                "recordings": credits,
-            })
+            }
+            if have_fade:
+                # This passage's own volume envelope, orthogonal to lead and
+                # travelling for the same reason gain does: it is meaningless
+                # against another encoding, and a receiver constructing this
+                # passage for the first time has nothing else to build it
+                # from `[SPEC-SC-046]`.
+                passage.update(
+                    fade_in_ms=p["fade_in_ms"], fade_out_ms=p["fade_out_ms"],
+                    fade_in_curve=p["fade_in_curve"], fade_out_curve=p["fade_out_curve"])
+            passage["recordings"] = credits
+            passages.append(passage)
         # The file's own tags travel, though they are cheap to re-derive from
         # audio that is arriving anyway. Without them an unidentified passage
         # lands with no artist at all: the player resolves a name MusicBrainz ->

@@ -38,6 +38,7 @@ partial by nature — a transfer gap is not a schema disagreement.
 | 06 | `01`, one `bundle_path` absent from the bundle | **Accept; that encoding deferred**, the other three land. Reported as awaiting audio — *not* as a schema failure. |
 | 07 | `01`, one file present but hashing to something else | **Accept; that encoding rejected as corrupt**, the other three land. `[SPEC-RLK-055]`: bytes present where a row expects them and disagreeing is a failed transfer, never a discovery. |
 | 08 | `08-would-overwrite-manual.json` | **Accept, and do not apply** the one changed value where the receiver holds `source = 'manual'` for it. Provenance outranks recency `[SPEC-DF-070]`; a user's correction is never silently overwritten. |
+| 09 | `09-fade-fields.json` | **Accept.** `01` plus `fade_in_ms`/`fade_out_ms`/`fade_in_curve`/`fade_out_curve` `[SPEC-SC-046]`, `[SPEC-PL-032]` on every passage — a manual, non-default edit on the first, the fixed default on the rest. `01` itself still shows the fields *absent*, since the real library it is generated from predates `[SPEC-SUI-226]`; `09` is what the same payload looks like once a source has migrated. |
 
 **08 is deliberately `COMPATIBLE`.** Overwriting a manual value is a merge-time
 provenance decision, not an acceptance question, and a checker that rejected the

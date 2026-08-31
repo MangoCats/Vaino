@@ -33,6 +33,8 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
       "kind": "radio", "start_ms": 0, "end_ms": 284250,
       "lead_in_ms": null, "lead_out_ms": null, "gain_db": null,
       "boundary_src": "ingest:whole-file",
+      "fade_in_ms": 20, "fade_out_ms": 20,
+      "fade_in_curve": "exponential", "fade_out_curve": "exponential",
       "recordings": [{ "mbid": "local:audio:b34c…", "weight": 1.0, "source": "local:ingest" }]
     }]
   }],
@@ -51,6 +53,8 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
 **`[SPEC-PL-025]` `bundle_path` is bundle scope — a third thing, and neither of the other two.** It says which arriving file an entry describes. It is **not** machine scope, because it never names a location on either machine, and it is not identity: the hash proves the answer and this string only shortens the search. Written with forward slashes, always. A backslash is a legal filename character on Linux, so shipping a Windows separator would not look wrong — it would name a different file `[SPEC-RLK-020]`.
 
 **`[SPEC-PL-030]` `null` means "not analysed" and must survive as `null`.** `lead_in_ms`, `lead_out_ms` and `gain_db` are absent on all four reference tracks because amplitude analysis `[SPEC-SA-075]` has not run — 252 of 16,409 passages are in that state. Coercing them to `0` would assert a measured silence of zero length, which the player would then act on.
+
+**`[SPEC-PL-032]` `fade_in_ms`/`fade_out_ms`/`fade_in_curve`/`fade_out_curve` `[SPEC-SC-046]` travel too, and mean something different when absent than `lead_in_ms` does.** Fade is this passage's own volume envelope, orthogonal to lead, and — unlike lead/gain — has no "not analysed" state to preserve: `passages.fade_in_ms` etc. are `NOT NULL DEFAULT` in SPEC008, so a migrated source always has a real value to send. The keys are absent from a payload only when the *sender* predates `[SPEC-SUI-226]` — a database `tools/add_fade_columns.py` has never touched — and a receiver reads that absence as "use the schema's own default," exactly what a bare `INSERT` omitting the columns would produce, not as `null`'s "no opinion, apply no ramp." `tools/payload.py`'s `build()` and `player/src/bundle.rs`'s importer agree on this, checked against `fixtures/payload/09-fade-fields.json` — `01` itself still shows the absent case, since the real library it is generated from predates the migration.
 
 ---
 

@@ -126,9 +126,12 @@ judgement it warned about is settled below rather than avoided.
 
 **`[SPEC-BK-040]` What a listener loses by moving to MPD is stated before they
 move, not discovered after.** `Capabilities::MPD` drops `gain` and `ramps`: per
-passage gain cannot be expressed at all, and lead-in/lead-out degrade to one
-global crossfade number against a median lead-out of 946 ms `[SPEC-SC-043]`. The
-control that offers the switch says so, once, in those terms.
+passage gain cannot be expressed at all; lead-in/lead-out degrade to one global
+crossfade number against a median lead-out of 946 ms `[SPEC-SC-043]`; and
+`fade_in_ms`/`fade_out_ms` `[SPEC-SC-046]` — the envelope actually heard on
+every passage, crossfade or not — has no MPD equivalent at all, since
+`crossfade`/`mixrampdb` only blend between two adjacent files. The control
+that offers the switch says so, once, in those terms.
 
 **`[SPEC-BK-055]` MPD's clock on a bounded song runs from the start of the
 span, not of the file.** *(Measured 2026-08-22, MPD 0.24.0.)* This decides what
