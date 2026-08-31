@@ -298,7 +298,7 @@ function releaseSuggestBox(pid, folder) {
       ['audio_md5', p.audio_md5],
       ['path', p.path],
       ['format / duration', `${p.format}, ${S.clock(p.duration_ms)} (${S.n(p.duration_ms)} ms)`],
-      ['span', `${S.n(p.start_ms)} → ${S.n(p.end_ms)} ms, kind=${p.kind}`],
+      ['span', `${S.n(p.start_ms)} → ${S.n(p.end_ms)} ms, kind = ${p.kind}`],
       // NULL means not analysed, which is not zero [SPEC-PL-030].
       ['lead in / out', p.lead_in_ms === null && p.lead_out_ms === null
         ? S.el('span', { class: 'pill warn', title: 'amplitude analysis has not run',
