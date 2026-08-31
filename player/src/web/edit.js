@@ -119,14 +119,19 @@
   // `minSpanMs`, when given, also re-zooms even when `ms` is technically
   // already in view: a 4.5s lead-out on a five-minute file is ~1.5% of a
   // whole-passage view -- a handful of pixels, present but indistinguishable
-  // from the end marker beside it, which reads exactly like "not there."
-  // Bringing a point on screen is not the same claim as making it legible.
-  // A ramp given six times its own length of breathing room reads as a
-  // ramp; the same 4.5s stretch inside a five-minute whole-passage view
-  // reads as a stray pixel. The floor keeps a near-zero lead (the common
-  // case: most tracks start and end abruptly, not with a fade) from zooming
-  // in absurdly far.
-  const revealSpan = leadMs => Math.max(leadMs * 6, 1500);
+  // from the end marker beside it, which reads exactly like "not there." The
+  // same is true of a 300ms nudge to `end_ms` on a wide "Zoom out" view --
+  // technically still on screen, but sub-pixel, which reported live as
+  // "changes in end time are not reflected" even though `draw()` genuinely
+  // ran every time `[SPEC-SUI-225]`. Bringing a point on screen is not the
+  // same claim as making it legible.
+  //
+  // Given a magnitude -- a lead's own length, or how far a start/end edit
+  // just moved -- six times that much breathing room reads as an actual
+  // change; the same distance inside a five-minute whole-passage view reads
+  // as a stray pixel. The floor keeps a near-zero magnitude (most edits are
+  // small nudges, not big moves) from zooming in absurdly far.
+  const revealSpan = magnitudeMs => Math.max(magnitudeMs * 6, 1500);
 
   function ensureVisible(ms, minSpanMs) {
     if (!buffer) return;
@@ -680,16 +685,26 @@
     const v = Number($('startms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
+    const before = draft.start_ms;
     draft.start_ms = clamp(Math.round(v), windowFromMs, draft.end_ms - 1);
-    updateFacts(); updatePreciseFields(); ensureVisible(draft.start_ms); draw(); refreshCommitState();
+    updateFacts(); updatePreciseFields();
+    // Reveal scaled to how far this edit actually moved it, not just
+    // whether the new position is technically in view -- a small nudge on
+    // a wide zoom is otherwise on screen but sub-pixel, indistinguishable
+    // from nothing having happened.
+    ensureVisible(draft.start_ms, revealSpan(Math.abs(draft.start_ms - before)));
+    draw(); refreshCommitState();
   });
   $('endms').addEventListener('focus', () => ensureVisible(draft.end_ms));
   $('endms').addEventListener('change', () => {
     const v = Number($('endms').value);
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
+    const before = draft.end_ms;
     draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, windowFromMs + totalMs());
-    updateFacts(); updatePreciseFields(); ensureVisible(draft.end_ms); draw(); refreshCommitState();
+    updateFacts(); updatePreciseFields();
+    ensureVisible(draft.end_ms, revealSpan(Math.abs(draft.end_ms - before)));
+    draw(); refreshCommitState();
   });
   $('leadinms').addEventListener('focus', () =>
     ensureVisible(draft.start_ms + draft.lead_in_ms, revealSpan(draft.lead_in_ms)));
