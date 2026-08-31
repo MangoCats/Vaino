@@ -52,6 +52,7 @@ vaino.db
 # Sampo / feature-extraction working data.
 # Large, re-derivable artifacts stay out; measured RESULTS stay in.
 data/*
+!data/README.md
 !data/reliability.json
 !data/stageb/
 data/stageb/*
