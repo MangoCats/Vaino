@@ -100,7 +100,7 @@ switch: now on vaino (faded, 6 passage(s) carried)
 
 **`[SPEC-BK-029]` Publishing is a capability of its own, not another playback
 method.** *(Built 2026-08-22.)* A guest's clients have no other way to learn why
-a track was chosen, so the Director's reasoning is published to them
+a passage was chosen, so the Director's reasoning is published to them
 `[SPEC-MPD-050]`. Vaino's own UI reads the decision store directly and needs
 none of it, so `Publish` sits beside `FadeOut` rather than on `Playback` — a
 backend should not have to answer a question only one of them is asked. The

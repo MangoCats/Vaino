@@ -148,12 +148,12 @@ Every write is **temp-file → verify → atomic replace**:
 1. Copy to a temp file, write tags there.
 2. Recompute `md5_encoded` on the temp file.
 3. Replace the original **only** if it matches the pre-write value `[SPEC-DF-020]`.
-4. On mismatch, discard the temp file, log, and mark the track tag-ineligible.
+4. On mismatch, discard the temp file, log, and mark the file tag-ineligible.
 
 The original is never mutated in place, so a failed write cannot damage the library.
 
 **`[SPEC-DF-093]` Payload is human-readable JSON.**
-At ~1–2 KB per track the compact alternative saves ~1.5 KB and costs inspectability, exact float precision, and debuggability. A packed fp16 form would be opaque to every tool including our own. This is a system whose headline requirement is that its processes be visible `[GDE-CHT-030]`; an unreadable payload embedded in the user's own files contradicts that for no measurable gain. One format, one parser `[SPEC-DF-065]`.
+At ~1–2 KB per recording the compact alternative saves ~1.5 KB and costs inspectability, exact float precision, and debuggability. A packed fp16 form would be opaque to every tool including our own. This is a system whose headline requirement is that its processes be visible `[GDE-CHT-030]`; an unreadable payload embedded in the user's own files contradicts that for no measurable gain. One format, one parser `[SPEC-DF-065]`.
 
 ---
 

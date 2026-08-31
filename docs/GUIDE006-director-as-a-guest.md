@@ -2,7 +2,7 @@
 
 **Development Guidance — driving other players with Vaino's selection, and where that stops being possible**
 
-Could the Program Director `[SPEC009]` choose the next track for someone else's player? For anything whose files you hold, yes, and more cheaply than expected. For a streaming catalogue, no — and not for want of an API.
+Could the Program Director `[SPEC009]` choose the next passage for someone else's player? For anything whose files you hold, yes, and more cheaply than expected. For a streaming catalogue, no — and not for want of an API.
 
 > **Related:** [SPEC009](spec/SPEC009-program-director.md) · [GUIDE004 §6](GUIDE004-phone-port-strategy.md) for `vaino-core` · [GUIDE005](GUIDE005-flavor-service.md) · `[REQ-LIB-120]`
 

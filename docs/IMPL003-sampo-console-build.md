@@ -81,10 +81,10 @@ Deliverables, in order:
 
 **`[IMPL-SUI-037]` What stage 1 found.**
 
-1. **The size estimate in `[SPEC-DF-093]` is out by ~9×.** Readable JSON is 11.0 KB per track, not the "~1–2 KB" it argues from; 1.27 KB is the *gzipped* figure `[SPEC-PL-090]`. **The decision it was defending survives** — compression reaches the stated size while keeping inspectability — but the arithmetic under it did not, and `[SPEC-SUI-165]`'s "~16 MB" was my own invention, now measured at 10.4 MB.
+1. **The size estimate in `[SPEC-DF-093]` is out by ~9×.** Readable JSON is 11.0 KB per recording, not the "~1–2 KB" it argues from; 1.27 KB is the *gzipped* figure `[SPEC-PL-090]`. **The decision it was defending survives** — compression reaches the stated size while keeping inspectability — but the arithmetic under it did not, and `[SPEC-SUI-165]`'s "~16 MB" was my own invention, now measured at 10.4 MB.
 2. **73% of the 1,072 MB library is cache no receiver can use** — `musicbrainz_cache` 547 MB, `lowlevel_cache` 202 MB, `identification_cache` 37 MB `[SPEC-PL-040]`. A far stronger form of `[SPEC-SUI-095]`'s argument than the size ratio that motivated it.
 3. **The scoped relink of `[SPEC-SUI-105]` is not a separate pass.** Relink never creates a row `[SPEC-RLK-090]`, so it cannot bind an arriving one; the importer must hash and bind what it creates, which is the same walk `[SPEC-PL-085]`. Stage 4 is smaller than planned.
-4. **The reference tracks have no `recording_artists` rows at all.** Their names live only in `file_tags`, so tags had to join the payload or the music would land artist-less `[SPEC-PL-050]`. Found by generating from real data; a hand-written fixture would have had artists in it.
+4. **The reference recordings have no `recording_artists` rows at all.** Their names live only in `file_tags`, so tags had to join the payload or the music would land artist-less `[SPEC-PL-050]`. Found by generating from real data; a hand-written fixture would have had artists in it.
 
 ---
 
@@ -271,7 +271,7 @@ Two observations from the appliance that are **not** about this change, and are 
 
 > **Designed 2026-08-27; build under way** — [SPEC021](spec/SPEC021-waveform-boundary-editor.md), alongside `[REQ-LIB-180]`'s MusicBrainz search (design in [SPEC010 §3](spec/SPEC010-identification-review.md#3-searching-musicbrainz-directly)). Build order for both is [IMPL006](IMPL006-sampo-editing-workflows.md), which starts where this document's Stage 5 ends and is now complete — Stages 6 through 10.
 
-**`[IMPL-SUI-085]` Segmentation stays provisional** `[SPEC-SA-070]`. Stage 0 works because single-track files need no segmentation; a DAO capture arriving before `[GDE-PHS-040]` lands still needs hand work, and the console must say so rather than produce one whole-file passage and call it done `[SPEC-SUI-075]`.
+**`[IMPL-SUI-085]` Segmentation stays provisional** `[SPEC-SA-070]`. Stage 0 works because single-recording files need no segmentation; a DAO capture arriving before `[GDE-PHS-040]` lands still needs hand work, and the console must say so rather than produce one whole-file passage and call it done `[SPEC-SUI-075]`.
 
 ---
 

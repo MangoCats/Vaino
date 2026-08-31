@@ -116,7 +116,7 @@ That is a weaker check, so it is labelled as one. A file passed on size and mtim
 
 **`[SPEC-SUI-070]` Propose, then commit.** Every tool here already refuses to write without `--commit` or `--apply`, and the console keeps that shape: `POST /induct` returns a **plan** — these files, these stages, this estimated cost — and writes nothing. The plan is what gets confirmed, so what runs is what was read.
 
-**`[SPEC-SUI-075]` Stages are chosen for the material, not run blindly.** Segmentation is for DAO captures and wrong for single-track files `[SPEC-SA-070]`; identification of self-published audio will return `unmatched`, which is not a failure `[REQ-LIB-165]`. The plan states which stages it will skip and why, because a stage silently omitted is how a library ends up with 91% of its descriptors inherited and nothing recording it `[GDE-V1-010]`.
+**`[SPEC-SUI-075]` Stages are chosen for the material, not run blindly.** Segmentation is for DAO captures and wrong for single-recording files `[SPEC-SA-070]`; identification of self-published audio will return `unmatched`, which is not a failure `[REQ-LIB-165]`. The plan states which stages it will skip and why, because a stage silently omitted is how a library ends up with 91% of its descriptors inherited and nothing recording it `[GDE-V1-010]`.
 
 ### 3.4 Handoff — the player's own pages, inside Sampo's workflow
 

@@ -106,24 +106,24 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
 
 ## 5. Size, and a correction
 
-**`[SPEC-PL-090]`** Measured on fixture `01` — four tracks, full 71-characteristic flavor:
+**`[SPEC-PL-090]`** Measured on fixture `01` — four recordings, full 71-characteristic flavor:
 
-| form | per track | whole library (8,330) |
+| form | per recording | whole library (8,330) |
 | :--- | ---: | ---: |
 | JSON, indented | 16.9 KB | 141 MB |
 | JSON, compact | 11.0 KB | 91 MB |
 | **gzip(compact)** | **1.27 KB** | **10.4 MB** |
 
-The estimate in `[SPEC-DF-093]` — *"~1–2 KB per track"* — **is true only of the compressed form**, and it was reasoning about the uncompressed one: it weighs readable JSON against "a packed fp16 form" saving "~1.5 KB". Readable JSON is roughly **nine times** that estimate.
+The estimate in `[SPEC-DF-093]` — *"~1–2 KB per recording"* — **is true only of the compressed form**, and it was reasoning about the uncompressed one: it weighs readable JSON against "a packed fp16 form" saving "~1.5 KB". Readable JSON is roughly **nine times** that estimate.
 
-**The decision it was defending survives intact, and is now better supported.** Compression reaches 1.27 KB per track while keeping every property the packed form would have cost: inspectable, exact, debuggable, parseable by every tool including our own. The packed alternative would save fractions of a kilobyte against *this* baseline rather than the stated 1.5 KB. So: **stored readable, transported compressed**, and `[SPEC-DF-093]`'s arithmetic is corrected without its conclusion moving.
+**The decision it was defending survives intact, and is now better supported.** Compression reaches 1.27 KB per recording while keeping every property the packed form would have cost: inspectable, exact, debuggable, parseable by every tool including our own. The packed alternative would save fractions of a kilobyte against *this* baseline rather than the stated 1.5 KB. So: **stored readable, transported compressed**, and `[SPEC-DF-093]`'s arithmetic is corrected without its conclusion moving.
 
 ---
 
 ## 6. Open
 
-1. **`[SPEC-PL-100]` `flavor.accuracy` is `NULL` on all 578,452 rows.** `[SPEC-SC-070]` says it carries the model's measured error into the distance metric `[SPEC-FD-120]`, populated from the model manifest, and nothing has ever populated it. The payload carries the field; today it carries nothing in it. Whether the importer should fill it from its *own* manifest — the accuracies are a property of the model, not the track — is unsettled and probably yes.
-2. **`[SPEC-PL-105]` Releases and cover art are specified but not yet emitted.** `releases`, `release_recordings` and `cover_art` are class B and belong in the payload; the reference tracks have none, so the serializer has nothing to test against and does not yet write them. Additive `[SPEC-PL-065]`.
+1. **`[SPEC-PL-100]` `flavor.accuracy` is `NULL` on all 578,452 rows.** `[SPEC-SC-070]` says it carries the model's measured error into the distance metric `[SPEC-FD-120]`, populated from the model manifest, and nothing has ever populated it. The payload carries the field; today it carries nothing in it. Whether the importer should fill it from its *own* manifest — the accuracies are a property of the model, not the recording — is unsettled and probably yes.
+2. **`[SPEC-PL-105]` Releases and cover art are specified but not yet emitted.** `releases`, `release_recordings` and `cover_art` are class B and belong in the payload; the reference recordings have none, so the serializer has nothing to test against and does not yet write them. Additive `[SPEC-PL-065]`.
 
 ---
 

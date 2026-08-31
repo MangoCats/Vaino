@@ -255,14 +255,14 @@ All 49 seeds now have flavor, against 35 with both provenances:
 
 ---
 
-## 5. Provenance Consistency Outranks Per-Track Accuracy
+## 5. Provenance Consistency Outranks Per-Recording Accuracy
 
 **`[SPEC-FD-130]` Similarity is a relative judgment, so uniformity of scoring matters more than fidelity to any external reference.**
 
-Distance is only ever computed *between two tracks in this library*. Absolute agreement with AcousticBrainz is therefore instrumental, never terminal. Two regimes differ sharply:
+Distance is only ever computed *between two recordings in this library*. Absolute agreement with AcousticBrainz is therefore instrumental, never terminal. Two regimes differ sharply:
 
-- **Uniform provenance** — every track scored by the same model from the same decoder on our own files. Whatever error the model has is **common-mode**: it shifts both sides of every comparison and largely cancels. Encoding variance is *zero*, because there is only one encode of each file — ours.
-- **Mixed provenance** — some tracks from the dump, some locally extracted. Every cross-provenance comparison pays *both* an encoding difference and a model difference, and the metric cannot tell that systematic offset apart from genuine musical difference. The library splits into two subpopulations that the distance function silently treats as musically distinct.
+- **Uniform provenance** — every recording scored by the same model from the same decoder on our own files. Whatever error the model has is **common-mode**: it shifts both sides of every comparison and largely cancels. Encoding variance is *zero*, because there is only one encode of each file — ours.
+- **Mixed provenance** — some recordings from the dump, some locally extracted. Every cross-provenance comparison pays *both* an encoding difference and a model difference, and the metric cannot tell that systematic offset apart from genuine musical difference. The library splits into two subpopulations that the distance function silently treats as musically distinct.
 
 **`[SPEC-FD-140]` Measured 2026-08-09 — the mixed-provenance penalty is confirmed and large; the predicted local-beats-dump advantage is not.**
 
@@ -288,7 +288,7 @@ So the honest ordering is **A ≈ B ≫ C**, with A and B within noise of each o
 
 **`[SPEC-FD-150]` Design consequence — the dumps' role changes.** They remain essential as **validation ground truth** and as the source of the `β_c` and `w_c` constants `[SPEC-FD-050]`, but they should **not** be the production flavor values. Extracting the entire library locally is preferable to using dump values for the covered 93.7% `[GDE-FEX-055]` and local values for the rest — that split is precisely regime C, the one measurably worst option `[SPEC-FD-140]`.
 
-Note this also removes the awkwardness in `[SPEC-FD-120]`: with uniform provenance there is no per-track provenance weighting to apply, because every track has the same provenance.
+Note this also removes the awkwardness in `[SPEC-FD-120]`: with uniform provenance there is no per-recording provenance weighting to apply, because every recording has the same provenance.
 
 **`[SPEC-FD-160]` Status: measured 2026-08-09** by `tools/provenance_consistency_test.py`. The mixed-provenance penalty is confirmed at ~8 points of top-1. The predicted all-local advantage is **not** confirmed and remains open, bounded by the two caveats in `[SPEC-FD-140]`.
 
@@ -298,19 +298,19 @@ Note this also removes the awkwardness in `[SPEC-FD-120]`: with uniform provenan
 
 **`[SPEC-FD-170]` Not the current target. Recorded so it is not lost.**
 
-Flow ordering `[SPEC-DIR-160]` currently matches the **whole-track** flavor of a candidate against the **whole-track** flavor of the passage already queued. But a handover is not a whole-track event: what the listener actually hears is the *end* of one passage against the *start* of the next, and many tracks differ markedly at their edges — a quiet intro, a fade, a long outro, a false ending, a track that opens sparse and closes dense.
+Flow ordering `[SPEC-DIR-160]` currently matches the **whole-recording** flavor of a candidate against the **whole-recording** flavor of the passage already queued. But a handover is not a whole-recording event: what the listener actually hears is the *end* of one passage against the *start* of the next, and many recordings differ markedly at their edges — a quiet intro, a fade, a long outro, a false ending, a recording that opens sparse and closes dense.
 
-The proposal: alongside the whole-track vector, characterise the **first three minutes** and the **last three minutes** of each passage (where the passage is long enough to have them), and let flow match `exit(previous) → entry(next)` instead of `whole(previous) → whole(next)`.
+The proposal: alongside the whole-recording vector, characterise the **first three minutes** and the **last three minutes** of each passage (where the passage is long enough to have them), and let flow match `exit(previous) → entry(next)` instead of `whole(previous) → whole(next)`.
 
-That is a better model of the thing being optimised. Whole-track similarity answers "do these two belong in the same programme"; edge similarity answers "does this transition work", and Stage C is asking the second question with an instrument built for the first.
+That is a better model of the thing being optimised. Whole-recording similarity answers "do these two belong in the same programme"; edge similarity answers "does this transition work", and Stage C is asking the second question with an instrument built for the first.
 
 **Three things to know before attempting it:**
 
-1. **It roughly triples extraction cost.** Lowlevel features are *aggregates* over the analysed window, so an entry vector cannot be derived from a whole-track extraction — it needs its own run. At `[GDE-FEX-104]`'s 6.4 s per audio-minute, adding two 3-minute windows per passage takes the library from ~64 to roughly ~190 core-hours. The `lowlevel_cache` key `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]` already accommodates the extra rows without schema change.
+1. **It roughly triples extraction cost.** Lowlevel features are *aggregates* over the analysed window, so an entry vector cannot be derived from a whole-recording extraction — it needs its own run. At `[GDE-FEX-104]`'s 6.4 s per audio-minute, adding two 3-minute windows per passage takes the library from ~64 to roughly ~190 core-hours. The `lowlevel_cache` key `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]` already accommodates the extra rows without schema change.
 2. **`flavor.subject_kind` needs a third value**, or a segment discriminator. It currently allows `recording` and `passage`; entry/exit are neither.
-3. **Short passages have no edges.** A 2-minute track is its own entry and exit, so the metric must fall back to whole-track rather than compare a 3-minute window against a 2-minute one. `[SPEC-FD-040]`'s intersection rule handles the shape of this, but the fallback should be explicit.
+3. **Short passages have no edges.** A 2-minute recording is its own entry and exit, so the metric must fall back to whole-recording rather than compare a 3-minute window against a 2-minute one. `[SPEC-FD-040]`'s intersection rule handles the shape of this, but the fallback should be explicit.
 
-**Current design target remains a single flavor vector per passage.** This entry is a direction, not a commitment: it should be attempted only once whole-track flow is in listening use and the transitions it produces can be judged against the ones edge-matching would produce.
+**Current design target remains a single flavor vector per passage.** This entry is a direction, not a commitment: it should be attempted only once whole-recording flow is in listening use and the transitions it produces can be judged against the ones edge-matching would produce.
 
 ---
 

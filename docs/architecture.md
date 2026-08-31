@@ -113,7 +113,7 @@ Three things worth knowing before changing anything here:
   one place that does this and both callers share it.
 * **Gain is applied per passage, before the mix**, so each side of a crossfade
   carries its own level. Applying it after would level the blend rather than the
-  tracks.
+  passages.
 
 ---
 

@@ -174,7 +174,7 @@ folder, and it belongs to the person who owns the folder.
 
 **`[SPEC-MPD-094]` A stop ends a passage; a pause does not.** MPD retains `songid`
 across a stop, so a watcher keyed on the song identity alone never notices one — a
-track stopped past its threshold went unrecorded, and stayed unrecorded if nothing
+passage stopped past its threshold went unrecorded, and stayed unrecorded if nothing
 played after it. A pause is the opposite case: elapsed holds still, the listener
 is coming back, and closing the book on them would count a play as a skip.
 

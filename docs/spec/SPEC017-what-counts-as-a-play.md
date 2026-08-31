@@ -58,7 +58,7 @@ threshold — observed, in the MPD observer's first live run. Absent is not zero
 **`[SPEC-PLAY-017]` A passage is judged when it stops sounding, including when
 nothing follows it.** *(Corrected 2026-08-21.)* The engine reads the passage at
 the head of the queue to judge it, so an emptied queue once left it nothing to
-read — and **skipping the last track of an evening judged nothing at all**. It
+read — and **skipping the last passage of an evening judged nothing at all**. It
 was neither played nor suppressed, and the Director could offer it straight
 back. An empty queue is not "nothing to do": it is the strongest evidence a
 passage has just departed.
@@ -94,7 +94,7 @@ deliberately.** *(Changed 2026-08-21.)* MuLibPlay's own note says its history
 structures update "as each new track finishes playing (or is put in the play
 queue)", and Vaino's engine followed it: a play was written the moment a passage
 began sounding. The reasoning was explicit — rotation spaces out what the
-listener has *encountered*, and a track skipped after ten seconds has been
+listener has *encountered*, and a passage skipped after ten seconds has been
 encountered.
 
 That reasoning is not wrong, but it answers a different question from the one
@@ -108,7 +108,7 @@ which is the class of change `[SPEC-DIR-210]` already defers under
 ## 4. Declining a passage suppresses it, and does nothing else
 
 Aligning the threshold left a gap: under the old rule a ten-second skip pushed a
-track down the rotation, and under `[SPEC-PLAY-010]` it was never played, so
+recording down the rotation, and under `[SPEC-PLAY-010]` it was never played, so
 nothing held it back at all. The answer is not to loosen the threshold — a skip
 is genuinely not a listen — but to give the rejection its own narrow effect.
 
@@ -121,8 +121,8 @@ has passed weighs exactly as one never rejected, which is asserted rather than
 described.
 
 Structurally rather than by convention: the rejection ages are separate fields
-from `track_age_s`, the gate sits with the passage filters *above* the artist and
-track passes, and nothing below it reads them. A rejection cannot leak into a ramp
+from `recording_age_s`, the gate sits with the passage filters *above* the artist and
+recording passes, and nothing below it reads them. A rejection cannot leak into a ramp
 because there is no path from one to the other.
 
 **`[SPEC-PLAY-055]` Two ways of declining, two windows.** They are not the same

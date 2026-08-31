@@ -101,9 +101,9 @@ Subprocess invocation also keeps the AGPL boundary clean — aggregation rather 
 
 **`[SPEC-SA-085]` Every decision is recorded, not just logged** — which stage matched, at what confidence, which candidates were rejected `[GDE-CHT-030]`. This is what converts an undocumented ritual into a reviewable process.
 
-**`[SPEC-SA-090]` Per-passage extraction — MEASURED 2026-08-09. The mechanism works.** Extraction runs **per passage**, not per file: a 40-track DAO file needs 40 extractor runs over 40 slices, which forces S2 before S4 and makes S4 consume sliced temporary audio.
+**`[SPEC-SA-090]` Per-passage extraction — MEASURED 2026-08-09. The mechanism works.** Extraction runs **per passage**, not per file: a 40-passage DAO file needs 40 extractor runs over 40 slices, which forces S2 before S4 and makes S4 consume sliced temporary audio.
 
-Ten tracks were truncated to centred excerpts and each excerpt's flavor compared against the same track's full-length flavor, in SPEC005 distance `[SPEC-FD-040]` normalized by the floor:
+Ten recordings were truncated to centred excerpts and each excerpt's flavor compared against the same recording's full-length flavor, in SPEC005 distance `[SPEC-FD-040]` normalized by the floor:
 
 | slice | flavor distance | vs floor | extraction failures |
 | ---: | ---: | ---: | ---: |
