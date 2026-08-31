@@ -81,7 +81,7 @@ def fake_spawn_success(remote_flags_json):
             out_path = argv[argv.index("-o") + 1]
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(remote_flags_json, f)
-            return 0, f"{len(remote_flags_json['flags'])} flagged track(s) exported to {out_path}"
+            return 0, f"{len(remote_flags_json['flags'])} flag(s) exported to {out_path}"
         return jobmod.Runner._spawn(self, job_id, stage, argv)
     return _spawn
 

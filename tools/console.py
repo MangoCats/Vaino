@@ -145,8 +145,8 @@ def library(conn, q: str = "", facet: str = "", limit: int = 400) -> list:
 
 
 def flags(conn) -> list:
-    """Tracks flagged "for review" from Vaino's own play-history page
-    `[REQ-VIS-265]`, newest flag first.
+    """Recordings and passages flagged "for review" from Vaino's own
+    play-history page `[REQ-VIS-265]`, newest flag first.
 
     Read-only, like everything else in this file -- the checkbox that sets
     and clears a flag lives in Vaino, because it is listener state and

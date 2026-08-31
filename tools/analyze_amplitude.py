@@ -278,7 +278,7 @@ def main() -> int:
                 conn.commit()
                 el = time.time() - t0
                 say(f"  {i}/{len(todo)}  ok={analyzed} failed={failed}  "
-                    f"{el / i:.1f}s/track  eta {(len(todo) - i) * el / i / 60:.0f} min")
+                    f"{el / i:.1f}s/passage  eta {(len(todo) - i) * el / i / 60:.0f} min")
     conn.commit()
 
     el = time.time() - t0

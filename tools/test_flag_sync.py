@@ -87,7 +87,7 @@ def run(script, *args):
 def vainopi_db(path: str) -> None:
     """The appliance: two files, one flagged by recording, one by passage --
     the second is exactly `[REQ-VIS-265]`'s own reasoning for keying by
-    passage at all, an unidentified track with nothing else to name it by.
+    passage at all, an unidentified recording with nothing else to name it by.
     """
     c = sqlite3.connect(path)
     c.executescript(SCHEMA)

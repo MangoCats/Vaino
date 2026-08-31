@@ -407,15 +407,15 @@ async function run(skin) {
           `unchecking must freeze on the active programme, posted ${JSON.stringify(posted)}`);
   }
 
-  // Picking which track the explanation panel describes `[REQ-VIS-100]`.
+  // Picking which passage the explanation panel describes `[REQ-VIS-100]`.
   // The skin that does this shows ONE control set beside the picked row, so
-  // the rows must not carry their own -- two ways to move a track is how they
+  // the rows must not carry their own -- two ways to move a passage is how they
   // drift apart.
   const nowrow = window.document.getElementById('nowrow');
   if (nowrow) {
     const rows = () => [...window.document.querySelectorAll('#queue li')];
     check(nowrow.classList.contains('picked'),
-          'the playing track must be picked to begin with');
+          'the playing passage must be picked to begin with');
     check(rows().every(r => !r.querySelector('.qedit')),
           'rows must not carry controls when the skin uses one shared set');
     check(window.document.getElementById('qpick').hidden,
@@ -437,11 +437,11 @@ async function run(skin) {
     // again: that repetition was removed and should not come back.
     check(!/Next One/.test(qp.textContent),
           `the controls must not repeat the picked title, got ${JSON.stringify(qp.textContent)}`);
-    // The panel must now describe the PICKED track, not the playing one.
+    // The panel must now describe the PICKED passage, not the playing one.
     check(/Queued Reasons/.test(window.document.getElementById('why').textContent),
           'the explanation must follow the pick');
     check(/Next One/.test(window.document.getElementById('whotitle').textContent),
-          'the heading must name the track being explained');
+          'the heading must name the passage being explained');
     // And they must act on the picked passage, not on whatever was first.
     qp.querySelectorAll('button')[0].onclick(new window.Event('click'));
     // The ENTRY's id, not the passage's `[REQ-VIS-186]`. The fixture gives them
@@ -452,7 +452,7 @@ async function run(skin) {
 
     nowrow.onclick();
     await new Promise(r => setTimeout(r, 20));
-    check(nowrow.classList.contains('picked'), 'the playing track must be pickable again');
+    check(nowrow.classList.contains('picked'), 'the playing passage must be pickable again');
     // And the controls go away with the selection. Only the appearing half was
     // asserted before, so a skin that revealed them and never hid them again
     // would have passed.

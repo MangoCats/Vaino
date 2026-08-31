@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Fetch a remote's flagged tracks directly, no database copy `[SPEC-DF-119]`.
+"""Fetch a remote's flagged recordings and passages directly, no database copy `[SPEC-DF-119]`.
 
 `export_flags.py` needed a full local copy only because it is Python, and
 `[SPEC-DF-108]` already established vainopi has none to run it *there* --
@@ -115,7 +115,7 @@ def main() -> int:
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump({"format_version": 1, "flags": flags}, f, indent=2)
 
-    say(f"{len(flags)} flagged track(s) exported to {args.out}")
+    say(f"{len(flags)} flag(s) exported to {args.out}")
     if not flags:
         say("nothing flagged there yet")
     if args.json:

@@ -6,7 +6,7 @@ Two stages, deliberately separate:
   audio → streaming_extractor_music → lowlevel JSON → `lowlevel_cache`
   cache → 18 Gaia chains          → 71 dimensions  → `flavor`
 
-Extraction is the only expensive step (~27 s/track) and the only one needing
+Extraction is the only expensive step (~27 s/passage) and the only one needing
 audio, so it caches against `audio_md5` `[SPEC-SC-080]`: improving a classifier
 re-runs stage two over the cache and never re-decodes the library.
 
@@ -223,11 +223,11 @@ def main() -> int:
                 el = time.time() - t0
                 con.commit()
                 print(f"  {i}/{len(todo)}  ok={ok} fail={fail}  "
-                      f"{el/i:.1f}s/track  eta {(len(todo)-i)*el/i/60:.0f} min", flush=True)
+                      f"{el/i:.1f}s/passage  eta {(len(todo)-i)*el/i/60:.0f} min", flush=True)
     con.commit()
     el = time.time() - t0
     print(f"\n{ok} extracted, {fail} failed in {el/60:.1f} min "
-          f"({el/max(ok,1):.1f}s/track wall, {jobs} jobs)")
+          f"({el/max(ok,1):.1f}s/passage wall, {jobs} jobs)")
     print(f"full library estimate: {len(rows)*el/max(ok,1)/3600:.1f} h at this rate")
     return 0
 

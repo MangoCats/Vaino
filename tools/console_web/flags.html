@@ -25,8 +25,8 @@
   <h2>Sync with a remote</h2>
   <p class="empty" style="font-size:.85rem;padding:.2rem 0">
     Pull brings vainopi's own flags here, resolved by audio content rather than
-    a local number — a flag on a track this library doesn't have yet is
-    counted and reported, not silently dropped. It reads only the flags
+    a local number — a flag on a recording or passage this library doesn't have
+    yet is counted and reported, not silently dropped. It reads only the flags
     themselves over ssh, never a copy of the whole library, so it's quick
     even over vainopi's own slow WiFi. Push lands whatever
     identification/boundary/artist edits have accumulated here since the last
@@ -56,7 +56,7 @@ async function load() {
   } catch (e) { return S.fail('#list', e); }
 
   document.getElementById('count').textContent =
-    `${rows.length} flagged track${rows.length === 1 ? '' : 's'}`;
+    `${rows.length} flag${rows.length === 1 ? '' : 's'}`;
   const box = document.getElementById('list');
   if (!rows.length) {
     box.replaceChildren(S.el('p', { class: 'empty', text: 'Nothing flagged yet.' }));
