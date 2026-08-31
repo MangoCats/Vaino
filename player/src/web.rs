@@ -564,7 +564,7 @@ async fn queue_passage(
     State(ui): State<Ui>,
     axum::extract::Path((passages, action)): axum::extract::Path<(String, String)>,
 ) -> StatusCode {
-    // A comma-separated list, so one selected track and thirty travel the same
+    // A comma-separated list, so one selected passage and thirty travel the same
     // path `[REQ-VIS-195]`. They must arrive together: three passages sent as
     // three requests and inserted one at a time at the same place come out
     // backwards, which looks like a UI fault and is not.
@@ -612,7 +612,7 @@ async fn queue_passage(
         let lib = crate::db::Library::open(&db).ok()?;
         // Order is the caller's, and it is the order they were looking at.
         // A passage that cannot be read is dropped rather than failing the
-        // batch: nineteen tracks queued beats none.
+        // batch: nineteen passages queued beats none.
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Ok(mut e) = lib.passage(id) {

@@ -59,7 +59,7 @@ pub trait FadeOut {
 ///
 /// Separate from [`Playback`] for the reason `FadeOut` is: publishing is
 /// something a *guest* wants, because its clients have no other way to learn
-/// why a track was chosen. Vaino's own UI reads the decision store directly and
+/// why a passage was chosen. Vaino's own UI reads the decision store directly and
 /// needs none of it, so putting this on the playback trait would have made every
 /// backend answer a question only one of them is asked.
 pub trait Publish {

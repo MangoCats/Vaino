@@ -217,7 +217,7 @@ impl Playback for crate::engine::Engine {
 /// Vaino's own UI reads the decision store and the explanation log directly
 /// `[REQ-VIS-100]`, so a sticker would be a second copy of something it already
 /// has, kept somewhere it never looks. Publishing exists for *guests*, whose
-/// clients have no other way to learn why a track was chosen `[SPEC-MPD-050]`.
+/// clients have no other way to learn why a passage was chosen `[SPEC-MPD-050]`.
 /// The engine is the clock, so there is nothing to refresh.
 impl crate::switch::Progress for Engine {
     fn head_position(&self) -> Option<(i64, u64)> {

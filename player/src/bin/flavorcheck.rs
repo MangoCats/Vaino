@@ -152,7 +152,7 @@ fn main() {
 ///
 /// MuLibPlay's eight programmes each carry hand-picked seeds: direct human
 /// judgments that these songs belong together. A sound metric should place
-/// same-programme seeds closer than cross-programme ones. Fifty tracks is a
+/// same-programme seeds closer than cross-programme ones. Fifty recordings is a
 /// small sample, but it is genuine perceptual signal from the actual listener,
 /// and it is the only such signal available.
 fn seed_separation(conn: &rusqlite::Connection, idx: &FlavorIndex) {

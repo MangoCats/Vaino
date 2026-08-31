@@ -1504,8 +1504,8 @@ impl PlayerStore {
     /// passage id is the convenience, the MBID is the durable key.
     /// Record a play, keyed by recording MBID `[REQ-PD-112]`.
     ///
-    /// Rotation is meaningless without it: an unrecorded play leaves a track as
-    /// eligible as it was before it was heard.
+    /// Rotation is meaningless without it: an unrecorded play leaves a recording
+    /// as eligible as it was before it was heard.
     ///
     /// `heard_ms` is the threshold just crossed, not the final figure -- the
     /// caller corrects it with [`finish_play`](Self::finish_play) once the
