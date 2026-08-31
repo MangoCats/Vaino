@@ -27,6 +27,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import audio_duration  # noqa: E402
+
 AUDIO = (".mp3", ".flac", ".ogg", ".m4a", ".wav", ".opus")
 
 # Self-published music has no MusicBrainz entry and inventing one would be a
@@ -58,10 +61,21 @@ def audio_md5(path: str) -> str | None:
 
 
 def probe(path: str) -> dict | None:
-    """Duration and tags in one call."""
+    """Duration and tags. Two different questions, asked two different ways.
+
+    Tags still come from one fast `ffprobe` call -- there is no cheaper way
+    to read them, and nothing about them is estimated. Duration does not:
+    `ffprobe format=duration` silently falls back to a bitrate ESTIMATE for
+    a VBR file with no valid Xing/Info header, wrong by however far the
+    file's real average bitrate differs from that guess -- measured on this
+    library at 29.7% of files, worst case 32.8 minutes off
+    `[REQ-LIB-145]`. `audio_duration.probe_duration_ms` actually decodes
+    the file instead, which is the only way to answer what `[SPEC-SC-030]`'s
+    schema comment requires: "decoded, not header-claimed".
+    """
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
-         "format=duration:format_tags=title,artist,album,track,disc",
+         "format_tags=title,artist,album,track,disc",
          "-show_entries", "stream=codec_type", "-of", "json", path],
         capture_output=True, text=True)
     if r.returncode != 0:
@@ -71,12 +85,13 @@ def probe(path: str) -> dict | None:
     except json.JSONDecodeError:
         return None
     fmt = d.get("format") or {}
-    if not fmt.get("duration"):
+    duration_ms = audio_duration.probe_duration_ms(path)
+    if not duration_ms:
         return None
     tags = {k.lower(): v for k, v in (fmt.get("tags") or {}).items()}
     has_art = any(s.get("codec_type") == "video" for s in d.get("streams") or [])
     return {
-        "duration_ms": int(float(fmt["duration"]) * 1000),
+        "duration_ms": int(round(duration_ms)),
         "title": tags.get("title"),
         "artist": tags.get("artist"),
         "album": tags.get("album"),

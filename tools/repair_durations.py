@@ -11,10 +11,21 @@ lead-out timing. So this repairs the passages too:
 
   * `files.duration_ms`  → the decoded value, where it disagrees
   * `passages.end_ms`    → clamped to the real end, where it overruns
+  * `lowlevel_cache`     → the orphaned row for the old span deleted, not
+                            left pointing at audio nothing plays anymore
   * phantom passages     → reported; deleted only on explicit request
 
 Repair only where it disagrees. Rewriting a correct value is churn, and the
 `updated` counts below are the evidence of what was actually wrong.
+
+**Second pass, 2026-08-30 — the first version of this tool could not see any
+of this.** It probed with `ffprobe -show_entries format=duration`, the exact
+metadata-estimate method that produces a wrong answer for a VBR file with no
+valid Xing/Info header in the first place. Checked directly against the real
+library: of 1,695 files wrong against an actual decode, ffprobe's own
+re-check agreed with the (wrong) stored value in all 1,695 -- a tool that
+compares a number against the method that generated it can never disagree
+with it. Now uses `audio_duration.probe_duration_ms`, which actually decodes.
 
 Usage:
   python tools/repair_durations.py <vaino.db> [--write] [--delete-phantoms]
@@ -23,14 +34,12 @@ Usage:
 from __future__ import annotations
 
 import concurrent.futures as futures
-import json
-import shutil
 import sqlite3
-import subprocess
 import sys
 from pathlib import Path
 
-FFPROBE = shutil.which("ffprobe")
+sys.path.insert(0, str(Path(__file__).parent))
+import audio_duration  # noqa: E402
 
 # Below this, a difference is rounding rather than error. MP3 frame duration is
 # ~26 ms, so a second of slack is comfortably clear of encoder granularity.
@@ -39,23 +48,13 @@ TOLERANCE_MS = 1000
 
 def probe(row: tuple) -> tuple[int, str, int, float | None]:
     fid, path, dur = row
-    try:
-        r = subprocess.run(
-            [FFPROBE, "-v", "error", "-show_entries", "format=duration",
-             "-of", "json", path],
-            capture_output=True, timeout=120,
-        )
-        if r.returncode == 0:
-            return fid, path, dur, float(json.loads(r.stdout)["format"]["duration"]) * 1000
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError, OSError):
-        pass
-    return fid, path, dur, None
+    return fid, path, dur, audio_duration.probe_duration_ms(path)
 
 
 def main() -> int:
     args = sys.argv[1:]
-    if not args or not FFPROBE:
-        print(__doc__ if args else "ffprobe not found")
+    if not args or not audio_duration.FFMPEG:
+        print(__doc__ if args else "ffmpeg not found")
         return 2
     db = Path(args[0])
     write = "--write" in args
@@ -63,7 +62,7 @@ def main() -> int:
 
     con = sqlite3.connect(db)
     files = con.execute("SELECT file_id, path, duration_ms FROM files").fetchall()
-    print(f"probing {len(files)} files...", flush=True)
+    print(f"probing {len(files)} files (real decode, not a header estimate)...", flush=True)
 
     real: dict[int, float] = {}
     unreadable = 0
@@ -87,9 +86,14 @@ def main() -> int:
         print(f"    error seconds: median {diffs[len(diffs)//2]:.1f}  p95 "
               f"{diffs[int(len(diffs)*0.95)]:.1f}  max {diffs[-1]:.1f}")
 
-    # Passages measured against a wrong duration.
+    # Passages measured against a wrong duration. `audio_md5` travels with
+    # each row too -- needed to find the `lowlevel_cache` entry an end_ms
+    # clamp is about to orphan, keyed `(audio_md5, start_ms, end_ms)`
+    # `[SPEC-SC-080]`, exactly as SPEC021 §5 already names for a boundary
+    # edit and this tool never closed for its own.
     rows = con.execute(
-        "SELECT passage_id, file_id, start_ms, end_ms, kind FROM passages"
+        "SELECT p.passage_id, p.file_id, p.start_ms, p.end_ms, p.kind, f.audio_md5 "
+        "FROM passages p JOIN files f USING (file_id)"
     ).fetchall()
     phantom = [r for r in rows if r[1] in real and r[2] >= real[r[1]] - TOLERANCE_MS]
     overrun = [r for r in rows if r[1] in real and r[2] < real[r[1]] - TOLERANCE_MS
@@ -97,7 +101,7 @@ def main() -> int:
     print(f"\npassages {len(rows)}")
     print(f"  PHANTOM  (start at/past the real end, unplayable): {len(phantom)}")
     print(f"  overrun  (end past the real end, clamp to it):     {len(overrun)}")
-    for pid, fid, s, e, kind in phantom[:6]:
+    for pid, fid, s, e, kind, _md5 in phantom[:6]:
         print(f"     phantom {pid} [{kind}] {s/60000:.1f}-{e/60000:.1f} min, "
               f"real end {real[fid]/60000:.1f}")
 
@@ -108,10 +112,19 @@ def main() -> int:
     for fid, _p, _d in wrong:
         con.execute("UPDATE files SET duration_ms = ? WHERE file_id = ?",
                     (int(round(real[fid])), fid))
-    for pid, fid, _s, _e, _k in overrun:
-        con.execute("UPDATE passages SET end_ms = ? WHERE passage_id = ?",
-                    (int(round(real[fid])), pid))
-    print(f"\nupdated {len(wrong)} durations, clamped {len(overrun)} passage ends")
+    has_cache = con.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lowlevel_cache'"
+    ).fetchone()[0] > 0
+    orphaned_cache = 0
+    for pid, fid, _s, e, _k, md5 in overrun:
+        new_end = int(round(real[fid]))
+        con.execute("UPDATE passages SET end_ms = ? WHERE passage_id = ?", (new_end, pid))
+        if has_cache:
+            cur = con.execute(
+                "DELETE FROM lowlevel_cache WHERE audio_md5 = ? AND end_ms = ?", (md5, e))
+            orphaned_cache += cur.rowcount
+    print(f"\nupdated {len(wrong)} durations, clamped {len(overrun)} passage ends, "
+          f"deleted {orphaned_cache} orphaned lowlevel_cache row(s)")
 
     if delete_phantoms and phantom:
         ids = [p[0] for p in phantom]

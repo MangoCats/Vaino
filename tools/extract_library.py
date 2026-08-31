@@ -35,10 +35,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import gaia_classify as gc  # noqa: E402
+import audio_duration  # noqa: E402
 
 EXTRACTOR = Path("data/essentia/streaming_extractor_music.exe").resolve()
 FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
 SOURCE = "local:essentia-2.1-beta2+gaia-beta1"
 
 # A passage covering all but this much of its file is treated as the whole file,
@@ -58,24 +58,20 @@ _DURATION_CACHE: dict[str, float | None] = {}
 
 
 def probe_duration_ms(path: str) -> float | None:
-    """Decoded duration in ms, from ffprobe. Cached; `None` if unavailable.
+    """Real decoded duration in ms, from `audio_duration`. Cached; `None`
+    if unavailable.
 
-    Costs ~50 ms and is read once per file, against ~27 s of extraction.
+    Was `ffprobe -show_entries format=duration` (~50 ms) until that was
+    found to silently return a bitrate ESTIMATE for a VBR file with no
+    valid Xing/Info header -- 29.7% of this library, worst case 32.8
+    minutes wrong -- with no error, nothing to distinguish it from a real
+    answer `[REQ-LIB-145]`. A real decode costs low seconds rather than
+    milliseconds, still small against ~27 s of extraction per file, and is
+    the only way to actually answer the question this function is named for.
     """
     if path in _DURATION_CACHE:
         return _DURATION_CACHE[path]
-    out = None
-    if FFPROBE:
-        try:
-            r = subprocess.run(
-                [FFPROBE, "-v", "error", "-show_entries", "format=duration",
-                 "-of", "json", path],
-                capture_output=True, timeout=60,
-            )
-            if r.returncode == 0:
-                out = float(json.loads(r.stdout)["format"]["duration"]) * 1000
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError, OSError):
-            out = None
+    out = audio_duration.probe_duration_ms(path)
     _DURATION_CACHE[path] = out
     return out
 
