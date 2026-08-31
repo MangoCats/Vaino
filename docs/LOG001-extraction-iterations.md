@@ -4,6 +4,8 @@
 
 Running record of attempts to replace AcousticBrainz locally. Per `[GDE-FEX-100]`, **the iteration history is itself a deliverable**: it records what was tried, what the numbers were, and why each approach plateaued, so the next attempt starts from evidence rather than from scratch.
 
+> ⚠️ **Not what ships.** Everything below is **Route 3 — distillation**: small MLP/gradient-boosted models trained to predict AcousticBrainz's highlevel output from lowlevel features, reaching a median err/β of **0.182** by [Iteration 6](#iteration-6--library-native-constants). It was the working production plan while **Route 2 — reimplementing AcousticBrainz's own Gaia/SVM chain exactly** was still being reverse-engineered. Route 2 succeeded (`[GDE-FEX-099..108]`, max error **0.0072** across all 18 classifiers — over 25× tighter than distillation, and not an approximation at all) and is the **sole** method `tools/extract_library.py` runs; nothing on this page is loaded in production. Kept in full, per `[GDE-LES-030]`'s discipline of reporting every attempt honestly — see [SPEC007 §4](spec/SPEC007-sampo-architecture.md#4-classification-s5--settled) for the settled production account.
+
 Strategy in [GUIDE003](GUIDE003-feature-extraction-strategy.md). Metric definitions in [SPEC005](spec/SPEC005-flavor-distance.md).
 
 ---

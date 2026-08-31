@@ -36,6 +36,7 @@ The user has identified McRhythm's functional requirements as the most refined i
 | :--- | :--- |
 | `MCR-REQ001-requirements.md` | Primary functional reference. Covers ground Vaino's own REQ001 does not: queue-empty behaviour, play history, network status, user identity, offline operation, error handling, library edge cases. |
 | `MCR-REQ002-entity_definitions.md` | Passage / Song / Recording / Work model, reconciled into `[GDE-ARC-040]`. |
+| `MCR-SPEC002-crossfade.md` | **Normative, and live — the source of the `XFD-*` tags `player/src/fade.rs` and `REQ002` cite directly** (`[XFD-ORTH-020]`, `[XFD-CURV-*]`, `[XFD-EXP-*]`, `[XFD-LIN-010]`, `[XFD-COS-010]`, `[XFD-OV-010]`). Added to this register 2026-08-30 — it was omitted despite being the only inherited document current code cites by tag. The fade-in/fade-out *point* model (lead vs. fade orthogonality) is ported as designed; the curve *formulas* are not — Vaino's `Exponential` is linear-in-dB (`10^(-D(1-t)/20)`), not this document's `v(t) = t²` — the same "inherit the concept, re-derive the math" pattern as `[SPEC-DIR-117]`'s artist-ramp fix. |
 | `MCR-SPEC003-musical_flavor.md` | **Normative for [SPEC005](../spec/SPEC005-flavor-distance.md) and [GUIDE003](../GUIDE003-feature-extraction-strategy.md).** Defines the 18 classifiers / 71 dimensions, the binary-vs-complex distinction, user-defined characteristics, and the distance/taste asymmetry. |
 | `MCR-SPEC004-musical_taste.md` | Taste as union centroid. Feeds `[GDE-OPN-030]`, still open. |
 | `MCR-SPEC005-program_director.md` | Selection design. Note the **numbering collision**: this is *not* Vaino's SPEC005. |
@@ -83,8 +84,10 @@ The user has identified McRhythm's functional requirements as the most refined i
 
 Three prefixes are shared: `REQ`, `ENT`, `MFL`. (`MFL-DEF-040` appearing in both is *correct* — Vaino specs deliberately cite McRhythm's tag. Citation is not definition.)
 
-**Mitigations, in force:**
-1. `tools/check_docs.py` fails on any *new* collision. The seven existing ones sit in a `KNOWN_COLLISIONS` register with a stated retirement condition — Vaino's `REQ001` is a v1 artifact on the disposal path `[GDE-DIS-010]`, so the collisions retire with the document rather than being fixed by churn.
+**Retired 2026-08-30.** `REQ001` — the v1 artifact these seven collisions belonged to — was deleted per `[GDE-DIS-010]`, its own stated retirement condition. `tools/check_docs.py`'s `KNOWN_COLLISIONS` register is now empty; a `REQ-QUE-*`/`REQ-UI-01*` collision reappearing would be a genuine new error, not a known one.
+
+**Mitigations that remain in force:**
+1. `tools/check_docs.py` fails on any *new* collision.
 2. `RESERVED_PREFIXES` in the same tool blocks Vaino from *defining* tags under prefixes owned by inherited material (`DBD`, `MFL`, `MTA`, `LD`, `AM`, `AFS`, `XFD`, `SSP`, `PERF`, `ARCH`), while still permitting citation.
 3. **Scoped search is now required** for `REQ`/`ENT`: `grep -rn "REQ-AUD" docs/ --exclude-dir=inherited` for Vaino-only. GOV001's search examples are otherwise misleading.
 

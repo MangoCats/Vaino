@@ -38,7 +38,7 @@ Structure of **Sampo**, the library builder that turns raw audio into everything
     ├─► [S2] segment ....... passage boundaries          ── PROVISIONAL §6
     ├─► [S3] identify ...... fpcalc → AcoustID → MusicBrainz
     ├─► [S4] extract ....... Essentia → lowlevel JSON     ── CACHED FOREVER
-    ├─► [S5] classify ...... distilled models → 71-dim flavor
+    ├─► [S5] classify ...... reimplemented Gaia/SVM chain → 71-dim flavor
     ├─► [S6] amplitude ..... lead-in/lead-out, gain, segue points
     └─► [S7] publish ....... vaino.db + optional tags/sidecars
 ```
@@ -61,11 +61,13 @@ Subprocess invocation also keeps the AGPL boundary clean — aggregation rather 
 
 ## 4. Classification (S5) — Settled
 
-**`[SPEC-SA-040]`** Distilled models map 928 lowlevel features → 71 highlevel dimensions, reproducing AcousticBrainz's classifiers without Gaia, without a build, and without reverse-engineering a binary format `[GDE-FEX-065]`. Median err/β **0.182** against the library-native floor of **0.359** `[LOG-I6-020]` — 0.51× floor, with 16 of 18 characteristics at or below their own.
+*(Corrected 2026-08-30: this section previously described distilled MLP/gradient-boosted models as production classification. That was the working plan while Route 2 below was still being reverse-engineered; it is not what shipped. `tools/extract_library.py` imports `gaia_classify` only — no distilled model is loaded anywhere in the production path. See `[GDE-FEX-065..108]` for how this was established.)*
 
-**`[SPEC-SA-045]` Model artifacts are raw fp32 arrays, not pickles.** Inference is numpy-only: three matmuls and a ReLU, portable to any language `[LOG-NEXT-050]`. sklearn pickles break across versions and these ship to machines we do not control. Bundles are self-describing — feature ordering, class names, training config, measured accuracy — so a stored model can be audited without the code that made it `[GDE-CHT-030]`.
+**`[SPEC-SA-040]` Classification reproduces AcousticBrainz's own SVM chain, not an approximation of it.** `tools/gaia_classify.py`, built on `tools/gaia_history.py`'s parser for Gaia's serialized `.history` transform chains — the same 18 files AcousticBrainz published alongside its SVM models — runs each chain (`remove → fixlength → enumerate → normalize →` gaussianize, where the chain has one `→ select → cleaner → normalize → svmtrain → select`) against the library's own lowlevel extraction. Verified against AcousticBrainz's own published highlevel values: **maximum error 0.0072 across all 18 classifiers**, three reproducing exactly, the rest consistent with rounding in the published dump rather than any error in the chain `[GDE-FEX-102]`. This is the sole production path for all 71 dimensions — every characteristic is classified the same way, not eleven one way and six another.
 
-**`[SPEC-SA-048]`** Model family is per-characteristic and not fixed by this specification; the store abstracts it. Currently 16 dedicated MLPs and 2 gradient-boosted `[LOG-I5-030]`, and further research `[LOG-NEXT-010]` may change the split without affecting anything here.
+**`[SPEC-SA-045]` Two research routes were tried first and are not what ships.** Building Essentia's own Gaia/SVM toolchain (route 1) was rejected before it started — it buys nothing the reimplementation doesn't already have `[GDE-FEX-065]`. Distilling AcousticBrainz's classifiers into small MLP/gradient-boosted models trained on the harvested dumps (route 3, logged in full in [LOG001](../LOG001-extraction-iterations.md)) reached a respectable median err/β 0.182 against the library-native floor and was the reasonable production candidate *until* the Gaia chain reproduced all 18 classifiers to within measurement noise — at which point distillation stopped being a candidate for production: it approximates a function this project can now compute exactly, at comparable per-track cost. `tools/model_store.py` and the `stageb_iter*.py`/`train_*.py` scripts remain in the tree as the record of that research, per `[GDE-LES-030]`'s standing discipline of measuring and reporting every attempt tried — nothing in `extract_library.py` imports them.
+
+**`[SPEC-SA-048]` Model artifacts are AcousticBrainz's own published libsvm text and Gaia parameter tree, not a model trained by this project.** Each classifier's support vectors, coefficients and Platt-scaling parameters come directly from AcousticBrainz's `svm_models` release at the **beta1** vintage — the one matching this project's extractor and lowlevel features `[GDE-FEX-093]`. Inference is RBF/polynomial kernel evaluation plus Wu–Lin–Weng pairwise coupling for the six multi-class characteristics; nothing here is a numpy forward pass over a trained network. Loading all 18 chains costs ~5 s; classifying one track against all 18 costs **586 ms** `[GDE-FEX-103]`, negligible beside the ~27 s/track lowlevel extraction that precedes it.
 
 ---
 

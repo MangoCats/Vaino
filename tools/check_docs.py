@@ -60,21 +60,22 @@ DOC_LIMIT = 300
 # condition -- NOT a way to silence the check. A collision absent from this list
 # is an error. Adding an entry requires a reason and a condition for removal.
 #
-# These seven exist because Vaino's own REQ001 (a v1 artifact on the disposal
-# path, [GDE-DIS-010]) reuses tags McRhythm also uses. Renumbering a document
-# slated for retirement would be churn; the collision retires with the document.
-KNOWN_COLLISIONS = {
-    "REQ-QUE-010", "REQ-QUE-020", "REQ-QUE-030", "REQ-QUE-040",
-    "REQ-UI-010", "REQ-UI-020", "REQ-UI-030",
-}
-COLLISION_RETIRES_WHEN = "docs/spec/REQ001-system-requirements.md is replaced [GDE-DIS-010]"
+# Retired 2026-08-30: the seven REQ-QUE-*/REQ-UI-01* collisions existed because
+# Vaino's own REQ001 (a v1 artifact on the disposal path, [GDE-DIS-010]) reused
+# tags McRhythm also uses. REQ001 was deleted the same day, its own stated
+# retirement condition -- the register is empty until a genuinely new collision
+# is found.
+KNOWN_COLLISIONS = set()
 
-# Dangling tags inside Vaino v1 documents that are themselves on the disposal
-# path [GDE-DIS-010]. Recorded rather than fixed: editing a document slated for
-# replacement is churn. Retires with the document.
-PREEXISTING_V1_DANGLING = {"SPEC-AUD-050", "REQ-SYS-010", "REQ-SYS-020",
-                           "REQ-MB-020", "REQ-PD-080", "REQ-HW-010", "REQ-HW-020",
-                           "SPEC-AUD-010", "SPEC-DB-010", "SPEC-RUST-010"}
+# Dangling tags cited (in brackets) from documents that survive, but whose
+# *definition* lived in a v1 document deleted 2026-08-30 per [GDE-DIS-010]
+# (REQ001, SPEC001-004, and the seven pre-rearchitecture root docs). Recorded
+# rather than rewritten: these are struck-through "dead entry" rows in GOV001's
+# own master index and a superseded-citation note in VainoPi/PI001, kept as
+# history rather than silently deleted along with the document they describe.
+PREEXISTING_V1_DANGLING = {"REQ-AUD-020", "REQ-AUD-040", "REQ-MB-010",
+                           "REQ-PD-010", "REQ-HW-020", "SPEC-AUD-010",
+                           "SPEC-DB-010", "SPEC-RUST-010"}
 
 # Tags used illustratively in GOV001's taxonomy table -- examples of the FORM
 # of an identifier, not references to real ones.

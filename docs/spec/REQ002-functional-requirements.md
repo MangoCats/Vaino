@@ -2,7 +2,7 @@
 
 **Requirements Specification — Tier 1**
 
-What Vaino and Sampo must do. **Supersedes [REQ001](REQ001-system-requirements.md)**, a v1 artifact retained only until mined `[GDE-DIS-010]`.
+What Vaino and Sampo must do. **Supersedes REQ001**, a v1 artifact fully mined and deleted 2026-08-30 per `[GDE-DIS-010]` — its ideas either live here or are tracked as open questions in [GUIDE002 §6](../GUIDE002-rearchitecture-plan.md#6-open-questions).
 
 Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhythm's refined functional work `[GDE-MCR-050]`, inherited as [MCR-REQ001](../inherited/mcrhythm/MCR-REQ001-requirements.md). McRhythm's *requirements* are inherited; its *architecture* is rejected `[GDE-CHT-050]`.
 
@@ -189,7 +189,7 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 
 > ### Recorded 2026-08-14, from the "what next" review
 >
-**`[REQ-LIB-160]` The listening is backed up; the library is not.** The library file holds two kinds of thing with opposite recovery stories. The **library** — files, passages, recordings, flavor — is derived from the audio on disk, and Sampo can grind it out again from nothing but time. The **listening** — 37,206 plays, 3,261 preferences, the programmes and their seeds — comes from years of a person using the thing, and nothing can reproduce it. Lose it and the Program Director is a random shuffle with opinions it can no longer justify.
+**`[REQ-LIB-160]` The listening is backed up; the library is not.** The library file holds two kinds of thing with opposite recovery stories. The **library** — files, passages, recordings, flavor — is derived from the audio on disk, and Sampo can grind it out again from nothing but time. The **listening** — 37,206 plays, 3,261 preferences, the programmes and their seeds — comes from years of a person using the thing, and nothing can reproduce it. Lose it and the Program Director is a random shuffle with opinions it can no longer justify. Design decision and rationale in `[SPEC-DF-094]`; what follows is what was built to meet it, and how it was measured.
 
 Only the second is copied, and that choice is what makes the scheme work: **2.4 MB against a 553 MB library, 0.4%**. A backup small enough to take hourly is a backup that gets taken.
 
@@ -201,7 +201,7 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 >
 > **Grandfather-father-son retention**, because the value of an old snapshot is not that it is old but that it *predates whatever went wrong*. Damage noticed the same afternoon needs yesterday; damage noticed at Christmas needs March; a preference quietly corrupted two years ago needs a copy from before it. So: **one per day for seven days, one per month for twelve months, one per year indefinitely**, and always the newest whatever else happens. Within a period the latest is kept — it holds the most listening.
 >
-> Three years of six-hourly snapshots thin from 4,380 files to **20**: 10.5 GB to 48 MB. The yearly tier is unbounded on purpose; a decade of them is ten files.
+> Three years of *hourly* snapshots, unpruned, would be 26,280 files — thinned by the ladder to **20**: ≈63 GB to 48 MB. *(Corrected 2026-08-30: this previously read "six-hourly snapshots... 4,380 files... 10.5 GB" — a stale figure from an earlier draft of the cadence, left uncorrected when the shipped schedule tightened to hourly below. The retained count, 20, is unaffected: it is set by the calendar ladder — 7 daily + 12 monthly + 1/year — not by how often a raw snapshot is taken.)* The yearly tier is unbounded on purpose; a decade of them is ten files.
 >
 > The date arithmetic is written out rather than imported — Howard Hinnant's civil-from-days, exact for every date this will see. Approximating a year as 365.25 days drifts a day a century and would silently file a snapshot under the wrong year, which is how the only copy of a year goes missing.
 >
