@@ -56,7 +56,7 @@ They interoperate as a system but remain separate entities: separate processes, 
 
 **`[GDE-ARC-018]` Licence direction matters, so keep the shared code MIT.** The schema/DAO layer both binaries use stays MIT. MIT code may be incorporated into an AGPL work; the reverse is not true. `sampo` therefore takes on AGPL while `vaino` remains unaffected.
 
-Note this is deliberately conservative: `sampo` *invokes* the extractor as a subprocess rather than linking it, which is generally aggregation rather than derivation. Relicensing anyway removes the question instead of arguing it. The distilled classifiers are separable in any case — they are models trained on AcousticBrainz data, not Essentia code `[GDE-FEX-139]`.
+Note this is deliberately conservative: `sampo` *invokes* the extractor as a subprocess rather than linking it, which is generally aggregation rather than derivation. Relicensing anyway removes the question instead of arguing it. The classification step is separable in any case — it reimplements Gaia's published transform chain against AcousticBrainz's own published SVM parameters `[SPEC-SA-040]`, CC0 data `[GDE-CLD-025]`, not Essentia code `[GDE-FEX-139]`. *(Corrected 2026-08-30: this previously described the classifiers as "distilled... models trained on AcousticBrainz data" — the production path since `[GDE-FEX-102]` is an exact reimplementation of AcousticBrainz's own chain, not a distilled model at all; the separability argument is unaffected either way.)*
 
 Per `[GDE-LES-050]`, no further decomposition without a measured constraint demanding it.
 
