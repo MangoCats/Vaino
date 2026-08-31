@@ -47,6 +47,8 @@ Every track carries two `cuts` rows against the same file:
 
 The Program Director selects **only `Radio` cuts**. One recording, multiple presentations, one file. Vaino v1 discarded this; it must come back.
 
+*(Vaino's own realization is `passages.kind IN ('album','radio')` — same duality, current terms and semantics in [SPEC008 §3](spec/SPEC008-database-schema.md#3-passages--the-albumradio-duality) and [SPEC023](spec/SPEC023-domain-vocabulary.md).)*
+
 **`[GDE-BMK-040]` Dead schema — do not port.** The following `tracks` columns have been NULL for all 8,116 rows across six years: `tempo`, `intensity`, `keyMood`, `darkLight`, `genre`, `themes`. `quality`, `jts`, `popularity` have ≤10 rows. They were aspirational and never used. Six years of production is conclusive evidence.
 
 **`[GDE-BMK-050]` The confirmed weak spot — there is no ingest.** `MaintController::scanFile` (`maintController.cpp:380` (MuLibPlay source, not imported)) does exactly one thing: hash a file, `SELECT * FROM files WHERE sig = :hash`, and update `filePath` if it matches. It **relocates known files**. It cannot induct new music. MuLibPlay contains no MusicBrainz client, no fingerprinting, no segmentation. The entire new-music process is external manual labor — which is precisely why it is undocumented, unrepeatable, and easily forgotten.

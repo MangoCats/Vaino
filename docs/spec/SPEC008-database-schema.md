@@ -4,7 +4,7 @@
 
 The `vaino.db` relational model. Reconciles MuLibPlay's six-years-proven structure `[GDE-BMK-020]` with McRhythm's entity definitions `[GDE-MCR-050]` and the identity/portability rules of [SPEC006](SPEC006-data-flow-and-portability.md).
 
-> **Related:** [GUIDE002 §2.4](../GUIDE002-rearchitecture-plan.md#2-architectural-decisions) · [SPEC005 Flavor Distance](SPEC005-flavor-distance.md) · [SPEC007 Sampo](SPEC007-sampo-architecture.md) · inherited [MCR-REQ002 Entities](../inherited/mcrhythm/MCR-REQ002-entity_definitions.md)
+> **Related:** [SPEC023 Domain Vocabulary](SPEC023-domain-vocabulary.md) for what file/passage/recording/release/album/artist/track each mean and do not mean · [GUIDE002 §2.4](../GUIDE002-rearchitecture-plan.md#2-architectural-decisions) · [SPEC005 Flavor Distance](SPEC005-flavor-distance.md) · [SPEC007 Sampo](SPEC007-sampo-architecture.md) · inherited [MCR-REQ002 Entities](../inherited/mcrhythm/MCR-REQ002-entity_definitions.md)
 
 ---
 
@@ -55,7 +55,7 @@ CREATE TABLE recordings (
 
 ## 3. Passages — the Album/Radio Duality
 
-**`[SPEC-SC-040]`** A passage is a span of audio with playback metadata `[ENT-MP-030]`. MuLibPlay's best structural idea `[GDE-BMK-030]`: **each recording in each file yields two passages**, and the Program Director selects only `radio`.
+**`[SPEC-SC-040]`** A passage is a span of one file with its own playback metadata `[ENT-MP-030]`, `[SPEC023]`. MuLibPlay's best structural idea `[GDE-BMK-030]`: **each recording-in-file span yields two passages, one per `kind`**, and the Program Director selects only `radio`.
 
 ```sql
 CREATE TABLE passages (
@@ -86,6 +86,13 @@ Reviewable and overridable, both, through the waveform boundary editor `[SPEC021
 
 Not to be confused with `skip_fade_ms` `[REQ-AUD-162]` — a third, unrelated use of "fade": a live-adjustable Skip/Handoff parameter in `switch.rs`, never read from or written to `passages`, and never in effect during ordinary playback.
 
+**`[SPEC-SC-047]` What `radio` and `album` actually change.** Both are the *same* recording-in-file span, played back two different ways — see `[SPEC023]` for the term itself:
+
+- **`radio`**: trimmed toward minimal start/end silence, meant for freeform rotation play; `lead_in_ms`/`lead_out_ms` set the timing window in which this passage's tail may overlap the next one's head, and `fade_in_ms`/`fade_out_ms` are the audible ramp, per `[SPEC-SC-046]` above.
+- **`album`**: preserves whatever between-track silence the source actually has — commonly present, never guaranteed — the span a listener hears playing straight through. On a DAO capture specifically, consecutive `album`-kind passages **abut exactly**: one's `end_ms` is the next's `start_ms`, no gap and no overlap, so playing them in sequence reproduces an uninterrupted full-disc listen, shaped only by each passage's own (typically minimal) fade.
+
+Neither `kind` implies anything about whether the underlying recording or file belongs to a catalogued MusicBrainz release — see `[SPEC023]`'s "Album" entry for that distinct, informal sense of the word.
+
 **`[SPEC-SC-045]` `boundary_src` distinguishing `manual` is what makes override durable** `[SPEC-SA-080]`. Recomputation must never overwrite a `manual` row; conflict resolution ranks provenance before recency `[SPEC-DF-070]`.
 
 **`[SPEC-SC-050]` Passage → recording is many-to-many with weights**, because a passage may contain a medley and a recording may appear in many files. Unidentified passages simply have no rows here — legal, and playable `[ENT-MP-035]`.
@@ -100,7 +107,18 @@ CREATE TABLE passage_recordings (
 ) WITHOUT ROWID;
 ```
 
-Artists, releases and works follow the same shape — weighted junctions onto MusicBrainz-keyed entities — and are omitted here for length rather than being undecided.
+---
+
+## 3b. Artists, Releases and Credits
+
+**`[SPEC-SC-048]`** `artists` and `releases` are MusicBrainz-keyed entities shaped exactly like `recordings` above (`[SPEC-SC-030]`); `recording_artists` and `release_recordings` are the weighted junctions onto them, shaped like `passage_recordings`. Base DDL for all four lives in [`sql/schema.sql`](../../sql/schema.sql) — this section explains what they're for and how they relate, not a second hand-typed copy of the columns, which is exactly how this section went stale before: it previously said "follow the same shape... omitted for length," which stopped being true the moment `release_recordings` grew `position`/`chosen`/`disc`/`track_length_ms` of its own.
+
+**Migrations grow `releases` past its base shape.** `sql/schema.sql` bootstraps a fresh database; `tools/fetch_releases.py` idempotently `ALTER TABLE`s in `release_group`/`status`/`primary_type`/`secondary_types`/`country`/`track_count` the first time a library needs release identification (`[SPEC010 §3]`) — the same layering `tools/add_fade_columns.py` uses for `passages`' own fade columns (`[SPEC-SC-046]`).
+
+**What each junction is for**, in terms `[SPEC023]` (Domain Vocabulary) names precisely:
+
+- **`recording_artists`** — a recording's credit is a *weighted set*, never a single value (`[SPEC023]` Artist): a collaboration or featured credit is a genuine multi-row entry, and `apply_reviews.py --revert-artist` corrects one recording's whole credit set at a time (`[SPEC010 §3]`).
+- **`release_recordings`** — one row is Vaino's realization of Track (`[SPEC023]` Track, inherited `[ENT-MB-010]`): a recording's position (`position`/`disc`) on one specific release. `chosen` is the flag SPEC010's release disambiguation writes when a recording sits on more than one catalogued release, which per `[SPEC023]`'s Release entry is the ordinary case, not an anomaly to resolve away.
 
 ---
 

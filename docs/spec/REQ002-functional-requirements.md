@@ -8,6 +8,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 > **Domain acronyms** are chosen to avoid McRhythm's REQ namespace entirely (`PI, CF, NET, UI, VER, PB, OFF, NF, CTL, SEL, QUE, AUTH, TECH, IPD, FLV, ART, PERS, HIST, ERR, XFD, DEF, AF, UQ, OV`), so a `grep` for a Vaino requirement cannot match inherited material `[INH-HAZ-020]`.
 
+> **Related:** [SPEC023 Domain Vocabulary](SPEC023-domain-vocabulary.md) for what file/passage/recording/release/album/artist/track mean below — "recording" and "passage" are used precisely throughout; "track"/"song"/"album" appear only where they name a UI label or an informal sense, per SPEC023's own carve-out.
+
 ---
 
 ## 1. Audio Playback — `AUD`
@@ -250,19 +252,19 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 
 **`[REQ-PD-100]`** Select the next passage automatically, continuously, without user intervention. The queue never empties while eligible passages exist.
 
-**`[REQ-PD-110]`** Implement MuLibPlay's weighting **as designed** `[GDE-PD-010..030]`: log-scale rotation, multiplicative artist-then-track eligibility, hard rotation block, linear recovery ramp, seasonal occasion multipliers, length bonus, and a `minWeightLimit` floor.
+**`[REQ-PD-110]`** Implement MuLibPlay's weighting **as designed** `[GDE-PD-010..030]`: log-scale rotation, multiplicative artist-then-recording eligibility, hard rotation block, linear recovery ramp, seasonal occasion multipliers, length bonus, and a `minWeightLimit` floor.
 
-> **As designed, not as shipped.** This previously read "reproduce exactly". It changed when a variable shadowing was found in the shipped code: MuLibPlay's artist recovery ramp never reached the track weight, so a partially recovered artist has never damped its tracks `[SPEC-DIR-117]`. Vaino implements the ramp. MuLibPlay is a proven baseline, not a ceiling — six years of satisfactory listening is evidence the design is sound, not evidence that every behaviour of the binary is worth preserving.
+> **As designed, not as shipped.** This previously read "reproduce exactly". It changed when a variable shadowing was found in the shipped code: MuLibPlay's artist recovery ramp never reached the recording weight, so a partially recovered artist has never damped its recordings `[SPEC-DIR-117]`. Vaino implements the ramp. MuLibPlay is a proven baseline, not a ceiling — six years of satisfactory listening is evidence the design is sound, not evidence that every behaviour of the binary is worth preserving.
 >
 > **Bit-identical reproduction is therefore no longer the acceptance test**, and could not be: the two now deliberately differ. The `GateOnly` coupling is retained so the divergence can be *measured* rather than assumed, which is the more useful check — it says how much the corrected ramp actually changes selection. Consistent with `[GDE-QUA-*]`, that measurement is diagnostic, never a pass/fail gate.
 
 **`[REQ-PD-115]` Related recordings share a rotation.** Hearing a live take, a remaster or a compilation appearance suppresses the others `[SPEC-DIR-116]`. Every relation applies, each judged on its own play history, damped over a recovery window scaled by relation strength.
 
-**`[REQ-PD-118]` Two master time scales — one for artists, one for tracks** — multiply every block and ramp duration `[SPEC-DIR-118]`. Range 0.0001–100.0000 to four decimal places, default 1.0000, at which they are exactly inert. They scale durations only, never weights, so *when* a passage becomes eligible is adjustable without touching *how much* it is wanted.
+**`[REQ-PD-118]` Two master time scales — one for artists, one for recordings** — multiply every block and ramp duration `[SPEC-DIR-118]`. Range 0.0001–100.0000 to four decimal places, default 1.0000, at which they are exactly inert. They scale durations only, never weights, so *when* a passage becomes eligible is adjustable without touching *how much* it is wanted.
 
-**`[REQ-PD-112]` Record every play, keyed by recording MBID.** Rotation is meaningless without it: an unrecorded play leaves a track as eligible as it was before, so a long session repeats what the algorithm exists to space out.
+**`[REQ-PD-112]` Record every play, keyed by recording MBID.** Rotation is meaningless without it: an unrecorded play leaves a recording as eligible as it was before, so a long session repeats what the algorithm exists to space out.
 
-> Recorded at the **start** of playback, not on completion. Rotation spaces out what the listener has *encountered*, and a track skipped after ten seconds has been encountered — suppressing it for a while is the wanted behaviour. This also matches MuLibPlay, whose own note says the history structures update "as each new track finishes playing (or is put in the play queue)".
+> Recorded at the **start** of playback, not on completion. Rotation spaces out what the listener has *encountered*, and a passage skipped after ten seconds has been encountered — suppressing it for a while is the wanted behaviour. This also matches MuLibPlay, whose own note says the history structures update "as each new track finishes playing (or is put in the play queue)".
 >
 > Stored with `passage_id` **and** `mbid` `[SPEC-SC-095]`: the passage id is the convenience, the MBID is what survives a rescan that renumbers passages. An unidentified passage still records a play with a null MBID — it simply cannot contribute to rotation.
 >
@@ -388,7 +390,9 @@ asset. It also sits *under* both layers permanently, which is what satisfies
 | artist | **Artist** name, by credit | file tag | — absent |
 | album | **Release** title | file tag | — absent |
 
-**Recording and Release are different levels of the MusicBrainz model, and the distinction is the reason album is the hard one.** A Recording is a particular piece of recorded audio; its title names that performance. A Release is a published product — this pressing, this edition, this cover — and *its* title is what an album name is. One recording appears on many releases and one release holds many recordings, so the link is a join table rather than a column, and naming an album means choosing *which* release to name. That choice is ingest work, not playback work.
+**Recording and Release are different levels of the MusicBrainz model, and the distinction is the reason album is the hard one.** A Recording is a particular piece of recorded audio; its title names that performance. A Release is a published product — this pressing, this edition, this cover — and *its* title is what an album name is. One recording appears on many releases and one release holds many recordings, so the link is a join table rather than a column, and naming an album means choosing *which* release to name. That choice is ingest work, not playback work — and it is frequently a choice with no wrong answer, since several release MBIDs often name the functionally same album; see [SPEC023](SPEC023-domain-vocabulary.md) and [SPEC010 §3](SPEC010-identification-review.md#3-searching-musicbrainz-directly).
+
+**"Album" is not the passage `kind='album'` value `[SPEC-SC-040]`.** Same word, unrelated concept — a passage's `kind` is a playback-style choice (trimmed for rotation vs. full boundaries), never a claim about release identity. `[SPEC023]`'s "Album" entry is precise about the difference.
 
 Artist and album have **no filename fallback**. Guessing a performer out of a path is how a library comes to believe in a band called "02"; absent is the honest answer.
 

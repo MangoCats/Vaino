@@ -74,16 +74,16 @@ Adopt McRhythm's Musical Flavor model `[GDE-MCR-060]` rather than MuLibPlay's 11
 
 Preserve both documented asymmetries: **distance over intersecting characteristics**, **taste over the union centroid**.
 
-Storage must accommodate partial vectors — many recordings will have 11 known dimensions (from `mulib.db`), some 71 (from the dumps), some locally computed. Per-characteristic provenance, not per-track.
+Storage must accommodate partial vectors — many recordings will have 11 known dimensions (from `mulib.db`), some 71 (from the dumps), some locally computed. Per-characteristic provenance, not per-recording.
 
 ### `[GDE-ARC-040]` Restore the relational entity model
 
-Return to what MuLibPlay proved over six years, reconciled with McRhythm's entity definitions `[GDE-MCR-050]`:
+Return to what MuLibPlay proved over six years, reconciled with McRhythm's entity definitions `[GDE-MCR-050]`. Term-for-term precision — what "release" vs. "album" vs. "track" mean here — is [SPEC023](spec/SPEC023-domain-vocabulary.md); this diagram names tables, not the vocabulary built on them:
 
 ```
 files ──< passages >── recordings ──< artists
   │      (Album / Radio)      │
-  │                        albums
+  │                        releases
   └── content signature (relocatable)
 
 play_history · programs · flavor(+provenance) · taste · ingest_decisions

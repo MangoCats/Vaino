@@ -4,7 +4,7 @@
 
 How Vaino chooses the next passage. Reproduces MuLibPlay's six-years-proven selection algorithm `[GDE-PD-010..050]`, extended with Like/Dislike Taste and the full 71-dimension flavor vector.
 
-> **Related:** [REQ002 §2](REQ002-functional-requirements.md#2-program-director--pd) · [SPEC005 Flavor Distance](SPEC005-flavor-distance.md) · [SPEC008 Schema](SPEC008-database-schema.md) · inherited [MCR-SPEC005](../inherited/mcrhythm/MCR-SPEC005-program_director.md), [MCR-SPEC006 Like/Dislike](../inherited/mcrhythm/MCR-SPEC006-like_dislike.md)
+> **Related:** [REQ002 §2](REQ002-functional-requirements.md#2-program-director--pd) · [SPEC005 Flavor Distance](SPEC005-flavor-distance.md) · [SPEC008 Schema](SPEC008-database-schema.md) · [SPEC023 Domain Vocabulary](SPEC023-domain-vocabulary.md) — rotation, weighting and flavor below score **recordings** (occasionally passages, where noted); "track" names only the "Why this track?" panel, an established UI label, never the scored entity · inherited [MCR-SPEC005](../inherited/mcrhythm/MCR-SPEC005-program_director.md), [MCR-SPEC006 Like/Dislike](../inherited/mcrhythm/MCR-SPEC006-like_dislike.md)
 
 ---
 
@@ -40,12 +40,12 @@ They never mix. Frequency produces a weight; character shapes and orders a pool.
 
 **`[SPEC-DIR-110]` Log-scale time encoding.** `seconds(v) = 10^v × 3600`. One float spans four orders of magnitude: `-1.0` → 6 min, `0.0` → 1 h, `2.0` → 4.2 days, `3.0` → 41 days.
 
-**`[SPEC-DIR-115]` Artist pass, then track pass**, multiplicatively. For each:
+**`[SPEC-DIR-115]` Artist pass, then recording pass**, multiplicatively. For each:
 
 1. `w = 10^(-restraint)`
 2. **Hard block** if `now - last_played < seconds(rotation)` → excluded entirely.
 3. Otherwise **linear recovery ramp**: `w *= clamp((age - rot) / rec, 0, 1)`.
-4. Track weight multiplies its artist's weight. Related recordings block and damp too, scaled by relation strength.
+4. Recording weight multiplies its artist's weight. Related recordings block and damp too, scaled by relation strength.
 5. Drop below `min_weight` → excluded.
 
 **`[SPEC-DIR-116]` Related recordings share a rotation, and each is judged on its own age.** A live take, a remaster and the compilation appearance are the same song to a listener; hearing one should suppress the others. MuLibPlay intended this and never achieved it, in two independent ways:
@@ -64,13 +64,13 @@ Vaino's rules:
 2. **Damp** by each related recording's own ramp, using **its own age**, over a recovery window scaled by relation strength. A weak relation therefore recovers sooner.
 3. **Every** relation applies, multiplicatively. Three half-recovered relations yield 0.125, not 0.5.
 
-**`[SPEC-DIR-118]` Master time scales.** One multiplier for artists and one for tracks, over every block and ramp *duration*. Floating point, four decimal places, range 0.0001–100.0000, default 1.0000 — at which they are exactly inert.
+**`[SPEC-DIR-118]` Master time scales.** One multiplier for artists and one for recordings, over every block and ramp *duration*. Floating point, four decimal places, range 0.0001–100.0000, default 1.0000 — at which they are exactly inert.
 
 They exist because per-subject tuning is log-scale `[SPEC-DIR-110]`. "Everything a bit sooner" is a reasonable thing to want and is otherwise inexpressible without editing thousands of rows. At 0.5 every block and ramp is half as long; at 2.0, twice.
 
-They scale **durations, never weights**. That is what keeps frequency and character orthogonal `[SPEC-DIR-100]`: a scale changes *when* a passage becomes eligible, never *how much* it is wanted, and it remains a single legible term in the panel. The two are independent — a track scale must not move an artist block — and the track scale reaches related recordings, which share the track's windows. Stored in `listener_settings` with the range enforced in the schema as well as in code, since an out-of-range stored value would quietly change selection everywhere.
+They scale **durations, never weights**. That is what keeps frequency and character orthogonal `[SPEC-DIR-100]`: a scale changes *when* a passage becomes eligible, never *how much* it is wanted, and it remains a single legible term in the panel. The two are independent — a recording scale must not move an artist block — and the recording scale reaches related recordings, which share the recording's windows. Stored in `listener_settings` with the range enforced in the schema as well as in code, since an out-of-range stored value would quietly change selection everywhere.
 
-**`[SPEC-DIR-117]` The artist weight never reaches the track weight in MuLibPlay as shipped.** Step 4 above describes the intent. The code does something else, and the difference was found only by transcribing it:
+**`[SPEC-DIR-117]` The artist weight never reaches the recording weight in MuLibPlay as shipped.** Step 4 above describes the intent. The code does something else, and the difference was found only by transcribing it:
 
 ```cpp
 qreal weight = pow(10.0,-restraint);          // outer
@@ -80,15 +80,15 @@ if ( eligibleArtists.contains( artistId ) )
     qreal weight = pow(10.0,-restraint);           // SHADOWS it; outer never read again
 ```
 
-The inner declaration shadows the outer, so the multiplication by the artist weight is dead. `eligibleTracks.insert(trackId, weight)` sits inside that inner block. **An artist rotation block still excludes the track — that gate is a map lookup, unaffected — but a partially recovered artist does not damp its tracks at all.** The artist recovery ramp has, in six years of production, done nothing.
+The inner declaration shadows the outer, so the multiplication by the artist weight is dead. `eligibleTracks.insert(trackId, weight)` sits inside that inner block — MuLibPlay's own variable names, quoted rather than translated. **An artist rotation block still excludes the recording — that gate is a map lookup, unaffected — but a partially recovered artist does not damp its recordings at all.** The artist recovery ramp has, in six years of production, done nothing.
 
-**Resolved: Vaino implements the ramp.** MuLibPlay is a proven baseline, not a ceiling — six years of satisfactory listening shows the *design* is sound, which is not the same as showing every behaviour of the binary is worth keeping. Artist recovery exists so that hearing one track by an artist gently damps the rest until it recovers; that is the intent, and it is better than what ran.
+**Resolved: Vaino implements the ramp.** MuLibPlay is a proven baseline, not a ceiling — six years of satisfactory listening shows the *design* is sound, which is not the same as showing every behaviour of the binary is worth keeping. Artist recovery exists so that hearing one recording by an artist gently damps the rest until it recovers; that is the intent, and it is better than what ran.
 
 The `ArtistCoupling` enum is named for behaviour rather than provenance, because the choice is now Vaino's:
 
 | | Effect | Purpose |
 | :--- | :--- | :--- |
-| **`Damped`** (default) | artist ramp multiplies into the track weight | Vaino's behaviour |
+| **`Damped`** (default) | artist ramp multiplies into the recording weight | Vaino's behaviour |
 | `GateOnly` | artist can block, never damps | measuring divergence only `[REQ-PD-110]` |
 
 Both are pinned by test so neither can drift into the other. `GateOnly` is retained to *measure* how far Vaino departs from six years of observed behaviour — diagnostic, never a listening mode and never a gate.
@@ -112,14 +112,14 @@ Two consequences to watch:
 1. **The artist ramp is now load-bearing, so its defaults are too.** Artist rotation 1.0 and recovery 1.0 `[SPEC-DIR-120]` mean an artist blocks for 10 hours and then damps across the following 10. That second window has never had any effect and has therefore never been tuned by anyone. Treat the artist defaults as unvalidated until observed.
 2. **Damping can now push a weight under `min_weight`**, excluding a passage early in the artist's recovery where it would previously have been eligible at full weight. This slightly extends the effective block. It is a consequence of the fix, not a separate decision.
 
-**Still open:** the same block contains a second instance of the pattern — related-track recovery damping passes the *primary* track's age rather than the related track's, so it too is largely inert. Related recordings are not yet modelled in Stage A; fix it when they are, rather than porting the defect forward.
+**Still open:** the same block contains a second instance of the pattern — related-recording recovery damping passes the *primary* recording's age rather than the related recording's, so it too is largely inert. Related recordings are not yet modelled in Stage A; fix it when they are, rather than porting the defect forward.
 
 **`[SPEC-DIR-120]` Defaults matter more than they look.** Only 2,918 of 8,116 MuLibPlay tracks (36%) ever received tuned values `[GDE-BMK-020]`, so most selection runs on defaults:
 
 | | default | = | observed tuned median |
 | :--- | ---: | ---: | ---: |
-| track rotation | 2.0 | 4.2 days | 2.196 (6.5 days) |
-| track recovery | 2.6 | 16.6 days | 2.722 (22 days) |
+| recording rotation | 2.0 | 4.2 days | 2.196 (6.5 days) |
+| recording recovery | 2.6 | 16.6 days | 2.722 (22 days) |
 | artist rotation | 1.0 | 10 hours | 1.231 (17 hours) |
 | artist recovery | 1.0 | 10 hours | 1.595 (39 hours) |
 | restraint | 0.0 | ×1.0 | 0.000 |
@@ -166,11 +166,11 @@ Note that `[K]` was never seasonal at all — a flat ×0.000001 on 140 children'
 | `user.summer` | `summery` | step | 6 | ×2 in June | 1 |
 | `user.childrens` | `for_children` | step | 1 | ×0.000001 all year | **149** |
 
-Measured effect in August: eligible passages fall **8,038 → 7,851**, with 187 more dropping under `min_weight` — the christmas and children's tracks, suppressed out of season. The mechanism had been complete and inert since it was written; the library already carried the characteristic values from six years of MuLibPlay tagging, so loading the curves is what made that tagging act again.
+Measured effect in August: eligible passages fall **8,038 → 7,851**, with 187 more dropping under `min_weight` — the christmas and children's passages, suppressed out of season. The mechanism had been complete and inert since it was written; the library already carried the characteristic values from six years of MuLibPlay tagging, so loading the curves is what made that tagging act again.
 
 > **`[SPEC-DIR-137]` The children's weight interacts with `min_weight`, and 0.000001 means *never*, not *rarely*.** A children's passage weighs `average × multiplier`; at the library's average of 1.214 that is 0.0000012, which falls **below `min_weight` (0.001)** and is therefore *excluded entirely* rather than made unlikely. There is a cliff at multiplier ≈ 0.00083.
 >
-> | kids multiplier | track weight | eligible? | plays/year @ 60 tracks/day |
+> | kids multiplier | passage weight | eligible? | plays/year @ 60 passages/day |
 > | ---: | ---: | :--- | ---: |
 > | 0.000001 *(MuLibPlay's)* | 0.0000012 | **no** | **never** |
 > | 0.001 | 0.0012 | yes | 0.42 |
@@ -229,7 +229,7 @@ Three implementation decisions worth keeping:
 
 **`[SPEC-DIR-160]` Flow.** Re-sort the pool by flavor distance to the **last passage already queued**, so consecutive passages blend `[GDE-PD-050]`. This is also what makes a hard programme switch acceptable `[SPEC-DIR-180]`: continuity is supplied here, not by blending programmes.
 
-> **Future direction `[SPEC-FD-170]`:** flow currently matches whole-track flavor to whole-track flavor, but a handover is heard as the *end* of one passage against the *start* of the next. Characterising the first and last three minutes separately, and matching `exit → entry`, models the transition rather than the pairing. Not the current target — it roughly triples extraction cost and needs a segment discriminator in `flavor`.
+> **Future direction `[SPEC-FD-170]`:** flow currently matches whole-passage flavor to whole-passage flavor, but a handover is heard as the *end* of one passage against the *start* of the next. Characterising the first and last three minutes separately, and matching `exit → entry`, models the transition rather than the pairing. Not the current target — it roughly triples extraction cost and needs a segment discriminator in `flavor`.
 
 **`[SPEC-DIR-165]` Roulette.** Take the top `rand_pool`, apply rank decay `w *= decay^rank`, then pick weighted-random. Selection is by weight, not by rank — a lower-ranked passage can win, which is where the surprise lives.
 
@@ -256,7 +256,7 @@ Two decisions:
 
 ## 7. Visibility Contract
 
-**`[SPEC-DIR-190]`** Every automatic selection writes a `selection_decisions` record `[SPEC-SC-100]` sufficient to reconstruct the choice `[REQ-VIS-100]`: artist weight and block state, track weight and ramp position, occasion multiplier with the characteristic and curve value that produced it, length bonus, final Stage-A weight, distance to each seed, Taste effect, flow distance, rank, roulette position and target — **and the runners-up that lost, with their weights**.
+**`[SPEC-DIR-190]`** Every automatic selection writes a `selection_decisions` record `[SPEC-SC-100]` sufficient to reconstruct the choice `[REQ-VIS-100]`: artist weight and block state, recording weight and ramp position, occasion multiplier with the characteristic and curve value that produced it, length bonus, final Stage-A weight, distance to each seed, Taste effect, flow distance, rank, roulette position and target — **and the runners-up that lost, with their weights**.
 
 The orthogonality of `[SPEC-DIR-100]` is what makes this legible: the panel shows *how often* and *does it fit* as two separate stories rather than one opaque product.
 
@@ -288,7 +288,7 @@ The orthogonality of `[SPEC-DIR-100]` is what makes this legible: the panel show
 
 **The boundaries land in the same place.** `excl_pool = 1000` cuts at a normalised distance of ~0.50–0.55 under both metrics, and the median nearest-seed distance is within a few percent. The concern in `[SPEC-DIR-200]` was that 71 weighted dimensions would shift the distance distribution enough to invalidate values tuned on 11 unweighted ones. Measured, it does not: the *shape* of the neighbourhood these parameters select is preserved.
 
-**The one real difference is at the head, and it favours the new metric.** Passages within half the `excl_pool` boundary distance — the near-duplicate zone — drop from 16–59 under the inherited metric to **4** under the local one. With 18 characteristics it is harder for two recordings to be close on all of them, so extreme similarity is rarer and the gathered pool is less dominated by near-identical tracks. That is an improvement in pool quality that needs no parameter change to collect.
+**The one real difference is at the head, and it favours the new metric.** Passages within half the `excl_pool` boundary distance — the near-duplicate zone — drop from 16–59 under the inherited metric to **4** under the local one. With 18 characteristics it is harder for two recordings to be close on all of them, so extreme similarity is rarer and the gathered pool is less dominated by near-identical recordings. That is an improvement in pool quality that needs no parameter change to collect.
 
 **`decay = 0.96` also stands.** Over `rand_pool = 100` it runs ×1.000 at rank 0, ×0.130 at rank 50, ×0.018 at rank 99 — a strong preference for the head without foreclosing the tail, which is what the observed winning ranks of 5, 10, 17, 24, 31, 50, 61, 99 show in practice `[SPEC-DIR-167]`.
 

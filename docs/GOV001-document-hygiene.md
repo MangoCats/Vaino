@@ -75,6 +75,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `PLAY` — What counts as a play, for every path that writes `listener_play_history`
 - `LYR` — Lyrics: where they live, and how far they travel
 - `BK` — Switching playback backends without stopping, see [SPEC018](spec/SPEC018-switching-backends.md) for the seam and [SPEC020](spec/SPEC020-the-handoff.md) for the handoff
+- `VOC` — Domain vocabulary: what file/passage/recording/release/album/artist/track mean and do not mean, see [SPEC023](spec/SPEC023-domain-vocabulary.md)
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -127,6 +128,7 @@ grep -rn "SPEC-PD" docs/
 | `[IMPL-MPD-*]` | Prototyping the MPD Director: the plan, and what it measured | [IMPL004](IMPL004-mpd-prototype.md), [IMPL005](IMPL005-mpd-prototype-results.md) |
 | `[SPEC-BK-*]` | Moving a session between Vaino's engine and MPD without stopping | [SPEC018-switching-backends.md](spec/SPEC018-switching-backends.md), [SPEC020-the-handoff.md](spec/SPEC020-the-handoff.md) |
 | `[SPEC-LYR-*]` | Lyrics, and what a guest protocol will not carry | [SPEC019-lyrics.md](spec/SPEC019-lyrics.md) |
+| `[SPEC-VOC-*]`, `[ENT-FILE-*]`, `[ENT-PASSAGE-*]`, `[ENT-RECORDING-*]`, `[ENT-RELEASE-*]`, `[ENT-ALBUM-*]`, `[ENT-ARTIST-*]`, `[ENT-TRACK-*]` | Domain vocabulary: file/passage/recording/release/album/artist/track, precisely | [SPEC023-domain-vocabulary.md](spec/SPEC023-domain-vocabulary.md) |
 | `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
 | `[IMPL-MPD-*]` | MPD Director prototype: build order, riskiest part first | [IMPL004-mpd-prototype.md](IMPL004-mpd-prototype.md) |
