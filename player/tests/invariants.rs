@@ -110,6 +110,7 @@ fn library(dir: &Path) -> Connection {
 }
 
 /// `TRACK nn` → the title under it, read back out of a written sheet.
+#[cfg(feature = "mpd")]
 fn tracks_in(sheet: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut n = 0;
