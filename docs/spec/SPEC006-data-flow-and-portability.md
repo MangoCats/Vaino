@@ -161,15 +161,17 @@ At ~1–2 KB per track the compact alternative saves ~1.5 KB and costs inspectab
 
 Settled 2026-08-09, completing the decisions in §7.
 
-**`[SPEC-DF-094]` Class-D export: daily, generational, integrity-checked before rotation.**
+**`[SPEC-DF-094]` Class-D export: hourly, grandfather-father-son, integrity-checked before rotation.** *(Retention schedule corrected 2026-08-30 to match the built and verified system — see below; the design rationale in this section is unchanged and still holds.)*
 
 1. **Verify first.** Confirm `vaino.db` is readable and self-consistent (`PRAGMA integrity_check`, plus row-count and referential sanity on the class-D tables) **before** writing a new generation. A failed check aborts the rotation and raises an alert — it never overwrites a good backup with a bad one.
-2. **Retain generations:** 30 daily + 12 monthly.
-3. **Cost is negligible.** Class D is a few MB — MuLibPlay's six years is 37,134 play events, `vaino.db` holds 74,299 — so 42 generations stay well under 200 MB.
+2. **Retain generations, grandfather-father-son:** one per day for seven days, one per month for twelve months, one per year indefinitely, and always the newest whatever else happens. Three years of hourly snapshots thin from 26,280 raw files to **20** retained; the yearly tier is unbounded on purpose — a decade of them is ten files.
+3. **Cost is negligible.** Class D is a few MB — MuLibPlay's six years is 37,134 play events, `vaino.db` holds 74,299 — so the retained ladder stays well under 100 MB indefinitely, growing by roughly one file's worth per year once the daily and monthly tiers are full.
 
-Rationale: storage is not the constraint here; **undetected corruption is**. A single rotating snapshot faithfully copies a corrupted database over the last good copy, and the loss is discovered only when someone looks. Depth plus a pre-rotation integrity check is what makes the backup trustworthy rather than merely present.
+Rationale: storage is not the constraint here; **undetected corruption is**. A single rotating snapshot faithfully copies a corrupted database over the last good copy, and the loss is discovered only when someone looks. Depth plus a pre-rotation integrity check is what makes the backup trustworthy rather than merely present. Grandfather-father-son specifically, rather than a flat depth, because the value of an old snapshot is not that it is old but that it *predates whatever went wrong*: damage noticed the same afternoon needs yesterday, damage noticed at Christmas needs March, a preference quietly corrupted two years ago needs a copy from before it.
 
-Rejected: *on clean shutdown* (a 24/7 appliance may never shut down cleanly — or only ever lose power, exporting nothing); *weekly* (shallower window to notice corruption before good generations age out). The **append-only journal** alternative is strictly more robust and remains the upgrade path if snapshots prove insufficient — it was declined only for the second write path it would add `[GDE-CHT-040]`.
+Rejected: *on clean shutdown* (a 24/7 appliance may never shut down cleanly — or only ever lose power, exporting nothing); *daily-only, no generational ladder* (a single rotating slot loses exactly the corrupted-two-years-ago case this exists for). The **append-only journal** alternative is strictly more robust and remains the upgrade path if snapshots prove insufficient — it was declined only for the second write path it would add `[GDE-CHT-040]`.
+
+**Built and verified as `REQ-LIB-160`.** That is the authoritative account of the shipped mechanism — the SQLite backup API against a read-only-attached library, atomic rename, `restore_listener`'s rehearse-by-default restore, the pre-restore safety copy exempt from rotation, re-pointing plays through `recording_mbid` rather than the unstable `passage_id`, and the Howard Hinnant civil-from-days date arithmetic that keeps the yearly tier from drifting. This section states the design decision and why; `REQ-LIB-160` states what was built to meet it and how it was measured — read both rather than expecting either alone to be complete.
 
 **`[SPEC-DF-095]` Headless Sampo falls back to sidecar-only, with an explicit `--embed` override.**
 
