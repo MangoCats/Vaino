@@ -1,7 +1,7 @@
 // Waveform boundary editing [REQ-LIB-175], [SPEC021].
 //
 // Fetch the passage's current boundaries and its raw audio, decode it
-// client-side, and draw a peak waveform with four draggable markers and a
+// client-side, and draw a peak waveform with six draggable markers and a
 // gain field over it. A drag previews on release, not on every pixel of
 // motion `[SPEC021 §4]` -- decoding audio on every frame of a drag is where
 // a "real-time" editor stops feeling real-time. "Save edit" posts the draft
@@ -15,6 +15,13 @@
 // grab a marker was a blind 10px guess on a bare line, there was no way back
 // from a mistake, and the server's own playback kept running underneath the
 // browser's preview with no way to silence it from here.
+//
+// Fade-in/fade-out markers and curve pickers were added `[SPEC-SUI-226]`:
+// this passage's own volume envelope, independent of lead -- lead only times
+// when a crossfade with a neighbour is *permitted*, and was never itself a
+// gain ramp during ordinary playback, so the preview now applies
+// `fade_in_ms`/`fade_out_ms` (with their own selected curve), not
+// `lead_in_ms`/`lead_out_ms`, matching what real playback actually does.
 (() => {
   const $ = id => document.getElementById(id);
   const note = (text, cls = '') => {
@@ -40,13 +47,13 @@
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   let base = null;    // the last-loaded-or-saved values, for the dirty check
-  let draft = null;   // the values being edited -- same five fields
+  let draft = null;   // the values being edited -- same nine fields
   let buffer = null;  // the decoded AudioBuffer
   let audioCtx = null;
   let source = null;  // the currently-playing AudioBufferSourceNode, or null
   let playedAt = 0;   // audioCtx.currentTime when the current playback began
   let playedFromMs = 0; // draft-relative ms the current playback began at
-  let dragging = null; // 'start' | 'end' | 'leadIn' | 'leadOut' | null
+  let dragging = null; // 'start' | 'end' | 'leadIn' | 'leadOut' | 'fadeIn' | 'fadeOut' | null
   let fileMs = 0;      // the file's own duration, for the facts line only
   // The decoded `buffer`'s own sample 0 is this many ms into the file, not
   // necessarily ms 0 `[SPEC-SUI-224]` -- a DAO capture is only ever decoded
@@ -172,7 +179,11 @@
     draft.end_ms !== base.end_ms ||
     draft.lead_in_ms !== base.lead_in_ms ||
     draft.lead_out_ms !== base.lead_out_ms ||
-    Math.abs(draft.gain_db - base.gain_db) > 1e-9;
+    Math.abs(draft.gain_db - base.gain_db) > 1e-9 ||
+    draft.fade_in_ms !== base.fade_in_ms ||
+    draft.fade_out_ms !== base.fade_out_ms ||
+    draft.fade_in_curve !== base.fade_in_curve ||
+    draft.fade_out_curve !== base.fade_out_curve;
 
   const refreshCommitState = () => { $('commit').disabled = !dirty(); };
 
@@ -228,6 +239,8 @@
       start_ms: info.start_ms, end_ms: info.end_ms,
       lead_in_ms: info.lead_in_ms, lead_out_ms: info.lead_out_ms,
       gain_db: info.gain_db,
+      fade_in_ms: info.fade_in_ms, fade_out_ms: info.fade_out_ms,
+      fade_in_curve: info.fade_in_curve, fade_out_curve: info.fade_out_curve,
     };
     draft = { ...base };
     loadedBoundary = { start_ms: base.start_ms, end_ms: base.end_ms };
@@ -236,7 +249,10 @@
     $('gain').disabled = false;
     updateFacts();
     updatePreciseFields();
-    for (const id of ['startms', 'endms', 'leadinms', 'leadoutms']) $(id).disabled = false;
+    for (const id of ['startms', 'endms', 'leadinms', 'leadoutms',
+                       'fadeinms', 'fadeoutms', 'fadeincurve', 'fadeoutcurve']) {
+      $(id).disabled = false;
+    }
 
     note('Loading audio…');
     // A bounded window around the passage, never the whole file
@@ -303,6 +319,8 @@
     $('facts').innerHTML =
       `start <b>${fmt(draft.start_ms)}</b> · end <b>${fmt(draft.end_ms)}</b> · ` +
       `lead-in <b>${draft.lead_in_ms} ms</b> · lead-out <b>${draft.lead_out_ms} ms</b> · ` +
+      `fade-in <b>${draft.fade_in_ms} ms ${draft.fade_in_curve}</b> · ` +
+      `fade-out <b>${draft.fade_out_ms} ms ${draft.fade_out_curve}</b> · ` +
       `gain <b>${draft.gain_db.toFixed(2)} dB</b> · file <b>${fmt(fileMs || null)}</b>` +
       // Only a bounded window around the passage is ever decoded for a
       // large DAO capture `[SPEC-SUI-224]` -- said plainly here, since
@@ -348,6 +366,10 @@
     $('endms').value = draft.end_ms;
     $('leadinms').value = draft.lead_in_ms;
     $('leadoutms').value = draft.lead_out_ms;
+    $('fadeinms').value = draft.fade_in_ms;
+    $('fadeoutms').value = draft.fade_out_ms;
+    $('fadeincurve').value = draft.fade_in_curve;
+    $('fadeoutcurve').value = draft.fade_out_curve;
   }
 
   // One min/max pair per horizontal pixel `[SPEC021 §4]`, over whatever span
@@ -400,13 +422,18 @@
       g.lineTo(x, mid + max * mid);
     }
     g.stroke();
-    const shade = (fromMs, toMs) => {
+    // Two independent semi-transparent layers, not one hand-blended region --
+    // lead and fade legitimately overlap either way `[XFD-ORTH-010]`, and the
+    // canvas's own alpha compositing shows that honestly wherever they do.
+    const shade = (fromMs, toMs, color) => {
       if (toMs <= fromMs) return;
-      g.fillStyle = 'rgba(255,187,102,.18)';
+      g.fillStyle = color;
       g.fillRect(px(fromMs), 0, px(toMs) - px(fromMs), h);
     };
-    shade(draft.start_ms, draft.start_ms + draft.lead_in_ms);
-    shade(draft.end_ms - draft.lead_out_ms, draft.end_ms);
+    shade(draft.start_ms, draft.start_ms + draft.lead_in_ms, 'rgba(255,187,102,.18)');
+    shade(draft.end_ms - draft.lead_out_ms, draft.end_ms, 'rgba(255,187,102,.18)');
+    shade(draft.start_ms, draft.start_ms + draft.fade_in_ms, 'rgba(167,139,250,.22)');
+    shade(draft.end_ms - draft.fade_out_ms, draft.end_ms, 'rgba(167,139,250,.22)');
 
     const line = (ms, color, width) => {
       const x = px(ms);
@@ -421,6 +448,8 @@
     line(draft.end_ms, '#6cf', 2);
     line(draft.start_ms + draft.lead_in_ms, '#fb6', 1.5);
     line(draft.end_ms - draft.lead_out_ms, '#fb6', 1.5);
+    line(draft.start_ms + draft.fade_in_ms, '#a78bfa', 1.5);
+    line(draft.end_ms - draft.fade_out_ms, '#a78bfa', 1.5);
 
     // A knob near the top of each line -- an actual grabbable shape, not
     // just a place on a line that happens to respond to a drag
@@ -438,6 +467,8 @@
     knob(draft.end_ms, '#6cf');
     knob(draft.start_ms + draft.lead_in_ms, '#fb6');
     knob(draft.end_ms - draft.lead_out_ms, '#fb6');
+    knob(draft.start_ms + draft.fade_in_ms, '#a78bfa');
+    knob(draft.end_ms - draft.fade_out_ms, '#a78bfa');
 
     if (source) {
       const elapsed = (audioCtx.currentTime - playedAt) * 1000;
@@ -457,6 +488,8 @@
     const candidates = [
       ['leadIn', draft.start_ms + draft.lead_in_ms],
       ['leadOut', draft.end_ms - draft.lead_out_ms],
+      ['fadeIn', draft.start_ms + draft.fade_in_ms],
+      ['fadeOut', draft.end_ms - draft.fade_out_ms],
       ['start', draft.start_ms],
       ['end', draft.end_ms],
     ];
@@ -478,6 +511,13 @@
       draft.lead_in_ms = Math.round(clamp(ms - draft.start_ms, 0, draft.end_ms - draft.start_ms));
     else if (which === 'leadOut')
       draft.lead_out_ms = Math.round(clamp(draft.end_ms - ms, 0, draft.end_ms - draft.start_ms));
+    // Independently constrained inside [start, end], not nested inside
+    // lead's own span -- lead and fade are orthogonal `[XFD-ORTH-010]` and
+    // legitimately overlap either way `[SPEC-SUI-226]`.
+    else if (which === 'fadeIn')
+      draft.fade_in_ms = Math.round(clamp(ms - draft.start_ms, 0, draft.end_ms - draft.start_ms));
+    else if (which === 'fadeOut')
+      draft.fade_out_ms = Math.round(clamp(draft.end_ms - ms, 0, draft.end_ms - draft.start_ms));
   }
 
   // Pan vs. click-to-jump, told apart by how far the pointer actually moved
@@ -585,14 +625,22 @@
   // boundaries with the draft's fades and gain baked in sample-by-sample,
   // using the exact same formula `fade.rs` applies to real playback
   // `[SPEC021 §4]` -- so what changes on a drag is also what is heard.
+  //
+  // Applies `fade_in_ms`/`fade_out_ms`, not `lead_in_ms`/`lead_out_ms`
+  // `[SPEC-SUI-226]`: lead only times when a crossfade with a neighbour is
+  // *permitted*, and was never itself a gain ramp during ordinary playback
+  // -- fade is the envelope real playback actually applies, so previewing
+  // against lead was quietly claiming a fade-out real playback never
+  // produced. Multiplied, not chosen, where the two overlap on a very short
+  // passage, matching `Envelope::gain_at` on the Rust side.
   function renderPreview() {
     const sr = buffer.sampleRate;
     const startSample = Math.max(0, Math.floor(((draft.start_ms - windowFromMs) / 1000) * sr));
     const endSample = Math.min(buffer.length, Math.ceil(((draft.end_ms - windowFromMs) / 1000) * sr));
     const n = Math.max(1, endSample - startSample);
-    const leadIn = Math.round((draft.lead_in_ms / 1000) * sr);
-    const leadOut = Math.round((draft.lead_out_ms / 1000) * sr);
-    const foStart = n - leadOut;
+    const fadeIn = Math.round((draft.fade_in_ms / 1000) * sr);
+    const fadeOut = Math.round((draft.fade_out_ms / 1000) * sr);
+    const foStart = n - fadeOut;
     const linGain = Math.pow(10, draft.gain_db / 20);
     const out = audioCtx.createBuffer(buffer.numberOfChannels, n, sr);
     for (let c = 0; c < buffer.numberOfChannels; c++) {
@@ -600,8 +648,8 @@
       const dst = out.getChannelData(c);
       for (let i = 0; i < n; i++) {
         let g = linGain;
-        if (leadIn > 0 && i < leadIn) g *= VainoFade.gainIn(i / leadIn);
-        if (leadOut > 0 && i >= foStart) g *= VainoFade.gainOut((i - foStart) / leadOut);
+        if (fadeIn > 0 && i < fadeIn) g *= VainoFade.gainIn(draft.fade_in_curve, i / fadeIn);
+        if (fadeOut > 0 && i >= foStart) g *= VainoFade.gainOut(draft.fade_out_curve, (i - foStart) / fadeOut);
         dst[i] = (src[startSample + i] || 0) * g;
       }
     }
@@ -727,6 +775,43 @@
     updateFacts(); updatePreciseFields();
     ensureVisible(draft.end_ms - draft.lead_out_ms, revealSpan(draft.lead_out_ms));
     draw(); refreshCommitState();
+  });
+
+  // Fade-in/fade-out: the same reveal-on-focus, clamp-on-change shape as
+  // lead above, just against `fade_in_ms`/`fade_out_ms` `[SPEC-SUI-226]`.
+  $('fadeinms').addEventListener('focus', () =>
+    ensureVisible(draft.start_ms + draft.fade_in_ms, revealSpan(draft.fade_in_ms)));
+  $('fadeinms').addEventListener('change', () => {
+    const v = Number($('fadeinms').value);
+    if (!Number.isFinite(v)) return updatePreciseFields();
+    pushUndo();
+    draft.fade_in_ms = Math.round(clamp(v, 0, draft.end_ms - draft.start_ms));
+    updateFacts(); updatePreciseFields();
+    ensureVisible(draft.start_ms + draft.fade_in_ms, revealSpan(draft.fade_in_ms));
+    draw(); refreshCommitState();
+  });
+  $('fadeoutms').addEventListener('focus', () =>
+    ensureVisible(draft.end_ms - draft.fade_out_ms, revealSpan(draft.fade_out_ms)));
+  $('fadeoutms').addEventListener('change', () => {
+    const v = Number($('fadeoutms').value);
+    if (!Number.isFinite(v)) return updatePreciseFields();
+    pushUndo();
+    draft.fade_out_ms = Math.round(clamp(v, 0, draft.end_ms - draft.start_ms));
+    updateFacts(); updatePreciseFields();
+    ensureVisible(draft.end_ms - draft.fade_out_ms, revealSpan(draft.fade_out_ms));
+    draw(); refreshCommitState();
+  });
+  $('fadeincurve').addEventListener('change', () => {
+    pushUndo();
+    draft.fade_in_curve = $('fadeincurve').value;
+    updateFacts();
+    refreshCommitState();
+  });
+  $('fadeoutcurve').addEventListener('change', () => {
+    pushUndo();
+    draft.fade_out_curve = $('fadeoutcurve').value;
+    updateFacts();
+    refreshCommitState();
   });
 
   $('commit').addEventListener('click', async () => {

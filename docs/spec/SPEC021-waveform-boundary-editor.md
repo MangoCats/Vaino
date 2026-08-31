@@ -2,7 +2,7 @@
 
 **Design Specification — Tier 2 · Built 2026-08-27, see [IMPL006](../IMPL006-sampo-editing-workflows.md) Stages 6–8**
 
-How a passage's start, end, lead-in, lead-out and gain are reviewed and corrected by hand, hearing the edit as it is made `[REQ-LIB-175]`, `[REQ-VIS-130]`, `[SPEC-SA-080]`.
+How a passage's start, end, lead-in, lead-out, fade-in, fade-out and gain are reviewed and corrected by hand, hearing the edit as it is made `[REQ-LIB-175]`, `[REQ-VIS-130]`, `[SPEC-SA-080]`.
 
 > **Related:** [SPEC013 §3.4](SPEC013-sampo-console.md#34-handoff--the-players-own-pages-inside-sampos-workflow) for where this is reached from · [SPEC010](SPEC010-identification-review.md) for the sibling feature it was designed alongside · [SPEC008 §3](SPEC008-database-schema.md) for `passages` · [`player/src/fade.rs`](../../player/src/fade.rs) for the fade curves this must not disagree with (design context in the inherited [`MCR-SPEC002-crossfade.md`](../inherited/mcrhythm/MCR-SPEC002-crossfade.md), `[INH-*]` — its curve *formulas* are not what `fade.rs` implements, only its lead/fade point model).
 
@@ -24,16 +24,22 @@ Where this lives was decided already, in `[SPEC-SUI-135]`: built in Vaino, reach
 
 ```sql
 CREATE TABLE boundary_reviews (
-    passage_id    INTEGER PRIMARY KEY,
-    start_ms      INTEGER NOT NULL,
-    end_ms        INTEGER NOT NULL,
-    lead_in_ms    INTEGER,
-    lead_out_ms   INTEGER,
-    gain_db       REAL,
-    decided_at    TEXT NOT NULL,
-    applied_at    TEXT
+    passage_id      INTEGER PRIMARY KEY,
+    start_ms        INTEGER NOT NULL,
+    end_ms          INTEGER NOT NULL,
+    lead_in_ms      INTEGER,
+    lead_out_ms     INTEGER,
+    gain_db         REAL,
+    fade_in_ms      INTEGER,
+    fade_out_ms     INTEGER,
+    fade_in_curve   TEXT,
+    fade_out_curve  TEXT,
+    decided_at      TEXT NOT NULL,
+    applied_at      TEXT
 );
 ```
+
+**`fade_*` added `[SPEC-SUI-226]`**, alongside `orig_fade_in_ms`/`orig_fade_out_ms`/`orig_fade_in_curve`/`orig_fade_out_curve` sync-baseline columns — the same `orig_*` shape `[SPEC-DF-102]` already gives `start_ms`/`lead_in_ms`/`gain_db`, for the same reason: a fade edit needs a sync-safe pre-edit baseline exactly like a boundary edit already has one. See [SPEC008 §3 `[SPEC-SC-046]`](SPEC008-database-schema.md) for what fade *is* and why it is orthogonal to lead.
 
 Created by Vaino on first write, the same way `id_reviews` is `[SPEC-SC-020]`-adjacent player-owned state, not Sampo schema. `applied_at` carries the same refusal-to-quietly-withdraw rule as `id_reviews.applied_at`: once `apply_boundary_reviews.py` has rewritten `passages`, the row can be reverted but not silently deleted, for the same reason — the evidence a manual edit overrode should survive the edit.
 
@@ -48,7 +54,7 @@ Created by Vaino on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 | `/edit/:passage_id` | GET | the editor page |
 | `/edit/:passage_id/info` | GET | the passage's current boundaries as JSON |
 | `/edit/:passage_id/audio` | GET | a decoded WAV window, `?from_ms=&to_ms=`, around the passage — never the raw file, see `[SPEC-SUI-224]` |
-| `/edit/:passage_id/review` | POST | write a `boundary_reviews` row — body carries the five values |
+| `/edit/:passage_id/review` | POST | write a `boundary_reviews` row — body carries the nine values `[SPEC-SUI-226]` |
 
 **`[SPEC-SUI-201]` `/info` exists because Vaino has no server-side templating.** Every page here is a static shell compiled in with `include_str!` and fetches its own state over a small JSON route once loaded — `/why/:id` and `/review/queue` are the same shape already. There was never a way to bake a passage's boundaries into the `/edit/:passage_id` response itself, so a sibling route carries them instead.
 
@@ -60,14 +66,15 @@ Created by Vaino on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 
 ## 4. Interaction model
 
-**One canvas, four draggable markers, one gain control.**
+**One canvas, six draggable markers, one gain control.**
 
 - **Waveform**: decoded once client-side via `decodeAudioData` on the fetched bytes, reduced to a min/max pair per horizontal pixel — the standard peak-rendering approach, cheap even for a multi-minute capture because it runs once per load, not per frame.
 - **Start / End**: two vertical handles bounding the passage. Dragging either previews from the new boundary on release, not on every pixel of motion — scrubbing a waveform at 60 fps while also decoding audio on every frame is where a "real-time" editor stops feeling real-time.
 - **Lead-in / Lead-out**: two secondary handles, constrained inside [start, end], shown as a shaded ramp rather than a bare line — the shading *is* the fade curve, drawn from the same formula the preview player applies, so "what will this sound like" and "what does this look like" are one picture.
+- **Fade-in / Fade-out** `[SPEC-SUI-226]`: two more handles, independently constrained inside [start, end] — not nested inside lead's own span, since lead and fade are orthogonal (`[XFD-ORTH-010]`) and legitimately overlap either way. Shown in a second, visually distinct shading from lead's own — the two fills are independent semi-transparent layers, so where they overlap the canvas's own alpha blending shows it rather than a third hand-computed state. Each side also gets a `<select>` for its curve (`linear`/`cosine`/`exponential`), beside its precise ms field.
 - **Gain**: a numeric field beside the waveform, not a marker on it — gain is not a position, and drawing it as one (a common mistake) invites confusing loudness with placement.
-- **Preview**: a transport bar under the waveform — play/pause, and a playhead that moves during playback and can be dragged to seek — built from a Web Audio `AudioBufferSourceNode` slicing the decoded buffer at the current draft boundaries and applying the current draft fades and gain. This is what makes it "real-time": every drag changes what the next press of play actually sounds like, with no round trip to the server.
-- **Commit**: one button, disabled until something has changed, posting the five draft values to `/edit/:passage_id/review`. There is no autosave — an edit is a deliberate decision, matching `id_reviews`' own "recorded, not applied" posture `[SPEC-SUI-140]`.
+- **Preview**: a transport bar under the waveform — play/pause, and a playhead that moves during playback and can be dragged to seek — built from a Web Audio `AudioBufferSourceNode` slicing the decoded buffer at the current draft boundaries and applying the current draft fades and gain. This is what makes it "real-time": every drag changes what the next press of play actually sounds like, with no round trip to the server. The preview applies `fade_in_ms`/`fade_out_ms` — not `lead_in_ms`/`lead_out_ms` — since lead only times crossfade admission and was never itself a gain ramp during ordinary playback; fade is the envelope real playback actually applies.
+- **Commit**: one button, disabled until something has changed, posting the nine draft values to `/edit/:passage_id/review`. There is no autosave — an edit is a deliberate decision, matching `id_reviews`' own "recorded, not applied" posture `[SPEC-SUI-140]`.
 
 **The fade curve must be the same formula in both places, or the preview lies.** `[SPEC-AUD-040]` already states the ramp profiles the mixer uses; this editor's JS implements the identical formula, and a shared table of `(position, expected gain)` pairs — computed once in Rust, checked once in JS against the same numbers — is the guard against the two drifting apart silently, the same failure class `[SPEC-PLAY-030]` was written to close for two backends agreeing about what a play is.
 
@@ -75,7 +82,7 @@ Created by Vaino on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 
 ## 5. Applying an accepted edit
 
-**`apply_boundary_reviews.py`, alongside `apply_reviews.py`, not folded into it.** The two tools share a shape — dry-run by default, `--commit` to write, refuse an already-applied row rather than silently re-apply — but touch different tables under different constraints (`passages.boundary_src` here, `passage_recordings`/`recording_artists` there), and `apply_reviews.py` is already sized to its own job. Rewrites `passages` for a `boundary_reviews` row not yet applied: `start_ms`, `end_ms`, `lead_in_ms`, `lead_out_ms`, `gain_db`, and sets `boundary_src = 'manual'` — which, per `[SPEC-SC-045]`, is what makes the override outrank any future recomputation permanently.
+**`apply_boundary_reviews.py`, alongside `apply_reviews.py`, not folded into it.** The two tools share a shape — dry-run by default, `--commit` to write, refuse an already-applied row rather than silently re-apply — but touch different tables under different constraints (`passages.boundary_src` here, `passage_recordings`/`recording_artists` there), and `apply_reviews.py` is already sized to its own job. Rewrites `passages` for a `boundary_reviews` row not yet applied: `start_ms`, `end_ms`, `lead_in_ms`, `lead_out_ms`, `gain_db`, `fade_in_ms`, `fade_out_ms`, `fade_in_curve`, `fade_out_curve` `[SPEC-SUI-226]`, and sets `boundary_src = 'manual'` — which, per `[SPEC-SC-045]`, is what makes the override outrank any future recomputation permanently.
 
 `lowlevel_cache` is keyed `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]`. A boundary edit that moves `start_ms`/`end_ms` orphans the cached features for the old span exactly as `[REQ-LIB-145]`'s duration repair did — `apply_boundary_reviews.py` must decide, per edit, whether to re-key or invalidate, not silently leave a stale cache row pointing at a span nothing plays anymore.
 
@@ -120,3 +127,17 @@ None of the above changes what §2's `boundary_reviews` row looks like, what `/e
 > **Fixed by no longer serving raw file bytes at all.** `/edit/:id/audio` now takes `from_ms`/`to_ms` and decodes exactly that span through `PassageDecoder` — the same seek-accurate, bounded-memory decoder the real player already uses — returning a WAV rather than a slice of the original compressed file. This also sidesteps something this session's own duration audit already proved unsafe: estimating a *byte* range from a *time* range via bitrate math is the same wrong-for-VBR mistake `[REQ-LIB-145]` exists to warn against; seeking by time through `PassageDecoder` means that arithmetic is never done at all. `edit.js` requests `[start_ms − 60s, end_ms + 60s]`, clamped to the file's own bounds — for the near-totality of the library (`start_ms=0`, `end_ms=file_ms` already) this equals the whole file regardless, so an ordinary passage sees no practical change beyond "now a WAV, decoded server-side." The **"Whole file" button is relabelled "Zoom out"** — for a bounded window it no longer means the literal whole file — and the facts line names the window explicitly (`showing ±60s around this passage, not the whole file`) whenever it is narrower than the file actually is. Expanding the window on request is real future work, not solved here, the same honest-deferral shape §6 already uses for the neighbour-passage question. `read_audio_range`/`parse_byte_range`/`mime_for_ext` and their tests are gone with the route they existed for; verified live against the actual reported passage, not only against a synthetic fixture.
 
 > **`[SPEC-SUI-225]` Built 2026-08-30 — a change that is "in view" is not necessarily legible.** Reported live: editing `end_ms` didn't visibly move anything on the waveform until `lead_out_ms` was also touched. `draw()` genuinely ran on every edit — the actual fault was `ensureVisible(draft.end_ms)` re-centring the view only when the point fell *off* screen, never re-zooming when it was on screen but sub-pixel: a 300ms nudge on a wide "Zoom out" view moves the blue end-line by less than a pixel, indistinguishable from nothing having happened, and with `lead_out_ms=0` (a common case — most tracks end abruptly) there was no amber band to notice moving either. `revealSpan` — already used for the lead fields, scaling breathing room to the lead's own length — now also drives `startms`/`endms`: scaled instead to *how far this particular edit just moved the value*, since a start/end position's own absolute magnitude (a file-relative ms count, often in the millions) is meaningless as a zoom hint the way a lead's own length is.
+
+> **`[SPEC-SUI-226]` Built 2026-08-31 — fade, added as its own concept alongside lead, per-passage and per-side.** Tracing the engine's own `Fade` construction sites turned up an asymmetry this feature closes: `lead_in_ms` was genuinely applied as a real fade-in gain ramp, but `lead_out_ms` only ever drove crossfade-*admission* timing (`queue.rs`'s `overlap_ms`) — no fade-out gain ramp existed anywhere in ordinary end-of-passage playback. McRhythm's own inherited crossfade design already named the fix: Lead (when a crossfade is *permitted*) and Fade (this passage's own volume envelope) are orthogonal (`[XFD-ORTH-010]`), and Vaino had only ever built the first.
+>
+> **What fade is for.** Two problems lead cannot solve on its own: avoiding a click at a hard file boundary (every passage should start and end at zero amplitude, not an arbitrary sample), and a soft way in/out of continuous audio — a DAO capture, a live recording — that has no silence of its own to lead into. `passages` gains `fade_in_ms`/`fade_out_ms`/`fade_in_curve`/`fade_out_curve`, all `NOT NULL DEFAULT` (20 ms, `'exponential'`) so every existing row is immediately meaningful — a fixed default, not a computed one, so `analyze_amplitude.py` never touches these columns and keeps writing only `lead_in_ms`/`lead_out_ms` exactly as before. Always user-editable, independently per side and independently of lead, through this editor.
+>
+> **`fade.rs` gained `Envelope`**, not a change to `Fade` itself — `Fade` alone stays exactly what it was for Skip/Handoff (`switch.rs`'s `cut_ring_to_incoming`), deliberately unrelated per its own doc comment. `Envelope` combines an independent fade-in `Fade` and fade-out `Fade` by multiplying their gains, which is what makes a very short passage where both regions overlap fall to the smaller of the two rather than one silently overriding the other. `Stream::fade: Fade` became `Stream::envelope: Envelope` in the mixer; `engine.rs::open()` builds it from the four new `QueueEntry` fields and a computed `total_frames`. Resuming mid-passage needed one more fix beyond the plan as first scoped: `Stream::frames_written` is now seeded from `origin_frames` (frames from the passage's own true start) on a resume, or a fade-in would spuriously re-trigger and a fade-out would land early.
+>
+> **The editor gained two more markers, not four disguised as two.** Fade-in and fade-out are independently constrained inside `[start, end]`, not nested inside lead's own span — they legitimately overlap lead either way, and the canvas now draws two independent semi-transparent shadings (lead's existing amber, fade's new violet `#a78bfa`) rather than hand-computing a blended third state. Each side gets its own precise ms field and a `<select>` for its curve. `renderPreview()` now applies `draft.fade_in_ms`/`fade_out_ms` (with the selected curve) instead of `draft.lead_in_ms`/`lead_out_ms` — the preview was quietly claiming a fade-out real playback never produced, and pointing it at fade rather than lead is the actual fix, not new preview logic.
+>
+> **`fade.js` gained `Linear`/`Cosine`**, previously hardcoded to `Exponential` alone since lead's own preview never needed to distinguish them. `gainIn`/`gainOut` now take the curve name as their first argument; `fixtures/fade/` grew sibling `linear.json`/`cosine.json` beside the existing `exponential.json`, and both `fade.rs`'s own fixture test and `build/verify-skins.js`'s `runFadeFixture` check all three curves, not only the one lead already exercised.
+>
+> **`boundary_reviews` gained the same four columns**, plus `orig_fade_in_ms`/`orig_fade_out_ms`/`orig_fade_in_curve`/`orig_fade_out_curve` — the identical `orig_*` sync-baseline shape `[SPEC-DF-102]` already gives `start_ms`/`lead_in_ms`/`gain_db`, added as their own `ALTER TABLE` batch (`BOUNDARY_REVIEW_FADE_COLUMNS`) rather than folded into the existing one, so an installation already past the first migration only ever gains columns. `record_boundary_review` validates both curve names against `Curve::parse` itself and refuses an unknown one, the same posture `record_review` already takes for its own verb; `/edit/:id/review`'s `BoundaryDraft` carries the curves as plain strings and lets the store do that validation rather than duplicating it in the route handler.
+>
+> **`apply_boundary_reviews.py`** now carries `fade_in_ms`/`fade_out_ms`/`fade_in_curve`/`fade_out_curve` alongside lead/gain in its existing `SELECT`/`UPDATE passages`, falling back to the passage's own current fade (`COALESCE`) only for a draft recorded before this column existed — every draft recorded from here on always carries one, since fade is a required part of the post, not an optional one the way lead/gain are. New `tools/add_fade_columns.py`: a small, idempotent, dry-run-by-default migration (`PRAGMA table_info(passages)` before adding, so a second run is a no-op) that backfills every existing row with the fixed default in one `ALTER TABLE ... DEFAULT` statement, needing no per-row computation the way `repair_durations.py`'s probe-and-correct shape does.

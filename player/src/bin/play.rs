@@ -44,6 +44,13 @@ fn main() {
                 file_ms: 0,
                 lead_in_ms: lin,
                 lead_out_ms: lout,
+                // The production default `[SPEC-SUI-226]` -- this tool
+                // exists to hear real playback, so it should hear the real
+                // envelope every ordinary passage gets, not a silent one.
+                fade_in_ms: 20,
+                fade_out_ms: 20,
+                fade_in_curve: vaino_player::fade::Curve::Exponential,
+                fade_out_curve: vaino_player::fade::Curve::Exponential,
                 gain_db: 0.0,
                 mbid: None,
                 naming: Default::default(),

@@ -42,7 +42,7 @@ Needed regardless of route:
 
 - **`vaino-core` extraction + JNI.** Measured 2026-08-20: the Director imports only `rusqlite`, `serde`, std collections, `crate::db` and `crate::queue::QueueEntry` — and `queue.rs` imports nothing but `VecDeque` and `PathBuf`. **No cpal, symphonia, rubato, axum or tokio.** ~3,500 lines lift cleanly.
 - **Passage playback.** Vaino plays spans, not files; `MediaItem.ClippingConfiguration` is a first-class Media3 API.
-- **Gain and the lead ramps.** A custom `AudioProcessor`. Media3 has no crossfade and has not for years — but `[SPEC-SC-043]` measured this library's lead-in median at **5 ms** and lead-out at **946 ms**, and says near-zero overlap is *intended*. That is a de-click envelope, not a blend.
+- **Gain and the fade ramps.** A custom `AudioProcessor`. Media3 has no crossfade and has not for years — and that turns out not to be the gap it first looks like: `[SPEC-SC-046]` is Vaino's own de-click envelope (`fade_in_ms`/`fade_out_ms`, applied on the way in, per-passage), separate from `lead_in_ms`/`lead_out_ms`, which time crossfade admission only and apply no gain ramp of their own at all. `[SPEC-SC-043]` measured this library's lead-in median at **5 ms** and lead-out at **946 ms**, and says near-zero overlap is *intended* — a fork needs to port `fade_in_ms`/`fade_out_ms` as the `AudioProcessor` ramp regardless of whether it ever ports lead/crossfade at all, since fade is what plays on every ordinary passage, crossfade or not.
 - **Relink by content.** Phone paths resemble nothing on the Pi, and `[SPEC-RLK-025]` is the standing proof that path rewriting is not sound.
 - **Bundle import**, listener-state write-back, backup, Director reload.
 
@@ -101,10 +101,10 @@ is the one place iOS is ahead, and it is not a small lead:
 | Need | Android (Media3) | iOS (AVAudioEngine) |
 | :--- | :--- | :--- |
 | Play a passage span | `ClippingConfiguration`, millisecond | **`scheduleSegment(_:startingFrame:frameCount:at:)` — frame-exact** |
-| Lead-in / lead-out ramp | custom `AudioProcessor` | mixer-node volume ramp, native |
-| Crossfade | **absent**, requested since 2017 | two player nodes into a mixer |
+| Fade-in / fade-out ramp `[SPEC-SC-046]` | custom `AudioProcessor` | mixer-node volume ramp, native |
+| Crossfade (lead admission window) | **absent**, requested since 2017 | two player nodes into a mixer |
 
-Vaino's passage is a frame range with a gain and two ramps `[SPEC-SC-040]`, and
+Vaino's passage is a frame range with a gain and two fade ramps `[SPEC-SC-040]`, `[SPEC-SC-046]` — plus two lead points that time crossfade admission but carry no ramp of their own — and
 `scheduleSegment` is that signature almost exactly. Sample-accurate boundaries
 also matter more here than they look: `[SPEC-SA-092]` showed boundary error
 propagating into *flavor*, not merely into playback.

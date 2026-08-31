@@ -96,9 +96,38 @@ def ensure_review_tables(conn: sqlite3.Connection) -> None:
         ("id_reviews", "origin TEXT"),
         ("boundary_reviews", "origin TEXT"),
         ("artist_reviews", "origin TEXT"),
+        # `[SPEC-SUI-226]`, same shape as the `orig_*` block above.
+        ("boundary_reviews", "fade_in_ms INTEGER"),
+        ("boundary_reviews", "fade_out_ms INTEGER"),
+        ("boundary_reviews", "fade_in_curve TEXT"),
+        ("boundary_reviews", "fade_out_curve TEXT"),
+        ("boundary_reviews", "orig_fade_in_ms INTEGER"),
+        ("boundary_reviews", "orig_fade_out_ms INTEGER"),
+        ("boundary_reviews", "orig_fade_in_curve TEXT"),
+        ("boundary_reviews", "orig_fade_out_curve TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+        except sqlite3.OperationalError:
+            pass  # already has it
+
+
+def ensure_passages_fade_columns(conn: sqlite3.Connection) -> None:
+    """`fade_in_ms`/`fade_out_ms`/`fade_in_curve`/`fade_out_curve` `[SPEC-SUI-226]`
+    on `passages` itself -- the same idempotent `ALTER TABLE ... DEFAULT`
+    migration `tools/add_fade_columns.py` runs standalone, run here too so a
+    target that has never had that run by hand still has somewhere to land
+    an incoming fade edit, rather than this tool crashing on "no such
+    column" the first time one arrives, or silently dropping it.
+    """
+    for column, ddl in [
+        ("fade_in_ms", "INTEGER NOT NULL DEFAULT 20"),
+        ("fade_out_ms", "INTEGER NOT NULL DEFAULT 20"),
+        ("fade_in_curve", "TEXT NOT NULL DEFAULT 'exponential'"),
+        ("fade_out_curve", "TEXT NOT NULL DEFAULT 'exponential'"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE passages ADD COLUMN {column} {ddl}")
         except sqlite3.OperationalError:
             pass  # already has it
 
@@ -141,11 +170,14 @@ def current_recording(conn: sqlite3.Connection, passage_id: int):
 
 def current_boundary(conn: sqlite3.Connection, passage_id: int):
     row = conn.execute(
-        "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db FROM passages WHERE passage_id=?1",
+        """SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                  fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve
+             FROM passages WHERE passage_id=?1""",
         (passage_id,)).fetchone()
     if not row:
         return None
-    keys = ["start_ms", "end_ms", "lead_in_ms", "lead_out_ms", "gain_db"]
+    keys = ["start_ms", "end_ms", "lead_in_ms", "lead_out_ms", "gain_db",
+            "fade_in_ms", "fade_out_ms", "fade_in_curve", "fade_out_curve"]
     return dict(zip(keys, row))
 
 
@@ -203,9 +235,12 @@ def describe(values: dict, kind: str) -> str:
     if kind == "artist_review":
         return values.get("artist_name") or values.get("artist_mbid") or "(none)"
     if kind == "boundary_review":
+        fade = (f", fade-in {values['fade_in_ms']}ms {values.get('fade_in_curve')}, "
+                f"fade-out {values['fade_out_ms']}ms {values.get('fade_out_curve')}"
+                if "fade_in_ms" in values else "")
         return (f"{values.get('start_ms')}-{values.get('end_ms')}, "
                 f"lead-in {values.get('lead_in_ms')}, lead-out {values.get('lead_out_ms')}, "
-                f"gain {values.get('gain_db')}")
+                f"gain {values.get('gain_db')}{fade}")
     return str(values)
 
 
@@ -245,10 +280,28 @@ def apply_id_review(conn: sqlite3.Connection, passage_id: int, change: dict) -> 
 
 def apply_boundary_review(conn: sqlite3.Connection, passage_id: int, change: dict) -> None:
     t = change["target"]
-    conn.execute(
-        """UPDATE passages SET start_ms=?1, end_ms=?2, lead_in_ms=?3, lead_out_ms=?4,
-                                gain_db=?5, boundary_src='manual' WHERE passage_id=?6""",
-        (t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"], passage_id))
+    b = change["baseline"]
+    # Fade `[SPEC-SUI-226]` only if the incoming change actually carries an
+    # opinion on it -- a `changes.json` from a pre-fade `export_changes.py`
+    # has none, and neither writing NULL into `passages`'s `NOT NULL` fade
+    # columns nor asserting a value never measured is right; leaving them
+    # untouched is the same "do not assert what was not there" rule
+    # `[SPEC-PL-030]` already applies to lead/gain.
+    has_fade = "fade_in_ms" in t
+    if has_fade:
+        conn.execute(
+            """UPDATE passages SET start_ms=?1, end_ms=?2, lead_in_ms=?3, lead_out_ms=?4,
+                                    gain_db=?5, fade_in_ms=?6, fade_out_ms=?7,
+                                    fade_in_curve=?8, fade_out_curve=?9,
+                                    boundary_src='manual' WHERE passage_id=?10""",
+            (t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
+             t["fade_in_ms"], t["fade_out_ms"], t["fade_in_curve"], t["fade_out_curve"],
+             passage_id))
+    else:
+        conn.execute(
+            """UPDATE passages SET start_ms=?1, end_ms=?2, lead_in_ms=?3, lead_out_ms=?4,
+                                    gain_db=?5, boundary_src='manual' WHERE passage_id=?6""",
+            (t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"], passage_id))
     anchor = change["anchor"]
     if (t["start_ms"], t["end_ms"]) != (anchor["start_ms"], anchor["end_ms"]):
         audio_md5 = anchor["audio_md5"]
@@ -260,21 +313,46 @@ def apply_boundary_review(conn: sqlite3.Connection, passage_id: int, change: dic
             conn.execute(
                 "DELETE FROM lowlevel_cache WHERE audio_md5=?1 AND start_ms=?2 AND end_ms=?3",
                 (audio_md5, anchor["start_ms"], anchor["end_ms"]))
-    conn.execute(
-        """INSERT INTO boundary_reviews
-               (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
-                audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms,
-                orig_lead_out_ms, orig_gain_db, decided_at, applied_at, origin)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,datetime('now'),?15)
-           ON CONFLICT(passage_id) DO UPDATE SET
-               start_ms=excluded.start_ms, end_ms=excluded.end_ms,
-               lead_in_ms=excluded.lead_in_ms, lead_out_ms=excluded.lead_out_ms,
-               gain_db=excluded.gain_db, decided_at=excluded.decided_at,
-               applied_at=excluded.applied_at, origin=excluded.origin""",
-        (passage_id, t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
-         anchor["audio_md5"], anchor["passage_kind"], anchor["start_ms"], anchor["end_ms"],
-         change["baseline"]["lead_in_ms"], change["baseline"]["lead_out_ms"], change["baseline"]["gain_db"],
-         change["decided_at"], change["origin"]))
+    if has_fade:
+        conn.execute(
+            """INSERT INTO boundary_reviews
+                   (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                    fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve,
+                    audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms,
+                    orig_lead_out_ms, orig_gain_db, orig_fade_in_ms, orig_fade_out_ms,
+                    orig_fade_in_curve, orig_fade_out_curve, decided_at, applied_at, origin)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
+                       datetime('now'),?23)
+               ON CONFLICT(passage_id) DO UPDATE SET
+                   start_ms=excluded.start_ms, end_ms=excluded.end_ms,
+                   lead_in_ms=excluded.lead_in_ms, lead_out_ms=excluded.lead_out_ms,
+                   gain_db=excluded.gain_db,
+                   fade_in_ms=excluded.fade_in_ms, fade_out_ms=excluded.fade_out_ms,
+                   fade_in_curve=excluded.fade_in_curve, fade_out_curve=excluded.fade_out_curve,
+                   decided_at=excluded.decided_at,
+                   applied_at=excluded.applied_at, origin=excluded.origin""",
+            (passage_id, t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
+             t["fade_in_ms"], t["fade_out_ms"], t["fade_in_curve"], t["fade_out_curve"],
+             anchor["audio_md5"], anchor["passage_kind"], anchor["start_ms"], anchor["end_ms"],
+             b["lead_in_ms"], b["lead_out_ms"], b["gain_db"],
+             b.get("fade_in_ms"), b.get("fade_out_ms"), b.get("fade_in_curve"), b.get("fade_out_curve"),
+             change["decided_at"], change["origin"]))
+    else:
+        conn.execute(
+            """INSERT INTO boundary_reviews
+                   (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                    audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms,
+                    orig_lead_out_ms, orig_gain_db, decided_at, applied_at, origin)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,datetime('now'),?15)
+               ON CONFLICT(passage_id) DO UPDATE SET
+                   start_ms=excluded.start_ms, end_ms=excluded.end_ms,
+                   lead_in_ms=excluded.lead_in_ms, lead_out_ms=excluded.lead_out_ms,
+                   gain_db=excluded.gain_db, decided_at=excluded.decided_at,
+                   applied_at=excluded.applied_at, origin=excluded.origin""",
+            (passage_id, t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
+             anchor["audio_md5"], anchor["passage_kind"], anchor["start_ms"], anchor["end_ms"],
+             b["lead_in_ms"], b["lead_out_ms"], b["gain_db"],
+             change["decided_at"], change["origin"]))
 
 
 def apply_artist_review(conn: sqlite3.Connection, recording_mbid: str, change: dict) -> None:
@@ -386,8 +464,28 @@ def main() -> int:
     # Traced too `[SPEC-DF-111]`: a target missing the review tables
     # entirely -- every real appliance today -- still needs them in the
     # emitted script, not just in this disposable compare copy.
+    #
+    # Explicit `BEGIN IMMEDIATE` first, always `[SPEC-SUI-226]` -- Python's
+    # `sqlite3` module never opens its own implicit transaction for a DDL
+    # statement (`ALTER TABLE`/`CREATE TABLE`), so left to the module's own
+    # heuristics, a later `conn.rollback()` (for `--emit-sql`) silently does
+    # NOT undo them; verified directly against this module's actual
+    # behaviour, not assumed. Issuing `BEGIN IMMEDIATE` ourselves first
+    # forces the DDL into a real, rollback-able transaction regardless.
+    # NOT committed here when `--emit-sql` is given: that mode's own promise
+    # is "nothing is ever committed to `db` itself," and
+    # `ensure_passages_fade_columns` -- unlike `ensure_review_tables`, whose
+    # statements are almost always no-ops against an already-migrated review
+    # table -- can be a genuine, first-time mutation of `passages` on a
+    # target that has never run `add_fade_columns.py`. Left inside the open
+    # transaction, the later `conn.rollback()` for `--emit-sql` now correctly
+    # undoes it, and the trace callback (already attached above) still
+    # captures it for the emitted script either way.
+    conn.execute("BEGIN IMMEDIATE")
     ensure_review_tables(conn)
-    conn.commit()
+    ensure_passages_fade_columns(conn)
+    if not args.emit_sql:
+        conn.commit()
 
     # A compare copy predating `[REQ-VIS-265]` entirely has no `listener_flags`
     # at all -- `--clear-flags` is then simply nothing to do, not an error
@@ -398,7 +496,12 @@ def main() -> int:
     say(f"{len(changes)} change(s) in {args.changes}")
     counts = {"fastforward": 0, "noop": 0, "conflict": 0, "missing": 0, "resolved": 0, "error": 0,
               "cleared": 0}
-    if writing:
+    # `--emit-sql` already has an open transaction from schema readiness
+    # above (never committed, on purpose) -- a second `BEGIN IMMEDIATE` here
+    # would fail against it, so this only opens a fresh one for the plain
+    # `--commit` path, which committed schema readiness immediately above
+    # and so has none open yet.
+    if writing and not args.emit_sql:
         conn.execute("BEGIN IMMEDIATE")
 
     for i, change in enumerate(changes, 1):
@@ -416,6 +519,13 @@ def main() -> int:
             passage_id = resolve_boundary_passage(conn, change)
             current = current_boundary(conn, passage_id) if passage_id else None
             keys = ["start_ms", "end_ms", "lead_in_ms", "lead_out_ms", "gain_db"]
+            # Only compare fade if the exported change actually carries an
+            # opinion on it `[SPEC-SUI-226]` -- a `changes.json` from a
+            # pre-fade `export_changes.py` has none, and comparing against
+            # it as if it did would misreport every such change as a
+            # conflict over fields it never meant to touch.
+            if "fade_in_ms" in change["target"]:
+                keys += ["fade_in_ms", "fade_out_ms", "fade_in_curve", "fade_out_curve"]
             subject = anchor["audio_md5"][:12] + "…"
             history = history_for(conn, "boundary_reviews", "passage_id=?1", (passage_id,)) if passage_id else None
         elif kind == "artist_review":
@@ -480,9 +590,10 @@ def main() -> int:
     landed = counts["fastforward"] or counts["resolved"]
     patch_statements = None
     if args.emit_sql:
-        # `db` is never the destination here `[SPEC-DF-111]` -- whatever this
-        # comparison wrote to it (including the schema setup above, already
-        # committed) is rolled back, leaving only the trace to act on.
+        # `db` is never the destination here `[SPEC-DF-111]` -- the schema
+        # setup above was deliberately left uncommitted for exactly this
+        # `[SPEC-SUI-226]`, so one rollback here undoes it along with every
+        # merge write below, leaving only the trace to act on.
         conn.rollback()
         # Only the writes: every comparison above issues its own `SELECT`s
         # (`resolve_passage`, `current_recording`, `history_for`, the

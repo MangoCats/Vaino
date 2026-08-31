@@ -1112,13 +1112,18 @@ async fn edit_info(
     match found {
         Some((entry, draft)) => {
             let edited = draft.is_some();
-            let (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db) = match draft {
+            let (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                 fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve) = match draft {
                 Some(d) => (
                     d.start_ms,
                     d.end_ms,
                     d.lead_in_ms.unwrap_or(entry.lead_in_ms),
                     d.lead_out_ms.unwrap_or(entry.lead_out_ms),
                     d.gain_db.unwrap_or(entry.gain_db as f64),
+                    d.fade_in_ms.unwrap_or(entry.fade_in_ms),
+                    d.fade_out_ms.unwrap_or(entry.fade_out_ms),
+                    d.fade_in_curve.unwrap_or_else(|| entry.fade_in_curve.as_str().to_string()),
+                    d.fade_out_curve.unwrap_or_else(|| entry.fade_out_curve.as_str().to_string()),
                 ),
                 None => (
                     entry.start_ms,
@@ -1126,6 +1131,10 @@ async fn edit_info(
                     entry.lead_in_ms,
                     entry.lead_out_ms,
                     entry.gain_db as f64,
+                    entry.fade_in_ms,
+                    entry.fade_out_ms,
+                    entry.fade_in_curve.as_str().to_string(),
+                    entry.fade_out_curve.as_str().to_string(),
                 ),
             };
             axum::Json(serde_json::json!({
@@ -1136,6 +1145,10 @@ async fn edit_info(
                 "lead_in_ms": lead_in_ms,
                 "lead_out_ms": lead_out_ms,
                 "gain_db": gain_db,
+                "fade_in_ms": fade_in_ms,
+                "fade_out_ms": fade_out_ms,
+                "fade_in_curve": fade_in_curve,
+                "fade_out_curve": fade_out_curve,
                 "edited": edited,
             }))
             .into_response()
@@ -1144,9 +1157,13 @@ async fn edit_info(
     }
 }
 
-/// The five values a boundary edit posts `[SPEC021 §3]`, and nothing else --
-/// no `passage_id`, which comes from the path and cannot be spoofed by the
-/// body disagreeing with the URL.
+/// The nine values a boundary edit posts `[SPEC021 §3]`, `[SPEC-SUI-226]`,
+/// and nothing else -- no `passage_id`, which comes from the path and cannot
+/// be spoofed by the body disagreeing with the URL. `fade_in_curve`/
+/// `fade_out_curve` travel as plain strings and are validated against
+/// `Curve::parse` inside `record_boundary_review`, not here -- the same
+/// place `start_ms >= end_ms` is already checked, so every draft-level
+/// refusal comes from one spot.
 #[cfg(feature = "sampo-support")]
 #[derive(serde::Deserialize)]
 struct BoundaryDraft {
@@ -1155,6 +1172,10 @@ struct BoundaryDraft {
     lead_in_ms: u64,
     lead_out_ms: u64,
     gain_db: f64,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
+    fade_in_curve: String,
+    fade_out_curve: String,
 }
 
 /// Commit a boundary edit `[SPEC021 §2]`. Recorded, not applied -- the same
@@ -1177,6 +1198,10 @@ async fn edit_review(
                 draft.lead_in_ms,
                 draft.lead_out_ms,
                 draft.gain_db,
+                draft.fade_in_ms,
+                draft.fade_out_ms,
+                &draft.fade_in_curve,
+                &draft.fade_out_curve,
             )
             .map_err(|e| e.message().to_string())
     })
@@ -1828,6 +1853,10 @@ mod tests {
             file_ms: 0,
             lead_in_ms: 0,
             lead_out_ms: 0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            fade_in_curve: crate::fade::Curve::Exponential,
+            fade_out_curve: crate::fade::Curve::Exponential,
             gain_db: 0.0,
             mbid: None,
             naming: Default::default(),
@@ -2038,14 +2067,17 @@ mod tests {
     /// check` because `serde` just ignores unknown fields by default.
     #[cfg(feature = "sampo-support")]
     #[test]
-    fn boundary_draft_deserialises_the_five_values_the_store_wants() {
+    fn boundary_draft_deserialises_the_nine_values_the_store_wants() {
         let draft: BoundaryDraft = serde_json::from_str(
-            r#"{"start_ms":1000,"end_ms":2000,"lead_in_ms":50,"lead_out_ms":900,"gain_db":-1.5}"#,
+            r#"{"start_ms":1000,"end_ms":2000,"lead_in_ms":50,"lead_out_ms":900,"gain_db":-1.5,
+                "fade_in_ms":20,"fade_out_ms":30,"fade_in_curve":"linear","fade_out_curve":"cosine"}"#,
         )
         .unwrap();
         assert_eq!((draft.start_ms, draft.end_ms), (1000, 2000));
         assert_eq!((draft.lead_in_ms, draft.lead_out_ms), (50, 900));
         assert!((draft.gain_db - -1.5).abs() < 1e-9);
+        assert_eq!((draft.fade_in_ms, draft.fade_out_ms), (20, 30));
+        assert_eq!((draft.fade_in_curve.as_str(), draft.fade_out_curve.as_str()), ("linear", "cosine"));
     }
 
     /// A round trip through `write_wav_pcm16`: known samples in, a header

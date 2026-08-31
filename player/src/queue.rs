@@ -19,6 +19,8 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::fade::Curve;
+
 /// A passage waiting to play. Timing only — no audio, no decoder.
 ///
 /// **Lead durations are usually milliseconds, and that is correct.** Measured
@@ -57,6 +59,16 @@ pub struct QueueEntry {
     pub lead_in_ms: u64,
     /// Full-to-silence at the end; 0 means end abruptly.
     pub lead_out_ms: u64,
+    /// This passage's own volume envelope -- orthogonal to lead-in/lead-out
+    /// `[XFD-ORTH-010]`. Lead decides *when* a neighbour may overlap; these
+    /// decide *whether this passage itself* starts/ends at full volume or
+    /// ramps, regardless of whether any crossfade ever happens around it.
+    /// Defaults to 20ms/exponential for every passage -- never analysed,
+    /// never `NULL`, always user-editable `[SPEC-SUI-226]`.
+    pub fade_in_ms: u64,
+    pub fade_out_ms: u64,
+    pub fade_in_curve: Curve,
+    pub fade_out_curve: Curve,
     pub gain_db: f32,
     /// The recording this passage is, for play history `[SPEC-SC-095]`.
     /// `None` when unidentified — such a passage still plays, it simply
@@ -528,6 +540,14 @@ mod tests {
             file_ms: 0,
             lead_in_ms: lead_in,
             lead_out_ms: lead_out,
+            // Pass-through, not the production default `[SPEC-SUI-226]` --
+            // this helper is shared by tests about crossfade *timing*, and a
+            // nonzero fade would perturb sample-value assertions elsewhere
+            // in this file that have nothing to do with fades.
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            fade_in_curve: Curve::Exponential,
+            fade_out_curve: Curve::Exponential,
             gain_db: 0.0,
             mbid: None,
             naming: Default::default(),

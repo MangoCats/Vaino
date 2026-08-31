@@ -309,10 +309,31 @@ pub(crate) const BOUNDARY_REVIEW_COLUMNS: [&str; 8] = [
     "origin TEXT",
 ];
 
+/// Fade, added after the columns above `[SPEC-SUI-226]` -- its own
+/// `ALTER TABLE` batch rather than folded into the array above, so an
+/// installation already past the first migration only ever gains columns,
+/// never re-runs one it already has. Same `orig_*` shape as lead/start/end
+/// for the same reason `[SPEC-DF-102]`: a fade edit needs a sync-safe
+/// pre-edit baseline exactly like a boundary edit already has one.
+#[cfg(feature = "sampo-support")]
+pub(crate) const BOUNDARY_REVIEW_FADE_COLUMNS: [&str; 8] = [
+    "fade_in_ms INTEGER",
+    "fade_out_ms INTEGER",
+    "fade_in_curve TEXT",
+    "fade_out_curve TEXT",
+    "orig_fade_in_ms INTEGER",
+    "orig_fade_out_ms INTEGER",
+    "orig_fade_in_curve TEXT",
+    "orig_fade_out_curve TEXT",
+];
+
 #[cfg(feature = "sampo-support")]
 pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
     for column in BOUNDARY_REVIEW_COLUMNS {
+        let _ = conn.execute(&format!("ALTER TABLE boundary_reviews ADD COLUMN {column}"), []);
+    }
+    for column in BOUNDARY_REVIEW_FADE_COLUMNS {
         let _ = conn.execute(&format!("ALTER TABLE boundary_reviews ADD COLUMN {column}"), []);
     }
     Ok(())
@@ -376,6 +397,7 @@ pub(crate) fn ensure_artist_review_table(conn: &Connection) -> Result<(), DbErro
 
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.duration_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
+                               p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, \
                                (SELECT pr.mbid FROM passage_recordings pr \
                                 WHERE pr.passage_id = p.passage_id \
                                 ORDER BY pr.weight DESC, pr.mbid LIMIT 1)";
@@ -398,10 +420,22 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         lead_in_ms: row.get::<_, Option<i64>>(5)?.unwrap_or(0).max(0) as u64,
         lead_out_ms: row.get::<_, Option<i64>>(6)?.unwrap_or(0).max(0) as u64,
         gain_db: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0) as f32,
+        // `NOT NULL DEFAULT 20`/`'exponential'` in the schema `[SPEC-SUI-226]`
+        // -- unlike lead, a fade always has a value, never "not yet
+        // analysed", so no `Option`/`unwrap_or` dance is needed for the
+        // numbers. The curve name still falls back defensively: a plain
+        // `TEXT` column can hold anything a hand edit or an older row put
+        // there, and a bad name should read as the default, not panic.
+        fade_in_ms: row.get::<_, i64>(8)?.max(0) as u64,
+        fade_out_ms: row.get::<_, i64>(9)?.max(0) as u64,
+        fade_in_curve: crate::fade::Curve::parse(&row.get::<_, String>(10)?)
+            .unwrap_or(crate::fade::Curve::Exponential),
+        fade_out_curve: crate::fade::Curve::parse(&row.get::<_, String>(11)?)
+            .unwrap_or(crate::fade::Curve::Exponential),
         // A scalar subquery rather than a join: a passage may legally hold a
         // medley of several recordings `[SPEC-SC-*]`, and a join would silently
         // return that passage twice. Highest weight wins, mbid breaks ties.
-        mbid: row.get::<_, Option<String>>(8)?,
+        mbid: row.get::<_, Option<String>>(12)?,
         naming: Naming::default(),
     })
 }
@@ -1016,6 +1050,7 @@ impl PlayerStore {
     /// for the same reason: the queue key is the passage, and a second draft
     /// is not a second finding.
     #[cfg(feature = "sampo-support")]
+    #[allow(clippy::too_many_arguments)]
     pub fn record_boundary_review(
         &self,
         passage_id: i64,
@@ -1024,10 +1059,22 @@ impl PlayerStore {
         lead_in_ms: u64,
         lead_out_ms: u64,
         gain_db: f64,
+        fade_in_ms: u64,
+        fade_out_ms: u64,
+        fade_in_curve: &str,
+        fade_out_curve: &str,
     ) -> Result<(), DbError> {
         if start_ms >= end_ms {
             return Err(DbError::Query("start must come before end".into()));
         }
+        // Validated here, not trusted from the URL -- the same posture
+        // `record_review` already takes for its own verb `[SPEC-SUI-226]`.
+        let fade_in_curve = crate::fade::Curve::parse(fade_in_curve)
+            .ok_or_else(|| DbError::Query(format!("unknown fade-in curve: {fade_in_curve}")))?
+            .as_str();
+        let fade_out_curve = crate::fade::Curve::parse(fade_out_curve)
+            .ok_or_else(|| DbError::Query(format!("unknown fade-out curve: {fade_out_curve}")))?
+            .as_str();
 
         // Changing a decision already folded into `passages` is not an
         // overwrite of one row -- `apply_boundary_reviews.py` has to put the
@@ -1057,14 +1104,19 @@ impl PlayerStore {
         // so a second commit before that reads the same true original --
         // exactly how `record_review`'s `previous_mbid` stays pinned across
         // repeated commits without needing to remember its own prior value.
-        let (audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms, orig_lead_out_ms, orig_gain_db): (String, String, i64, i64, Option<i64>, Option<i64>, Option<f64>) = self
+        #[allow(clippy::type_complexity)]
+        let (audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms, orig_lead_out_ms,
+             orig_gain_db, orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve):
+            (String, String, i64, i64, Option<i64>, Option<i64>, Option<f64>, i64, i64, String, String) = self
             .conn
             .query_row(
-                "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db \
+                "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db, \
+                        p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve \
                    FROM passages p JOIN files f ON f.file_id = p.file_id \
                   WHERE p.passage_id = ?1",
                 [passage_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
+                        r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)),
             )
             .map_err(|_| DbError::Query("no such passage".into()))?;
 
@@ -1072,15 +1124,23 @@ impl PlayerStore {
             .execute(
                 "INSERT INTO boundary_reviews
                      (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                      fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve,
                       audio_md5, orig_kind, orig_start_ms, orig_end_ms,
-                      orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, decided_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
+                      orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
+                      orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve,
+                      decided_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                         ?18, ?19, ?20, ?21, datetime('now'))
                  ON CONFLICT(passage_id) DO UPDATE SET
                      start_ms = excluded.start_ms,
                      end_ms = excluded.end_ms,
                      lead_in_ms = excluded.lead_in_ms,
                      lead_out_ms = excluded.lead_out_ms,
                      gain_db = excluded.gain_db,
+                     fade_in_ms = excluded.fade_in_ms,
+                     fade_out_ms = excluded.fade_out_ms,
+                     fade_in_curve = excluded.fade_in_curve,
+                     fade_out_curve = excluded.fade_out_curve,
                      audio_md5 = excluded.audio_md5,
                      orig_kind = excluded.orig_kind,
                      orig_start_ms = excluded.orig_start_ms,
@@ -1088,12 +1148,18 @@ impl PlayerStore {
                      orig_lead_in_ms = excluded.orig_lead_in_ms,
                      orig_lead_out_ms = excluded.orig_lead_out_ms,
                      orig_gain_db = excluded.orig_gain_db,
+                     orig_fade_in_ms = excluded.orig_fade_in_ms,
+                     orig_fade_out_ms = excluded.orig_fade_out_ms,
+                     orig_fade_in_curve = excluded.orig_fade_in_curve,
+                     orig_fade_out_curve = excluded.orig_fade_out_curve,
                      decided_at = excluded.decided_at",
                 rusqlite::params![
                     passage_id, start_ms as i64, end_ms as i64,
                     lead_in_ms as i64, lead_out_ms as i64, gain_db,
+                    fade_in_ms as i64, fade_out_ms as i64, fade_in_curve, fade_out_curve,
                     audio_md5, orig_kind, orig_start_ms, orig_end_ms,
                     orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
+                    orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve,
                 ],
             )
             .map(|_| ())
@@ -1873,6 +1939,10 @@ pub struct BoundaryReview {
     pub lead_in_ms: Option<u64>,
     pub lead_out_ms: Option<u64>,
     pub gain_db: Option<f64>,
+    pub fade_in_ms: Option<u64>,
+    pub fade_out_ms: Option<u64>,
+    pub fade_in_curve: Option<String>,
+    pub fade_out_curve: Option<String>,
 }
 
 /// What to narrow a browse to. Every field is a whole-value match except `q`,
@@ -2248,7 +2318,8 @@ impl Library {
         }
         self.conn
             .query_row(
-                "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db
+                "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                        fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve
                    FROM boundary_reviews WHERE passage_id = ?1",
                 [passage_id],
                 |r| {
@@ -2258,6 +2329,10 @@ impl Library {
                         lead_in_ms: r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
                         lead_out_ms: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
                         gain_db: r.get(4)?,
+                        fade_in_ms: r.get::<_, Option<i64>>(5)?.map(|v| v as u64),
+                        fade_out_ms: r.get::<_, Option<i64>>(6)?.map(|v| v as u64),
+                        fade_in_curve: r.get(7)?,
+                        fade_out_curve: r.get(8)?,
                     })
                 },
             )
@@ -2437,7 +2512,17 @@ mod tests {
              INSERT INTO passages VALUES (2,1,'radio',1200,298000,3000,4000,-2.5,'src');
              -- passage 2 is a medley: two recordings, the heavier one wins
              INSERT INTO passage_recordings VALUES (2,'aaaaaaaa-0000-0000-0000-00000000000f',0.3,'s'),
-                                                   (2,'aaaaaaaa-0000-0000-0000-000000000001',0.9,'s');",
+                                                   (2,'aaaaaaaa-0000-0000-0000-000000000001',0.9,'s');
+             -- Added after the fact, exactly like the real migration
+             -- (`tools/add_fade_columns.py`) adds them to a live database
+             -- `[SPEC-SUI-226]` -- so every existing bare `INSERT INTO
+             -- passages VALUES (...)` above and in every test built on this
+             -- fixture keeps working unmodified, backfilled with the same
+             -- default a real ALTER TABLE gives every existing row.
+             ALTER TABLE passages ADD COLUMN fade_in_ms INTEGER NOT NULL DEFAULT 20;
+             ALTER TABLE passages ADD COLUMN fade_out_ms INTEGER NOT NULL DEFAULT 20;
+             ALTER TABLE passages ADD COLUMN fade_in_curve TEXT NOT NULL DEFAULT 'exponential';
+             ALTER TABLE passages ADD COLUMN fade_out_curve TEXT NOT NULL DEFAULT 'exponential';",
         )
         .unwrap();
         c
@@ -2498,7 +2583,7 @@ mod tests {
     fn settled_ids_stay_out_of_the_queue() {
         let c = reviewable();
         c.execute_batch(
-            "INSERT INTO passages VALUES (3,1,'radio',0,1000,NULL,NULL,NULL,'src');
+            "INSERT INTO passages VALUES (3,1,'radio',0,1000,NULL,NULL,NULL,'src',20,20,'exponential','exponential');
              INSERT INTO passage_recordings VALUES (3,'aaaaaaaa-0000-0000-0000-000000000005',1.0,'s');
              INSERT INTO id_checks VALUES (3,'aaaaaaaa-0000-0000-0000-000000000005','confirmed',0.99,NULL,'t');",
         )
@@ -2521,7 +2606,7 @@ mod tests {
     fn on_demand_reaches_a_passage_the_queue_never_flagged() {
         let c = reviewable();
         c.execute_batch(
-            "INSERT INTO passages VALUES (9,1,'radio',0,1000,NULL,NULL,NULL,'src');
+            "INSERT INTO passages VALUES (9,1,'radio',0,1000,NULL,NULL,NULL,'src',20,20,'exponential','exponential');
              INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','On Demand',NULL,'s');
              INSERT INTO passage_recordings VALUES (9,'aaaaaaaa-0000-0000-0000-00000000000a',1.0,'s');",
         )
@@ -2563,7 +2648,7 @@ mod tests {
         // weaker match of the two, so if it still comes first the ordering is
         // by kind and not merely by score.
         c.execute_batch(
-            "INSERT INTO passages VALUES (4,1,'radio',0,1000,NULL,NULL,NULL,'src');
+            "INSERT INTO passages VALUES (4,1,'radio',0,1000,NULL,NULL,NULL,'src',20,20,'exponential','exponential');
              INSERT INTO passage_recordings VALUES (4,'aaaaaaaa-0000-0000-0000-000000000003',1.0,'s');
              INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-000000000003','Wrong Song',NULL,'s');
              INSERT INTO id_checks VALUES (4,'aaaaaaaa-0000-0000-0000-000000000003','contradicted',0.91,
@@ -2739,7 +2824,7 @@ mod tests {
         // same recording under another MBID" when it has no id to differ from.
         let c = reviewable();
         c.execute_batch(
-            "INSERT INTO passages VALUES (6,1,'radio',0,1000,NULL,NULL,NULL,'src');
+            "INSERT INTO passages VALUES (6,1,'radio',0,1000,NULL,NULL,NULL,'src',20,20,'exponential','exponential');
              INSERT INTO recordings VALUES ('local:track:827','Some Track',NULL,'s');
              INSERT INTO passage_recordings VALUES (6,'local:track:827',1.0,'s');
              INSERT INTO id_checks VALUES (6,'local:track:827','unmatched',NULL,NULL,'t');",
@@ -2763,12 +2848,12 @@ mod tests {
     fn a_deliberately_local_id_is_not_a_review_finding() {
         let c = reviewable();
         c.execute_batch(
-            "INSERT INTO passages VALUES (7,1,'radio',0,1000,NULL,NULL,NULL,'ingest:whole-file');
+            "INSERT INTO passages VALUES (7,1,'radio',0,1000,NULL,NULL,NULL,'ingest:whole-file',20,20,'exponential','exponential');
              INSERT INTO recordings VALUES ('local:audio:abc','My Own Song',NULL,'local:ingest');
              INSERT INTO passage_recordings VALUES (7,'local:audio:abc',1.0,'local:ingest');
              INSERT INTO id_checks VALUES (7,'local:audio:abc','unmatched',NULL,NULL,'t');
              -- and a migration placeholder, which must still be asked about
-             INSERT INTO passages VALUES (8,1,'radio',0,1000,NULL,NULL,NULL,'src');
+             INSERT INTO passages VALUES (8,1,'radio',0,1000,NULL,NULL,NULL,'src',20,20,'exponential','exponential');
              INSERT INTO recordings VALUES ('local:track:827','Something',NULL,'s');
              INSERT INTO passage_recordings VALUES (8,'local:track:827',1.0,'inherited:mulib');
              INSERT INTO id_checks VALUES (8,'local:track:827','unmatched',NULL,NULL,'t');",
@@ -2784,7 +2869,7 @@ mod tests {
         // But a locally-ingested track AcoustID *can* name is the most useful
         // row there is: a placeholder with the real recording beside it.
         lib.conn.execute_batch(
-            "INSERT INTO passages VALUES (9,1,'radio',0,1000,NULL,NULL,NULL,'ingest:whole-file');
+            "INSERT INTO passages VALUES (9,1,'radio',0,1000,NULL,NULL,NULL,'ingest:whole-file',20,20,'exponential','exponential');
              INSERT INTO recordings VALUES ('local:audio:def','Some Album Track',NULL,'local:ingest');
              INSERT INTO passage_recordings VALUES (9,'local:audio:def',1.0,'local:ingest');
              INSERT INTO id_checks VALUES (9,'local:audio:def','contradicted',0.98,
@@ -2808,7 +2893,7 @@ mod tests {
     fn unmatched_is_reachable_but_graded_lowest() {
         let c = reviewable();
         c.execute_batch(
-            "INSERT INTO passages VALUES (5,1,'radio',0,1000,NULL,NULL,NULL,'src');
+            "INSERT INTO passages VALUES (5,1,'radio',0,1000,NULL,NULL,NULL,'src',20,20,'exponential','exponential');
              INSERT INTO passage_recordings VALUES (5,'aaaaaaaa-0000-0000-0000-000000000006',1.0,'s');
              INSERT INTO id_checks VALUES (5,'aaaaaaaa-0000-0000-0000-000000000006','unmatched',NULL,NULL,'t');",
         )
@@ -3193,7 +3278,7 @@ mod tests {
             c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
         }
         let store = PlayerStore::open(&tmp).unwrap();
-        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0).unwrap();
+        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0, 20, 20, "exponential", "exponential").unwrap();
 
         let lib = Library::open(&tmp).unwrap();
         let got = lib.boundary_review(2).expect("a committed edit must be readable back");
@@ -3201,8 +3286,12 @@ mod tests {
         assert_eq!(got.lead_in_ms, Some(500));
         assert_eq!(got.lead_out_ms, Some(1500));
         assert!((got.gain_db.unwrap() - -1.0).abs() < 1e-9);
+        assert_eq!(got.fade_in_ms, Some(20));
+        assert_eq!(got.fade_out_ms, Some(20));
+        assert_eq!(got.fade_in_curve.as_deref(), Some("exponential"));
+        assert_eq!(got.fade_out_curve.as_deref(), Some("exponential"));
 
-        store.record_boundary_review(2, 2100, 291_000, 400, 1400, -0.5).unwrap();
+        store.record_boundary_review(2, 2100, 291_000, 400, 1400, -0.5, 20, 20, "exponential", "exponential").unwrap();
         let n: i64 = store
             .conn
             .query_row("SELECT COUNT(*) FROM boundary_reviews", [], |r| r.get(0))
@@ -3228,28 +3317,33 @@ mod tests {
             c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
         }
         let store = PlayerStore::open(&tmp).unwrap();
-        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0).unwrap();
+        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0, 20, 20, "exponential", "exponential").unwrap();
 
-        let row = |c: &Connection| -> (String, String, i64, i64, Option<i64>, Option<i64>, Option<f64>) {
+        #[allow(clippy::type_complexity)]
+        let row = |c: &Connection| -> (String, String, i64, i64, Option<i64>, Option<i64>, Option<f64>, Option<i64>, Option<i64>, Option<String>, Option<String>) {
             c.query_row(
                 "SELECT audio_md5, orig_kind, orig_start_ms, orig_end_ms, \
-                        orig_lead_in_ms, orig_lead_out_ms, orig_gain_db \
+                        orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, \
+                        orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve \
                    FROM boundary_reviews WHERE passage_id = 2",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
+                        r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)),
             )
             .unwrap()
         };
-        let (md5, kind, os, oe, oli, olo, og) = row(&store.conn);
+        let (md5, kind, os, oe, oli, olo, og, ofi, ofo, ofic, ofoc) = row(&store.conn);
         assert_eq!((md5.as_str(), kind.as_str()), ("md5", "radio"));
         assert_eq!((os, oe), (1200, 298_000), "must be the passage's ORIGINAL span, not the draft");
         assert_eq!((oli, olo), (Some(3000), Some(4000)));
         assert!((og.unwrap() - -2.5).abs() < 1e-9);
+        assert_eq!((ofi, ofo), (Some(20), Some(20)), "the passage's original fade, from the fixture default");
+        assert_eq!((ofic.as_deref(), ofoc.as_deref()), (Some("exponential"), Some("exponential")));
 
         // A second commit, before anything applies it, must not move the
         // baseline to the FIRST draft's values -- `passages` itself has not
         // changed, so re-reading it gives the same true original.
-        store.record_boundary_review(2, 2100, 291_000, 400, 1400, -0.5).unwrap();
+        store.record_boundary_review(2, 2100, 291_000, 400, 1400, -0.5, 20, 20, "exponential", "exponential").unwrap();
         let (_, _, os2, oe2, ..) = row(&store.conn);
         assert_eq!((os2, oe2), (1200, 298_000), "the baseline must not drift on a re-commit");
 
@@ -3269,7 +3363,7 @@ mod tests {
             c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
         }
         let store = PlayerStore::open(&tmp).unwrap();
-        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0).unwrap();
+        store.record_boundary_review(2, 2000, 290_000, 500, 1500, -1.0, 20, 20, "exponential", "exponential").unwrap();
         store
             .conn
             .execute(
@@ -3277,7 +3371,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert!(store.record_boundary_review(2, 2200, 292_000, 300, 1300, -0.2).is_err());
+        assert!(store.record_boundary_review(2, 2200, 292_000, 300, 1300, -0.2, 20, 20, "exponential", "exponential").is_err());
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -3293,8 +3387,8 @@ mod tests {
             c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
         }
         let store = PlayerStore::open(&tmp).unwrap();
-        assert!(store.record_boundary_review(2, 5000, 5000, 0, 0, 0.0).is_err());
-        assert!(store.record_boundary_review(2, 6000, 5000, 0, 0, 0.0).is_err());
+        assert!(store.record_boundary_review(2, 5000, 5000, 0, 0, 0.0, 20, 20, "exponential", "exponential").is_err());
+        assert!(store.record_boundary_review(2, 6000, 5000, 0, 0, 0.0, 20, 20, "exponential", "exponential").is_err());
         let _ = std::fs::remove_file(&tmp);
     }
 

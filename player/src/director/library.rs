@@ -919,7 +919,17 @@ mod tests {
              INSERT INTO passages VALUES (4,1,'album',0,180000,0,0,0.0);
              INSERT INTO passage_recordings VALUES (1,'rec-a',1.0),(2,'rec-b',1.0),(3,'rec-c',1.0);
              INSERT INTO recording_artists VALUES ('rec-a','art-1'),('rec-b','art-2'),
-                                                  ('rec-c','art-3');",
+                                                  ('rec-c','art-3');
+             -- Added after the fact, exactly like the real migration
+             -- (`tools/add_fade_columns.py`) adds them to a live database
+             -- `[SPEC-SUI-226]` -- so every existing bare `INSERT INTO
+             -- passages VALUES (...)` above keeps working unmodified,
+             -- backfilled with the same default a real ALTER TABLE gives
+             -- every existing row.
+             ALTER TABLE passages ADD COLUMN fade_in_ms INTEGER NOT NULL DEFAULT 20;
+             ALTER TABLE passages ADD COLUMN fade_out_ms INTEGER NOT NULL DEFAULT 20;
+             ALTER TABLE passages ADD COLUMN fade_in_curve TEXT NOT NULL DEFAULT 'exponential';
+             ALTER TABLE passages ADD COLUMN fade_out_curve TEXT NOT NULL DEFAULT 'exponential';",
         )
         .unwrap();
         c

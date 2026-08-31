@@ -33,7 +33,11 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(file_id),
     kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-    boundary_src TEXT NOT NULL, CHECK (end_ms > start_ms));
+    boundary_src TEXT NOT NULL,
+    fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
+    fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
+    fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
+    CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
     length_ms INTEGER, source TEXT NOT NULL);
@@ -57,7 +61,10 @@ CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
     lead_out_ms INTEGER, gain_db REAL, audio_md5 TEXT, orig_kind TEXT,
     orig_start_ms INTEGER, orig_end_ms INTEGER, orig_lead_in_ms INTEGER,
     orig_lead_out_ms INTEGER, orig_gain_db REAL, decided_at TEXT NOT NULL,
-    applied_at TEXT, origin TEXT);
+    applied_at TEXT, origin TEXT,
+    fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
+    orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
+    orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
 CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
     artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
     previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
@@ -91,8 +98,10 @@ def build_local(path: str) -> None:
     c.executescript(SCHEMA)
     c.execute("INSERT INTO files VALUES (1,'md5-a','/m/a.mp3',1,1.0,'mp3',300000,'t','t')")
     c.execute("INSERT INTO files VALUES (2,'md5-b','/m/b.mp3',1,1.0,'mp3',300000,'t','t')")
-    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src')")
-    c.execute("INSERT INTO passages VALUES (2,2,'radio',2000,190000,250,1200,-2.0,'manual')")
+    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src',20,20,'exponential','exponential')")
+    # Passage 2 carries its POST-edit fade too -- the boundary edit below
+    # `[SPEC-SUI-226]` moved it from the fixed default to 15ms/1500ms.
+    c.execute("INSERT INTO passages VALUES (2,2,'radio',2000,190000,250,1200,-2.0,'manual',15,1500,'linear','cosine')")
     c.execute("INSERT INTO recordings VALUES (?,'New Title',NULL,'inherited:mulib')", (NEW_REC,))
     c.execute("INSERT INTO recordings VALUES (?,'Song X',NULL,'inherited:mulib')", (SONG_X,))
     c.execute("INSERT INTO artists VALUES (?,'Right Artist',NULL,'inherited:mulib')", (ART_RIGHT,))
@@ -105,12 +114,16 @@ def build_local(path: str) -> None:
         "INSERT INTO id_reviews (passage_id,decision,chosen_mbid,previous_mbid,decided_at,applied_at) "
         "VALUES (1,'reassigned',?,?,'2026-08-27 10:00:00','2026-08-27 10:05:00')",
         (NEW_REC, OLD_REC))
-    # 2. A boundary edit, applied -- the pre-edit span was 1000-200000.
+    # 2. A boundary edit, applied -- the pre-edit span was 1000-200000, and
+    # the fade `[SPEC-SUI-226]` moved off the fixed default too.
     c.execute(
         "INSERT INTO boundary_reviews (passage_id,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
         "audio_md5,orig_kind,orig_start_ms,orig_end_ms,orig_lead_in_ms,orig_lead_out_ms,orig_gain_db,"
-        "decided_at,applied_at) VALUES (2,2000,190000,250,1200,-2.0,'md5-b','radio',1000,200000,"
-        "0,900,-1.0,'2026-08-27 11:00:00','2026-08-27 11:05:00')")
+        "decided_at,applied_at,fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve,"
+        "orig_fade_in_ms,orig_fade_out_ms,orig_fade_in_curve,orig_fade_out_curve) "
+        "VALUES (2,2000,190000,250,1200,-2.0,'md5-b','radio',1000,200000,"
+        "0,900,-1.0,'2026-08-27 11:00:00','2026-08-27 11:05:00',"
+        "15,1500,'linear','cosine',20,20,'exponential','exponential')")
     # 3. An artist correction, applied.
     c.execute(
         "INSERT INTO artist_reviews (recording_mbid,passage_id,artist_mbid,artist_name,"
@@ -128,8 +141,8 @@ def base_remote(path: str) -> sqlite3.Connection:
     c.executescript(SCHEMA)
     c.execute("INSERT INTO files VALUES (1,'md5-a','/srv/a.mp3',1,1.0,'mp3',300000,'t','t')")
     c.execute("INSERT INTO files VALUES (2,'md5-b','/srv/b.mp3',1,1.0,'mp3',300000,'t','t')")
-    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src')")
-    c.execute("INSERT INTO passages VALUES (2,2,'radio',1000,200000,0,900,-1.0,'src')")
+    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src',20,20,'exponential','exponential')")
+    c.execute("INSERT INTO passages VALUES (2,2,'radio',1000,200000,0,900,-1.0,'src',20,20,'exponential','exponential')")
     c.execute("INSERT INTO recordings VALUES (?,'Old Title',NULL,'inherited:mulib')", (OLD_REC,))
     c.execute("INSERT INTO recordings VALUES (?,'Song X',NULL,'inherited:mulib')", (SONG_X,))
     c.execute("INSERT INTO artists VALUES (?,'Wrong Artist',NULL,'inherited:mulib')", (ART_WRONG,))
@@ -147,6 +160,17 @@ def link(conn, passage_id):
 def boundary(conn, passage_id):
     return conn.execute(
         "SELECT start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db FROM passages WHERE passage_id=?",
+        (passage_id,)).fetchone()
+
+
+def boundary_and_fade(conn, passage_id):
+    """Like `boundary`, plus the four fade columns `[SPEC-SUI-226]` -- kept
+    separate so the older no-fade assertions stay exactly as strict as they
+    always were, and only the scenario that actually cares about fade reads
+    it."""
+    return conn.execute(
+        "SELECT start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
+        "fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve FROM passages WHERE passage_id=?",
         (passage_id,)).fetchone()
 
 
@@ -169,6 +193,18 @@ def main() -> int:
         with open(changes_json) as f:
             doc = json.load(f)
         check(len(doc["changes"]) == 3, f"expected 3 change records, got {len(doc['changes'])}")
+        # `[SPEC-SUI-226]`: the exported record must actually carry fade,
+        # not just span/lead/gain -- the bug a first version of this export
+        # had (a column-order mismatch silently zeroed out every exported
+        # boundary_review) would have failed the "3 changes" check above,
+        # but would not have caught a *wrong* value landing in the right key.
+        boundary_change = next(c for c in doc["changes"] if c["kind"] == "boundary_review")
+        check(boundary_change["target"].get("fade_in_ms") == 15,
+              f"exported target fade_in_ms wrong, got {boundary_change['target']}")
+        check(boundary_change["target"].get("fade_out_curve") == "cosine",
+              f"exported target fade_out_curve wrong, got {boundary_change['target']}")
+        check(boundary_change["baseline"].get("fade_in_ms") == 20,
+              f"exported baseline fade must be the fixed pre-edit default, got {boundary_change['baseline']}")
 
         # --- Scenario 1: remote unchanged since baseline -> fast-forward ---
         print("unchanged remote: all three fast-forward with no flag needed")
@@ -183,6 +219,8 @@ def main() -> int:
         c = sqlite3.connect(remote1)
         check(link(c, 1) == NEW_REC, f"reassignment did not land, got {link(c, 1)}")
         check(boundary(c, 2) == (2000, 190000, 250, 1200, -2.0), f"boundary edit did not land, got {boundary(c, 2)}")
+        check(boundary_and_fade(c, 2) == (2000, 190000, 250, 1200, -2.0, 15, 1500, 'linear', 'cosine'),
+              f"fade did not land alongside the rest of the boundary edit, got {boundary_and_fade(c, 2)}")
         check(artist_of(c, SONG_X) == ART_RIGHT, f"artist correction did not land, got {artist_of(c, SONG_X)}")
         c.close()
 
@@ -198,7 +236,8 @@ def main() -> int:
         c2.execute("INSERT INTO recordings VALUES (?,'New Title',NULL,'inherited:mulib')", (NEW_REC,))
         c2.execute("DELETE FROM passage_recordings WHERE passage_id=1 AND mbid=?", (OLD_REC,))
         c2.execute("UPDATE passages SET start_ms=2000,end_ms=190000,lead_in_ms=250,"
-                   "lead_out_ms=1200,gain_db=-2.0 WHERE passage_id=2")
+                   "lead_out_ms=1200,gain_db=-2.0,fade_in_ms=15,fade_out_ms=1500,"
+                   "fade_in_curve='linear',fade_out_curve='cosine' WHERE passage_id=2")
         c2.execute("DELETE FROM recording_artists WHERE mbid=?", (SONG_X,))
         c2.execute("INSERT INTO artists VALUES (?,'Right Artist',NULL,'inherited:mulib')", (ART_RIGHT,))
         c2.execute("INSERT INTO recording_artists VALUES (?,?,1.0,'inherited:mulib')", (SONG_X, ART_RIGHT))
@@ -233,6 +272,9 @@ def main() -> int:
         check(link(c3, 1) == third_rec, "a conflict must not overwrite the divergent value")
         check(artist_of(c3, SONG_X) == ART_THIRD, "a conflict must not overwrite the divergent credit")
         check(boundary(c3, 2) == (2000, 190000, 250, 1200, -2.0), "the non-conflicting boundary edit must still land")
+        check(boundary_and_fade(c3, 2) == (2000, 190000, 250, 1200, -2.0, 15, 1500, 'linear', 'cosine'),
+              "the fade half of the non-conflicting boundary edit must land too, "
+              f"got {boundary_and_fade(c3, 2)}")
 
         print("--resolve theirs applies the incoming change over the divergence")
         r = run(APPLY, remote3, changes_json, "--resolve", "1=theirs", "--resolve", "3=theirs", "--commit")
@@ -322,6 +364,14 @@ def main() -> int:
         check(link(c7, 1) == NEW_REC, "the reassignment must land despite the missing origin column")
         check(boundary(c7, 2) == (2000, 190000, 250, 1200, -2.0),
               "the boundary edit must land despite boundary_reviews never existing here")
+        # `passages` here started with none of the four fade columns at all
+        # `[SPEC-SUI-226]` -- `ensure_passages_fade_columns` must have added
+        # them on the fly for the fade half of the same edit to land, the
+        # same auto-migration `ensure_review_tables` already does for the
+        # three review tables themselves.
+        check(boundary_and_fade(c7, 2) == (2000, 190000, 250, 1200, -2.0, 15, 1500, 'linear', 'cosine'),
+              f"the fade half must land even though passages lacked the columns entirely, "
+              f"got {boundary_and_fade(c7, 2)}")
         check(artist_of(c7, SONG_X) == ART_RIGHT,
               "the artist correction must land despite artist_reviews never existing here")
         c7.close()

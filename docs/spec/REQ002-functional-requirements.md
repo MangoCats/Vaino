@@ -20,7 +20,7 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-AUD-122]` Passage boundaries are sample-accurate, not packet-accurate.** A decoder seek lands on a container packet and reports where it actually landed; the remainder must be discarded so `start_ms` means `start_ms`. Measured drift when the reported landing was ignored: **648 frames, 14.7 ms**, on every passage with a non-zero start. It is inaudible in isolation, which is precisely the danger — it silently shifts every trim point, and because the passage length is measured from the *requested* start, it drags the end boundary along with it.
 
-**`[REQ-AUD-130]`** Crossfade between consecutive passages using their lead-in/lead-out points and gain `[SPEC-SC-040]`.
+**`[REQ-AUD-130]`** Crossfade between consecutive passages, `lead_in_ms`/`lead_out_ms` timing when the overlap is permitted and `fade_in_ms`/`fade_out_ms` `[SPEC-SC-046]` actually ramping gain across it, together with gain `[SPEC-SC-040]`.
 
 **`[REQ-AUD-140]`** Resume playback state across restart, including position within a passage `[SPEC-SC-098]`.
 
@@ -332,7 +332,7 @@ and the page is blank rather than merely forgetful.
 `?skin=` still overrides, and is remembered when used, so a link can hand
 someone a skin and it sticks.
 
-**`[REQ-VIS-130]`** Automatically computed boundaries, lead-in/lead-out points and gain are **reviewable and overridable** through a waveform view `[SPEC-SA-080]`. Manual edits outrank computed values permanently and are never silently recomputed.
+**`[REQ-VIS-130]`** Automatically computed boundaries, lead-in/lead-out points and gain are **reviewable and overridable** through a waveform view `[SPEC-SA-080]`. Fade-in/fade-out and their curves `[SPEC-SC-046]` are reviewable and overridable there too, though not automatically computed — every passage starts from the same fixed default. Manual edits outrank computed values permanently and are never silently recomputed.
 
 **`[REQ-VIS-150]` The listening surface shows what is coming and what is in force.** The queue in play order, the active programme with a manual override `[SPEC-DIR-185]`, and master volume.
 

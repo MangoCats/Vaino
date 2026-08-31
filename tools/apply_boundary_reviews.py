@@ -43,10 +43,33 @@ def main() -> int:
         say("no boundary edits recorded yet")
         return 1
 
+    # `passages.fade_*` `[SPEC-SUI-226]` is a deliberate, separate migration
+    # (`tools/add_fade_columns.py`), not something Vaino's own Rust
+    # schema-ensure adds -- unlike `boundary_reviews` itself, which every
+    # `sampo-support` Vaino brings up to date on its own. A clear refusal
+    # here beats the raw "no such column: p.fade_in_ms" the SELECT below
+    # would otherwise fail with.
+    passages_cols = {r[1] for r in conn.execute("PRAGMA table_info(passages)")}
+    if "fade_in_ms" not in passages_cols:
+        say("passages is missing the fade columns [SPEC-SUI-226] -- run "
+            "tools/add_fade_columns.py --write against this database first")
+        return 1
+
+    # `b.fade_*` falls back to the passage's own current fade `[SPEC-SUI-226]`
+    # only for a draft recorded before this column existed -- every draft
+    # `record_boundary_review` writes going forward always carries a fade,
+    # since it is a required part of the post, not an optional one like
+    # lead/gain.
     pending = conn.execute(
         """SELECT b.passage_id, b.start_ms, b.end_ms, b.lead_in_ms, b.lead_out_ms,
-                  b.gain_db, p.file_id, p.kind, p.start_ms, p.end_ms,
-                  p.lead_in_ms, p.lead_out_ms, p.gain_db, f.audio_md5
+                  b.gain_db, COALESCE(b.fade_in_ms, p.fade_in_ms),
+                  COALESCE(b.fade_out_ms, p.fade_out_ms),
+                  COALESCE(b.fade_in_curve, p.fade_in_curve),
+                  COALESCE(b.fade_out_curve, p.fade_out_curve),
+                  p.file_id, p.kind, p.start_ms, p.end_ms,
+                  p.lead_in_ms, p.lead_out_ms, p.gain_db,
+                  p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve,
+                  f.audio_md5
              FROM boundary_reviews b
              JOIN passages p ON p.passage_id = b.passage_id
              JOIN files f ON f.file_id = p.file_id
@@ -63,14 +86,18 @@ def main() -> int:
         conn.execute("BEGIN IMMEDIATE")
 
     for (passage_id, new_start, new_end, new_lead_in, new_lead_out, new_gain,
+         new_fade_in, new_fade_out, new_fade_in_curve, new_fade_out_curve,
          file_id, kind, old_start, old_end, old_lead_in, old_lead_out,
-         old_gain, audio_md5) in pending:
+         old_gain, old_fade_in, old_fade_out, old_fade_in_curve, old_fade_out_curve,
+         audio_md5) in pending:
 
         moved = (new_start, new_end) != (old_start, old_end)
         say(f"  passage {passage_id}: {old_start}-{old_end} -> {new_start}-{new_end}"
-            + ("" if moved else " (leads/gain only)")
+            + ("" if moved else " (leads/gain/fade only)")
             + f", lead-in {old_lead_in}->{new_lead_in}, "
-              f"lead-out {old_lead_out}->{new_lead_out}, gain {old_gain}->{new_gain}")
+              f"lead-out {old_lead_out}->{new_lead_out}, gain {old_gain}->{new_gain}, "
+              f"fade-in {old_fade_in}ms {old_fade_in_curve}->{new_fade_in}ms {new_fade_in_curve}, "
+              f"fade-out {old_fade_out}ms {old_fade_out_curve}->{new_fade_out}ms {new_fade_out_curve}")
 
         # `passages_span` is UNIQUE on (file_id, kind, start_ms, end_ms) --
         # checked before writing, in both modes, so a rehearsal's count is the
@@ -87,9 +114,14 @@ def main() -> int:
             conn.execute(
                 """UPDATE passages
                       SET start_ms = ?1, end_ms = ?2, lead_in_ms = ?3,
-                          lead_out_ms = ?4, gain_db = ?5, boundary_src = 'manual'
-                    WHERE passage_id = ?6""",
-                (new_start, new_end, new_lead_in, new_lead_out, new_gain, passage_id))
+                          lead_out_ms = ?4, gain_db = ?5,
+                          fade_in_ms = ?6, fade_out_ms = ?7,
+                          fade_in_curve = ?8, fade_out_curve = ?9,
+                          boundary_src = 'manual'
+                    WHERE passage_id = ?10""",
+                (new_start, new_end, new_lead_in, new_lead_out, new_gain,
+                 new_fade_in, new_fade_out, new_fade_in_curve, new_fade_out_curve,
+                 passage_id))
 
             if moved:
                 # The old span's cached features describe audio that nothing

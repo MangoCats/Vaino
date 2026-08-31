@@ -59,24 +59,32 @@ CREATE TABLE recordings (
 
 ```sql
 CREATE TABLE passages (
-    passage_id    INTEGER PRIMARY KEY,
-    file_id       INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
-    kind          TEXT    NOT NULL CHECK (kind IN ('album','radio')),
-    start_ms      INTEGER NOT NULL,
-    end_ms        INTEGER NOT NULL,
-    lead_in_ms    INTEGER,                  -- computed [SPEC-SA-075]; NULL = not analysed
-    lead_out_ms   INTEGER,
-    gain_db       REAL,                     -- loudness match; MuLibPlay observed ~0.70-0.75 linear
-    boundary_src  TEXT    NOT NULL,         -- 'computed:<algo>@<ver>' | 'manual' | 'imported:<x>'
+    passage_id     INTEGER PRIMARY KEY,
+    file_id        INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+    kind           TEXT    NOT NULL CHECK (kind IN ('album','radio')),
+    start_ms       INTEGER NOT NULL,
+    end_ms         INTEGER NOT NULL,
+    lead_in_ms     INTEGER,                  -- computed [SPEC-SA-075]; NULL = not analysed
+    lead_out_ms    INTEGER,
+    gain_db        REAL,                     -- loudness match; MuLibPlay observed ~0.70-0.75 linear
+    boundary_src   TEXT    NOT NULL,         -- 'computed:<algo>@<ver>' | 'manual' | 'imported:<x>'
+    fade_in_ms     INTEGER NOT NULL DEFAULT 20,          -- this passage's own volume envelope [SPEC-SC-046]
+    fade_out_ms    INTEGER NOT NULL DEFAULT 20,
+    fade_in_curve  TEXT    NOT NULL DEFAULT 'exponential', -- 'linear' | 'cosine' | 'exponential'
+    fade_out_curve TEXT    NOT NULL DEFAULT 'exponential',
     CHECK (end_ms > start_ms)
 );
 CREATE INDEX passages_file ON passages(file_id);
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 ```
 
-**`[SPEC-SC-043]` Lead durations are normally milliseconds, deliberately.** Across the migrated library the lead-in median is **5 ms** and the lead-out median **946 ms**. The ramps exist primarily to mask the short, occasionally loud artifacts at a track's start and end, which needs only a few milliseconds; audible crossfade is the uncommon case, wanted where a track genuinely fades slowly and the alternative is a long near-silent gap. Near-zero overlap `[SPEC-DIR-*]` is therefore the intended behaviour, and these values should not be inflated to "enable crossfading".
+**`[SPEC-SC-043]` Lead durations are normally milliseconds, deliberately.** Across the migrated library the lead-in median is **5 ms** and the lead-out median **946 ms**. **Lead does not itself apply any gain ramp** `[SPEC-SC-046]` — it only times *when* a crossfade with a neighbour is permitted, never *how loud* either side is during it — so these numbers control overlap duration, not loudness shape. Near-zero overlap `[SPEC-DIR-*]` is therefore the intended default, and these values should not be inflated to "enable crossfading": doing so widens the window a crossfade is *allowed* to use, but produces no audible blend on its own. Audible crossfade is the uncommon case, and reaching it needs two things set together, not one: a long-enough `lead_out_ms`/`lead_in_ms` to admit the overlap, *and* a comparably long `fade_out_ms`/`fade_in_ms` `[SPEC-SC-046]` to actually ramp gain across it — every passage's fixed 20 ms fade default will not produce a slow blend even inside a long lead window, since it finishes in the first 20 ms of whatever `lead_out_ms` admits.
 
-Revisiting them is a future editing-UI question `[SPEC-SA-080]`, not a data defect.
+Reviewable and overridable, both, through the waveform boundary editor `[SPEC021]`.
+
+**`[SPEC-SC-046]` Fade is orthogonal to lead, and is now the entire audible envelope** `[SPEC-SUI-226]`, per McRhythm's own inherited distinction (`[XFD-ORTH-010]`): `lead_in_ms`/`lead_out_ms` time *when a crossfade with a neighbour is permitted*; `fade_in_ms`/`fade_out_ms` are this passage's *own* volume envelope, applied whether or not anything neighbours it. This supersedes, not supplements, an earlier asymmetry: before this column existed, `lead_in_ms` was genuinely applied as a real fade-in gain ramp and `lead_out_ms` was not applied as one at all — `engine.rs::open()` now builds its `Envelope` entirely from the four fade columns, and `lead_in_ms`/`lead_out_ms` no longer reach the mixer as a gain ramp in any form, on either side. `analyze_amplitude.py` never touches the four fade columns — they carry a fixed default (20 ms, `exponential`), not a computed one, and exist purely so no passage ever starts or ends at an arbitrary, potentially non-zero sample: a hard click at a file boundary, or an abrupt cut into/out of continuous audio (a DAO capture, a live recording) that has no silence of its own to lead into. Always user-editable per side, independently of `lead_in_ms`/`lead_out_ms` and of each other, through the waveform boundary editor `[SPEC021]`.
+
+Not to be confused with `skip_fade_ms` `[REQ-AUD-162]` — a third, unrelated use of "fade": a live-adjustable Skip/Handoff parameter in `switch.rs`, never read from or written to `passages`, and never in effect during ordinary playback.
 
 **`[SPEC-SC-045]` `boundary_src` distinguishing `manual` is what makes override durable** `[SPEC-SA-080]`. Recomputation must never overwrite a `manual` row; conflict resolution ranks provenance before recency `[SPEC-DF-070]`.
 

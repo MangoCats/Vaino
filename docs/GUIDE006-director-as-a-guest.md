@@ -34,7 +34,7 @@ Plausible hosts, all of which let you both enqueue and read back what played:
 
 **OpenSubsonic is the highest-leverage target**: one protocol, several servers, and dozens of clients across every platform. A Director speaking it reaches all of them without knowing any of them.
 
-**`[GDE-EXT-025]` The fidelity cost is real and specific: passages become tracks.** Vaino selects a *span* — `start_ms` to `end_ms`, with lead-in, lead-out and gain `[SPEC-SC-040]` — and MPD and Subsonic address whole files. Three consequences:
+**`[GDE-EXT-025]` The fidelity cost is real and specific: passages become tracks.** Vaino selects a *span* — `start_ms` to `end_ms`, with lead-in, lead-out, fade-in, fade-out and gain `[SPEC-SC-040]`, `[SPEC-SC-046]` — and MPD and Subsonic address whole files. Three consequences:
 
 - the **Album/Radio duality is lost** `[GDE-BMK-030]`, which is MuLibPlay's best structural idea and the thing the trim points exist for;
 - **DAO captures cannot be played at all** as single songs, because the file is forty songs and the host has no way to be told which one;

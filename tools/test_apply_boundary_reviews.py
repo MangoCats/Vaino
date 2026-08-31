@@ -28,6 +28,36 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(file_id),
     kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
+    boundary_src TEXT NOT NULL,
+    fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
+    fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
+    fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
+    CHECK (end_ms > start_ms));
+CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
+CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL, features BLOB NOT NULL, extractor TEXT NOT NULL,
+    extracted_at TEXT NOT NULL, PRIMARY KEY (audio_md5, start_ms, end_ms)) WITHOUT ROWID;
+CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+    start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER,
+    lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT,
+    fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
+    orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
+    orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
+"""
+
+# The pre-`[SPEC-SUI-226]` shape of `passages`/`boundary_reviews` -- exactly
+# what `SCHEMA` was before this feature, kept as its own constant rather than
+# derived from `SCHEMA` by string surgery, which would be one whitespace
+# change away from silently testing nothing.
+PRE_FADE_SCHEMA = """
+CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL,
+    path TEXT NOT NULL, size_bytes INTEGER NOT NULL, mtime REAL NOT NULL,
+    format TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
+CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
+    file_id INTEGER NOT NULL REFERENCES files(file_id),
+    kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+    lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
     boundary_src TEXT NOT NULL, CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
@@ -35,7 +65,10 @@ CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
     extracted_at TEXT NOT NULL, PRIMARY KEY (audio_md5, start_ms, end_ms)) WITHOUT ROWID;
 CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
     start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER,
-    lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT);
+    lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT,
+    fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
+    orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
+    orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
 """
 
 FAILED = []
@@ -56,13 +89,15 @@ def build(tmp: str, extra_passage=None) -> str:
     c.executescript(SCHEMA)
     c.execute("INSERT INTO files VALUES (1,'md5','/m/a.mp3',1,1.0,'mp3',300000,'t','t')")
     c.execute("INSERT INTO passages VALUES "
-              "(1,1,'radio',1000,200000,0,900,-1.0,'segmentation')")
+              "(1,1,'radio',1000,200000,0,900,-1.0,'segmentation',20,20,'exponential','exponential')")
     c.execute("INSERT INTO lowlevel_cache VALUES ('md5',1000,200000,x'00',"
               "'essentia','t')")
+    # The boundary edit moves fade off its fixed default too `[SPEC-SUI-226]`.
     c.execute("INSERT INTO boundary_reviews VALUES "
-              "(1,2000,190000,250,1200,-2.0,'t',NULL)")
+              "(1,2000,190000,250,1200,-2.0,'t',NULL,15,1500,'linear','cosine',"
+              "20,20,'exponential','exponential')")
     if extra_passage:
-        c.execute("INSERT INTO passages VALUES (?,?,?,?,?,?,?,?,?)", extra_passage)
+        c.execute("INSERT INTO passages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", extra_passage)
     c.commit()
     c.close()
     return db
@@ -77,6 +112,17 @@ def passage(db, passage_id=1):
     c = sqlite3.connect(db)
     row = c.execute(
         "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, boundary_src "
+        "FROM passages WHERE passage_id=?", (passage_id,)).fetchone()
+    c.close()
+    return row
+
+
+def passage_fade(db, passage_id=1):
+    """Like `passage`, plus the four fade columns `[SPEC-SUI-226]` -- kept
+    separate so the pre-fade assertions stay exactly as strict as before."""
+    c = sqlite3.connect(db)
+    row = c.execute(
+        "SELECT fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve "
         "FROM passages WHERE passage_id=?", (passage_id,)).fetchone()
     c.close()
     return row
@@ -98,6 +144,9 @@ def main() -> int:
         check(r.returncode == 0, f"commit exited {r.returncode}: {r.stderr[:300]}")
         got = passage(db)
         check(got == (2000, 190000, 250, 1200, -2.0, "manual"), f"passage is now {got}")
+        got_fade = passage_fade(db)
+        check(got_fade == (15, 1500, "linear", "cosine"),
+              f"fade must land alongside the rest of the boundary edit [SPEC-SUI-226], got {got_fade}")
         c = sqlite3.connect(db)
         check(c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_id=1")
                .fetchone()[0] is not None, "applied_at must be stamped")
@@ -113,7 +162,8 @@ def main() -> int:
         check(passage(db) == got, "a no-op run must not touch the passage again")
 
         print("a new span colliding with another passage on the same file is refused")
-        db2 = build(tmp + "/b", extra_passage=(2, 1, "radio", 2000, 190000, None, None, None, "s"))
+        db2 = build(tmp + "/b", extra_passage=(2, 1, "radio", 2000, 190000, None, None, None, "s",
+                                                20, 20, "exponential", "exponential"))
         r = run(db2, "--commit")
         check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:300]}")
         check("refused" in r.stdout.lower(), f"expected a refusal, got {r.stdout!r}")
@@ -131,7 +181,8 @@ def main() -> int:
         # OLD span -- the cache is keyed by audio_md5, not by file, so this is
         # the real case a byte-identical duplicate rip produces.
         c.execute("INSERT INTO files VALUES (2,'md5','/m/b.mp3',1,1.0,'mp3',300000,'t','t')")
-        c.execute("INSERT INTO passages VALUES (3,2,'radio',1000,200000,0,900,-1.0,'segmentation')")
+        c.execute("INSERT INTO passages VALUES "
+                  "(3,2,'radio',1000,200000,0,900,-1.0,'segmentation',20,20,'exponential','exponential')")
         c.commit()
         c.close()
         r = run(db3, "--commit")
@@ -141,6 +192,30 @@ def main() -> int:
                .fetchone()[0] == 1,
               "a span still used by another passage's identical audio must survive")
         c.close()
+
+        print("a passages table never migrated for fade is refused clearly, not a raw SQL error")
+        os.makedirs(tmp + "/d", exist_ok=True)
+        db4 = os.path.join(tmp + "/d", "t.db")
+        c = sqlite3.connect(db4)
+        # The pre-`[SPEC-SUI-226]` shape: no fade columns on `passages` at
+        # all -- a library `tools/add_fade_columns.py` has never touched.
+        c.executescript(PRE_FADE_SCHEMA)
+        c.execute("INSERT INTO files VALUES (1,'md5','/m/a.mp3',1,1.0,'mp3',300000,'t','t')")
+        c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'segmentation')")
+        c.execute("INSERT INTO boundary_reviews VALUES "
+                  "(1,2000,190000,250,1200,-2.0,'t',NULL,15,1500,'linear','cosine',"
+                  "20,20,'exponential','exponential')")
+        c.commit()
+        c.close()
+        r = run(db4, "--commit")
+        # A whole-run precondition failure, the same posture "no boundary
+        # edits recorded yet" already takes -- not a per-row refusal, which
+        # is what returns 0 elsewhere in this tool.
+        check(r.returncode == 1, f"expected a clean exit 1, got {r.returncode}: {r.stderr[:300]}")
+        check("add_fade_columns.py" in r.stdout,
+              f"expected a pointer to the migration script, got {r.stdout!r}")
+        check("Traceback" not in r.stdout and "Traceback" not in r.stderr,
+              f"a missing column must be a clear refusal, not a raw traceback: {r.stderr[:400]}")
 
     print()
     if FAILED:

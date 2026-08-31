@@ -81,9 +81,16 @@ def sql_for(kind: str, anchor: dict) -> str:
             f"AND p.start_ms = {literal(anchor['start_ms'])} "
             f"AND p.end_ms = {literal(anchor['end_ms'])} "
             "ORDER BY pr.weight DESC, pr.mbid LIMIT 1")
-    if kind == "boundary_review":
+    if kind in ("boundary_review", "boundary_review_no_fade"):
+        # `boundary_review_no_fade` `[SPEC-SUI-226]`: the fallback `peek()`
+        # retries with, exactly once, against a remote whose `passages` has
+        # never run `tools/add_fade_columns.py` and so lacks the four fade
+        # columns entirely -- see `peek()`'s own comment for why a retry
+        # beats either failing the whole peek or never asking for fade at all.
+        fade_cols = (", p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve"
+                     if kind == "boundary_review" else "")
         return (
-            "SELECT p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db "
+            f"SELECT p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db{fade_cols} "
             "FROM passages p JOIN files f ON f.file_id = p.file_id "
             f"WHERE f.audio_md5 = {literal(anchor['audio_md5'])} "
             f"AND p.kind = {literal(anchor['passage_kind'])} "
@@ -146,8 +153,20 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
 def peek(remote: str, kind: str, anchor: dict, timeout: float = TOTAL_TIMEOUT) -> dict:
     """One anchor in, the row at it (or `None`) out -- `run_remote_sql()`
     plus the one `kind`-specific `SELECT` `sql_for()` builds.
+
+    `boundary_review` retries once, without the four fade columns
+    `[SPEC-SUI-226]`, on exactly the failure a remote that has never run
+    `tools/add_fade_columns.py` would produce -- reporting that as
+    `{"ok": False}` would misread an older schema as "unreachable," the
+    same distinction this file's own docstring already draws for a `null`
+    current vs. a real failure. The common case (an already-migrated
+    remote) still costs the one round trip `[SPEC-DF-116]` promises;
+    only this one case costs two.
     """
     result = run_remote_sql(remote, sql_for(kind, anchor), timeout=timeout)
+    if (not result["ok"] and kind == "boundary_review"
+            and "fade_in_ms" in (result.get("error") or "")):
+        result = run_remote_sql(remote, sql_for("boundary_review_no_fade", anchor), timeout=timeout)
     if not result["ok"]:
         return result
     rows = result["rows"]

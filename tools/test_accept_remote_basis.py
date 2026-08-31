@@ -36,7 +36,11 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(file_id),
     kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-    boundary_src TEXT NOT NULL, CHECK (end_ms > start_ms));
+    boundary_src TEXT NOT NULL,
+    fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
+    fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
+    fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
+    CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
     length_ms INTEGER, source TEXT NOT NULL);
@@ -60,7 +64,10 @@ CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
     lead_out_ms INTEGER, gain_db REAL, audio_md5 TEXT, orig_kind TEXT,
     orig_start_ms INTEGER, orig_end_ms INTEGER, orig_lead_in_ms INTEGER,
     orig_lead_out_ms INTEGER, orig_gain_db REAL, decided_at TEXT NOT NULL,
-    applied_at TEXT, origin TEXT);
+    applied_at TEXT, origin TEXT,
+    fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
+    orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
+    orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
 CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
     artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
     previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
@@ -88,7 +95,8 @@ def build(path: str) -> None:
     c = sqlite3.connect(path)
     c.executescript(SCHEMA)
     c.execute("INSERT INTO files VALUES (1,'md5-a','/m/a.mp3',1,1.0,'mp3',300000,'t','t')")
-    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src')")
+    c.execute("INSERT INTO passages VALUES "
+              "(1,1,'radio',1000,200000,0,900,-1.0,'src',20,20,'exponential','exponential')")
     c.execute("INSERT INTO recordings VALUES (?,'A Song',NULL,'inherited:mulib')", (REC_A,))
     c.execute("INSERT INTO passage_recordings VALUES (1,?,1.0,'inherited:mulib')", (REC_A,))
     c.commit()
@@ -98,6 +106,14 @@ def build(path: str) -> None:
 def boundary(conn, passage_id=1):
     return conn.execute(
         "SELECT start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db FROM passages WHERE passage_id=?",
+        (passage_id,)).fetchone()
+
+
+def boundary_and_fade(conn, passage_id=1):
+    """Like `boundary`, plus the four fade columns `[SPEC-SUI-226]`."""
+    return conn.execute(
+        "SELECT start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
+        "fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve FROM passages WHERE passage_id=?",
         (passage_id,)).fetchone()
 
 
@@ -185,13 +201,15 @@ def test_closes_the_loop(tmp: str) -> None:
     # `remote_peek.py` finds this row by, same as `apply_changes.py`'s own
     # `resolve_passage` would locally -- a *moved* trim point is a
     # different, harder case this targeted read does not claim to solve.
-    vc.execute("UPDATE passages SET lead_in_ms=250,lead_out_ms=1200,gain_db=-2.0 "
+    # Fade `[SPEC-SUI-226]` diverged there too, off its fixed default.
+    vc.execute("UPDATE passages SET lead_in_ms=250,lead_out_ms=1200,gain_db=-2.0,"
+               "fade_in_ms=15,fade_out_ms=1500,fade_in_curve='linear',fade_out_curve='cosine' "
                "WHERE passage_id=1")
     vc.commit()
     vc.close()
 
     desktop = os.path.join(tmp, "desktop.db")
-    build(desktop)  # still at the pre-divergence lead-in/out/gain
+    build(desktop)  # still at the pre-divergence lead-in/out/gain/fade
 
     # What remote_peek.py would have returned, computed with its own SQL
     # against a plain local copy standing in for the ssh round trip.
@@ -200,26 +218,37 @@ def test_closes_the_loop(tmp: str) -> None:
     row = rc.execute(rp.sql_for("boundary_review", anchor)).fetchone()
     rc.close()
     check(row is not None, "the anchor must still resolve on vainopi -- its identity did not move")
-    remote_value = dict(zip(["start_ms", "end_ms", "lead_in_ms", "lead_out_ms", "gain_db"], row))
+    remote_value = dict(zip(
+        ["start_ms", "end_ms", "lead_in_ms", "lead_out_ms", "gain_db",
+         "fade_in_ms", "fade_out_ms", "fade_in_curve", "fade_out_curve"], row))
     check(remote_value == {"start_ms": 1000, "end_ms": 200000, "lead_in_ms": 250,
-                            "lead_out_ms": 1200, "gain_db": -2.0}, f"got {remote_value}")
+                            "lead_out_ms": 1200, "gain_db": -2.0,
+                            "fade_in_ms": 15, "fade_out_ms": 1500,
+                            "fade_in_curve": "linear", "fade_out_curve": "cosine"}, f"got {remote_value}")
 
     r = run(desktop, "--kind", "boundary_review", *ANCHOR_ARGS,
             "--value", json.dumps(remote_value), "--commit")
     check(r.returncode == 0, f"accept exited {r.returncode}: {r.stderr[:300]}")
     dc = sqlite3.connect(desktop)
     check(boundary(dc) == (1000, 200000, 250, 1200, -2.0), "the local baseline must now match vainopi's")
+    check(boundary_and_fade(dc) == (1000, 200000, 250, 1200, -2.0, 15, 1500, "linear", "cosine"),
+          f"the fade half of the accepted basis must land too, got {boundary_and_fade(dc)}")
 
     # Now a local edit ON TOP of the accepted basis -- Vaino's own editor
     # would capture exactly this as `orig_*`, since that is what `passages`
-    # held the moment editing began.
+    # held the moment editing began. Fade moves again too, further off what
+    # was just accepted.
     dc.execute("UPDATE passages SET start_ms=2500,end_ms=190500,lead_in_ms=300,"
-               "lead_out_ms=1100,gain_db=-1.5 WHERE passage_id=1")
+               "lead_out_ms=1100,gain_db=-1.5,fade_in_ms=25,fade_out_ms=1600,"
+               "fade_in_curve='cosine',fade_out_curve='exponential' WHERE passage_id=1")
     dc.execute(
         "INSERT INTO boundary_reviews (passage_id,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
         "audio_md5,orig_kind,orig_start_ms,orig_end_ms,orig_lead_in_ms,orig_lead_out_ms,orig_gain_db,"
-        "decided_at,applied_at) VALUES (1,2500,190500,300,1100,-1.5,'md5-a','radio',1000,200000,"
-        "250,1200,-2.0,'2026-08-29 10:00:00','2026-08-29 10:00:05')")
+        "decided_at,applied_at,fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve,"
+        "orig_fade_in_ms,orig_fade_out_ms,orig_fade_in_curve,orig_fade_out_curve) "
+        "VALUES (1,2500,190500,300,1100,-1.5,'md5-a','radio',1000,200000,"
+        "250,1200,-2.0,'2026-08-29 10:00:00','2026-08-29 10:00:05',"
+        "25,1600,'cosine','exponential',15,1500,'linear','cosine')")
     dc.commit()
     dc.close()
 
@@ -232,10 +261,13 @@ def test_closes_the_loop(tmp: str) -> None:
                        capture_output=True, text=True)
     check(r.returncode == 0, f"apply exited {r.returncode}: {r.stderr[:400]}")
     check("1 fast-forward" in r.stdout, f"expected a fast-forward, got {r.stdout!r}")
-    check("0 conflict" in r.stdout, f"the accepted basis must prevent a conflict, got {r.stdout!r}")
+    check("0 conflict" in r.stdout,
+          f"the accepted basis (fade included) must prevent a conflict, got {r.stdout!r}")
     vc = sqlite3.connect(vainopi)
     check(boundary(vc) == (2500, 190500, 300, 1100, -1.5),
           f"the edit must land on vainopi, got {boundary(vc)}")
+    check(boundary_and_fade(vc) == (2500, 190500, 300, 1100, -1.5, 25, 1600, "cosine", "exponential"),
+          f"the fade half of the edit must land on vainopi too, got {boundary_and_fade(vc)}")
     vc.close()
 
 

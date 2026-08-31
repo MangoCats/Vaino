@@ -5,7 +5,7 @@
 <style>
   /* Waveform boundary editing [REQ-LIB-175], [SPEC021].
 
-     One canvas, four draggable markers, a gain field and a preview
+     One canvas, six draggable markers, a gain field and a preview
      transport -- the interaction model of SPEC021 §4. Nothing is written
      until "Save edit" is pressed, and that writes a draft to `boundary_reviews`,
      never `passages` itself `[SPEC-SUI-140]`.
@@ -13,7 +13,15 @@
      A zoomable/pannable viewport, precise numeric fields and undo were added
      `[SPEC-SUI-217..220]` after using this against a real multi-minute file
      surfaced that a single fixed-width canvas and a 10px-tolerance drag were
-     not enough to place a point with any confidence. */
+     not enough to place a point with any confidence.
+
+     Fade-in/fade-out markers and curve pickers were added `[SPEC-SUI-226]`
+     -- a passage's own volume envelope, independent of lead (which only
+     times when a crossfade with a neighbour is permitted, never itself a
+     gain ramp during ordinary playback). Drawn in their own violet shading,
+     a second independent layer beside lead's amber one -- the two overlap
+     legitimately, and letting the canvas's own alpha blending show that is
+     simpler and more honest than hand-computing a third blended state. */
   html, body { margin: 0; padding: 0; background: #141416; color: #eee;
                font: 16px/1.5 system-ui, sans-serif; }
   .edit { max-width: 60rem; margin: 0 auto; padding: .75rem; }
@@ -66,6 +74,9 @@
                        font: inherit; width: 5rem; padding: .3rem .4rem;
                        background: transparent; color: inherit; border-radius: 4px;
                        border: 1px solid rgba(128,128,128,.45); }
+  .precise select { font: inherit; padding: .3rem .4rem; background: #141416;
+                     color: inherit; border-radius: 4px;
+                     border: 1px solid rgba(128,128,128,.45); }
   .transport .spacer { flex: 1; }
   #commit[disabled], #undo[disabled] { opacity: .35; cursor: default; }
 
@@ -102,6 +113,7 @@
   <p class="legend">
     <span><span class="swatch" style="background:#6cf"></span>start / end</span>
     <span><span class="swatch" style="background:#fb6"></span>lead-in / lead-out</span>
+    <span><span class="swatch" style="background:#a78bfa"></span>fade-in / fade-out</span>
     <span><span class="swatch" style="background:#fff"></span>playhead</span>
     <span>drag a knob to move it · drag empty space to pan · click empty space to jump · wheel to zoom</span>
   </p>
@@ -117,6 +129,20 @@
     <label>end <input type="number" id="endms" step="1" disabled> ms</label>
     <label>lead-in <input type="number" id="leadinms" step="1" min="0" disabled> ms</label>
     <label>lead-out <input type="number" id="leadoutms" step="1" min="0" disabled> ms</label>
+  </div>
+  <div class="precise">
+    <label>fade-in <input type="number" id="fadeinms" step="1" min="0" disabled> ms</label>
+    <label><select id="fadeincurve" disabled>
+        <option value="linear">linear</option>
+        <option value="cosine">cosine</option>
+        <option value="exponential">exponential</option>
+      </select></label>
+    <label>fade-out <input type="number" id="fadeoutms" step="1" min="0" disabled> ms</label>
+    <label><select id="fadeoutcurve" disabled>
+        <option value="linear">linear</option>
+        <option value="cosine">cosine</option>
+        <option value="exponential">exponential</option>
+      </select></label>
   </div>
   <p class="note" id="note"></p>
   <p class="note" id="flavornote"></p>

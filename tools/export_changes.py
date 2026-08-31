@@ -87,29 +87,51 @@ def export_boundary_reviews(conn: sqlite3.Connection, hostname: str) -> list:
         # nothing to export, the same as any one row missing `audio_md5`.
         return changes
     origin_expr = "origin" if has_column(conn, "boundary_reviews", "origin") else "NULL"
-    for (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+    # `fade_*`/`orig_fade_*` `[SPEC-SUI-226]` predate this export on any
+    # installation still running a pre-fade Vaino -- read around the gap the
+    # same way `origin_expr` already does for `[SPEC-DF-104]`. Unlike
+    # `origin_expr`, a missing fade column means OMITTING the keys entirely
+    # below, not sending them as `null`: `apply_changes.py` tells "no
+    # opinion on fade" apart from "silence the fade ramp" by whether the
+    # key is present at all, and a `null` here would read as the latter.
+    have_fade = has_column(conn, "boundary_reviews", "fade_in_ms")
+    fade_cols = ("fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve"
+                 if have_fade else "NULL, NULL, NULL, NULL")
+    orig_fade_cols = ("orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve"
+                       if have_fade else "NULL, NULL, NULL, NULL")
+    for (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, fade_in_ms, fade_out_ms,
+         fade_in_curve, fade_out_curve,
          audio_md5, orig_kind, orig_start_ms, orig_end_ms,
          orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
+         orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve,
          decided_at, origin) in conn.execute(
-        f"""SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+        f"""SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, {fade_cols},
                   audio_md5, orig_kind, orig_start_ms, orig_end_ms,
-                  orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, decided_at, {origin_expr}
+                  orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, {orig_fade_cols},
+                  decided_at, {origin_expr}
              FROM boundary_reviews WHERE applied_at IS NOT NULL"""):
         if audio_md5 is None:
             # Applied before `[SPEC-DF-102]` added the baseline columns --
             # nothing to resolve this against on another machine, so it
             # cannot be exported. Not an error: it just predates sync.
             continue
+        baseline = {"start_ms": orig_start_ms, "end_ms": orig_end_ms,
+                    "lead_in_ms": orig_lead_in_ms, "lead_out_ms": orig_lead_out_ms,
+                    "gain_db": orig_gain_db}
+        target = {"start_ms": start_ms, "end_ms": end_ms,
+                  "lead_in_ms": lead_in_ms, "lead_out_ms": lead_out_ms,
+                  "gain_db": gain_db}
+        if have_fade:
+            baseline.update(fade_in_ms=orig_fade_in_ms, fade_out_ms=orig_fade_out_ms,
+                             fade_in_curve=orig_fade_in_curve, fade_out_curve=orig_fade_out_curve)
+            target.update(fade_in_ms=fade_in_ms, fade_out_ms=fade_out_ms,
+                           fade_in_curve=fade_in_curve, fade_out_curve=fade_out_curve)
         changes.append({
             "kind": "boundary_review",
             "anchor": {"audio_md5": audio_md5, "passage_kind": orig_kind,
                        "start_ms": orig_start_ms, "end_ms": orig_end_ms},
-            "baseline": {"start_ms": orig_start_ms, "end_ms": orig_end_ms,
-                         "lead_in_ms": orig_lead_in_ms, "lead_out_ms": orig_lead_out_ms,
-                         "gain_db": orig_gain_db},
-            "target": {"start_ms": start_ms, "end_ms": end_ms,
-                       "lead_in_ms": lead_in_ms, "lead_out_ms": lead_out_ms,
-                       "gain_db": gain_db},
+            "baseline": baseline,
+            "target": target,
             "decided_at": decided_at,
             "origin": origin or hostname,
         })

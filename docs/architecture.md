@@ -94,7 +94,10 @@ Director ─▶ QueueEntry ─▶ queue.rs ─▶ decoder.rs ─▶ resample.rs 
 ```
 
 `QueueEntry` is the unit every layer speaks: `passage_id`, `path`,
-`start_ms`/`end_ms`, `lead_in_ms`/`lead_out_ms`, `gain_db`, `mbid`, naming.
+`start_ms`/`end_ms`, `lead_in_ms`/`lead_out_ms` (crossfade-admission timing
+only), `fade_in_ms`/`fade_out_ms`/`fade_in_curve`/`fade_out_curve`
+(this passage's own volume envelope `[SPEC-SC-046]` — the actual ramp the
+mixer applies), `gain_db`, `mbid`, naming.
 
 **A passage is a span of a file**, which is why a whole-file backend cannot carry
 `kind='radio'` trim points, and why one capture holds forty passages with one set

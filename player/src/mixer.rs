@@ -5,7 +5,7 @@
 //! so mixing a crossfade is addition. Resisting the urge to put "just a little"
 //! gain logic here is what keeps the fade math in one place.
 
-use crate::fade::Fade;
+use crate::fade::Envelope;
 
 /// Fixed-capacity FIFO of interleaved f32 samples.
 ///
@@ -154,32 +154,35 @@ impl RingBuffer {
 /// One passage's buffered, already-faded audio.
 pub struct Stream {
     pub ring: RingBuffer,
-    /// Frames written so far, which is the fade's position. Tracked here
-    /// because the fade is applied on the way *in*.
+    /// Frames written so far, which is the envelope's position. Tracked
+    /// here because it is applied on the way *in*.
     pub frames_written: u64,
-    pub fade: Fade,
+    /// The passage's own fade-in/fade-out, independent of `Fade` above --
+    /// that one stays reserved for Skip/Handoff's own retroactive cut
+    /// `[SPEC-SUI-226]`.
+    pub envelope: Envelope,
     pub channels: usize,
     /// No more audio will be produced; the stream ends when the ring drains.
     pub finished: bool,
 }
 
 impl Stream {
-    pub fn new(capacity_samples: usize, channels: usize, fade: Fade) -> Self {
+    pub fn new(capacity_samples: usize, channels: usize, envelope: Envelope) -> Self {
         Self {
             ring: RingBuffer::new(capacity_samples),
             frames_written: 0,
-            fade,
+            envelope,
             channels,
             finished: false,
         }
     }
 
-    /// Apply this stream's fade to `samples` and buffer the result.
+    /// Apply this stream's envelope to `samples` and buffer the result.
     ///
     /// The only path by which audio enters a stream, so audio in the ring is
     /// always already faded -- the invariant the mixer relies on.
     pub fn push(&mut self, samples: &mut [f32]) -> usize {
-        self.fade.apply(samples, self.channels, self.frames_written);
+        self.envelope.apply(samples, self.channels, self.frames_written);
         let written = self.ring.write(samples);
         self.frames_written += (written / self.channels.max(1)) as u64;
         written
@@ -354,7 +357,7 @@ mod tests {
         let mut streams: Vec<Stream> = [0.25f32, 0.5]
             .iter()
             .map(|v| {
-                let mut s = Stream::new(16, 2, Fade::none());
+                let mut s = Stream::new(16, 2, Envelope::none());
                 s.push(&mut [*v; 8]);
                 s.finished = true;
                 s
@@ -367,7 +370,7 @@ mod tests {
 
     #[test]
     fn exhausted_streams_are_dropped() {
-        let mut s = Stream::new(8, 2, Fade::none());
+        let mut s = Stream::new(8, 2, Envelope::none());
         s.push(&mut [1.0; 4]);
         s.finished = true;
         let mut streams = vec![s];
@@ -379,13 +382,45 @@ mod tests {
 
     #[test]
     fn audio_is_faded_on_the_way_in_not_at_mix_time() {
-        let mut s = Stream::new(64, 1, Fade { curve: Curve::Linear, frames: 8, fade_in: true });
+        let envelope = Envelope {
+            fade_in: Fade { curve: Curve::Linear, frames: 8, fade_in: true },
+            fade_out: Fade::none(),
+            total_frames: 8,
+        };
+        let mut s = Stream::new(64, 1, envelope);
         let mut block = vec![1.0f32; 8];
         s.push(&mut block);
         let mut out = [0.0; 8];
         s.ring.read(&mut out);
         assert!(out[0] < out[7], "ring must already hold faded audio");
         assert!(out[0].abs() < 1e-6, "fade-in starts silent");
+    }
+
+    /// The other half of the same claim: a stream configured with only a
+    /// fade-*out* plays full volume until its own fade-out region, then
+    /// falls -- ordinary end-of-passage playback now genuinely ramps the
+    /// outgoing gain down, which nothing in the engine did before this
+    /// `[SPEC-SUI-226]`.
+    #[test]
+    fn a_fade_out_only_envelope_plays_full_volume_then_falls() {
+        let envelope = Envelope {
+            fade_in: Fade::none(),
+            fade_out: Fade { curve: Curve::Linear, frames: 4, fade_in: false },
+            total_frames: 8,
+        };
+        let mut s = Stream::new(64, 1, envelope);
+        let mut block = vec![1.0f32; 8]; // the whole passage, pushed in one call
+        s.push(&mut block);
+        let mut out = [0.0; 8];
+        s.ring.read(&mut out);
+        // fade_out_start = 8 - 4 = 4: frames 0-3 are before the fade-out
+        // region and stay full volume; frame 4 is t=0 of a linear fade-out
+        // (still exactly full volume, the fade's own starting point); frames
+        // 5-7 fall linearly from there.
+        assert!((out[0] - 1.0).abs() < 1e-6, "full volume before the fade-out region begins");
+        assert!((out[4] - 1.0).abs() < 1e-6, "still full volume at the fade-out's own t=0");
+        assert!(out[5] < out[4], "falling from here on -- into the fade-out region itself");
+        assert!(out[7] < out[5], "still falling toward the passage's own last frame");
     }
 
     #[test]

@@ -48,11 +48,26 @@ def say(text: str) -> None:
 
 
 def accept_boundary(conn: sqlite3.Connection, passage_id: int, value: dict) -> None:
-    conn.execute(
-        "UPDATE passages SET start_ms=?1, end_ms=?2, lead_in_ms=?3, lead_out_ms=?4, "
-        "gain_db=?5 WHERE passage_id=?6",
-        (value["start_ms"], value["end_ms"], value["lead_in_ms"], value["lead_out_ms"],
-         value["gain_db"], passage_id))
+    # `fade_*` `[SPEC-SUI-226]` only if `--value` actually carries it -- it
+    # is absent from a `remote_peek.py` reply that fell back to
+    # `boundary_review_no_fade` against a remote never migrated for it, and
+    # from any `--value` copied out of an older `remote_peek.py` run. Not
+    # writing it then is the same "do not assert what was not there" rule
+    # `apply_boundary_review`'s own fade guard already follows.
+    if "fade_in_ms" in value:
+        conn.execute(
+            "UPDATE passages SET start_ms=?1, end_ms=?2, lead_in_ms=?3, lead_out_ms=?4, "
+            "gain_db=?5, fade_in_ms=?6, fade_out_ms=?7, fade_in_curve=?8, fade_out_curve=?9 "
+            "WHERE passage_id=?10",
+            (value["start_ms"], value["end_ms"], value["lead_in_ms"], value["lead_out_ms"],
+             value["gain_db"], value["fade_in_ms"], value["fade_out_ms"],
+             value["fade_in_curve"], value["fade_out_curve"], passage_id))
+    else:
+        conn.execute(
+            "UPDATE passages SET start_ms=?1, end_ms=?2, lead_in_ms=?3, lead_out_ms=?4, "
+            "gain_db=?5 WHERE passage_id=?6",
+            (value["start_ms"], value["end_ms"], value["lead_in_ms"], value["lead_out_ms"],
+             value["gain_db"], passage_id))
 
 
 def accept_id(conn: sqlite3.Connection, passage_id: int, value: dict) -> None:
@@ -106,6 +121,14 @@ def main() -> int:
 
     say(f"passage {passage_id}: accepting the remote's {args.kind} value -- {value}")
     if args.commit:
+        # Only inside `--commit` -- unlike `apply_changes.py`'s "schema
+        # readiness is not a decision," this tool's own rehearsal explicitly
+        # promises "nothing was written," and that must stay true even for
+        # the one case (a local `passages` never migrated for fade) this
+        # would otherwise need to touch.
+        if args.kind == "boundary_review" and "fade_in_ms" in value:
+            ac.ensure_passages_fade_columns(conn)
+            conn.commit()  # closed out on its own, before the real write's own transaction
         conn.execute("BEGIN IMMEDIATE")
         try:
             if args.kind == "boundary_review":

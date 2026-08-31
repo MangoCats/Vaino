@@ -1011,25 +1011,31 @@ async function runReviewHandoff() {
 }
 
 // ---------------------------------------------------------------------------
-// `fade.js`'s ramp formula against the same fixture `fade.rs`'s own test
-// checks Rust against `[SPEC021 §4]` -- the one part of the editor's math
-// this harness can verify without a real browser's Web Audio, since it is
-// pure arithmetic and `fade.js` is written to run under plain Node too.
+// `fade.js`'s ramp formulas against the same fixtures `fade.rs`'s own test
+// checks Rust against `[SPEC021 §4]`, `[SPEC-SUI-226]` -- the one part of
+// the editor's math this harness can verify without a real browser's Web
+// Audio, since it is pure arithmetic and `fade.js` is written to run under
+// plain Node too. One fixture file per curve, `gainIn`/`gainOut` now taking
+// the curve name as their first argument.
 function runFadeFixture() {
   const errors = [];
-  const rows = JSON.parse(
-    fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'fade', 'exponential.json'), 'utf8'));
+  let total = 0;
   delete require.cache[require.resolve(path.join(ROOT, 'fade.js'))];
   const { gainIn, gainOut } = require(path.join(ROOT, 'fade.js'));
-  for (const { t, gain_in, gain_out } of rows) {
-    const gotIn = gainIn(t), gotOut = gainOut(t);
-    if (Math.abs(gotIn - gain_in) > 1e-5)
-      errors.push(`gainIn(${t}): got ${gotIn}, want ${gain_in}`);
-    if (Math.abs(gotOut - gain_out) > 1e-5)
-      errors.push(`gainOut(${t}): got ${gotOut}, want ${gain_out}`);
+  for (const curve of ['linear', 'cosine', 'exponential']) {
+    const rows = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'fade', `${curve}.json`), 'utf8'));
+    total += rows.length;
+    for (const { t, gain_in, gain_out } of rows) {
+      const gotIn = gainIn(curve, t), gotOut = gainOut(curve, t);
+      if (Math.abs(gotIn - gain_in) > 1e-5)
+        errors.push(`gainIn(${curve}, ${t}): got ${gotIn}, want ${gain_in}`);
+      if (Math.abs(gotOut - gain_out) > 1e-5)
+        errors.push(`gainOut(${curve}, ${t}): got ${gotOut}, want ${gain_out}`);
+    }
   }
   console.log(`${'fade'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
-              `${rows.length} points checked against the Rust-side fixture`);
+              `${total} points checked against the Rust-side fixtures`);
   for (const e of errors) console.log('    ! ' + e);
   if (errors.length) failures++;
 }
@@ -1056,7 +1062,9 @@ async function runEdit() {
   };
 
   const INFO = { passage_id: 22, start_ms: 1000, end_ms: 181000, file_ms: 200000,
-                 lead_in_ms: 5, lead_out_ms: 946, gain_db: -1.2 };
+                 lead_in_ms: 5, lead_out_ms: 946, gain_db: -1.2,
+                 fade_in_ms: 20, fade_out_ms: 20,
+                 fade_in_curve: 'exponential', fade_out_curve: 'exponential' };
   const posted = [];
   let audioUrl = null;
   window.fetch = (url, opts) => {
@@ -1103,6 +1111,30 @@ async function runEdit() {
   check($('leadinms').value === '5', `lead-in field should read 5, got ${$('leadinms').value}`);
   check($('leadoutms').value === '946', `lead-out field should read 946, got ${$('leadoutms').value}`);
   check(!$('leadoutms').disabled, 'the precise fields must be usable once /info has loaded');
+
+  // Fade-in/fade-out `[SPEC-SUI-226]`: independent of lead, their own
+  // precise fields and curve pickers, populated from the same `/info`.
+  check($('fadeinms').value === '20', `fade-in field should read 20, got ${$('fadeinms').value}`);
+  check($('fadeoutms').value === '20', `fade-out field should read 20, got ${$('fadeoutms').value}`);
+  check($('fadeincurve').value === 'exponential',
+        `fade-in curve should read exponential, got ${$('fadeincurve').value}`);
+  check($('fadeoutcurve').value === 'exponential',
+        `fade-out curve should read exponential, got ${$('fadeoutcurve').value}`);
+  check(!$('fadeinms').disabled, 'the fade fields must be usable once /info has loaded');
+  check(!$('fadeincurve').disabled, 'the fade curve pickers must be usable once /info has loaded');
+
+  $('fadeoutms').value = '500';
+  $('fadeoutms').dispatchEvent(new window.Event('change'));
+  check($('facts').textContent.includes('500 ms'), 'a fade-out edit must reach the facts line');
+  check(!$('undo').disabled, 'a completed fade edit must arm undo');
+  $('undo').dispatchEvent(new window.Event('click'));
+  check($('fadeoutms').value === '20', 'undo must restore the fade-out field along with the draft');
+
+  $('fadeincurve').value = 'linear';
+  $('fadeincurve').dispatchEvent(new window.Event('change'));
+  check($('facts').textContent.includes('linear'), 'a fade-in curve edit must reach the facts line');
+  $('undo').dispatchEvent(new window.Event('click'));
+  check($('fadeincurve').value === 'exponential', 'undo must restore the fade-in curve too');
 
   // Undo `[SPEC-SUI-220]`: a completed field edit is undoable, and the undo
   // button reflects whether there is anything to undo.

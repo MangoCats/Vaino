@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use crate::db::PlayerStore;
 use crate::decoder::PassageDecoder;
-use crate::fade::{Curve, Fade};
+use crate::fade::{Curve, Envelope, Fade};
 use crate::mixer::{mix, Stream};
 use crate::queue::{should_admit, Queue, QueueEntry};
 use crate::resample::Resampler;
@@ -1080,13 +1080,31 @@ impl Engine {
         // conversion; using the file rate here would mis-time every fade on a
         // device that does not match the file.
         let sr = self.out_rate as f32;
-        let fade = Fade {
-            curve: Curve::Exponential,
-            frames: (e.lead_in_ms as f32 * sr / 1000.0) as u64,
-            fade_in: true,
+        // Both measured from the PASSAGE's own start, not from wherever this
+        // particular decode session happens to begin `[SPEC-SUI-226]`: a
+        // resume partway through must not re-trigger the fade-in, and the
+        // fade-out still has to land at the passage's own true end
+        // regardless of where playback picked up. `Stream::frames_written`
+        // is seeded below from `origin_frames` for exactly this reason.
+        let total_frames = (e.duration_ms() as f32 * sr / 1000.0) as u64;
+        let origin_frames = (origin_ms as f32 * sr / 1000.0) as u64;
+        let envelope = Envelope {
+            fade_in: Fade {
+                curve: e.fade_in_curve,
+                frames: (e.fade_in_ms as f32 * sr / 1000.0) as u64,
+                fade_in: true,
+            },
+            fade_out: Fade {
+                curve: e.fade_out_curve,
+                frames: (e.fade_out_ms as f32 * sr / 1000.0) as u64,
+                fade_in: false,
+            },
+            total_frames,
         };
+        let mut stream = Stream::new(BUFFER_FRAMES * ch, ch, envelope);
+        stream.frames_written = origin_frames;
         Ok(Live {
-            stream: Stream::new(BUFFER_FRAMES * ch, ch, fade),
+            stream,
             dec,
             resampler,
             converted: Vec::new(),
@@ -1643,6 +1661,13 @@ mod tests {
             file_ms: 0,
             lead_in_ms: 0,
             lead_out_ms: 0,
+            // Pass-through, not the production default `[SPEC-SUI-226]` --
+            // this helper is shared by tests unrelated to fades, and a
+            // nonzero envelope would perturb exact sample-value assertions.
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            fade_in_curve: Curve::Exponential,
+            fade_out_curve: Curve::Exponential,
             gain_db: 0.0,
             mbid: None,
             naming: Default::default(),
