@@ -4,7 +4,7 @@
 
 How Vaino chooses the next passage. Reproduces MuLibPlay's six-years-proven selection algorithm `[GDE-PD-010..050]`, extended with Like/Dislike Taste and the full 71-dimension flavor vector.
 
-> **Related:** [REQ002 §2](REQ002-functional-requirements.md#2-program-director--pd) · [SPEC005 Flavor Distance](SPEC005-flavor-distance.md) · [SPEC008 Schema](SPEC008-database-schema.md) · [SPEC023 Domain Vocabulary](SPEC023-domain-vocabulary.md) — rotation, weighting and flavor below score **recordings** (occasionally passages, where noted); "track" names only the "Why this track?" panel, an established UI label, never the scored entity · inherited [MCR-SPEC005](../inherited/mcrhythm/MCR-SPEC005-program_director.md), [MCR-SPEC006 Like/Dislike](../inherited/mcrhythm/MCR-SPEC006-like_dislike.md)
+> **Related:** [REQ002 §2](REQ002-functional-requirements.md#2-program-director--pd) · [SPEC005 Flavor Distance](SPEC005-flavor-distance.md) · [SPEC008 Schema](SPEC008-database-schema.md) · [SPEC023 Domain Vocabulary](SPEC023-domain-vocabulary.md) — rotation, weighting and flavor below score **recordings** (occasionally passages, where noted); the panel that shows this decomposition is "Why this passage?" `[REQ-VIS-100]`, not "track" · inherited [MCR-SPEC005](../inherited/mcrhythm/MCR-SPEC005-program_director.md), [MCR-SPEC006 Like/Dislike](../inherited/mcrhythm/MCR-SPEC006-like_dislike.md)
 
 ---
 
@@ -134,7 +134,7 @@ Tuned medians sit close to the defaults, which is evidence the defaults are well
 w *= 1 + characteristic_value × (curve(today) − 1)
 ```
 
-So `user.christmas.christmasy = 0.9` on 21 December with a curve value of 4.2 yields ×3.9; the same passage in June yields ≈×1. This keeps MuLibPlay's proven seasonal behaviour `[GDE-PD-020]` while removing the hardcoded `[C]`/`[W]`/`[S]`/`[K]` tags, and — critically — stays **legible as a single term** in the Why-this-track panel. Folding seasonality into the programme target vector was rejected for exactly that reason.
+So `user.christmas.christmasy = 0.9` on 21 December with a curve value of 4.2 yields ×3.9; the same passage in June yields ≈×1. This keeps MuLibPlay's proven seasonal behaviour `[GDE-PD-020]` while removing the hardcoded `[C]`/`[W]`/`[S]`/`[K]` tags, and — critically — stays **legible as a single term** in the Why-this-passage panel. Folding seasonality into the programme target vector was rejected for exactly that reason.
 
 Curves are data, not code: a new occasion is a new characteristic plus a curve, with no edit to the engine.
 

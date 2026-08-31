@@ -5,7 +5,7 @@
 //! and the six-years-proven behaviour can be pinned rather than described.
 //!
 //! Frequency never consults flavor, Taste or seeds `[SPEC-DIR-100]`. Keeping
-//! that separation is what lets the Why-this-track panel tell two legible
+//! that separation is what lets the Why-this-passage panel tell two legible
 //! stories instead of one opaque product `[SPEC-DIR-190]`.
 
 /// Defaults from `[SPEC-DIR-120]`. They matter more than they look: only 36%

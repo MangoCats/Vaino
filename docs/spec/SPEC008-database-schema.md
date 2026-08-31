@@ -218,7 +218,7 @@ The keys keep the old column names, so a database written before this carries ov
 
 ## 7. Visibility
 
-**`[SPEC-SC-100]`** `ingest_decisions` records what each Sampo stage decided, at what confidence, and what it rejected — a durable record, not a log line `[SPEC-SA-085]`. `selection_decisions` records the Program Director's weight decomposition per choice, which is what the "Why this track?" panel reads `[GDE-CHT-030]`.
+**`[SPEC-SC-100]`** `ingest_decisions` records what each Sampo stage decided, at what confidence, and what it rejected — a durable record, not a log line `[SPEC-SA-085]`. `selection_decisions` records the Program Director's weight decomposition per choice, which is what the "Why this passage?" panel reads `[GDE-CHT-030]`.
 
 Both are append-only, bounded by retention, and are **Vaino-local**: they describe process, not music, so they never travel `[SPEC-DF-050]`.
 

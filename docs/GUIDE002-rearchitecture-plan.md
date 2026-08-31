@@ -15,7 +15,7 @@ The ground-up re-think, re-specification and re-implementation plan for Vaino, d
 **`[GDE-CHT-020]` Fix new-music induction.** This is the reason for the project. Today it is undocumented external manual labor `[GDE-BMK-050]`. McRhythm proved a 93%-accurate automated segmenter is achievable `[GDE-MCR-010]` — but segmentation is worthless without flavor data for what it finds, which is why extraction comes first `[GDE-PHS-000]`.
 
 **`[GDE-CHT-030]` Make every process visible.** The headline requirement. Three things must be inspectable rather than inferred:
-- **Why this track?** — the full weight decomposition behind each selection.
+- **Why this passage?** — the full weight decomposition behind each selection.
 - **How was this identified?** — the ingest decision record for every passage.
 - **Is this data trustworthy?** — provenance and a live accuracy scorecard for every descriptor.
 
@@ -166,7 +166,7 @@ Port the MuLibPlay math exactly `[GDE-PD-010..050]` — log-scale rotation, mult
 
 Then extend toward McRhythm's model `[GDE-MCR-070]`: Like/Dislike with click-stacking and undo, Like-Taste and Dislike-Taste centroids, dislike-as-exclusion-filter. Note that McRhythm explicitly left the Taste→selection coupling undefined — that is Vaino's design work, not an inheritance.
 
-Build the **"Why this track?" panel** `[GDE-CHT-030]`: artist weight, rotation block state, position on the recovery ramp, occasion multiplier, length bonus, distance to each seed, final rank and roulette position — plus the runners-up that lost.
+Build the **"Why this passage?" panel** `[GDE-CHT-030]`: artist weight, rotation block state, position on the recovery ramp, occasion multiplier, length bonus, distance to each seed, final rank and roulette position — plus the runners-up that lost.
 
 > **Reports:** given a frozen play history and a fixed RNG seed, the port reproduces MuLibPlay's selections. Diverge only deliberately, and record why.
 

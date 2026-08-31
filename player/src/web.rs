@@ -910,7 +910,7 @@ fn parse_mb_results(kind: &str, body: &serde_json::Value) -> Vec<crate::db::Sugg
 /// Why any one passage was chosen `[REQ-VIS-100]`.
 ///
 /// The log is keyed by passage and already holds the queued ones; only the
-/// playing one was ever reachable. A skin that lets you ask about the track
+/// playing one was ever reachable. A skin that lets you ask about the passage
 /// *after* next needs the rest of it.
 ///
 /// Fetched on demand rather than pushed with every snapshot: an explanation is

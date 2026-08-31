@@ -156,12 +156,12 @@
   // Terms sitting at 1.0 did nothing, and are dimmed rather than hidden --
   // "this did not apply" is itself part of the answer.
   const TERMS = [
-    ['Artist recovery',  w => w.artist_weight],
-    ['Track restraint',  w => w.track_restraint],
-    ['Track recovery',   w => w.track_ramp],
-    ['Related damping',  w => w.related_damping],
-    ['Length bonus',     w => w.length_bonus],
-    ['Occasion',         w => w.occasion],
+    ['Artist recovery',     w => w.artist_weight],
+    ['Recording restraint', w => w.recording_restraint],
+    ['Recording recovery',  w => w.recording_ramp],
+    ['Related damping',     w => w.related_damping],
+    ['Length bonus',        w => w.length_bonus],
+    ['Occasion',            w => w.occasion],
   ];
 
 
@@ -394,7 +394,7 @@
   // The explanation panel, and the one control set that goes with it.
   function renderPick(s) {
     // A pinned passage that has since started playing, or left the queue
-    // entirely, falls back to following the current track rather than
+    // entirely, falls back to following the current passage rather than
     // explaining something no longer there.
     const queued = (s.queue || []).some(q => q.qid === picked);
     if (picked != null && !queued) picked = null;
@@ -403,7 +403,7 @@
     const on = picked != null ? (s.queue || []).find(q => q.qid === picked) : null;
     $('whotitle').textContent = on
       ? (on.artist ? `${on.title} — ${on.artist}` : on.title)
-      : 'this track';
+      : 'this passage';
     renderWhy(picked == null ? s.why : pickedWhy);
 
     // Controls belong to a queued row; the playing one cannot be moved or

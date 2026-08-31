@@ -57,7 +57,7 @@ How Vaino's Program Director `[SPEC009]` reaches the MPD ecosystem: what MPD alr
 2. **Rotation, recovery, restraint.** MPD offers `random`, `repeat`, `single`, `consume` — none time-aware. Six years of tuned frequency behaviour has no MPD counterpart `[GDE-PD-010]`.
 3. **The Album/Radio duality.** MPD stores no per-song trim. Vaino holds `start_ms`/`end_ms` and applies them per add via `rangeid`, which is why this target keeps what 98.6% of the library is shaped by `[GDE-BAK-030]`.
 4. **Long-term play history.** MPD does not keep one. Vaino's `listener_play_history` does, and it is the only irreplaceable data in the system `[SPEC-DF-090]`.
-5. **Why this track.** No equivalent — see below.
+5. **Why this passage.** No equivalent — see below.
 
 ---
 
@@ -74,7 +74,7 @@ Proposed namespace, all under `vaino.`:
 | `vaino.flavor` | a short human summary, e.g. `danceable · not sad` | any sticker-aware client |
 | `vaino.chosen_at` | unix seconds | `sticker find` for "what did it pick today" |
 
-**A client that knows nothing of Vaino is unaffected**; one that shows stickers gains the "why this track" panel for free. That is the whole of the extension, and it requires no MPD change, no fork, and no protocol addition.
+**A client that knows nothing of Vaino is unaffected**; one that shows stickers gains the "why this passage" panel for free. That is the whole of the extension, and it requires no MPD change, no fork, and no protocol addition.
 
 **`[SPEC-MPD-055]` What cannot be expressed, stated rather than approximated.**
 

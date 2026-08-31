@@ -695,7 +695,7 @@ impl MpdBackend {
 
 /// **The whole point of the sticker approach** `[SPEC-MPD-050]`: a client that
 /// has never heard of Vaino is unaffected, and one that shows stickers gains a
-/// "why this track" panel without a line of code changing. Nothing is added to
+/// "why this passage" panel without a line of code changing. Nothing is added to
 /// MPD to make it work.
 /// Where MPD says it is, from the last poll — and able to ask again now,
 /// because a handoff cannot wait for the next scheduled one `[SPEC-BK-065]`.

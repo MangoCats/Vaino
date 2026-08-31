@@ -284,7 +284,7 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 
 Vaino's headline requirement `[GDE-CHT-030]`. Previously specified nowhere.
 
-**`[REQ-VIS-100]` Why this track?** Every automatic selection exposes its full weight decomposition — artist weight, rotation block state, position on the recovery ramp, occasion multiplier, length bonus, distance to each seed, final rank, roulette position — **and the runners-up that lost**.
+**`[REQ-VIS-100]` Why this passage?** *(Renamed from "Why this track?" — [SPEC023](SPEC023-domain-vocabulary.md).)* Every automatic selection exposes its full weight decomposition — artist weight, rotation block state, position on the recovery ramp, occasion multiplier, length bonus, distance to each seed, final rank, roulette position — **and the runners-up that lost**.
 
 > **Status: the frequency half is delivered.** Every Director-chosen passage carries its full Stage-A decomposition — each term separately, never just the product — plus the five heaviest runners-up it beat, its share of the pool, and the pool's size and total weight. Written durably to `selection_decisions` and shown in the web UI. Terms sitting at ×1.0000 are dimmed rather than hidden: "this did not apply" is part of the answer.
 >

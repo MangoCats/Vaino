@@ -24,7 +24,7 @@
 //! What is published instead is a **sticker**, in MPD's own database, which is
 //! where MPD's own clients already look `[SPEC-MPD-050]`. A client that has
 //! never heard of Vaino is unaffected; one that shows stickers gains the "why
-//! this track" panel without a line of code changing.
+//! this passage" panel without a line of code changing.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};

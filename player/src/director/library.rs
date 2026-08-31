@@ -78,7 +78,7 @@ const RUNNERS_UP: usize = 5;
 /// becoming certain. At rank 100 this is ×0.017.
 pub const RANK_DECAY: f64 = 0.96;
 
-/// A complete answer to "why this track?" `[REQ-VIS-100]`.
+/// A complete answer to "why this passage?" `[REQ-VIS-100]`.
 ///
 /// Every term separately, never just the product -- a single number cannot be
 /// argued with, and arguing with it is the point.
@@ -97,8 +97,8 @@ pub struct Explanation {
     pub roulette_target: f64,
     pub artist_weight: f64,
     pub artist_blocked: bool,
-    pub track_restraint: f64,
-    pub track_ramp: f64,
+    pub recording_restraint: f64,
+    pub recording_ramp: f64,
     pub related_damping: f64,
     pub length_bonus: f64,
     pub occasion: f64,
@@ -672,12 +672,8 @@ impl Director {
                 roulette_target,
                 artist_weight: w.artist_weight,
                 artist_blocked: w.artist_blocked,
-                // `Explanation`'s own fields keep the `track_*` names here --
-                // they are the `/why/:id` JSON contract `skin.js` reads by
-                // key, so renaming them is a wire change, not a naming fix.
-                // See SPEC023's Track entry, and the report this review left.
-                track_restraint: w.recording_restraint,
-                track_ramp: w.recording_ramp,
+                recording_restraint: w.recording_restraint,
+                recording_ramp: w.recording_ramp,
                 related_damping: w.related_damping,
                 length_bonus: w.length_bonus,
                 occasion: w.occasion,

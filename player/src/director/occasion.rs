@@ -13,7 +13,7 @@
 //!
 //! so a value of 1.0 applies the curve exactly, 0.0 ignores it, and 0.9 applies
 //! nine tenths of it. That keeps the whole seasonal effect **one legible term**
-//! in the Why-this-track panel `[SPEC-DIR-190]`. Folding seasonality into the
+//! in the Why-this-passage panel `[SPEC-DIR-190]`. Folding seasonality into the
 //! programme target vector was rejected for exactly that reason.
 
 use std::collections::HashMap;

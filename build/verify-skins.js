@@ -72,7 +72,7 @@ const RICH = {
   why: {
     program: 'Mellow', weight: 0.8123, decayed_weight: 0.4211, pool_weight: 3120.5,
     pool_size: 8078, share_pct: 0.0135,
-    artist_weight: 1.0, track_restraint: 0.75, track_ramp: 1.0,
+    artist_weight: 1.0, recording_restraint: 0.75, recording_ramp: 1.0,
     related_damping: 0.9, length_bonus: 1.08, occasion: 1.0,
     shaping: { bypassed: false, eligible_in: 8078, gathered: 400, seeds_used: 3, disliked_out: 12 },
     seed_distances: [0.21, 0.33, 0.41], flow_distance: 0.187, rank: 4,
