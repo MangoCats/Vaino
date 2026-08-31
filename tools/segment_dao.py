@@ -15,9 +15,20 @@ between two of them is the gap between two songs. Matching the existing
 convention is what makes the result comparable with 2,676 hand-checked
 boundaries rather than merely plausible.
 
-    python tools/segment_dao.py <db> --validate [--limit N]   against known files
-    python tools/segment_dao.py <db> --file <path>            propose, print only
-    python tools/segment_dao.py <db> --file <path> --commit   write passages
+    python tools/segment_dao.py <db> --validate [--limit N]         against known files
+    python tools/segment_dao.py <db> --file <path>                 propose, print only
+    python tools/segment_dao.py <db> --file <path> --expect N       count-driven, print only
+    python tools/segment_dao.py <db> --file <path> --commit         propose, identify, write
+    python tools/segment_dao.py <db> --file <path> --expect N --commit
+
+`--commit` requires the file to already be in the library -- run
+`tools/ingest_folder.py` on its folder first `[SPEC-SA-070]`, `[SPEC-SA-110]`.
+It replaces that whole-file placeholder with one identified `radio`/`album`
+pair per track, the same album/radio duality `ingest_folder.py` now writes
+by default for a single-track file `[GDE-BMK-030]`. Without `--expect`, both
+the preview and `--commit` need an AcoustID key (`secrets/acoustid.key` or
+`ACOUSTID_KEY`) -- `propose()`'s own threshold choice is identification
+rate, so even looking has to look things up.
 """
 
 import argparse
@@ -100,20 +111,26 @@ def spans_at(path: str, threshold_db: int, total: float,
     return spans
 
 
-def segment(path: str, medium: str = "cd", min_track_s: float = MIN_TRACK_S,
-            expect: int | None = None):
-    """Tracks in a capture.
+def segment_with_threshold(path: str, medium: str = "cd", min_track_s: float = MIN_TRACK_S,
+                            expect: int | None = None):
+    """Tracks in a capture, and the threshold that found them.
 
     With `expect` -- the release's track count -- the threshold is swept and
     the one hitting that count wins, stopping at the first exact hit. Without
     it, the medium's single default is used and the answer is a guess: that is
     the mode that found 34 boundaries where 298 were known.
+
+    Returns `(threshold_db, spans)`, or `None` if the file would not decode.
+    The threshold travels with the spans because `--commit` needs it for
+    `boundary_src` `[SPEC-SA-110]`; `segment()` below drops it for callers
+    that only ever wanted the spans.
     """
     total = duration(path)
     if total is None:
         return None
     if expect is None:
-        return spans_at(path, THRESHOLDS.get(medium, -60), total, min_track_s)
+        db = THRESHOLDS.get(medium, -60)
+        return db, spans_at(path, db, total, min_track_s)
     best = None
     for db in SWEEP:
         spans = spans_at(path, db, total, min_track_s)
@@ -122,20 +139,29 @@ def segment(path: str, medium: str = "cd", min_track_s: float = MIN_TRACK_S,
             best = (err, db, spans)
         if err == 0:
             break
-    return best[2]
+    return best[1], best[2]
+
+
+def segment(path: str, medium: str = "cd", min_track_s: float = MIN_TRACK_S,
+            expect: int | None = None):
+    """Tracks in a capture -- spans only. See `segment_with_threshold` for
+    the threshold alongside them, which `validate()` below has no use for
+    but `--commit` does.
+    """
+    result = segment_with_threshold(path, medium, min_track_s, expect)
+    return None if result is None else result[1]
 
 
 # ------------------------------------------------------------- identification
 
-def identify(path: str, start: float, end: float, key: str):
-    """What AcoustID calls the audio between two marks, or `None`.
+def _best_recording(path: str, start: float, end: float, key: str) -> dict | None:
+    """The AcoustID `recordings` entry that best matches this span, as the
+    raw structured record (`id`, `title`, `artists`), or `None`.
 
-    The acceptance test that generalises `[AFS-MB-030]`. Choosing a threshold
-    by track count needs the count to be right, and a pressing that differs
-    from MusicBrainz by two or three tracks -- which is the normal state of a
-    special edition -- can never satisfy it. Whether a segment *identifies*
-    asks nothing about the total: a boundary in the wrong place cuts a song in
-    half and matches nothing, which is the signal worth having.
+    Shared by `identify()` (a display string, for the threshold sweep and the
+    plain preview) and `identify_recording()` (`--commit`'s own structured
+    need `[SPEC-SA-110]`) -- one fingerprint-and-lookup, two shapes of
+    answer, so the two can never disagree about what a lookup returned.
     """
     import json
     import urllib.error
@@ -159,9 +185,43 @@ def identify(path: str, start: float, end: float, key: str):
     for r in d.get("results") or []:
         for rec in r.get("recordings") or []:
             if rec.get("title"):
-                artists = ", ".join(a.get("name", "") for a in rec.get("artists") or [])
-                return f"{rec['title']} — {artists}" if artists else rec["title"]
+                return rec
     return None
+
+
+def identify(path: str, start: float, end: float, key: str):
+    """What AcoustID calls the audio between two marks, or `None`.
+
+    The acceptance test that generalises `[AFS-MB-030]`. Choosing a threshold
+    by track count needs the count to be right, and a pressing that differs
+    from MusicBrainz by two or three tracks -- which is the normal state of a
+    special edition -- can never satisfy it. Whether a segment *identifies*
+    asks nothing about the total: a boundary in the wrong place cuts a song in
+    half and matches nothing, which is the signal worth having.
+    """
+    rec = _best_recording(path, start, end, key)
+    if rec is None:
+        return None
+    artists = ", ".join(a.get("name", "") for a in rec.get("artists") or [])
+    return f"{rec['title']} — {artists}" if artists else rec["title"]
+
+
+def identify_recording(path: str, start: float, end: float, key: str) -> dict | None:
+    """Structured identification for `--commit` `[SPEC-SA-110]`: the
+    recording's own mbid, title, and every credited artist's `(mbid, name)`
+    -- everything `recordings`/`recording_artists`/`passage_recordings` need,
+    not just `identify()`'s display string. `None` for the same "nothing
+    matched" case `identify()` already returns for.
+    """
+    rec = _best_recording(path, start, end, key)
+    if rec is None:
+        return None
+    return {
+        "mbid": rec["id"],
+        "title": rec["title"],
+        "artists": [(a["id"], a.get("name") or "?")
+                    for a in rec.get("artists") or [] if a.get("id")],
+    }
 
 
 def propose(path: str, key: str, samples: int = 8, grid=SWEEP):
@@ -250,6 +310,124 @@ def validate(db: str, limit: int, medium: str, tolerance: float) -> int:
     return 0
 
 
+# --------------------------------------------------------------------- commit
+
+def commit_segments(conn, file_id: int, audio_md5: str, path: str,
+                     spans: list[tuple[float, float]], threshold_db: int, key: str) -> dict:
+    """Replace `file_id`'s passages with a real segmentation `[SPEC-SA-070]`,
+    one identified `radio`/`album` pair per track `[SPEC-SA-110]`,
+    `[GDE-BMK-030]`.
+
+    Replaces rather than adds to what is already there: the ordinary
+    starting point for a DAO capture is `tools/ingest_folder.py`'s own
+    whole-file `radio`/`album` pair, a deliberate one-track-per-file
+    placeholder for exactly this shape of file, not a rival segmentation
+    worth keeping once a real one exists.
+
+    Each span is identified independently, the same convention this
+    library's own 133-of-136 already-segmented tracks were produced under: a
+    confident AcoustID match gets the real MusicBrainz recording (and every
+    credited artist); anything else gets `local:audio:<md5>:<start_ms>`, the
+    same placeholder shape `local:audio:<md5>` alone already means for a
+    single-track file, extended with the one thing that makes it unique
+    inside a DAO capture -- where in the file it starts.
+    """
+    old = [r[0] for r in conn.execute(
+        "SELECT passage_id FROM passages WHERE file_id=?1", (file_id,))]
+    if old:
+        conn.execute(
+            f"DELETE FROM passage_recordings WHERE passage_id IN ({','.join('?' * len(old))})", old)
+        conn.execute("DELETE FROM passages WHERE file_id=?1", (file_id,))
+
+    boundary_src = f"segment:silence-{threshold_db}dB+acoustid"
+    identified = unidentified = 0
+    for start_s, end_s in spans:
+        start_ms, end_ms = round(start_s * 1000), round(end_s * 1000)
+        rec = identify_recording(path, start_s, end_s, key)
+        if rec is not None:
+            mbid, source = rec["mbid"], "segment:acoustid"
+            conn.execute(
+                "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
+                "VALUES (?1,?2,?3,?4)", (mbid, rec["title"], end_ms - start_ms, source))
+            for artist_mbid, name in rec["artists"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO artists (mbid,name,source) VALUES (?1,?2,?3)",
+                    (artist_mbid, name, source))
+                conn.execute(
+                    "INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
+                    "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
+            identified += 1
+        else:
+            mbid, source = f"local:audio:{audio_md5}:{start_ms}", "segment:unidentified"
+            conn.execute(
+                "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
+                "VALUES (?1,?2,?3,?4)",
+                (mbid, f"unidentified segment at {round(start_ms / 60000)} min",
+                 end_ms - start_ms, source))
+            unidentified += 1
+
+        # Both kinds, one identification `[SPEC-SA-110]` -- see
+        # `ingest_folder.py`'s own `--kind both` for why `album`'s lead/gain
+        # are 0, not NULL: its segue points equal its own hard boundaries
+        # `[GDE-BMK-030]`, permanently, not a value awaiting analysis.
+        for kind in ("radio", "album"):
+            if kind == "album":
+                pid = conn.execute(
+                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,"
+                    "lead_in_ms,lead_out_ms,gain_db,boundary_src) "
+                    "VALUES (?1,?2,?3,?4,0,0,0.0,?5)",
+                    (file_id, kind, start_ms, end_ms, boundary_src)).lastrowid
+            else:
+                pid = conn.execute(
+                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
+                    "VALUES (?1,?2,?3,?4,?5)",
+                    (file_id, kind, start_ms, end_ms, boundary_src)).lastrowid
+            conn.execute(
+                "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
+                "VALUES (?1,?2,1.0,?3)", (pid, mbid, source))
+
+    return {"tracks": len(spans), "identified": identified,
+            "unidentified": unidentified, "replaced": len(old)}
+
+
+def do_commit(db_path: str, path: str, spans: list[tuple[float, float]], threshold_db: int) -> int:
+    """`--commit`'s own I/O: find the file, get a key, write the transaction.
+
+    Deliberately does not create `files`/`file_tags` rows itself -- that is
+    `tools/ingest_folder.py`'s job, and it already ran first for this file to
+    exist here at all `[SPEC-SA-070]`. Refusing plainly when it has not, per
+    `[SPEC-DF-095]`, beats guessing at tags this tool never read.
+    """
+    import sqlite3
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import ingest_folder  # noqa: E402  -- same audio_md5(), not a second copy of it
+    import secret  # noqa: E402
+
+    md5 = ingest_folder.audio_md5(path)
+    if md5 is None:
+        say("would not decode")
+        return 1
+
+    conn = sqlite3.connect(db_path, timeout=60)
+    conn.execute("PRAGMA busy_timeout = 60000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    row = conn.execute("SELECT file_id FROM files WHERE audio_md5=?1", (md5,)).fetchone()
+    if row is None:
+        say(f"\nnot in the library yet -- run tools/ingest_folder.py on its folder "
+            f"first, then re-run this with --commit")
+        return 1
+    file_id = row[0]
+
+    key = secret.acoustid_key()  # required=True: --commit always identifies
+    conn.execute("BEGIN IMMEDIATE")
+    result = commit_segments(conn, file_id, md5, path, spans, threshold_db, key)
+    conn.commit()
+    say(f"\nreplaced {result['replaced']} old passage(s) with {result['tracks']} track(s), "
+        f"{result['tracks']} radio + {result['tracks']} album: "
+        f"{result['identified']} identified, {result['unidentified']} not")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
@@ -259,20 +437,39 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--tolerance", type=float, default=2.0)
     ap.add_argument("--commit", action="store_true")
+    # The release's own track count, when it is known `[AFS-MB-030]` -- swept
+    # for the threshold hitting that count, no AcoustID lookup needed to
+    # *choose* one. Without it, the threshold is chosen by identification
+    # rate instead (`propose()`), which does need a key even just to preview.
+    ap.add_argument("--expect", type=int)
     args = ap.parse_args()
 
     if args.validate:
         return validate(args.db, args.limit, args.medium, args.tolerance)
     if args.file:
-        spans = segment(args.file, args.medium)
-        if spans is None:
-            say("would not decode")
-            return 1
-        say(f"{len(spans)} track(s) in {os.path.basename(args.file)}")
+        if args.expect:
+            found = segment_with_threshold(args.file, args.medium, expect=args.expect)
+            if found is None:
+                say("would not decode")
+                return 1
+            threshold_db, spans = found
+        else:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import secret  # noqa: E402
+            # A key is required here even for a bare preview: unlike
+            # `--expect`, `propose()`'s own threshold choice is identification
+            # rate, which has no meaning without looking anything up.
+            key = secret.acoustid_key()
+            proposed = propose(args.file, key)
+            if proposed is None:
+                say("would not decode, or nothing identified at any threshold")
+                return 1
+            _, threshold_db, spans = proposed
+        say(f"\n{len(spans)} track(s) in {os.path.basename(args.file)} ({threshold_db} dB)")
         for i, (s, e) in enumerate(spans, 1):
             say(f"  {i:3d}  {s/60:6.2f}–{e/60:6.2f} min   ({e-s:6.1f}s)")
         if args.commit:
-            say("\n--commit is not implemented yet: validate first.")
+            return do_commit(args.db, args.file, spans, threshold_db)
         return 0
     say(__doc__)
     return 2

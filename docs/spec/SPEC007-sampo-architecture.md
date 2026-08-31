@@ -121,6 +121,8 @@ Ten recordings were truncated to centred excerpts and each excerpt's flavor comp
 
 **`[SPEC-SA-094]` Still open:** whether *genuinely short recordings* — 12-second interludes, not truncated long songs — yield reliable flavor. That needs short songs as subjects and is a different experiment.
 
+**`[SPEC-SA-110]` Built 2026-08-31: the album/radio duality `[GDE-BMK-030]` on Vaino's own ingest paths, not only the migrated data.** Found live starting from one flagged track with no album cut at all: every passage `[SPEC-SA-070]`/`tools/ingest_folder.py` had ever written on their own was `radio` only — 116 whole-file, 136 DAO-segmented, `inherited:mulib`'s 8,079/8,078 the sole properly-paired case. `tools/ingest_folder.py --kind both` (the new default) writes both per file; `segment_dao.py --commit` (previously a documented stub — "`--commit` is not implemented yet") now does the same per identified track, replacing a file's placeholder passages rather than adding to them; `tools/backfill_album_cuts.py` closes the gap already on disk, mechanically — `analyze_amplitude.py` only ever writes `lead_in_ms`/`lead_out_ms` on `kind='radio'`, never `start_ms`/`end_ms`, so a radio-only passage from either newer path already carries the exact span its album twin needs, no re-detection required. An album cut's `lead_in_ms`/`lead_out_ms`/`gain_db` are `0`/`0`/`0.0` on all three paths, permanently, not `NULL` the way a fresh radio cut's are: its segue points equal its own hard boundaries by definition, and it is never itself the subject of amplitude analysis.
+
 ---
 
 ## 7. Deliberate Non-Goals

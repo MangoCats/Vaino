@@ -114,7 +114,15 @@ def main() -> int:
     ap.add_argument("db")
     ap.add_argument("folder")
     ap.add_argument("--commit", action="store_true")
-    ap.add_argument("--kind", default="radio", choices=("radio", "album"))
+    # Both by default `[SPEC-SA-110]`: a single-track file earns the same
+    # album/radio duality `[GDE-BMK-030]` a migrated one already has, without
+    # a second manual run someone has to remember to make -- 116 files across
+    # this library's own history never got that second run, and sat with a
+    # radio cut and nothing else until `tools/backfill_album_cuts.py` found
+    # them. `radio`/`album` alone are kept for the one caller with a real
+    # reason to want just one -- `tools/backfill_album_cuts.py`'s own tests,
+    # and anyone re-ingesting a single kind on purpose.
+    ap.add_argument("--kind", default="both", choices=("radio", "album", "both"))
     # Structured output, for a caller that is not a terminal `[SPEC-SUI-085]`.
     # The prose form renders a smart-quoted title as `?Duala?` under a Windows
     # console encoding -- harmless there and wrong in a browser, so a consumer
@@ -206,20 +214,35 @@ def main() -> int:
             (fid, info["title"], info["artist"], info["album"],
              info["track_no"], info["disc_no"], info["has_art"], int(time.time())))
 
-        # One passage spanning the file. Right for single-track audio; a DAO
-        # capture needs segmentation, which is not this tool's business.
-        pid = conn.execute(
-            "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
-            "VALUES (?1,?2,0,?3,'ingest:whole-file')",
-            (fid, args.kind, info["duration_ms"])).lastrowid
+        # One passage per kind spanning the file `[SPEC-SA-110]`. Right for
+        # single-track audio; a DAO capture needs segmentation, which is not
+        # this tool's business. `album`'s lead/gain are 0, not NULL: its segue
+        # points equal its own hard boundaries `[GDE-BMK-030]`, so it is never
+        # "awaiting analysis" the way a fresh radio cut is -- and never will
+        # be, since `analyze_amplitude.py` only ever touches `kind='radio'`.
+        kinds = ("radio", "album") if args.kind == "both" else (args.kind,)
+        pids = {}
+        for kind in kinds:
+            if kind == "album":
+                pids[kind] = conn.execute(
+                    "INSERT INTO passages "
+                    "(file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src) "
+                    "VALUES (?1,?2,0,?3,0,0,0.0,'ingest:whole-file')",
+                    (fid, kind, info["duration_ms"])).lastrowid
+            else:
+                pids[kind] = conn.execute(
+                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
+                    "VALUES (?1,?2,0,?3,'ingest:whole-file')",
+                    (fid, kind, info["duration_ms"])).lastrowid
 
         mbid = LOCAL_PREFIX + md5
         conn.execute(
             "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) VALUES (?1,?2,?3,?4)",
             (mbid, info["title"] or os.path.splitext(name)[0], info["duration_ms"], LOCAL_SOURCE))
-        conn.execute(
-            "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
-            "VALUES (?1,?2,1.0,?3)", (pid, mbid, LOCAL_SOURCE))
+        for pid in pids.values():
+            conn.execute(
+                "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
+                "VALUES (?1,?2,1.0,?3)", (pid, mbid, LOCAL_SOURCE))
 
         # What this stage decided, and on what `[SPEC-SA-085]`, `[SPEC-SC-100]`.
         # Added 2026-08-20: the table held 15,050 rows and every one was
@@ -230,7 +253,7 @@ def main() -> int:
             "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
             "VALUES (?1,'ingest','added',NULL,?2,?3)",
             (md5, json.dumps({
-                "passage_id": pid, "file_id": fid, "mbid": mbid, "kind": args.kind,
+                "passages": pids, "file_id": fid, "mbid": mbid,
                 "boundary": "whole-file",
                 # Why no MusicBrainz id was sought here: this stage does not
                 # identify, and recording that is the point of the table.
@@ -249,7 +272,13 @@ def main() -> int:
         return 0
     if args.commit:
         say(f"\nadded {added}, already present {skipped}, unreadable {failed}")
-        say("They are `kind=radio` passages, so the Director can pick them now.")
+        if args.kind == "both":
+            say("Each got a `radio` cut (what the Director picks) and an `album` "
+                "cut (full span, matching what a migrated track already has).")
+        elif args.kind == "radio":
+            say("They are `kind=radio` passages, so the Director can pick them now.")
+        else:
+            say("They are `kind=album` passages -- the Director only ever picks `radio`.")
         say(f"Identity is {LOCAL_PREFIX}<md5> -- deliberately not an MBID, because")
         say("there is no MusicBrainz entry to point at and inventing one would")
         say("be a lie the whole library would then believe.")
