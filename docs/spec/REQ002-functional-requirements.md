@@ -864,6 +864,14 @@ What makes this possible was already true and merely tangled: **the server's con
 >
 > One consequence worth recording: `lowlevel_cache` is keyed `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]`, so clamping an end **orphans that passage's cached features**. The features were still correct — extraction had already clamped the range before analysing — so 212 rows were **re-keyed rather than re-extracted**, each matching exactly one cache row on `(audio_md5, start_ms)`. Radio-passage coverage is now **8,078 of 8,078**. Any repair that moves a passage boundary must consider the cache key, or it silently discards work.
 
+**`[REQ-LIB-146]` Read a file's tags from wherever the container actually put them, not wherever the majority format happens to.** `ingest_folder.py`'s `probe()` asked `ffprobe` only for `format`-level tags. MP3's ID3 tags live there, so 5,490 of 5,682 `.mp3` files in the library read fine — but Ogg Vorbis comments land on the *stream* instead, and `format_tags` never sees them: **all 27 `.ogg` files in the library came back with `title`/`artist`/`album`/`track_no`/`disc_no` entirely NULL**, despite every one of them carrying a full tag set on disk.
+
+> Found live 2026-08-31 chasing why `tools/suggest_release.py` scored 0/14 tracks matched for `Xavier Rudd/White Moth` even after being pointed at the exact right release directly by id — the release was right; the folder's own files had nothing in `file_tags` to match titles against at all.
+>
+> Fixed by asking `ffprobe` for `stream_tags` as well as `format_tags` in the same call, and falling back to the stream-level value per field only when the format level has nothing — a format-level tag a file genuinely has is never overwritten by a same-named stream-level one, verified by a test constructed the other way round for exactly that reason.
+>
+> Backfilled by `tools/backfill_file_tags.py`, scoped to a `file_tags` row that is entirely empty (the specific shape a probe that looked in the wrong place for every field produces, not "missing one optional field", which can be genuinely true of a file's real tags) — idempotent, and reports rather than retries a file that turns out to have no tags to find at all.
+
 **`[REQ-LIB-150]`** Relocate a moved or renamed library by content, not path `[SPEC-SC-035]`.
 
 **`[REQ-LIB-170]` Sampo has an interface, and it shows what is known, what is not, and what it decided.** The pipeline is seven stages `[SPEC-SA-020]` whose order is recorded nowhere, `ingest_decisions` is written and read by nothing, and a folder of new music is discovered only when a person thinks to point a tool at it — a four-track EP went four months unnoticed. That is `[GDE-BMK-050]`'s undocumented ritual with better parts, and `[REQ-LIB-100]` is not met by a pipeline that works only when someone remembers it exists. Designed in [SPEC013](SPEC013-sampo-console.md).

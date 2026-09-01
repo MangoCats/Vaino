@@ -15,6 +15,7 @@ actually decode.
     python tools/test_ingest_folder.py
 """
 
+import json
 import os
 import sqlite3
 import sys
@@ -31,6 +32,68 @@ def check(cond, msg):
     if not cond:
         FAILED.append(msg)
         print(f"  FAIL: {msg}")
+
+
+class FakeCompleted:
+    def __init__(self, stdout: dict, returncode: int = 0):
+        self.returncode = returncode
+        self.stdout = json.dumps(stdout)
+        self.stderr = ""
+
+
+def test_probe_falls_back_to_stream_tags() -> None:
+    """`[REQ-LIB-146]` Ogg Vorbis comments land on the *stream*, not the
+    *format* -- found live against `Xavier Rudd/White Moth`, where every one
+    of 27 `.ogg` files in the library came back with `file_tags` all NULL
+    despite carrying full tags on disk. `subprocess.run` is faked with the
+    exact shape `ffprobe` returns for that file, not decoded audio -- the
+    same reasoning this file's own module docstring already gives for
+    mocking `probe()` wholesale elsewhere; here it is `probe()` itself under
+    test, so only its one subprocess call is faked.
+    """
+    print("probe(): an Ogg file's stream-level tags are read when format-level ones are empty")
+    real_run, real_duration = ingest_folder.subprocess.run, ingest_folder.audio_duration.probe_duration_ms
+    ingest_folder.subprocess.run = lambda *a, **kw: FakeCompleted({
+        "format": {},
+        "streams": [{"codec_type": "audio", "tags": {
+            "TITLE": "Better People", "ARTIST": "Xavier Rudd", "ALBUM": "White Moth",
+            "track": "1", "disc": "1",
+        }}],
+    })
+    ingest_folder.audio_duration.probe_duration_ms = lambda p: 186506.0
+    try:
+        info = ingest_folder.probe("irrelevant.ogg")
+    finally:
+        ingest_folder.subprocess.run = real_run
+        ingest_folder.audio_duration.probe_duration_ms = real_duration
+    check(info is not None, "probe() must not give up just because format.tags was empty")
+    if info:
+        check(info["title"] == "Better People", f"got {info['title']!r}")
+        check(info["artist"] == "Xavier Rudd", f"got {info['artist']!r}")
+        check(info["album"] == "White Moth", f"got {info['album']!r}")
+        check(info["track_no"] == 1, f"got {info['track_no']!r}")
+        check(info["disc_no"] == 1, f"got {info['disc_no']!r}")
+
+
+def test_probe_prefers_format_tags_when_present() -> None:
+    print("probe(): a format-level tag (MP3/ID3's own home) is never overridden by a "
+          "same-named stream-level one")
+    real_run, real_duration = ingest_folder.subprocess.run, ingest_folder.audio_duration.probe_duration_ms
+    ingest_folder.subprocess.run = lambda *a, **kw: FakeCompleted({
+        "format": {"tags": {"title": "Format Title", "artist": "Format Artist"}},
+        "streams": [{"codec_type": "audio", "tags": {
+            "TITLE": "Stream Title", "ALBUM": "Stream Album",
+        }}],
+    })
+    ingest_folder.audio_duration.probe_duration_ms = lambda p: 200000.0
+    try:
+        info = ingest_folder.probe("irrelevant.mp3")
+    finally:
+        ingest_folder.subprocess.run = real_run
+        ingest_folder.audio_duration.probe_duration_ms = real_duration
+    check(info["title"] == "Format Title", f"format-level title must win, got {info['title']!r}")
+    check(info["album"] == "Stream Album",
+          f"a field format.tags never had at all must still fall back, got {info['album']!r}")
 
 
 # The minimum this tool's own INSERTs touch -- not the full `sql/schema.sql`,
@@ -65,6 +128,10 @@ def run(db_path: str, folder: str, extra_args=()) -> int:
 
 
 def main() -> int:
+    test_probe_falls_back_to_stream_tags()
+    test_probe_prefers_format_tags_when_present()
+    print()
+
     fd, tmp_db = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.remove(tmp_db)

@@ -74,8 +74,9 @@ def probe(path: str) -> dict | None:
     schema comment requires: "decoded, not header-claimed".
     """
     r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries",
-         "format_tags=title,artist,album,track,disc",
+        ["ffprobe", "-v", "error",
+         "-show_entries", "format_tags=title,artist,album,track,disc",
+         "-show_entries", "stream_tags=title,artist,album,track,disc",
          "-show_entries", "stream=codec_type", "-of", "json", path],
         capture_output=True, text=True)
     if r.returncode != 0:
@@ -89,6 +90,17 @@ def probe(path: str) -> dict | None:
     if not duration_ms:
         return None
     tags = {k.lower(): v for k, v in (fmt.get("tags") or {}).items()}
+    # MP3's ID3 tags land on `format`, which the lookup above already covers
+    # -- but Ogg Vorbis comments land on the *stream* instead, and ffprobe
+    # never copies them up: `format.tags` comes back empty for an Ogg file
+    # with a full tag set sitting one level down `[REQ-LIB-146]`, found live
+    # against `Xavier Rudd/White Moth`, systemic across all 27 `.ogg` files
+    # then in the library (0/27 tagged, vs. 5490/5682 `.mp3`). `setdefault`
+    # per field, not a blanket second source, so a format-level tag a file
+    # genuinely has is never overwritten by a same-named stream-level one.
+    for s in d.get("streams") or []:
+        for k, v in (s.get("tags") or {}).items():
+            tags.setdefault(k.lower(), v)
     has_art = any(s.get("codec_type") == "video" for s in d.get("streams") or [])
     return {
         "duration_ms": int(round(duration_ms)),
