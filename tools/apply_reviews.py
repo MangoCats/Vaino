@@ -212,7 +212,7 @@ def apply_artist_corrections(conn: sqlite3.Connection, commit: bool) -> int:
         say(f"applied {len(pending)} artist correction(s)")
     else:
         say("nothing was written. Re-run with --commit to do it.")
-    return 0
+    return len(pending)
 
 
 def main() -> int:
@@ -223,6 +223,9 @@ def main() -> int:
                     help="undo an applied reassignment and re-open it for review")
     ap.add_argument("--revert-artist", metavar="RECORDING_MBID",
                     help="undo an applied artist-credit correction `[SPEC-SUI-197]`")
+    ap.add_argument("--json", action="store_true",
+                     help="also print one final JSON summary line, for a caller "
+                          "(the Sampo console's apply-reviews job) rather than a person")
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db, timeout=60)
@@ -233,6 +236,8 @@ def main() -> int:
         "SELECT name FROM sqlite_master WHERE type='table'")}
     if "id_reviews" not in have:
         say("no reviews recorded yet")
+        if args.json:
+            say(json.dumps({"applied": 0, "artist_applied": 0, "committed": args.commit}))
         return 1
 
     if args.revert is not None:
@@ -361,9 +366,13 @@ def main() -> int:
     # Independent of everything above `[SPEC-SUI-197]`: a different table, a
     # different key, and a passage's recording id being fine is exactly the
     # case this exists for.
+    artist_count = 0
     if "artist_reviews" in have:
         say("")
-        apply_artist_corrections(conn, args.commit)
+        artist_count = apply_artist_corrections(conn, args.commit)
+    if args.json:
+        say(json.dumps({"applied": applied, "artist_applied": artist_count,
+                        "committed": args.commit}))
     return 0
 
 

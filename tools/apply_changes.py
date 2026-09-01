@@ -62,6 +62,57 @@ def say(text: str) -> None:
     print(text.encode(enc, "replace").decode(enc), flush=True)
 
 
+# The bare, pre-`[SPEC-DF-104]`/`[SPEC-SUI-226]` shape of each review table
+# -- module-level so `remote_snapshot.py` can create exactly this much
+# without also running the `ALTER TABLE` loop below `[SPEC-DF-120]`. That
+# loop is only ever a no-op-and-untraced on a table these already exist on,
+# so a caller that ran it first would silently swallow the very statements
+# a real push needs to *capture* and ship to a remote missing them --
+# reused here, not duplicated, so the two can never drift out of sync.
+ID_REVIEWS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS id_reviews (passage_id INTEGER PRIMARY KEY, "
+    "decision TEXT NOT NULL, chosen_mbid TEXT, decided_at TEXT NOT NULL, "
+    "chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT)")
+BOUNDARY_REVIEWS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS boundary_reviews (passage_id INTEGER PRIMARY KEY, "
+    "start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER, "
+    "lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT)")
+ARTIST_REVIEWS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS artist_reviews (recording_mbid TEXT PRIMARY KEY, "
+    "passage_id INTEGER, artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL, "
+    "previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL, "
+    "decided_at TEXT NOT NULL, applied_at TEXT)")
+
+
+# The `ALTER TABLE ADD COLUMN` migrations layered onto the bare tables
+# above, over time -- module-level for the identical reason those are
+# `[SPEC-DF-120]`: `remote_snapshot.py` needs this exact list to know which
+# of them a *real* remote already has (so its own snapshot pre-adds only
+# those, and leaves a genuinely missing one for `ensure_review_tables()`'s
+# own later run to add fresh and capture), not just "bare or fully migrated."
+REVIEW_TABLE_MIGRATIONS = [
+    ("boundary_reviews", "audio_md5", "TEXT"),
+    ("boundary_reviews", "orig_kind", "TEXT"),
+    ("boundary_reviews", "orig_start_ms", "INTEGER"),
+    ("boundary_reviews", "orig_end_ms", "INTEGER"),
+    ("boundary_reviews", "orig_lead_in_ms", "INTEGER"),
+    ("boundary_reviews", "orig_lead_out_ms", "INTEGER"),
+    ("boundary_reviews", "orig_gain_db", "REAL"),
+    ("id_reviews", "origin", "TEXT"),
+    ("boundary_reviews", "origin", "TEXT"),
+    ("artist_reviews", "origin", "TEXT"),
+    # `[SPEC-SUI-226]`, same shape as the `orig_*` block above.
+    ("boundary_reviews", "fade_in_ms", "INTEGER"),
+    ("boundary_reviews", "fade_out_ms", "INTEGER"),
+    ("boundary_reviews", "fade_in_curve", "TEXT"),
+    ("boundary_reviews", "fade_out_curve", "TEXT"),
+    ("boundary_reviews", "orig_fade_in_ms", "INTEGER"),
+    ("boundary_reviews", "orig_fade_out_ms", "INTEGER"),
+    ("boundary_reviews", "orig_fade_in_curve", "TEXT"),
+    ("boundary_reviews", "orig_fade_out_curve", "TEXT"),
+]
+
+
 def ensure_review_tables(conn: sqlite3.Connection) -> None:
     """This tool has no dependency on Vaino ever having run against the
     target file at all -- it writes to the SQLite path directly, the same as
@@ -72,42 +123,12 @@ def ensure_review_tables(conn: sqlite3.Connection) -> None:
     schema exactly matching what `PlayerStore::open`'s own
     `ensure_review_table` and its two siblings create.
     """
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS id_reviews (passage_id INTEGER PRIMARY KEY, "
-        "decision TEXT NOT NULL, chosen_mbid TEXT, decided_at TEXT NOT NULL, "
-        "chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT)")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS boundary_reviews (passage_id INTEGER PRIMARY KEY, "
-        "start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER, "
-        "lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT)")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS artist_reviews (recording_mbid TEXT PRIMARY KEY, "
-        "passage_id INTEGER, artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL, "
-        "previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL, "
-        "decided_at TEXT NOT NULL, applied_at TEXT)")
-    for table, column in [
-        ("boundary_reviews", "audio_md5 TEXT"),
-        ("boundary_reviews", "orig_kind TEXT"),
-        ("boundary_reviews", "orig_start_ms INTEGER"),
-        ("boundary_reviews", "orig_end_ms INTEGER"),
-        ("boundary_reviews", "orig_lead_in_ms INTEGER"),
-        ("boundary_reviews", "orig_lead_out_ms INTEGER"),
-        ("boundary_reviews", "orig_gain_db REAL"),
-        ("id_reviews", "origin TEXT"),
-        ("boundary_reviews", "origin TEXT"),
-        ("artist_reviews", "origin TEXT"),
-        # `[SPEC-SUI-226]`, same shape as the `orig_*` block above.
-        ("boundary_reviews", "fade_in_ms INTEGER"),
-        ("boundary_reviews", "fade_out_ms INTEGER"),
-        ("boundary_reviews", "fade_in_curve TEXT"),
-        ("boundary_reviews", "fade_out_curve TEXT"),
-        ("boundary_reviews", "orig_fade_in_ms INTEGER"),
-        ("boundary_reviews", "orig_fade_out_ms INTEGER"),
-        ("boundary_reviews", "orig_fade_in_curve TEXT"),
-        ("boundary_reviews", "orig_fade_out_curve TEXT"),
-    ]:
+    conn.execute(ID_REVIEWS_TABLE)
+    conn.execute(BOUNDARY_REVIEWS_TABLE)
+    conn.execute(ARTIST_REVIEWS_TABLE)
+    for table, column, coltype in REVIEW_TABLE_MIGRATIONS:
         try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
         except sqlite3.OperationalError:
             pass  # already has it
 

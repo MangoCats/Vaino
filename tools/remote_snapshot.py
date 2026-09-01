@@ -74,7 +74,66 @@ def _passage_row_sql(anchor: dict, extra_cols: str) -> str:
     )
 
 
-def _id_review_row(remote: str, change: dict, timeout: float) -> dict:
+def _remote_review_schema(remote: str, timeout: float) -> dict:
+    """Which of the three review tables the remote actually has, and which
+    columns each one carries -- one round trip for the table names plus one
+    per existing table for its columns, checked once per `fetch()` rather
+    than once per change. A virgin installation that has never had an edit
+    applied and pushed to it (every real appliance, the first time) has NONE
+    of them yet, and a correlated subquery naming a table that does not
+    exist fails outright, the same "no such column" shape `[SPEC-SUI-226]`'s
+    own fade retry already guards against, one level up: a whole missing
+    table, not one column. The per-table column set matters too, separately
+    `[SPEC-DF-120]`: `build()` needs it to pre-add only the migrations a real
+    remote already has, or its own snapshot would otherwise look either
+    "fully migrated" (silently dropping the `ALTER`s a genuinely older
+    remote needs `apply_changes.py`'s later run to capture and ship) or
+    "bare" (re-shipping harmless-but-noisy duplicate-column `ALTER`s to a
+    remote that already has them every single time).
+
+    Returns `{table: set(columns) | None}` -- `None` for a table that does
+    not exist. Missing tables/columns are the ordinary, expected case this
+    exists to handle, not a failure; only an unreachable remote falls back
+    to assuming nothing is known (querying every column defensively, the
+    same posture this tool already took before this distinction existed).
+    """
+    result = remote_peek.run_remote_sql(
+        remote,
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name IN ('id_reviews','boundary_reviews','artist_reviews')",
+        timeout=timeout)
+    if not result["ok"]:
+        return {"id_reviews": None, "boundary_reviews": None, "artist_reviews": None}
+    have = {r["name"] for r in result["rows"]}
+    schema = {}
+    for table in ("id_reviews", "boundary_reviews", "artist_reviews"):
+        if table not in have:
+            schema[table] = None
+            continue
+        cols = remote_peek.run_remote_sql(remote, f"PRAGMA table_info({table})", timeout=timeout)
+        schema[table] = {c["name"] for c in cols["rows"]} if cols["ok"] else None
+    return schema
+
+
+def _history_cols(table: str, key_col: str, key_lit: str, remote_schema: dict) -> str:
+    """The `hist_decided_at`/`hist_origin` pair, or literal `NULL`s for
+    either that the remote cannot actually answer: `hist_decided_at` when
+    `table` does not exist at all (the one case a `[SPEC-DF-102]`-style
+    correlated subquery cannot survive regardless of how it is written), and
+    `hist_origin` on its own when the table exists but predates
+    `[SPEC-DF-104]`'s `origin` column -- a real, standalone gap
+    `apply_changes.py`'s own docstring already names.
+    """
+    cols = remote_schema.get(table)
+    if cols is None:
+        return "NULL AS hist_decided_at, NULL AS hist_origin"
+    origin_expr = (f"(SELECT origin FROM {table} WHERE {key_col} = {key_lit} "
+                   "AND applied_at IS NOT NULL)" if "origin" in cols else "NULL")
+    return (f"(SELECT decided_at FROM {table} WHERE {key_col} = {key_lit} "
+            f"AND applied_at IS NOT NULL) AS hist_decided_at, {origin_expr} AS hist_origin")
+
+
+def _id_review_row(remote: str, change: dict, timeout: float, remote_schema: dict) -> dict:
     """One round trip: the anchor's own `passage_id` and current recording,
     whether the *target* recording already exists remotely (the one case
     `apply_id_review` cannot safely guess past -- a plain, non-`OR IGNORE`
@@ -82,16 +141,12 @@ def _id_review_row(remote: str, change: dict, timeout: float) -> dict:
     there under a target mbid this installation happens to know from
     elsewhere), and this passage's own applied-review history, if any.
     """
-    lit = remote_peek.literal
     sql = _passage_row_sql(
         change["anchor"],
         ", (SELECT pr.mbid FROM passage_recordings pr WHERE pr.passage_id = p.passage_id "
         "    ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS current_mbid, "
         f"({_exists('recordings', 'mbid', change['target']['mbid'])}) AS target_recording_exists, "
-        "(SELECT decided_at FROM id_reviews WHERE passage_id = p.passage_id "
-        "    AND applied_at IS NOT NULL) AS hist_decided_at, "
-        "(SELECT origin FROM id_reviews WHERE passage_id = p.passage_id "
-        "    AND applied_at IS NOT NULL) AS hist_origin")
+        + _history_cols("id_reviews", "passage_id", "p.passage_id", remote_schema))
     result = remote_peek.run_remote_sql(remote, sql, timeout=timeout)
     if not result["ok"]:
         raise RuntimeError(result["error"])
@@ -103,7 +158,7 @@ def _exists(table: str, column: str, value) -> str:
     return f"SELECT 1 FROM {table} WHERE {column} = {remote_peek.literal(value)}"
 
 
-def _boundary_row(remote: str, change: dict, timeout: float) -> tuple[dict, bool]:
+def _boundary_row(remote: str, change: dict, timeout: float, remote_schema: dict) -> tuple[dict, bool]:
     """Two attempts, the same fallback `remote_peek.py`'s own `peek()`
     already uses for a lone anchor: with the four fade columns, then without,
     on exactly the failure an unmigrated `passages` (no
@@ -120,17 +175,10 @@ def _boundary_row(remote: str, change: dict, timeout: float) -> tuple[dict, bool
     anchor = change["anchor"]
     target_anchor = {**anchor, "start_ms": change["target"]["start_ms"],
                       "end_ms": change["target"]["end_ms"]}
+    hist = _history_cols("boundary_reviews", "passage_id", "p.passage_id", remote_schema)
     fade_cols = (", p.lead_in_ms, p.lead_out_ms, p.gain_db, "
-                 "p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, "
-                 "(SELECT decided_at FROM boundary_reviews WHERE passage_id = p.passage_id "
-                 "    AND applied_at IS NOT NULL) AS hist_decided_at, "
-                 "(SELECT origin FROM boundary_reviews WHERE passage_id = p.passage_id "
-                 "    AND applied_at IS NOT NULL) AS hist_origin")
-    no_fade_cols = (", p.lead_in_ms, p.lead_out_ms, p.gain_db, "
-                    "(SELECT decided_at FROM boundary_reviews WHERE passage_id = p.passage_id "
-                    "    AND applied_at IS NOT NULL) AS hist_decided_at, "
-                    "(SELECT origin FROM boundary_reviews WHERE passage_id = p.passage_id "
-                    "    AND applied_at IS NOT NULL) AS hist_origin")
+                 "p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, " + hist)
+    no_fade_cols = (", p.lead_in_ms, p.lead_out_ms, p.gain_db, " + hist)
 
     def attempt(a: dict, cols: str):
         return remote_peek.run_remote_sql(remote, _passage_row_sql(a, cols), timeout=timeout)
@@ -151,7 +199,7 @@ def _boundary_row(remote: str, change: dict, timeout: float) -> tuple[dict, bool
     return (result2["rows"][0] if result2["rows"] else {}), has_fade
 
 
-def _artist_review_row(remote: str, change: dict, timeout: float) -> dict:
+def _artist_review_row(remote: str, change: dict, timeout: float, remote_schema: dict) -> dict:
     """One round trip: whether the recording is known here at all, its
     current credited artist, whether the *target* artist already exists
     (`apply_artist_review`'s own `artists` write is `INSERT OR IGNORE`, so
@@ -169,10 +217,7 @@ def _artist_review_row(remote: str, change: dict, timeout: float) -> dict:
         "(SELECT a.name FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid "
         f"    WHERE ra.mbid = {lit(rmbid)} ORDER BY ra.weight DESC, a.name LIMIT 1) AS current_artist_name, "
         f"({_exists('artists', 'mbid', change['target']['artist_mbid'])}) AS target_artist_exists, "
-        f"(SELECT decided_at FROM artist_reviews WHERE recording_mbid = {lit(rmbid)} "
-        "    AND applied_at IS NOT NULL) AS hist_decided_at, "
-        f"(SELECT origin FROM artist_reviews WHERE recording_mbid = {lit(rmbid)} "
-        "    AND applied_at IS NOT NULL) AS hist_origin")
+        + _history_cols("artist_reviews", "recording_mbid", lit(rmbid), remote_schema))
     result = remote_peek.run_remote_sql(remote, sql, timeout=timeout)
     if not result["ok"]:
         raise RuntimeError(result["error"])
@@ -180,29 +225,36 @@ def _artist_review_row(remote: str, change: dict, timeout: float) -> dict:
     return rows[0] if rows else {}
 
 
-def fetch(remote: str, changes: list[dict], timeout: float = remote_peek.TOTAL_TIMEOUT) -> dict:
+def fetch(remote: str, changes: list[dict],
+          timeout: float = remote_peek.TOTAL_TIMEOUT) -> tuple[dict, dict]:
     """One targeted answer per change -- `{index: {"row": {...}, "has_fade": bool}}`,
     `has_fade` only meaningful for `boundary_review`. A change whose kind is
     not one of the three this tool knows is left out; `build()` treats an
     absent entry as "found nothing", matching `resolve_passage()`'s own
     `None` for an anchor that plainly does not resolve.
+
+    Also returns the remote's own review-table schema `[SPEC-DF-120]`
+    (`_remote_review_schema()`'s own shape) -- computed here once regardless,
+    so `build()` needs no round trip of its own to learn which migrations a
+    real remote already has.
     """
+    remote_schema = _remote_review_schema(remote, timeout)
     out = {}
     for i, change in enumerate(changes):
         kind = change["kind"]
         if kind == "id_review":
-            out[i] = {"row": _id_review_row(remote, change, timeout), "has_fade": None}
+            out[i] = {"row": _id_review_row(remote, change, timeout, remote_schema), "has_fade": None}
         elif kind == "boundary_review":
-            row, has_fade = _boundary_row(remote, change, timeout)
+            row, has_fade = _boundary_row(remote, change, timeout, remote_schema)
             out[i] = {"row": row, "has_fade": has_fade}
         elif kind == "artist_review":
-            out[i] = {"row": _artist_review_row(remote, change, timeout), "has_fade": None}
+            out[i] = {"row": _artist_review_row(remote, change, timeout, remote_schema), "has_fade": None}
         # An unknown kind is left for `apply_changes.py` itself to report,
         # exactly as it already does for one it reads locally.
-    return out
+    return out, remote_schema
 
 
-def build(changes: list[dict], fetched: dict, out_path: str) -> None:
+def build(changes: list[dict], fetched: dict, remote_schema: dict, out_path: str) -> None:
     """The disposable comparison copy `apply_changes.py` reads unmodified.
 
     One `files`/`passages` row per resolved anchor (a boundary edit gets a
@@ -215,12 +267,24 @@ def build(changes: list[dict], fetched: dict, out_path: str) -> None:
         os.remove(out_path)
     conn = sqlite3.connect(out_path)
     conn.executescript(SCHEMA)
-    # The one true review-table schema, not a narrower stand-in `[SPEC-DF-120]`:
-    # a history row inserted here has to satisfy the exact columns
-    # `apply_changes.py`'s own later run will find already there (and try to
-    # `ALTER TABLE ADD COLUMN` no-ops against) -- reused, not duplicated, so
-    # the two can never drift apart.
-    apply_changes.ensure_review_tables(conn)
+    # The BARE review-table shape first `[SPEC-DF-120]` -- reused from
+    # `apply_changes.py`, not duplicated, so a history row inserted below
+    # satisfies the same base columns that tool's own later run will find
+    # already there. Each table then gets exactly the migrated columns the
+    # REAL remote already has, from `remote_schema` -- neither "assume fully
+    # migrated" (a column that already exists fails at prepare time, before
+    # `--emit-sql`'s trace ever sees it, so a genuinely older remote's
+    # missing `ALTER`s would never reach it) nor "always bare" (which would
+    # re-ship every migration as noisy, if harmless, duplicate-column
+    # `ALTER`s to a remote that already has them all, every single push).
+    # A table absent from the remote entirely starts and stays bare, the
+    # same "let `ensure_review_tables()` discover it fresh" reasoning.
+    conn.execute(apply_changes.ID_REVIEWS_TABLE)
+    conn.execute(apply_changes.BOUNDARY_REVIEWS_TABLE)
+    conn.execute(apply_changes.ARTIST_REVIEWS_TABLE)
+    for table, column, coltype in apply_changes.REVIEW_TABLE_MIGRATIONS:
+        if remote_schema.get(table) and column in remote_schema[table]:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
     # `passages` starts without the four fade columns on purpose -- a
     # boundary change whose remote lookup found them absent (an unmigrated
     # `passages`) must stay that way here too, so `apply_changes.py`'s own
@@ -269,11 +333,21 @@ def build(changes: list[dict], fetched: dict, out_path: str) -> None:
                 # meaningless here -- `history_for()` reads only
                 # `decided_at`/`origin`, and `apply_id_review`'s own
                 # `ON CONFLICT DO UPDATE` overwrites both the moment a
-                # matching change actually applies.
-                conn.execute(
-                    "INSERT INTO id_reviews (passage_id, decision, chosen_mbid, decided_at, "
-                    "applied_at, origin) VALUES (?1,'reassigned',?2,?3,'x',?4)",
-                    (pid, row.get("current_mbid"), row["hist_decided_at"], row.get("hist_origin")))
+                # matching change actually applies. `origin` only goes in
+                # when `remote_schema` says the real remote already has that
+                # column -- the snapshot was pre-migrated to match exactly
+                # that above, so it is genuinely already there, not a column
+                # this insert would otherwise be adding for the first time.
+                if remote_schema.get("id_reviews") and "origin" in remote_schema["id_reviews"]:
+                    conn.execute(
+                        "INSERT INTO id_reviews (passage_id, decision, chosen_mbid, decided_at, "
+                        "applied_at, origin) VALUES (?1,'reassigned',?2,?3,'x',?4)",
+                        (pid, row.get("current_mbid"), row["hist_decided_at"], row.get("hist_origin")))
+                else:
+                    conn.execute(
+                        "INSERT INTO id_reviews (passage_id, decision, chosen_mbid, decided_at, "
+                        "applied_at) VALUES (?1,'reassigned',?2,?3,'x')",
+                        (pid, row.get("current_mbid"), row["hist_decided_at"]))
 
         elif kind == "boundary_review":
             if pid is not None:
@@ -290,10 +364,18 @@ def build(changes: list[dict], fetched: dict, out_path: str) -> None:
                 conn.execute(f"INSERT OR IGNORE INTO passages ({','.join(cols)}) "
                              f"VALUES ({placeholders})", vals)
                 if row.get("hist_decided_at") is not None:
-                    conn.execute(
-                        "INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at, "
-                        "applied_at, origin) VALUES (?1,?2,?3,?4,'x',?5)",
-                        (pid, row["start_ms"], row["end_ms"], row["hist_decided_at"], row.get("hist_origin")))
+                    # `origin` conditional -- see the identical reasoning
+                    # above `id_reviews`' own history insert.
+                    if remote_schema.get("boundary_reviews") and "origin" in remote_schema["boundary_reviews"]:
+                        conn.execute(
+                            "INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at, "
+                            "applied_at, origin) VALUES (?1,?2,?3,?4,'x',?5)",
+                            (pid, row["start_ms"], row["end_ms"], row["hist_decided_at"], row.get("hist_origin")))
+                    else:
+                        conn.execute(
+                            "INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at, "
+                            "applied_at) VALUES (?1,?2,?3,?4,'x')",
+                            (pid, row["start_ms"], row["end_ms"], row["hist_decided_at"]))
 
         elif kind == "artist_review":
             rmbid = change["anchor"]["recording_mbid"]
@@ -316,11 +398,19 @@ def build(changes: list[dict], fetched: dict, out_path: str) -> None:
                 # `artist_mbid`/`artist_name` are NOT NULL but otherwise
                 # meaningless here, the same reasoning as `id_reviews`'
                 # `decision` above -- `history_for()` never reads them.
-                conn.execute(
-                    "INSERT INTO artist_reviews (recording_mbid, artist_mbid, artist_name, "
-                    "decided_at, applied_at, origin) VALUES (?1,?2,?3,?4,'x',?5)",
-                    (rmbid, row.get("current_artist_mbid") or "?", row.get("current_artist_name") or "?",
-                     row["hist_decided_at"], row.get("hist_origin")))
+                # `origin` conditional -- see both siblings above.
+                if remote_schema.get("artist_reviews") and "origin" in remote_schema["artist_reviews"]:
+                    conn.execute(
+                        "INSERT INTO artist_reviews (recording_mbid, artist_mbid, artist_name, "
+                        "decided_at, applied_at, origin) VALUES (?1,?2,?3,?4,'x',?5)",
+                        (rmbid, row.get("current_artist_mbid") or "?", row.get("current_artist_name") or "?",
+                         row["hist_decided_at"], row.get("hist_origin")))
+                else:
+                    conn.execute(
+                        "INSERT INTO artist_reviews (recording_mbid, artist_mbid, artist_name, "
+                        "decided_at, applied_at) VALUES (?1,?2,?3,?4,'x')",
+                        (rmbid, row.get("current_artist_mbid") or "?", row.get("current_artist_name") or "?",
+                         row["hist_decided_at"]))
 
     conn.commit()
     conn.close()
@@ -339,7 +429,7 @@ def main() -> int:
         changes = json.load(f).get("changes", [])
 
     try:
-        fetched = fetch(args.remote, changes, timeout=args.timeout)
+        fetched, remote_schema = fetch(args.remote, changes, timeout=args.timeout)
     except RuntimeError as e:
         if args.json:
             say(json.dumps({"ok": False, "error": str(e)}))
@@ -347,7 +437,7 @@ def main() -> int:
             say(f"could not read {args.remote}: {e}")
         return 1
 
-    build(changes, fetched, args.out)
+    build(changes, fetched, remote_schema, args.out)
     resolved = sum(1 for e in fetched.values() if e["row"].get("passage_id") is not None
                    or e["row"].get("has_recording"))
     if args.json:

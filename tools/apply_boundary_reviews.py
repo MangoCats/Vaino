@@ -18,6 +18,7 @@ pass's job, not this tool's.
 """
 
 import argparse
+import json
 import sqlite3
 import sys
 
@@ -31,6 +32,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--json", action="store_true",
+                     help="also print one final JSON summary line, for a caller "
+                          "(the Sampo console's apply-reviews job) rather than a person")
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db, timeout=60)
@@ -41,6 +45,9 @@ def main() -> int:
         "SELECT name FROM sqlite_master WHERE type='table'")}
     if "boundary_reviews" not in have:
         say("no boundary edits recorded yet")
+        if args.json:
+            say(json.dumps({"pending": 0, "applied": 0, "span_moved": 0,
+                            "cache_dropped": 0, "skipped": 0, "committed": args.commit}))
         return 1
 
     # `passages.fade_*` `[SPEC-SUI-226]` is a deliberate, separate migration
@@ -53,6 +60,8 @@ def main() -> int:
     if "fade_in_ms" not in passages_cols:
         say("passages is missing the fade columns [SPEC-SUI-226] -- run "
             "tools/add_fade_columns.py --write against this database first")
+        if args.json:
+            say(json.dumps({"error": "passages is missing the fade columns"}))
         return 1
 
     # `b.fade_*` falls back to the passage's own current fade `[SPEC-SUI-226]`
@@ -78,6 +87,9 @@ def main() -> int:
 
     say(f"{len(pending)} boundary edit(s) to apply")
     if not pending:
+        if args.json:
+            say(json.dumps({"pending": 0, "applied": 0, "span_moved": 0,
+                            "cache_dropped": 0, "skipped": 0, "committed": args.commit}))
         return 0
 
     applied = span_moved = cache_dropped = 0
@@ -165,6 +177,10 @@ def main() -> int:
         say(f"\nwould apply {applied}"
             + (f", refusing {len(skipped)}" if skipped else ""))
         say("nothing was written. Re-run with --commit to do it.")
+    if args.json:
+        say(json.dumps({"pending": len(pending), "applied": applied, "span_moved": span_moved,
+                        "cache_dropped": cache_dropped, "skipped": len(skipped),
+                        "committed": args.commit}))
     return 0
 
 

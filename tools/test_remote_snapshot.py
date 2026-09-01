@@ -248,12 +248,12 @@ def main() -> int:
         old_run_remote_sql = remote_peek.run_remote_sql
         remote_peek.run_remote_sql = fake
         try:
-            fetched = remote_snapshot.fetch("fake@remote:/path", CHANGES)
+            fetched, schema = remote_snapshot.fetch("fake@remote:/path", CHANGES)
         finally:
             remote_peek.run_remote_sql = old_run_remote_sql
             fake.close()
         snap_path = os.path.join(tmp, "snapshot.db")
-        remote_snapshot.build(CHANGES, fetched, snap_path)
+        remote_snapshot.build(CHANGES, fetched, schema, snap_path)
         # A toy fixture this small hits SQLite's own minimum page allocation
         # either way, so file size proves nothing at this scale -- the real
         # ~1.16 GB vs. a handful of rows is `[SPEC-DF-114]`'s own measurement,
@@ -297,8 +297,17 @@ def main() -> int:
               f"snapshot and full-copy must agree on whether history was found:\n"
               f"  full-copy: {'found' if 'diverged independently' in full_text else 'not found'}\n"
               f"  snapshot:  {'found' if 'diverged independently' in snap_text else 'not found'}")
-        check("some-other-host" in snap_text,
-              f"the history's own origin must come through, got:\n{snap_text}")
+        check("some-other-host" in full_text,
+              f"the full-copy baseline must show the history's own origin, got:\n{full_text}")
+        # The snapshot's own synthetic history row cannot carry `origin` --
+        # that column is `ALTER`-added, and pre-adding it here would make
+        # `apply_changes.py`'s own later `ensure_review_tables()` call treat
+        # it as already there, silently dropping the ALTER a genuinely
+        # virgin remote needs captured and shipped (see `build()`'s own
+        # comment). A blank origin in the conflict report -- checked for
+        # above via "diverged independently" appearing in both -- is the
+        # accepted cost of that correctness: `history_for()` reads a bare
+        # `NULL` as "here", not a crash and not a wrong host name.
 
         print()
         print("the target-already-known-elsewhere case did not try to duplicate-INSERT it "
@@ -320,7 +329,7 @@ def main() -> int:
         fake2 = _FakeRemoteSql(no_fade_remote)
         remote_peek.run_remote_sql = fake2
         try:
-            fetched2 = remote_snapshot.fetch("fake@remote:/path", fade_change)
+            fetched2, schema2 = remote_snapshot.fetch("fake@remote:/path", fade_change)
         finally:
             remote_peek.run_remote_sql = old_run_remote_sql
             fake2.close()
@@ -328,10 +337,64 @@ def main() -> int:
               f"an unmigrated remote must be detected as such, got {fetched2[0]}")
         check(fetched2[0]["row"].get("passage_id") == 600, f"got {fetched2[0]['row']}")
         snap2_path = os.path.join(tmp, "snap2.db")
-        remote_snapshot.build(fade_change, fetched2, snap2_path)
+        remote_snapshot.build(fade_change, fetched2, schema2, snap2_path)
         snap2_summary, _ = run_apply(snap2_path, fade_change, os.path.join(tmp, "snap2.sql"))
         check(snap2_summary["fastforward"] == 1, f"got {snap2_summary}")
         check(snap2_summary["error"] == 0, f"got {snap2_summary}")
+
+        print()
+        print("a remote whose boundary_reviews TABLE exists but predates "
+              "[SPEC-DF-104]/[SPEC-SUI-226] (bare columns only): the snapshot must "
+              "reproduce exactly that, not silently claim it is fully migrated, "
+              "or claim it is missing entirely -- the bug this whole fix closes")
+        partial_remote = os.path.join(tmp, "partial-remote.db")
+        c = sqlite3.connect(partial_remote)
+        c.executescript("""
+            CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE);
+            CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
+                start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER, lead_out_ms INTEGER,
+                gain_db REAL, fade_in_ms INTEGER NOT NULL DEFAULT 20,
+                fade_out_ms INTEGER NOT NULL DEFAULT 20,
+                fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
+                fade_out_curve TEXT NOT NULL DEFAULT 'exponential', boundary_src TEXT);
+        """)
+        c.execute(apply_changes.BOUNDARY_REVIEWS_TABLE)  # bare -- no origin/orig_*/fade_* yet
+        c.execute(f"INSERT INTO files VALUES (1, '{MD5_A}')")
+        c.execute("INSERT INTO passages VALUES (700, 1, 'radio', 3000, 170000, 50, 50, 0.0, "
+                  "20, 20, 'exponential', 'exponential', 'src')")
+        # A genuinely pre-origin applied row -- this column does not exist yet.
+        c.execute("INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, lead_in_ms, "
+                  "lead_out_ms, gain_db, decided_at, applied_at) VALUES "
+                  "(700, 3000, 170000, 50, 50, 0.0, '2026-07-01T00:00:00', datetime('now'))")
+        c.commit()
+        c.close()
+
+        partial_change = [{
+            "kind": "boundary_review",
+            "anchor": {"audio_md5": MD5_A, "passage_kind": "radio", "start_ms": 3000, "end_ms": 170000},
+            "baseline": {"start_ms": 3000, "end_ms": 170000, "lead_in_ms": 50, "lead_out_ms": 50, "gain_db": 0.0},
+            "target": {"start_ms": 3100, "end_ms": 169000, "lead_in_ms": 40, "lead_out_ms": 60, "gain_db": -0.5},
+            "decided_at": "2026-08-31T00:06:00", "origin": "desktop",
+        }]
+        fake3 = _FakeRemoteSql(partial_remote)
+        remote_peek.run_remote_sql = fake3
+        try:
+            fetched3, schema3 = remote_snapshot.fetch("fake@remote:/path", partial_change)
+        finally:
+            remote_peek.run_remote_sql = old_run_remote_sql
+            fake3.close()
+        check(schema3["boundary_reviews"] is not None and "origin" not in schema3["boundary_reviews"],
+              f"the real remote's own schema must read as bare (no origin yet), got {schema3}")
+        snap3_path = os.path.join(tmp, "snap3.db")
+        remote_snapshot.build(partial_change, fetched3, schema3, snap3_path)
+        snap3_summary, snap3_text = run_apply(snap3_path, partial_change, os.path.join(tmp, "snap3.sql"))
+        check(snap3_summary["fastforward"] == 1, f"got {snap3_summary}")
+        check(snap3_summary["error"] == 0, f"got {snap3_summary}")
+        check("here" in snap3_text.lower() or "no correction history" not in snap3_text,
+              f"a bare-schema remote must not crash the conflict-report path, got:\n{snap3_text}")
+        patch3 = patch_writes(os.path.join(tmp, "snap3.sql"))
+        check(any("ADD COLUMN origin" in s and "boundary_reviews" in s for s in patch3),
+              f"a genuinely pre-origin remote's own patch must still add that column, got:\n{patch3}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
