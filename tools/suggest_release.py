@@ -27,6 +27,12 @@ its tracklist lines up with the folder's actual files, and reports all of it
 exactly the shape `fetch_releases.py`/`choose_release.py` already read and
 write, so nothing downstream needs to know which tool populated them.
 
+`--query` also accepts a release already found by hand on musicbrainz.org --
+its bare id, or the whole page URL pasted as-is -- fetched and scored
+directly rather than sent to the free-text search endpoint, where a raw id
+matches nothing indexed as words and reports "0 candidate release(s)
+scored" for a release that plainly exists.
+
 **Accept** -- the write half, rehearse-by-default:
 
     python tools/suggest_release.py data/vaino_new.db "C:/Music/Foghat/The Best of Foghat" \\
@@ -56,6 +62,7 @@ answered.
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -154,6 +161,24 @@ def guess_query(files: list) -> str | None:
     if artist:
         return f'artist:"{artist}"'
     return None
+
+
+# A release found by browsing musicbrainz.org directly -- as natural a thing
+# to paste into "release-query" as a hand-picked search string, and a
+# strictly *better* answer than one: found live pasting a release's own id
+# (copied from its MusicBrainz page) into this exact box and getting "0
+# candidate release(s) scored" back, because it was sent to the free-text
+# search endpoint unchanged, where a bare UUID matches nothing indexed as
+# words. Matched anywhere in the string, not anchored to the whole of it,
+# so a pasted `https://musicbrainz.org/release/<id>` URL works the same as
+# the bare id `choose_release.py`'s own `--accept` already expects.
+RELEASE_ID_RE = re.compile(
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.IGNORECASE)
+
+
+def release_id_in(query: str) -> str | None:
+    m = RELEASE_ID_RE.search(query or "")
+    return m.group(1).lower() if m else None
 
 
 # ---------------------------------------------------------- MusicBrainz calls --
@@ -312,14 +337,25 @@ def do_discover(conn: sqlite3.Connection, args, files: list) -> int:
         if args.json:
             say(json.dumps({"ok": False, "error": "nothing to search with"}))
         return 1
-    say(f"{len(files)} file(s) in {args.folder}; searching MusicBrainz for {query!r}")
-    try:
-        hits = search_releases(query)
-    except Exception as e:  # noqa: BLE001 - report and stop, like every other tool here
-        say(f"MusicBrainz search failed: {e}")
-        if args.json:
-            say(json.dumps({"ok": False, "error": str(e)}))
-        return 1
+
+    direct = release_id_in(query)
+    if direct:
+        # Not a search at all -- a specific release someone already found
+        # and named, fetched and scored exactly like a search hit would be,
+        # skipping the free-text endpoint a raw id would return nothing
+        # from. Still just one candidate offered for acceptance, same as
+        # any other: this does not shortcut the confirm-before-apply step.
+        say(f"{len(files)} file(s) in {args.folder}; release {direct} named directly, not searched")
+        hits = [{"id": direct}]
+    else:
+        say(f"{len(files)} file(s) in {args.folder}; searching MusicBrainz for {query!r}")
+        try:
+            hits = search_releases(query)
+        except Exception as e:  # noqa: BLE001 - report and stop, like every other tool here
+            say(f"MusicBrainz search failed: {e}")
+            if args.json:
+                say(json.dumps({"ok": False, "error": str(e)}))
+            return 1
 
     scored = []
     for hit in hits[:MAX_CANDIDATES]:
@@ -353,7 +389,8 @@ def do_discover(conn: sqlite3.Connection, args, files: list) -> int:
         say(f"  {c['score']:.2f}  {c['title']!r} ({c['artist']}, {c['date']})  "
             f"{len(c['matches'])}/{c['track_count']} track(s) matched  {c['mbid']}")
     if not scored:
-        say("nothing found -- try --query with a hand-picked search")
+        say(f"could not fetch release {direct} -- check the id is right and MusicBrainz is reachable"
+            if direct else "nothing found -- try --query with a hand-picked search")
     if args.json:
         say(json.dumps({"ok": True, "query": query, "candidates": scored}))
     return 0

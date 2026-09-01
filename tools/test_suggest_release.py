@@ -172,6 +172,22 @@ def test_match_files_to_tracks_and_score() -> None:
     check(sr.folder_score(files, []) == 0.0, "no matches must score exactly 0")
 
 
+def test_release_id_in() -> None:
+    print("release_id_in(): a pasted id or URL is recognised, a search phrase is not")
+    check(sr.release_id_in(REL_1) == REL_1,
+          "a bare id, exactly as `--accept` already expects, must round-trip")
+    check(sr.release_id_in(REL_1.upper()) == REL_1,
+          "musicbrainz.org itself renders ids lowercase, but a pasted one may not be")
+    check(sr.release_id_in(f"https://musicbrainz.org/release/{REL_1}") == REL_1,
+          "the whole page URL, pasted as-is, must still find the id inside it")
+    check(sr.release_id_in(f"  https://musicbrainz.org/release/{REL_1}?tab=details ") == REL_1,
+          "surrounding whitespace or a trailing query string must not block the match")
+    check(sr.release_id_in('release:"Greatest Hits" AND artist:"TestBand"') is None,
+          "an ordinary search phrase must not be mistaken for an id")
+    check(sr.release_id_in("") is None, "an empty query has no id to find")
+    check(sr.release_id_in(None) is None, "release_id_in must tolerate a None query, not raise")
+
+
 # -- discovery, faked network --------------------------------------------------
 
 class Args:
@@ -206,6 +222,45 @@ def test_discover(tmp: str) -> None:
     check(tracks_cached == 3, f"all three tracks must be cached, got {tracks_cached}")
     check(conn.execute("SELECT COUNT(*) FROM passage_recordings").fetchone()[0] == 0,
           "discovery must never touch passage_recordings")
+    conn.close()
+
+
+def test_discover_direct_release_id(tmp: str) -> None:
+    print("do_discover(): a pasted release id/URL is fetched directly, never searched")
+    db = os.path.join(tmp, "discover-direct.db")
+    build(db)
+    conn = sqlite3.connect(db)
+    sr.ensure_schema(conn)
+
+    searched = []
+    real_search = sr.search_releases
+
+    def spying_search(query):
+        searched.append(query)
+        return real_search(query)
+
+    real_get = sr.mb_get
+    sr.mb_get = fake_mb_get
+    sr.search_releases = spying_search
+    try:
+        files = sr.gather_folder_files(conn, FOLDER)
+        for query in (REL_1, f"https://musicbrainz.org/release/{REL_1}"):
+            out = []
+            real_say = sr.say
+            sr.say = out.append
+            try:
+                rc = sr.do_discover(conn, Args(query=query), files)
+            finally:
+                sr.say = real_say
+            check(rc == 0, f"expected exit 0 for query {query!r}, got {rc}")
+            result = json.loads(out[-1])
+            check(result["ok"] and len(result["candidates"]) == 1
+                  and result["candidates"][0]["mbid"] == REL_1,
+                  f"the named release must be the one and only candidate, got {out[-1]}")
+    finally:
+        sr.mb_get = real_get
+        sr.search_releases = real_search
+    check(searched == [], f"a directly-named release must never reach search_releases(), got {searched}")
     conn.close()
 
 
@@ -356,7 +411,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_gather_folder_files_exact_scope(tmp)
         test_match_files_to_tracks_and_score()
+        test_release_id_in()
         test_discover(tmp)
+        test_discover_direct_release_id(tmp)
         test_accept_rehearsal_then_commit(tmp)
         test_accept_clears_stale_flags(tmp)
         test_accept_clears_stale_id_check(tmp)

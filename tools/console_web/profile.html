@@ -190,7 +190,7 @@ function releaseSuggestBox(pid, folder) {
   const box = S.el('div', {});
   const controls = S.el('div', { class: 'controls' },
     S.el('input', { type: 'search', id: 'release-query',
-                    placeholder: 'leave blank to guess from this folder\'s own file tags',
+                    placeholder: 'blank guesses from file tags, or paste a musicbrainz.org release id/URL',
                     style: 'min-width:24rem' }),
     S.el('button', { class: 'chip', id: 'suggest-release' }, 'suggest a MusicBrainz release'));
   const result = S.el('div', { id: 'release-result' });
