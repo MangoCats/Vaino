@@ -1695,6 +1695,61 @@ pub struct BrowseTrack {
     pub disc_no: Option<i64>,
 }
 
+/// One passage's own facts, for a person to look at `[REQ-VIS-270]` -- the
+/// core span/lead/gain/fade/boundary data and every recording it names, but
+/// none of Sampo's own decision history or MusicBrainz release candidates:
+/// this lives in Vaino, reachable on an appliance with no network reason to
+/// exist, so it shows only what is already sitting in the local database.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PassageProfile {
+    pub passage_id: i64,
+    pub path: String,
+    pub format: Option<String>,
+    pub duration_ms: u64,
+    pub audio_md5: String,
+    pub kind: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub lead_in_ms: Option<i64>,
+    pub lead_out_ms: Option<i64>,
+    pub gain_db: Option<f64>,
+    pub fade_in_ms: i64,
+    pub fade_out_ms: i64,
+    pub fade_in_curve: String,
+    pub fade_out_curve: String,
+    pub boundary_src: String,
+    /// The file's own tag, read regardless of whether a recording is known
+    /// `[SPEC-SC-*]` -- self-published or unidentified audio still has a name.
+    pub tag_title: Option<String>,
+    pub tag_artist: Option<String>,
+    pub tag_album: Option<String>,
+    pub recordings: Vec<ProfileRecording>,
+    /// The other `kind` of this same recording-in-file span, if this
+    /// passage's own file has one `[GDE-BMK-030]`.
+    pub sibling: Option<ProfileSibling>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProfileRecording {
+    pub mbid: String,
+    pub weight: f64,
+    pub source: String,
+    pub title: Option<String>,
+    pub artists: Vec<ProfileArtist>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProfileArtist {
+    pub name: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProfileSibling {
+    pub passage_id: i64,
+    pub kind: String,
+}
+
 /// One row of the play-history page `[REQ-VIS-250]`: something that sounded
 /// long enough to be counted, or long enough to be judged and declined.
 ///
@@ -2409,6 +2464,126 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Everything one passage is, for a person to look at `[REQ-VIS-270]` --
+    /// the appliance-side sibling of Sampo's own profile page, scoped to what
+    /// is local, already computed, and needs no network: no decision history,
+    /// no MusicBrainz release candidates, nothing this build would have to
+    /// reach out for. A read, like `browse_tracks` beside it -- same file,
+    /// same cost, no decoder, no allocation that scales with the library.
+    pub fn passage_profile(&self, passage_id: i64) -> Result<Option<PassageProfile>, DbError> {
+        let row = self.conn.query_row(
+            "SELECT p.passage_id, f.path, f.format, f.duration_ms, f.audio_md5, \
+                    p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db, \
+                    p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, p.boundary_src, \
+                    ft.title, ft.artist, ft.album \
+               FROM passages p JOIN files f ON f.file_id = p.file_id \
+               LEFT JOIN file_tags ft ON ft.file_id = f.file_id \
+              WHERE p.passage_id = ?1",
+            [passage_id],
+            |r| {
+                Ok(PassageProfile {
+                    passage_id: r.get(0)?,
+                    path: r.get(1)?,
+                    format: r.get(2)?,
+                    duration_ms: r.get::<_, Option<i64>>(3)?.unwrap_or(0).max(0) as u64,
+                    audio_md5: r.get(4)?,
+                    kind: r.get(5)?,
+                    start_ms: r.get(6)?,
+                    end_ms: r.get(7)?,
+                    lead_in_ms: r.get(8)?,
+                    lead_out_ms: r.get(9)?,
+                    gain_db: r.get(10)?,
+                    fade_in_ms: r.get(11)?,
+                    fade_out_ms: r.get(12)?,
+                    fade_in_curve: r.get(13)?,
+                    fade_out_curve: r.get(14)?,
+                    boundary_src: r.get(15)?,
+                    tag_title: r.get(16)?,
+                    tag_artist: r.get(17)?,
+                    tag_album: r.get(18)?,
+                    recordings: Vec::new(),
+                    sibling: None,
+                })
+            },
+        );
+        let mut profile = match row {
+            Ok(p) => p,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(DbError::Query(e.to_string())),
+        };
+
+        // Every recording this passage names -- a medley legally has more
+        // than one `[SPEC-SC-*]` -- each with its own credited artist(s),
+        // heaviest first.
+        let mut stmt = self.conn.prepare(
+            "SELECT pr.mbid, pr.weight, pr.source, r.title \
+               FROM passage_recordings pr LEFT JOIN recordings r ON r.mbid = pr.mbid \
+              WHERE pr.passage_id = ?1 ORDER BY pr.weight DESC, pr.mbid",
+        ).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut recordings = stmt
+            .query_map([passage_id], |r| {
+                Ok(ProfileRecording {
+                    mbid: r.get(0)?,
+                    weight: r.get(1)?,
+                    source: r.get(2)?,
+                    title: r.get(3)?,
+                    artists: Vec::new(),
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        for rec in &mut recordings {
+            let mut astmt = self.conn.prepare(
+                "SELECT a.name, ra.weight FROM recording_artists ra \
+                   JOIN artists a ON a.mbid = ra.artist_mbid \
+                  WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name",
+            ).map_err(|e| DbError::Query(e.to_string()))?;
+            rec.artists = astmt
+                .query_map([&rec.mbid], |r| {
+                    Ok(ProfileArtist { name: r.get(0)?, weight: r.get(1)? })
+                })
+                .map_err(|e| DbError::Query(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| DbError::Query(e.to_string()))?;
+        }
+        profile.recordings = recordings;
+
+        // The other kind of this same recording-in-file span, if there is
+        // one `[GDE-BMK-030]` -- exact span match first, true for every
+        // passage `tools/ingest_folder.py`/`tools/segment_dao.py --commit`/
+        // `tools/backfill_album_cuts.py` ever wrote, all of which give both
+        // kinds the identical `start_ms`/`end_ms` `[SPEC-SA-110]`. Falling
+        // back to "some other passage on this file naming the same heaviest
+        // recording" covers the migrated `inherited:mulib` data instead,
+        // whose own radio/album pair legitimately differ in `start_ms` by
+        // design -- its radio cut is independently trimmed at the row level.
+        let file_id: i64 = self.conn.query_row(
+            "SELECT file_id FROM passages WHERE passage_id = ?1", [passage_id], |r| r.get(0))
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let mut sibling: Option<(i64, String)> = self.conn.query_row(
+            "SELECT passage_id, kind FROM passages \
+              WHERE file_id = ?1 AND kind != ?2 AND start_ms = ?3 AND end_ms = ?4",
+            rusqlite::params![file_id, profile.kind, profile.start_ms, profile.end_ms],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).ok();
+        if sibling.is_none() {
+            if let Some(top) = profile.recordings.first() {
+                sibling = self.conn.query_row(
+                    "SELECT p2.passage_id, p2.kind FROM passages p2 \
+                       JOIN passage_recordings pr2 ON pr2.passage_id = p2.passage_id \
+                      WHERE p2.file_id = ?1 AND p2.kind != ?2 AND pr2.mbid = ?3 \
+                      LIMIT 1",
+                    rusqlite::params![file_id, profile.kind, top.mbid],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                ).ok();
+            }
+        }
+        profile.sibling = sibling.map(|(passage_id, kind)| ProfileSibling { passage_id, kind });
+
+        Ok(Some(profile))
     }
 
     /// A page of what has actually sounded, newest first `[REQ-VIS-250]`.
@@ -3897,5 +4072,78 @@ mod tests {
         let rows = lib.play_history(10, 0).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].played_pct, None);
+    }
+
+    /// `passage_profile()` [REQ-VIS-270]: core span/lead/gain/fade facts, a
+    /// medley's own recordings heaviest-first with their credited artists,
+    /// and the file's own tag as a fallback name.
+    #[test]
+    fn passage_profile_carries_span_recordings_and_tags() {
+        let c = reviewable();
+        c.execute_batch(
+            "INSERT INTO file_tags (file_id, title, artist, album, has_art, scanned_at) \
+                 VALUES (1, 'Fallback Title', 'Fallback Artist', 'Fallback Album', 0, 0);
+             INSERT INTO artists VALUES
+                 ('bbbbbbbb-0000-0000-0000-000000000001', 'A Band', NULL, 's');
+             INSERT INTO recording_artists VALUES
+                 ('aaaaaaaa-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000001',
+                  1.0, 's');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+
+        let p = lib.passage_profile(2).unwrap().expect("passage 2 exists");
+        assert_eq!(p.passage_id, 2);
+        assert_eq!(p.kind, "radio");
+        assert_eq!((p.start_ms, p.end_ms), (1200, 298000));
+        assert_eq!((p.lead_in_ms, p.lead_out_ms), (Some(3000), Some(4000)));
+        assert_eq!(p.gain_db, Some(-2.5));
+        assert_eq!((p.fade_in_ms, p.fade_out_ms), (20, 20));
+        assert_eq!(p.tag_title.as_deref(), Some("Fallback Title"));
+
+        // The medley's heavier recording first `[SPEC-SC-*]`.
+        assert_eq!(p.recordings.len(), 2);
+        assert_eq!(p.recordings[0].mbid, "aaaaaaaa-0000-0000-0000-000000000001");
+        assert_eq!(p.recordings[0].title.as_deref(), Some("Wrong Song"));
+        assert_eq!(p.recordings[0].artists.len(), 1);
+        assert_eq!(p.recordings[0].artists[0].name, "A Band");
+        assert_eq!(p.recordings[1].mbid, "aaaaaaaa-0000-0000-0000-00000000000f");
+        assert!(p.recordings[1].title.is_none(), "an unregistered recording has no title row");
+
+        assert!(lib.passage_profile(999).unwrap().is_none(), "a nonexistent passage is None, not an error");
+    }
+
+    /// A passage's `album`/`radio` sibling, resolved two ways `[GDE-BMK-030]`:
+    /// exact span match (every newer ingest path `[SPEC-SA-110]`), falling
+    /// back to "shares this passage's own heaviest recording" for the
+    /// migrated `inherited:mulib` data, whose pair legitimately differs in
+    /// `start_ms` by design.
+    #[test]
+    fn passage_profile_finds_its_sibling_by_span_then_by_recording() {
+        let c = reviewable();
+        c.execute_batch(
+            // File 1's passage 1 ('album', 0-300000) shares no span with
+            // passage 2 ('radio', 1200-298000) -- exactly the inherited:mulib
+            // shape -- but the same recording links them.
+            "INSERT INTO passage_recordings VALUES
+                 (1, 'aaaaaaaa-0000-0000-0000-000000000001', 1.0, 's');
+             -- A second file, whose two passages DO share an exact span --
+             -- every passage this library's own newer ingest paths write.
+             INSERT INTO files VALUES (2,'md5b','/m/b.mp3',1,1.0,'mp3',200000,'t','t');
+             INSERT INTO passages VALUES (10,2,'radio',0,200000,0,0,0.0,'ingest:whole-file',
+                                          20,20,'exponential','exponential');
+             INSERT INTO passages VALUES (11,2,'album',0,200000,0,0,0.0,'ingest:whole-file',
+                                          20,20,'exponential','exponential');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+
+        let by_recording = lib.passage_profile(2).unwrap().unwrap();
+        let sib = by_recording.sibling.expect("passage 2 must find passage 1 via their shared recording");
+        assert_eq!((sib.passage_id, sib.kind.as_str()), (1, "album"));
+
+        let by_span = lib.passage_profile(10).unwrap().unwrap();
+        let sib2 = by_span.sibling.expect("passage 10 must find passage 11 by exact span");
+        assert_eq!((sib2.passage_id, sib2.kind.as_str()), (11, "album"));
     }
 }

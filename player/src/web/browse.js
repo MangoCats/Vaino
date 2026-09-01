@@ -210,6 +210,16 @@
         box.onclick = e => e.stopPropagation();
         box.onchange = armed;
         li.prepend(box);
+        // A passage's own facts [REQ-VIS-270], one tap away without leaving
+        // the checkbox underneath it -- its own click target, the same
+        // `stopPropagation` reasoning the checkbox above already needs.
+        const info = document.createElement('a');
+        info.className = 'info';
+        info.href = `/passage/${r.passage_id}`;
+        info.textContent = 'ⓘ';
+        info.title = 'passage details';
+        info.onclick = e => e.stopPropagation();
+        li.appendChild(info);
         // Tapping anywhere on the row ticks it: a 16-pixel checkbox is not a
         // phone target, and the whole row is.
         li.onclick = () => { box.checked = !box.checked; armed(); };

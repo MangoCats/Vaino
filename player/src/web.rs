@@ -327,6 +327,9 @@ pub fn router(ui: Ui) -> Router {
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
+        .route("/passage/:passage_id", get(|| async { ([REVALIDATE], Html(PASSAGE_HTML)) }))
+        .route("/passage.js", get(|| async { js(PASSAGE_JS) }))
+        .route("/passage/:passage_id/info", get(passage_info))
         .route("/history", get(history))
         .route("/history/flag/:kind/:id", post(set_flag));
 
@@ -467,6 +470,28 @@ async fn browse(
     .await;
     match out {
         Ok(Some(v)) => axum::Json(v).into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// One passage's own facts, for the appliance-side sibling of Sampo's
+/// profile page `[REQ-VIS-270]` -- unconditional, not behind `sampo-support`:
+/// a read against the same database `browse`/`why_for` already query, no
+/// decoder, no network, the same boundary `[SPEC-SUI-213]`'s own capability
+/// probe already draws between build capability and application data (this
+/// is squarely the latter, and it costs nothing an appliance cannot afford).
+async fn passage_info(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open(&db).ok()?;
+        lib.passage_profile(passage_id).ok().flatten()
+    })
+    .await;
+    match out {
+        Ok(Some(profile)) => axum::Json(profile).into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -1759,6 +1784,8 @@ async fn command(
 const SHELL: &str = include_str!("web/shell.html");
 const BROWSE_HTML: &str = include_str!("web/browse.html");
 const BROWSE_JS: &str = include_str!("web/browse.js");
+const PASSAGE_HTML: &str = include_str!("web/passage.html");
+const PASSAGE_JS: &str = include_str!("web/passage.js");
 #[cfg(feature = "sampo-support")]
 const REVIEW_HTML: &str = include_str!("web/review.html");
 #[cfg(feature = "sampo-support")]
@@ -2085,6 +2112,17 @@ mod tests {
         // Silences the server's own transport on entry `[SPEC-SUI-217]` --
         // the same route the main skin's own pause button sends.
         assert!(EDIT_JS.contains("/command/pause"));
+    }
+
+    /// Unconditional, like `/browse` beside it -- and the page/router
+    /// agreement `the_edit_page_asks_for_routes_the_router_serves` checks
+    /// for the sampo-support pages applies here too `[REQ-VIS-270]`.
+    #[test]
+    fn the_passage_page_loads_the_runtime_and_asks_for_routes_the_router_serves() {
+        assert!(PASSAGE_HTML.contains("/core.js") && PASSAGE_HTML.contains("/passage.js"));
+        assert!(PASSAGE_JS.contains("startBare"), "passage takes the skin, not the player");
+        assert!(PASSAGE_JS.contains("/passage/${passageId}/info"));
+        assert!(PASSAGE_JS.contains("/why/${p.passage_id}"), "the why-link must name a route /why_for actually serves");
     }
 
     /// `GET /build`'s body carries what Sampo's own staleness check needs

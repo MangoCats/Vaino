@@ -571,6 +571,21 @@ async function runBrowse() {
   check(window.document.querySelectorAll('#az button').length === 0,
         'no alphabet over a running order');
 
+  // A passage's own facts [REQ-VIS-270] are one tap away, without also
+  // ticking the row's checkbox underneath it.
+  const info = rows()[0].querySelector('a.info');
+  check(!!info, 'each track row must carry an info link');
+  check(info && info.getAttribute('href') === '/passage/11',
+        `the info link must name this row's own passage, got ${info && info.getAttribute('href')}`);
+  // Not a real dispatched click -- jsdom attempts actual navigation for an
+  // `<a href>`'s default action, which it does not implement and would log
+  // as a spurious error here. Checking that the handler itself calls
+  // `stopPropagation` is what actually matters: that call is the only thing
+  // standing between a real tap and also ticking the row underneath it.
+  let stopped = false;
+  info.onclick({ stopPropagation: () => { stopped = true; } });
+  check(stopped, "the info link's own click handler must call stopPropagation");
+
   // Nothing selected: the verbs must refuse rather than act.
   check($('v-now').disabled && $('v-next').disabled && $('v-last').disabled,
         'verbs must start disabled');
@@ -1212,6 +1227,109 @@ async function runEdit() {
   if (errors.length) failures++;
 }
 
+// ---------------------------------------------------------------------------
+// The passage-info page [REQ-VIS-270] -- the appliance-side sibling of
+// Sampo's profile page, reached from a browse row's own info link. Unlike
+// `runEdit`, this one page has no seam jsdom cannot see: no Web Audio, no
+// canvas, nothing decoded -- a plain fetch and a plain render, checkable
+// end to end.
+async function runPassage() {
+  const html = fs.readFileSync(path.join(ROOT, 'passage.html'), 'utf8');
+  const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'http://localhost/passage/22' });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+
+  const INFO = {
+    passage_id: 22, path: '/m/song.mp3', format: 'mp3', duration_ms: 240000,
+    audio_md5: 'deadbeef', kind: 'radio', start_ms: 1000, end_ms: 200000,
+    lead_in_ms: 250, lead_out_ms: 1800, gain_db: -1.2,
+    fade_in_ms: 20, fade_out_ms: 20, fade_in_curve: 'exponential', fade_out_curve: 'exponential',
+    boundary_src: 'inherited:mulib', tag_title: 'Fallback Title', tag_artist: null, tag_album: null,
+    recordings: [{
+      mbid: '68684e6b-37d2-487e-8ee2-d21e28fa1589', weight: 1.0, source: 'inherited:mulib',
+      title: 'A Passage With Reasons', artists: [{ name: 'A Band', weight: 1.0 }],
+    }],
+    sibling: { passage_id: 23, kind: 'album' },
+  };
+  window.fetch = url => {
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    if (url === '/passage/22/info') return Promise.resolve({ ok: true, json: () => Promise.resolve(INFO) });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript(fs.readFileSync(path.join(ROOT, 'passage.js'), 'utf8'));
+  await new Promise(r => setTimeout(r, 30));
+
+  const $ = id => window.document.getElementById(id);
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+
+  check($('title').textContent === 'A Passage With Reasons',
+        `title should prefer the recording's own, got "${$('title').textContent}"`);
+  check($('subtitle').textContent.includes('A Band'), `subtitle should name the artist, got "${$('subtitle').textContent}"`);
+  check(!$('sibling').hidden && $('sibling').textContent.includes('album'),
+        `the sibling cut must be offered, got "${$('sibling').textContent}"`);
+  check($('sibling').querySelector('a').getAttribute('href') === '/passage/23',
+        'the sibling link must point at its own passage id');
+  const spanText = $('span').textContent;
+  check(spanText.includes('radio'), 'facts must show the passage kind');
+  check(spanText.includes('250') && spanText.includes('1800'), 'facts must show lead-in/out');
+  check(/see the selection reasoning/.test(spanText), 'a link to /why must be offered');
+  check($('span').querySelector('a').getAttribute('href') === '/why/22',
+        'the why-link must name this passage');
+  check($('file').textContent.includes('/m/song.mp3'), 'file facts must show the path');
+  const cards = window.document.querySelectorAll('#recordings .card');
+  check(cards.length === 1, `expected 1 recording card, got ${cards.length}`);
+  check(cards[0] && cards[0].textContent.includes('A Band'),
+        'the recording card must show its credited artist');
+  // A real MusicBrainz id links out; this project's own local placeholders
+  // (`local:audio:...`) must not, since nothing there would resolve.
+  check(!!cards[0].querySelector('a[href*="musicbrainz.org"]'),
+        'a real mbid must link to musicbrainz.org');
+
+  // A second instance for the passage the server does not have -- its own
+  // fixture, since the query differs before the page's own script ever runs.
+  const dom2 = new JSDOM(fs.readFileSync(path.join(ROOT, 'passage.html'), 'utf8'),
+    { runScripts: 'dangerously', url: 'http://localhost/passage/999' });
+  dom2.window.console.error = (...a) => errors.push('(999) ' + a.join(' '));
+  const create2 = dom2.window.document.createElement.bind(dom2.window.document);
+  dom2.window.document.createElement = tag => {
+    const el = create2(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  dom2.window.fetch = url => {
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  const runScript2 = src => {
+    const el = create2('script');
+    el.textContent = src;
+    dom2.window.document.body.appendChild(el);
+  };
+  runScript2(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript2(fs.readFileSync(path.join(ROOT, 'passage.js'), 'utf8'));
+  await new Promise(r => setTimeout(r, 30));
+  const note2 = dom2.window.document.getElementById('note').textContent;
+  check(/not found/i.test(note2), `an unknown passage must say so, got "${note2}"`);
+
+  console.log(`${'passage'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `facts and recording card match /info for passage 22, and 999 explains itself`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
   await runBrowse();
@@ -1219,6 +1337,7 @@ async function runEdit() {
   await runReviewHandoff();
   runFadeFixture();
   await runEdit();
+  await runPassage();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);
 })();
