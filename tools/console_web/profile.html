@@ -326,6 +326,12 @@ function releaseSuggestBox(pid, folder) {
         ? S.el('span', { class: 'pill warn', title: 'amplitude analysis has not run',
                          text: 'not analysed' })
         : `${p.lead_in_ms} / ${p.lead_out_ms} ms`],
+      // Directly under lead in/out, not after gain -- lead and fade are the
+      // two edges of a passage's own boundary, and this row order (and its
+      // wording) now matches Vaino's own passage page [REQ-VIS-270] so the
+      // two are easily side by side comparable. Unlike lead, fade is never
+      // "not analysed": every passage always has one, defaulted at ingest.
+      ['fade in / out', `${p.fade_in_ms} ms ${p.fade_in_curve} / ${p.fade_out_ms} ms ${p.fade_out_curve}`],
       ['gain', p.gain_db === null
         ? S.el('span', { class: 'pill warn', text: 'not analysed' }) : `${p.gain_db} dB`],
       ['boundary_src', S.el('span', { class: 'pill', text: p.boundary_src })],

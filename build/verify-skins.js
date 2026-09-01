@@ -1285,6 +1285,12 @@ async function runPassage() {
   const spanText = $('span').textContent;
   check(spanText.includes('radio'), 'facts must show the passage kind');
   check(spanText.includes('250') && spanText.includes('1800'), 'facts must show lead-in/out');
+  check(spanText.includes('20 ms exponential'), 'facts must show fade-in/out');
+  // Directly under lead in/out, before gain -- matching Sampo's own profile
+  // page row order [REQ-VIS-270], so the two read side by side comparable.
+  check(spanText.indexOf('lead in') < spanText.indexOf('fade in')
+        && spanText.indexOf('fade in') < spanText.indexOf('gain'),
+        `fade in/out must sit directly under lead in/out, before gain, got:\n${spanText}`);
   check(/see the selection reasoning/.test(spanText), 'a link to /why must be offered');
   check($('span').querySelector('a').getAttribute('href') === '/why/22',
         'the why-link must name this passage');

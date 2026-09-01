@@ -72,8 +72,12 @@
       ['span', `${fmt(p.start_ms)} – ${fmt(p.end_ms)}`],
       ['lead in / out', p.lead_in_ms == null && p.lead_out_ms == null
         ? 'not yet analysed' : `${p.lead_in_ms ?? 0} / ${p.lead_out_ms ?? 0} ms`],
-      ['gain', p.gain_db == null ? null : `${p.gain_db.toFixed(2)} dB`],
+      // Directly under lead in/out, not after gain -- lead and fade are the
+      // two edges of a passage's own boundary, and reading side by side
+      // against Sampo's own profile page [REQ-VIS-270] means matching its
+      // row order here, not just its wording.
       ['fade in / out', `${p.fade_in_ms} ms ${p.fade_in_curve} / ${p.fade_out_ms} ms ${p.fade_out_curve}`],
+      ['gain', p.gain_db == null ? null : `${p.gain_db.toFixed(2)} dB`],
       ['boundary source', p.boundary_src],
     ]);
     // A real link, appended as its own dt/dd rather than folded into `dl()`'s
