@@ -131,6 +131,39 @@ def test_sql_mirrors_apply_changes(tmp: str) -> None:
     conn.close()
 
 
+def test_passage_flag_sql(tmp: str) -> None:
+    print("sql_for('passage_flag'): resolves the remote's own passage_id, and "
+          "reports flagged under either subject shape [SPEC-DF-107]")
+    db = os.path.join(tmp, "flag-fixture.db")
+    build(db)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE listener_flags (subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, "
+        "flagged_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID")
+    anchor = {"audio_md5": "md5-a", "passage_kind": "radio", "start_ms": 1000, "end_ms": 200000}
+
+    row = conn.execute(rp.sql_for("passage_flag", anchor)).fetchone()
+    check(row[:2] == (1, 0), f"not yet flagged -- expected (passage_id=1, flagged=0), got {row}")
+    check(json.loads(row[2]) == [REC], f"the currently-linked recording must ride along, got {row}")
+
+    conn.execute("INSERT INTO listener_flags VALUES ('recording', ?, 't', NULL)", (REC,))
+    row = conn.execute(rp.sql_for("passage_flag", anchor)).fetchone()
+    check(row[:2] == (1, 1), f"a recording-keyed flag must count, got {row}")
+
+    conn.execute("DELETE FROM listener_flags")
+    conn.execute("INSERT INTO listener_flags VALUES ('passage', '1', 't', NULL)")
+    row = conn.execute(rp.sql_for("passage_flag", anchor)).fetchone()
+    check(row[:2] == (1, 1), f"a passage-keyed flag must count too, got {row}")
+
+    print("sql_for('passage_flag') against a passage the remote does not have at all: "
+          "passage_id is NULL, not an error, and never falsely 'flagged'")
+    miss = {"audio_md5": "md5-nope", "passage_kind": "radio", "start_ms": 0, "end_ms": 1}
+    row = conn.execute(rp.sql_for("passage_flag", miss)).fetchone()
+    check(row[:2] == (None, 0), f"got {row}")
+    check(json.loads(row[2]) == [], f"no passage at all means no linked recordings either, got {row}")
+    conn.close()
+
+
 def test_literal_escaping(tmp: str) -> None:
     print("literal() escapes a value that would otherwise break out of the SELECT")
     check(rp.literal("it's a trap") == "'it''s a trap'", "a single quote must be doubled, not dropped")
@@ -267,6 +300,7 @@ def test_peek_error_handling() -> None:
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         test_sql_mirrors_apply_changes(tmp)
+        test_passage_flag_sql(tmp)
         test_literal_escaping(tmp)
     test_peek_error_handling()
 

@@ -131,6 +131,71 @@ function remoteBasisBox(pid) {
   return box;
 }
 
+// Whether this passage is flagged "for review" `[REQ-VIS-265]`, agreeing
+// or not between the local library, vainopi, and what this page already
+// shows -- plus a one-click way to clear it everywhere. "Shown" is never
+// its own live check: this page only ever renders a passage from its own
+// local database, so whatever is on screen already *is* the local reading.
+// The only genuinely open question is whether vainopi still agrees
+// `[SPEC-DF-115]` -- so the local/shown reading is one dot, and vainopi's
+// is the other; if they ever disagree, only vainopi's turns yellow.
+function flagSyncBox(pid) {
+  const box = S.el('div', {});
+
+  const dot = (state, symbol, label) => S.el('span', { class: 'cell' },
+    S.el('span', { class: `dot ${state}`, text: symbol }), S.el('span', { class: 'label', text: label }));
+
+  async function render() {
+    // Whether a remote is configured at all, so "no remote configured" and
+    // "configured but unreachable" read differently even though `/flag`
+    // alone reports `remote: null` for both -- one extra, tiny request,
+    // not worth folding into `/flag` itself for a distinction only the
+    // label needs.
+    let remoteConfigured = false;
+    try { remoteConfigured = !!(await S.get('/api/remote')).remote; } catch { /* stays false */ }
+
+    let d;
+    try {
+      d = await S.get(`/api/profile/${pid}/flag`);
+    } catch (e) { return S.fail(box, e); }
+
+    const remoteKnown = d.remote !== null;
+    const agree = !remoteKnown || d.remote === d.local;
+    const anyFlagged = d.local || (remoteKnown && d.remote);
+
+    const vainopiDot = remoteKnown
+      ? dot(agree ? 'sync' : 'desync', d.remote ? '⚑' : '·', `vainopi: ${d.remote ? 'flagged' : 'not flagged'}`)
+      : dot('unknown', '?', remoteConfigured ? 'vainopi: could not reach it' : 'vainopi: no remote configured');
+
+    const row = S.el('div', { class: 'flagsync' },
+      dot('sync', d.local ? '⚑' : '·', `shown / local: ${d.local ? 'flagged' : 'not flagged'}`),
+      vainopiDot);
+    if (anyFlagged) {
+      const btn = S.el('button', { class: 'chip' }, 'unflag');
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = 'clearing…';
+        try {
+          const r = await (await fetch(`/api/profile/${pid}/unflag`, { method: 'POST' })).json();
+          if (r.error) throw new Error(r.error);
+          await render();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = 'unflag';
+          S.fail(box, e);
+        }
+      };
+      row.append(btn);
+    } else {
+      row.append(S.el('span', { class: 'label', text: '— nothing to clear' }));
+    }
+    box.replaceChildren(row);
+  }
+
+  render();
+  return box;
+}
+
 // A candidate release the folder-level score named, rendered whether it is
 // the top pick or an alternative -- one shape, styled differently
 // [SPEC-SUI-215]. `best` only affects the border; every candidate gets its
@@ -257,6 +322,12 @@ function releaseSuggestBox(pid, folder) {
             : 'python tools/apply_reviews.py <db> --commit' }),
           pendingKinds.length > 1 ? ' (run both tools if more than one kind is pending).' : '.')));
     }
+
+    // Flagged "for review" `[REQ-VIS-265]`, and whether local and vainopi
+    // still agree on that -- next to the pending-edit banner above, not
+    // buried below, since both answer the same question a naive glance at
+    // this page cannot: is what I am looking at actually current everywhere.
+    m.append(flagSyncBox(pid));
 
     // The folder this passage's own file lives in -- the scope both the
     // reanalyze button and the release-suggestion section below act on.

@@ -23,6 +23,10 @@ measured a full copy at.
     python tools/remote_peek.py pi@vainopi:/srv/library/vaino.db \
         --kind artist_review --recording-mbid <mbid>
 
+    python tools/remote_peek.py pi@vainopi:/srv/library/vaino.db \
+        --kind passage_flag --audio-md5 <md5> --passage-kind radio \
+        --start-ms 1000 --end-ms 200000
+
 Prints one JSON line: `{"ok": true, "current": {...} | null}` on a
 successful round trip (a `null` current means the remote answered but has
 nothing at that identity -- itself informative, not a failure), or
@@ -102,6 +106,40 @@ def sql_for(kind: str, anchor: dict) -> str:
             "FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid "
             f"WHERE ra.mbid = {literal(anchor['recording_mbid'])} "
             "ORDER BY ra.weight DESC, a.name LIMIT 1")
+    if kind == "passage_flag":
+        # Whether the remote's OWN copy of this passage is flagged, under
+        # either shape a flag can take `[SPEC-DF-107]` -- keyed by the
+        # remote's own local passage_id (never portable on its own,
+        # `[SPEC-DF-103]`, which is why it is resolved here rather than
+        # trusted from the caller) or by any recording currently linked to
+        # it. `remote_passage_id` rides along in the same round trip: the
+        # one thing a caller wanting to *clear* that flag needs next, and
+        # NULL, not a second query, is how "the remote has no such passage
+        # at all" is told apart from "it has it, unflagged."
+        #
+        # `remote_mbids` rides along too -- found live, not anticipated: an
+        # id correction accepted locally but never yet pushed left the
+        # remote linked to the *old* recording, so a caller resolving
+        # subjects only from its own current link cleared nothing where
+        # the flag actually was, `_vaino_set_flag`-style success reported
+        # regardless (a DELETE matching zero rows is not an error). The
+        # same reasoning `[SPEC-DF-112]`'s `clear_flags_for()` already
+        # applies for an `id_review`'s own target+baseline, generalized:
+        # ask what the OTHER side currently thinks too, clear the union.
+        return (
+            "WITH target AS (SELECT p.passage_id FROM passages p "
+            "JOIN files f ON f.file_id = p.file_id "
+            f"WHERE f.audio_md5 = {literal(anchor['audio_md5'])} "
+            f"AND p.kind = {literal(anchor['passage_kind'])} "
+            f"AND p.start_ms = {literal(anchor['start_ms'])} "
+            f"AND p.end_ms = {literal(anchor['end_ms'])}) "
+            "SELECT (SELECT passage_id FROM target) AS remote_passage_id, "
+            "EXISTS (SELECT 1 FROM listener_flags lf, target t "
+            "WHERE (lf.subject_kind='passage' AND lf.subject_id = CAST(t.passage_id AS TEXT)) "
+            "OR (lf.subject_kind='recording' AND lf.subject_id IN "
+            "(SELECT mbid FROM passage_recordings WHERE passage_id = t.passage_id))) AS flagged, "
+            "(SELECT json_group_array(mbid) FROM passage_recordings "
+            "WHERE passage_id = (SELECT passage_id FROM target)) AS remote_mbids")
     raise ValueError(f"unknown kind {kind!r}")
 
 
@@ -177,7 +215,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("remote", help="user@host:/path/to/vaino.db")
     ap.add_argument("--kind", required=True,
-                     choices=["id_review", "boundary_review", "artist_review"])
+                     choices=["id_review", "boundary_review", "artist_review", "passage_flag"])
     ap.add_argument("--audio-md5")
     ap.add_argument("--passage-kind")
     ap.add_argument("--start-ms", type=int)

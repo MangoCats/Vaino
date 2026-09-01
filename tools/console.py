@@ -30,6 +30,7 @@ import html
 import http.client
 import json
 import os
+import shlex
 import shutil
 import socket
 import socketserver
@@ -376,6 +377,70 @@ def remote_status(conn, pid: int) -> dict:
     return {"remote": remote, "reachable": reachable, "anchor": anchor, "checks": checks}
 
 
+def passage_flag_subjects(conn, pid: int) -> list:
+    """Every `listener_flags` subject that plausibly names this passage --
+    its own passage-keyed row, plus every recording currently linked to it
+    `[SPEC-DF-112]`'s own `clear_flags_for()` already establishes this same
+    shape for the same reason: a listener may have flagged it before it had
+    a recording at all, or under one it has since moved away from. Read-only
+    here; shared by the sync-status check and the unflag action below so
+    the two can never disagree about what "flagged" means for this passage.
+    """
+    subjects = [("passage", str(pid))]
+    for row in conn.execute(
+            "SELECT DISTINCT mbid FROM passage_recordings WHERE passage_id=?1", (pid,)):
+        subjects.append(("recording", row[0]))
+    return subjects
+
+
+def passage_flagged_locally(conn, subjects: list) -> bool:
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "listener_flags" not in have:
+        return False
+    return any(
+        conn.execute("SELECT 1 FROM listener_flags WHERE subject_kind=?1 AND subject_id=?2",
+                     (kind, sid)).fetchone()
+        for kind, sid in subjects)
+
+
+def flag_sync_status(conn, pid: int) -> dict:
+    """Is this passage flagged locally, on the remote, and does that match
+    what this page already shows -- the display `[REQ-VIS-265]`'s checkbox
+    needs before offering to clear it everywhere at once.
+
+    "Shown" is never fetched separately: this process only ever renders a
+    passage from its own local database, so whatever a person is looking at
+    on this very page *is* `local` at the moment it loaded. The only
+    genuinely open question a live check can answer is whether the remote
+    still agrees -- `[SPEC-DF-115]`'s own point, that vainopi's flags can
+    change with no involvement from Sampo at all.
+    """
+    subjects = passage_flag_subjects(conn, pid)
+    local = passage_flagged_locally(conn, subjects)
+    remote = STATE["jobs"].get_remote()
+    if not remote:
+        return {"local": local, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []}
+
+    p = conn.execute(
+        "SELECT p.kind, p.start_ms, p.end_ms, f.audio_md5 FROM passages p "
+        "JOIN files f USING(file_id) WHERE p.passage_id=?1", (pid,)).fetchone()
+    if p is None:
+        return {"local": local, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []}
+    anchor_args = ["--audio-md5", p["audio_md5"], "--passage-kind", p["kind"],
+                   "--start-ms", str(p["start_ms"]), "--end-ms", str(p["end_ms"])]
+    result = _peek(remote, "passage_flag", anchor_args)
+    if not result.get("ok"):
+        return {"local": local, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []}
+    current = result.get("current") or {}
+    remote_mbids = []
+    try:
+        remote_mbids = json.loads(current.get("remote_mbids") or "[]")
+    except (ValueError, TypeError):
+        pass  # malformed reply from an old remote_peek.py -- treated as "none known"
+    return {"local": local, "remote": bool(current.get("flagged")), "reachable": True,
+            "remote_pid": current.get("remote_passage_id"), "remote_mbids": remote_mbids}
+
+
 # ------------------------------------------------------------------ system ---
 # Which running instance is this, and a way to stop it `[SPEC-SUI-210..212]`.
 # Grew directly out of a real incident: two stale `console.py` processes were
@@ -489,6 +554,100 @@ def _vaino_has_sampo_support(port: int, timeout: float = 2.0) -> bool:
             conn.close()
     except OSError:
         return False
+
+
+def _vaino_set_flag(port: int, kind: str, subject_id: str, flagged: bool,
+                     timeout: float = 2.0) -> bool:
+    """Sampo signals; Vaino writes `[SPEC-SC-020]` -- the identical `POST
+    /history/flag/:kind/:id` route the play-history page's own checkbox
+    already calls (`player/src/web.rs`'s `set_flag`), never a direct
+    `listener_flags` write from this process. `204` is the only success;
+    anything else (a malformed kind, a closed connection, an older Vaino
+    with no such route) is `False`, for the caller to report.
+    """
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.request("POST", f"/history/flag/{kind}/{subject_id}"
+                                  f"?flagged={'true' if flagged else 'false'}")
+            r = conn.getresponse()
+            r.read()
+            return r.status == 204
+        finally:
+            conn.close()
+    except OSError:
+        return False
+
+
+def _remote_set_flag(remote: str, port: int, kind: str, subject_id: str, flagged: bool,
+                      timeout: float = 8.0) -> bool:
+    """The identical signal `_vaino_set_flag` sends locally, sent instead to
+    vainopi's own already-running Vaino over one `ssh ... curl` round trip.
+    Never a database write from this process, and never a service
+    interruption: unlike `[SPEC-DF-111]`'s patch-apply recipe, nothing here
+    writes to vainopi's database directly, so there is nothing for its own
+    running player to race against and no reason to stop it.
+    """
+    host, _, _ = remote.partition(":")
+    url = (f"http://localhost:{port}/history/flag/{kind}/{subject_id}"
+           f"?flagged={'true' if flagged else 'false'}")
+    try:
+        r = subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host,
+             f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 -X POST {shlex.quote(url)}"],
+            capture_output=True, text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return r.returncode == 0 and r.stdout.strip() == "204"
+
+
+def unflag_everywhere(conn, pid: int) -> dict:
+    """Clear every plausible flag on this passage, locally and on the
+    remote, in one action `[REQ-VIS-265]`. Both writes go through Vaino's
+    own `set_flag` -- co-resident over plain HTTP, vainopi's over one `ssh
+    ... curl` round trip -- never this process's own `listener_flags` write,
+    the same boundary `flags()`'s own docstring already states: listener
+    state is Vaino's to write, not Sampo's.
+
+    A `("passage", pid)` subject is only ever meaningful locally --
+    `pid` is not portable `[SPEC-DF-103]` -- so it is translated to the
+    remote's OWN local passage_id (already resolved by `flag_sync_status`'s
+    `passage_flag` peek) before being sent there. A `("recording", mbid)`
+    subject needs no translation, but it is not simply reused either: the
+    remote's *own* currently-linked recording(s) are unioned in too, found
+    live the first time this ran for real -- an id correction accepted
+    locally but not yet pushed left the remote still linked to the *old*
+    recording, so resolving subjects only from this library's own current
+    link cleared nothing where the flag actually was, `_remote_set_flag`
+    reporting success regardless (a DELETE matching zero rows is not an
+    error). The same reasoning `[SPEC-DF-112]`'s `clear_flags_for()` already
+    applies for an `id_review`'s own target+baseline, generalized: ask what
+    the far side currently thinks too, clear the union. A remote passage
+    that does not exist there at all (`remote_pid is None`) has its
+    passage-keyed subject skipped and named, not silently dropped.
+    """
+    subjects = passage_flag_subjects(conn, pid)
+    local_ok = [_vaino_set_flag(VAINO_PORT, kind, sid, False) for kind, sid in subjects]
+    result = {"local": {"ok": all(local_ok), "cleared": sum(local_ok), "of": len(local_ok)}}
+
+    remote = STATE["jobs"].get_remote()
+    if not remote:
+        result["remote"] = {"configured": False}
+        return result
+
+    status = flag_sync_status(conn, pid)
+    if not status["reachable"]:
+        result["remote"] = {"configured": True, "reachable": False}
+        return result
+    remote_subjects = {("recording", mbid) for mbid in status["remote_mbids"]}
+    remote_subjects |= {(k, sid) for k, sid in subjects if k == "recording"}
+    if status["remote_pid"] is not None:
+        remote_subjects.add(("passage", str(status["remote_pid"])))
+    remote_ok = [_remote_set_flag(remote, VAINO_PORT, kind, sid, False)
+                 for kind, sid in sorted(remote_subjects)]
+    result["remote"] = {"configured": True, "reachable": True, "ok": all(remote_ok),
+                         "cleared": sum(remote_ok), "of": len(remote_ok)}
+    return result
 
 
 def _vaino_binary() -> str | None:
@@ -828,6 +987,9 @@ class Handler(BaseHTTPRequestHandler):
             if p.startswith("/api/profile/") and p.endswith("/remote"):
                 pid = int(p.split("/")[3])
                 return self.send_json(remote_status(conn, pid))
+            if p.startswith("/api/profile/") and p.endswith("/flag"):
+                pid = int(p.split("/")[3])
+                return self.send_json(flag_sync_status(conn, pid))
             if p.startswith("/api/profile/"):
                 pid = int(p.rsplit("/", 1)[-1])
                 d = profile(conn, pid)
@@ -925,6 +1087,16 @@ class Handler(BaseHTTPRequestHandler):
                           "start_ms": row["start_ms"], "end_ms": row["end_ms"]}
                 target = json.dumps({"kind": kind, "anchor": anchor, "value": value})
                 return self.send_json({"job_id": STATE["jobs"].submit("accept-remote", target)})
+            if p.startswith("/api/profile/") and p.endswith("/unflag"):
+                # Not a job `[SPEC-SUI-080]`: unlike every write that model
+                # wraps, nothing here spawns a Python tool against a
+                # database at all -- both writes happen inside Vaino's own
+                # process, over HTTP, synchronously, in the same request/
+                # response cycle `_peek()`'s own remote check already uses.
+                pid = int(p.split("/")[3])
+                if conn.execute("SELECT 1 FROM passages WHERE passage_id=?1", (pid,)).fetchone() is None:
+                    return self.send_json({"error": f"no such passage: {pid}"}, code=404)
+                return self.send_json(unflag_everywhere(conn, pid))
             if p == "/api/induct/propose":
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 folder = (json.loads(body or b"{}") or {}).get("folder", "")

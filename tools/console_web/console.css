@@ -121,6 +121,21 @@ h2 small { font-weight: 400; color: var(--dim); }
                 gap: .8rem; padding: .4rem 0; border-bottom: 1px dotted var(--line); }
 .diverge .row:last-child { border-bottom: none; }
 
+/* flag sync across local/vainopi, and the unflag action [REQ-VIS-265].
+   Deliberately vivid, not the muted --ok/--warn text used by .pill
+   elsewhere: this is a status a person decides whether to act on at a
+   glance, not a quiet label among many. */
+.flagsync { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap;
+            margin: 0 0 1.2rem; font-size: .85rem; }
+.flagsync .cell { display: flex; align-items: center; gap: .35rem; }
+.flagsync .dot { width: 1.05rem; height: 1.05rem; border-radius: 50%;
+                 display: inline-flex; align-items: center; justify-content: center;
+                 font-size: .65rem; font-weight: 700; line-height: 1; flex: none; }
+.flagsync .dot.sync { background: #22c55e; color: #062b12; }
+.flagsync .dot.desync { background: #eab308; color: #362a00; }
+.flagsync .dot.unknown { background: var(--line); color: var(--dim); }
+.flagsync .label { color: var(--dim); }
+
 /* the handoff [SPEC-SUI-140]: Vaino's own review page, framed in place */
 .handoff-frame {
   display: block; width: 100%; height: 34rem; margin-top: .5rem;
