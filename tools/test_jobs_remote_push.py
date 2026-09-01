@@ -106,7 +106,7 @@ def wait_for(runner, job_id, timeout=10.0):
     raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
 
 
-def fake_spawn_success(changes_doc):
+def fake_spawn_success(changes_doc, captured_argv=None):
     def _spawn(self, job_id, stage, argv):
         if stage == "export":
             check("export_changes.py" in argv[1], f"export must run export_changes.py, got {argv}")
@@ -120,6 +120,8 @@ def fake_spawn_success(changes_doc):
             build_snapshot(out_path)
             return 0, json.dumps({"ok": True, "changes": 1, "resolved": 1, "out": out_path})
         if stage in ("send", "apply-remote"):
+            if captured_argv is not None:
+                captured_argv[stage] = argv
             return 0, ""
         return jobmod.Runner._spawn(self, job_id, stage, argv)
     return _spawn
@@ -143,7 +145,8 @@ def test_push_lands_a_change(tmp: str) -> None:
     build_library(library)
     sidecar = os.path.join(tmp, "library.console.db")
     runner = jobmod.Runner(library, sidecar)
-    runner._spawn = fake_spawn_success(CHANGES_DOC).__get__(runner, jobmod.Runner)
+    captured = {}
+    runner._spawn = fake_spawn_success(CHANGES_DOC, captured).__get__(runner, jobmod.Runner)
     job_id = runner.submit("remote-push", "pi@vainopi:/srv/library/vaino.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"expected done, got {j}")
@@ -152,6 +155,21 @@ def test_push_lands_a_change(tmp: str) -> None:
           f"expected exactly these five stages in this order, got {stages}")
     check("scp" not in json.dumps(j["events"]),
           "no scp full-copy step should appear anywhere in this job's log")
+
+    # `[SPEC-DF-121]` A real, previously-uncaught bug: a bare `systemctl` as
+    # the unprivileged deploy user fails outright with "Interactive
+    # authentication required" -- found live against a real vainopi, not by
+    # any test, because this stage was faked wholesale above (and everywhere
+    # else this job is tested) without ever inspecting the argv it built.
+    apply_argv = captured.get("apply-remote")
+    check(apply_argv is not None, "apply-remote must actually run for a change that lands")
+    if apply_argv is not None:
+        remote_cmd = apply_argv[-1]
+        check("sudo systemctl stop vaino" in remote_cmd,
+              f"stop must run with sudo -- a bare systemctl needs a password "
+              f"non-interactively, got: {remote_cmd!r}")
+        check("sudo systemctl start vaino" in remote_cmd,
+              f"start must run with sudo too, got: {remote_cmd!r}")
     check(j["result"].get("landed") is True, f"the id_review must have landed, got {j['result']}")
     check(j["result"].get("fastforward") == 1, f"expected 1 fast-forward, got {j['result']}")
     logs = [e["text"] for e in j["events"] if e["kind"] == "log"]

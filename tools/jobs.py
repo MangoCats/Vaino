@@ -484,11 +484,20 @@ class Runner:
         # patch is never applied underneath a live writer, apply it through
         # vainopi's own `sqlite3`, restart. Briefly interrupts whatever is
         # playing -- why this job runs only on explicit request, never per edit.
+        #
+        # `sudo` is load-bearing, not decoration `[SPEC-DF-121]`: a bare
+        # `systemctl stop vaino` as the unprivileged deploy user fails outright
+        # with "Interactive authentication required" -- found live, the first
+        # time this stage ever ran against a real vainopi outside a test's own
+        # faked `_spawn`. `pi ALL=(ALL) NOPASSWD: ALL` (`PI005`) already grants
+        # this without a password prompt, the same assumption
+        # `VainoPi/deploy-player.sh` already makes for its own `systemctl`
+        # calls -- this stage had simply never matched it.
         self._emit(job_id, "stage", "apply-remote", stage="apply-remote")
         code, _ = self._spawn(job_id, "apply-remote", [
             "ssh", host,
-            f"systemctl stop vaino && sqlite3 {remote_path} < /tmp/vaino-sync-patch.sql "
-            f"&& systemctl start vaino"])
+            f"sudo systemctl stop vaino && sqlite3 {remote_path} < /tmp/vaino-sync-patch.sql "
+            f"&& sudo systemctl start vaino"])
         if code == 0:
             self._emit(job_id, "log", "vainopi now has these changes.")
         db = self._db()
