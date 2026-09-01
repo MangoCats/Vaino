@@ -236,6 +236,28 @@ function releaseSuggestBox(pid, folder) {
     m.append(S.el('h2', {}, `${t.title || '(untitled)'} `,
       S.el('small', { text: `— passage ${pid}, ${t.artist || 'no artist'}` })));
 
+    // A saved-but-not-yet-applied edit `[REQ-VIS-275]` -- blatant on
+    // purpose, and first, above everything else this page shows: this is
+    // exactly the state that looked identical to "already pushed" from this
+    // very page until it wasn't. `boundary_src`'s own "manual" pill below
+    // only ever means an edit already folded in, so it cannot say this.
+    const PENDING_LABEL = { id: 'recording id', boundary: 'boundary', artist: 'artist credit' };
+    const pendingKinds = Object.keys(d.pending || {});
+    if (pendingKinds.length) {
+      m.append(S.el('div', { class: 'caveat' },
+        S.el('p', { style: 'margin:0 0 .3rem' },
+          S.el('b', { text: '⚠ Saved here, not yet applied to the library: ' }),
+          pendingKinds.map(k => PENDING_LABEL[k] || k).join(', ') + '.'),
+        S.el('p', { style: 'margin:0' },
+          'Vaino’s editor records a draft and changes nothing else — it cannot be ',
+          'pushed anywhere, and nothing else on this page reflects it, until a separate, ',
+          'deliberate step folds it in: ',
+          S.el('span', { style: 'font-family:var(--mono)', text: pendingKinds.includes('boundary')
+            ? 'python tools/apply_boundary_reviews.py <db> --commit'
+            : 'python tools/apply_reviews.py <db> --commit' }),
+          pendingKinds.length > 1 ? ' (run both tools if more than one kind is pending).' : '.')));
+    }
+
     // The folder this passage's own file lives in -- the scope both the
     // reanalyze button and the release-suggestion section below act on.
     // Last path segment stripped, `\` or `/`, since library paths are

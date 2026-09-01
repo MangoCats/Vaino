@@ -208,6 +208,26 @@ def flags(conn) -> list:
     return out
 
 
+def pending_counts(conn) -> dict:
+    """How many reviewed decisions are sitting as drafts, not yet folded into
+    the library `[REQ-VIS-275]` -- the same three tables `tools/apply_reviews
+    .py`/`tools/apply_boundary_reviews.py` already read, counted rather than
+    listed: a naive user has no reason to know these tools, or that saving an
+    edit in Vaino's own editor is only the first of two deliberate steps
+    before it can even be pushed anywhere `[SPEC021 §2]`. Zero for any table
+    this library predates -- absence is "nothing pending," not an error.
+    """
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    counts = {}
+    for kind, table in (("id", "id_reviews"), ("boundary", "boundary_reviews"),
+                        ("artist", "artist_reviews")):
+        counts[kind] = (conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE applied_at IS NULL").fetchone()[0]
+            if table in have else 0)
+    counts["total"] = sum(counts.values())
+    return counts
+
+
 def profile(conn, pid: int) -> dict:
     """One passage's whole derivation `[SPEC-SUI-040]`.
 
@@ -255,7 +275,40 @@ def profile(conn, pid: int) -> dict:
         "decisions": [dict(d) for d in conn.execute(
             "SELECT stage, outcome, confidence, detail, decided_at FROM ingest_decisions "
             "WHERE audio_md5 = ? ORDER BY decided_at", (p["audio_md5"],))],
+        # A saved-but-not-yet-applied edit `[REQ-VIS-275]` -- distinct from
+        # `boundary_src == 'manual'`, which only ever shows an edit already
+        # folded in. This is the state that looked identical to "pushed" from
+        # this very page until it wasn't: Vaino's editor commits a draft here
+        # and changes nothing else, so a naive glance at this profile has no
+        # way to tell "edited" from "edited, but only as far as the draft."
+        "pending": _pending_for_passage(conn, pid, [c["mbid"] for c in creds]),
     }
+
+
+def _pending_for_passage(conn, pid: int, mbids: list) -> dict:
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    out = {}
+    if "id_reviews" in have:
+        row = conn.execute(
+            "SELECT decided_at FROM id_reviews WHERE passage_id=?1 AND applied_at IS NULL", (pid,)
+        ).fetchone()
+        if row:
+            out["id"] = {"decided_at": row[0]}
+    if "boundary_reviews" in have:
+        row = conn.execute(
+            "SELECT decided_at FROM boundary_reviews WHERE passage_id=?1 AND applied_at IS NULL", (pid,)
+        ).fetchone()
+        if row:
+            out["boundary"] = {"decided_at": row[0]}
+    if "artist_reviews" in have and mbids:
+        placeholders = ",".join("?" * len(mbids))
+        row = conn.execute(
+            f"SELECT decided_at FROM artist_reviews "
+            f"WHERE recording_mbid IN ({placeholders}) AND applied_at IS NULL "
+            f"ORDER BY decided_at DESC LIMIT 1", mbids).fetchone()
+        if row:
+            out["artist"] = {"decided_at": row[0]}
+    return out
 
 
 def _peek(remote: str, kind: str, anchor_args: list, timeout: float = 12.0) -> dict:
@@ -767,6 +820,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/api/totals":
                 return self.send_json({"totals": totals(conn), "coverage": completeness(conn)})
+            if p == "/api/pending":
+                return self.send_json(pending_counts(conn))
             if p == "/api/library":
                 return self.send_json(library(
                     conn, q=(qs.get("q") or [""])[0], facet=(qs.get("facet") or [""])[0]))

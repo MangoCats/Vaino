@@ -105,3 +105,25 @@ const S = {
         S.el('div', { class: 'tile' }, S.el('b', { text: S.n(v) }), S.el('span', { text: k })))));
   },
 };
+
+// A saved-but-not-yet-applied edit `[REQ-VIS-275]` looked identical to a
+// pushed one from this very console until it wasn't -- Vaino's editor
+// commits a draft and changes nothing else, and nothing anywhere said so
+// unless a person already knew to look. Every page loads this file, so this
+// is the one place a badge actually reaches all of them, not just the page
+// someone happened to be on when they went looking.
+(async () => {
+  const nav = document.querySelector('header nav');
+  if (!nav) return;
+  let d;
+  try {
+    d = await S.get('/api/pending');
+  } catch (e) {
+    return;   // a console with no library open yet has nothing to count
+  }
+  if (!d.total) return;
+  nav.appendChild(S.el('span', {
+    class: 'pill warn', title: 'Saved but not yet applied to the library -- '
+      + 'run tools/apply_boundary_reviews.py / tools/apply_reviews.py --commit',
+  }, `⚠ ${S.n(d.total)} pending edit${d.total === 1 ? '' : 's'}`));
+})();
