@@ -454,6 +454,12 @@ class Runner:
             db.close()
             return self._finish(job_id, "failed")
 
+        # One sentence, not five numbers -- the raw per-change breakdown
+        # `apply_changes.py --json` already printed stays in the log exactly
+        # as it was, for whoever wants it; a person watching the page gets
+        # this instead of having to parse `compare`'s own JSON tail by eye.
+        self._emit(job_id, "log", _push_summary(result))
+
         if not result.get("landed") and not result.get("cleared"):
             # Nothing to land -- vainopi is never stopped for an empty patch.
             # `patch_statements` alone cannot tell this: it always includes
@@ -463,7 +469,7 @@ class Runner:
             # household nothing `[SPEC-SUI-082]`'s own posture toward the
             # player applied to its live service instead of just its write
             # lock.
-            self._emit(job_id, "log", "nothing to push -- the remote was not touched")
+            self._emit(job_id, "log", "the remote was not touched.")
             db = self._db()
             db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
             db.commit()
@@ -483,6 +489,8 @@ class Runner:
             "ssh", host,
             f"systemctl stop vaino && sqlite3 {remote_path} < /tmp/vaino-sync-patch.sql "
             f"&& systemctl start vaino"])
+        if code == 0:
+            self._emit(job_id, "log", "vainopi now has these changes.")
         db = self._db()
         db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
         db.commit()
@@ -652,6 +660,33 @@ def parse_json_tail(out: str):
             except json.JSONDecodeError:
                 continue
     return None
+
+
+def _push_summary(result: dict) -> str:
+    """One sentence for `_remote_push`'s own `compare` stage, not five raw
+    numbers -- `apply_changes.py --json`'s own line stays in the log exactly
+    as printed, right above this, for whoever wants the detail; this is what
+    a person glancing at the page actually needs to read.
+    """
+    total = sum(result.get(k, 0) for k in
+                ("fastforward", "noop", "conflict", "missing", "resolved", "error"))
+    if total == 0:
+        return "nothing to sync -- no pending edits in your local library to push."
+    parts = []
+    landed = (result.get("fastforward") or 0) + (result.get("resolved") or 0)
+    if landed:
+        parts.append(f"{landed} change(s) to push")
+    if result.get("noop"):
+        parts.append(f"{result['noop']} already in sync there")
+    if result.get("missing"):
+        parts.append(f"{result['missing']} not present there yet")
+    if result.get("conflict"):
+        parts.append(f"{result['conflict']} conflict(s) waiting for --resolve")
+    if result.get("error"):
+        parts.append(f"{result['error']} refused")
+    if result.get("cleared"):
+        parts.append(f"{result['cleared']} flag(s) cleared")
+    return ", ".join(parts) + "."
 
 
 def now() -> str:

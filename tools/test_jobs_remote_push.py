@@ -154,6 +154,32 @@ def test_push_lands_a_change(tmp: str) -> None:
           "no scp full-copy step should appear anywhere in this job's log")
     check(j["result"].get("landed") is True, f"the id_review must have landed, got {j['result']}")
     check(j["result"].get("fastforward") == 1, f"expected 1 fast-forward, got {j['result']}")
+    logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
+    check(any("1 change(s) to push" in t for t in logs),
+          f"a one-sentence summary must say what is about to be pushed, got {logs}")
+    check(any("vainopi now has these changes" in t for t in logs),
+          f"a final confirmation must say the push actually landed, got {logs}")
+
+
+def test_push_nothing_pending(tmp: str) -> None:
+    print("no pending edits at all: a plain-English 'nothing to sync' line, not just raw JSON")
+    library = os.path.join(tmp, "library3.db")
+    build_library(library)
+    sidecar = os.path.join(tmp, "library3.console.db")
+    runner = jobmod.Runner(library, sidecar)
+    empty = {"format_version": 1, "changes": []}
+    runner._spawn = fake_spawn_success(empty).__get__(runner, jobmod.Runner)
+    job_id = runner.submit("remote-push", "pi@vainopi:/srv/library/vaino.db")
+    j = wait_for(runner, job_id)
+    check(j["state"] == "done", f"expected done, got {j}")
+    stages = [e["stage"] for e in j["events"] if e["kind"] == "stage"]
+    check(stages == ["export", "snapshot", "compare"],
+          f"send/apply-remote must not run when there is nothing to push, got {stages}")
+    logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
+    check(any("nothing to sync" in t for t in logs),
+          f"a plain-English 'nothing to sync' line must appear, got {logs}")
+    check(any(t == "the remote was not touched." for t in logs),
+          f"must say plainly that vainopi was never touched, got {logs}")
 
 
 def test_snapshot_unreachable_fails_before_compare(tmp: str) -> None:
@@ -174,6 +200,7 @@ def test_snapshot_unreachable_fails_before_compare(tmp: str) -> None:
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_push_lands_a_change(tmp)
+        test_push_nothing_pending(tmp)
         test_snapshot_unreachable_fails_before_compare(tmp)
 
     print()
