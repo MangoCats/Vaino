@@ -2,10 +2,14 @@
 //! decisions made about it. Gated behind `sampo-support` along with
 //! everything else reached from the review page.
 
+#[cfg(feature = "sampo-support")]
 use axum::extract::State;
+#[cfg(feature = "sampo-support")]
 use axum::http::StatusCode;
+#[cfg(feature = "sampo-support")]
 use axum::response::IntoResponse;
 
+#[cfg(feature = "sampo-support")]
 use super::Ui;
 
 /// The questionable ids, with the evidence against them `[REQ-LIB-165]`.

@@ -1,10 +1,14 @@
 //! The boundary/waveform editor `[SPEC021]`: a passage's own facts, the
 //! decision it records, and the raw-audio window the waveform draws from.
 
+#[cfg(feature = "sampo-support")]
 use axum::extract::State;
+#[cfg(feature = "sampo-support")]
 use axum::http::StatusCode;
+#[cfg(feature = "sampo-support")]
 use axum::response::IntoResponse;
 
+#[cfg(feature = "sampo-support")]
 use super::Ui;
 
 /// The editor's read side: what a passage's boundaries currently are

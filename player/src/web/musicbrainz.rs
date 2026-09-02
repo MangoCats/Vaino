@@ -1,7 +1,9 @@
 //! Live MusicBrainz search from the review page, rate-limited to one
 //! request in flight at a time.
 
+#[cfg(feature = "sampo-support")]
 use axum::http::StatusCode;
+#[cfg(feature = "sampo-support")]
 use axum::response::IntoResponse;
 
 
