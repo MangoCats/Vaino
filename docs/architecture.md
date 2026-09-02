@@ -201,9 +201,6 @@ moves over the network in that arrangement is control, not sound.
 * **No integration tests.** `player/tests/` is empty; coverage is unit tests
   inside modules, so cross-module invariants — cue numbering against
   `cue_uris`, for one — are held by comments rather than by tests.
-* **Four folder-writing modules repeat one shape** (`cue`, `covers`,
-  `lyrics_cache`, `lyrics_sidecar`), with a report vocabulary that has drifted
-  between them.
 
 ---
 
