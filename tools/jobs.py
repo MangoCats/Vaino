@@ -506,6 +506,32 @@ class Runner:
         db.close()
         return self._finish(job_id, "done" if code == 0 else "failed")
 
+    def _run_single_stage(self, job_id: int, stage: str, argv: list, *, require_ok: bool = True) -> None:
+        """Spawn one stage, save its `--json` tail as the job's result, and
+        finish done/failed -- the tail every one-stage job kind below shared
+        already, five times over, before this existed: emit the stage, spawn
+        it, parse whatever it printed, save that as the result regardless of
+        outcome (a failure's own JSON is exactly what a caller wants to see),
+        and finish on the same two facts every one of them finished by --
+        the exit code, and (unless `require_ok` is False, for a tool whose
+        `--json` carries no `ok` field to check) whether the tool itself
+        said `"ok": true`.
+
+        A multi-stage job (`_run_pipeline`, `_remote_pull`, `_remote_push`)
+        does not fit this shape and is not forced into it: each stage there
+        needs its own decision about whether a failure stops the whole job,
+        which single-stage callers never have to make.
+        """
+        self._emit(job_id, "stage", stage, stage=stage)
+        code, out = self._spawn(job_id, stage, argv)
+        result = parse_json_tail(out) or {}
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        ok = code == 0 and (result.get("ok") if require_ok else True)
+        self._finish(job_id, "done" if ok else "failed")
+
     def _accept_remote(self, job_id: int, target: str):
         """`[SPEC-DF-116..117]`'s one deliberate exception to "the console
         never writes the library" -- kept to that discipline's own shape:
@@ -523,14 +549,7 @@ class Runner:
                 "--passage-kind", anchor["passage_kind"], "--start-ms", str(anchor["start_ms"]),
                 "--end-ms", str(anchor["end_ms"]), "--value", json.dumps(payload["value"]),
                 "--commit", "--json"]
-        self._emit(job_id, "stage", "accept", stage="accept")
-        code, out = self._spawn(job_id, "accept", argv)
-        result = parse_json_tail(out) or {}
-        db = self._db()
-        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
-        db.commit()
-        db.close()
-        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+        self._run_single_stage(job_id, "accept", argv)
 
     def _suggest_release(self, job_id: int, target: str):
         """Discovery only `[SPEC-SUI-215]` -- `target` is
@@ -545,14 +564,7 @@ class Runner:
                 self.library, payload["folder"], "--json"]
         if payload.get("query"):
             argv += ["--query", payload["query"]]
-        self._emit(job_id, "stage", "search", stage="search")
-        code, out = self._spawn(job_id, "search", argv)
-        result = parse_json_tail(out) or {}
-        db = self._db()
-        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
-        db.commit()
-        db.close()
-        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+        self._run_single_stage(job_id, "search", argv)
 
     def _accept_release(self, job_id: int, target: str):
         """The write half `[SPEC-SUI-215]` -- `target` is
@@ -567,14 +579,7 @@ class Runner:
         argv = [sys.executable, os.path.join(tools, "suggest_release.py"),
                 self.library, payload["folder"], "--accept", payload["release_mbid"],
                 "--commit", "--json"]
-        self._emit(job_id, "stage", "apply", stage="apply")
-        code, out = self._spawn(job_id, "apply", argv)
-        result = parse_json_tail(out) or {}
-        db = self._db()
-        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
-        db.commit()
-        db.close()
-        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+        self._run_single_stage(job_id, "apply", argv)
 
     def _analyze_amplitude(self, job_id: int, target: str):
         """`[SPEC-SA-075]` -- `target` is a folder path, or empty for the
@@ -588,14 +593,7 @@ class Runner:
         argv = [sys.executable, os.path.join(tools, "analyze_amplitude.py"), self.library, "--json"]
         if target:
             argv += ["--folder", target]
-        self._emit(job_id, "stage", "analyze", stage="analyze")
-        code, out = self._spawn(job_id, "analyze", argv)
-        result = parse_json_tail(out) or {}
-        db = self._db()
-        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
-        db.commit()
-        db.close()
-        return self._finish(job_id, "done" if code == 0 and result.get("ok") else "failed")
+        self._run_single_stage(job_id, "analyze", argv)
 
     def _analyze_flavor(self, job_id: int, target: str):
         """Refresh one passage's own flavor, `target` its passage id.
@@ -605,18 +603,15 @@ class Runner:
         capability, only a narrower way to reach the same tool for one
         passage, offered from its own profile page rather than requiring a
         library- or folder-wide re-run just to pick up a boundary edit.
+
+        `--json` here carries no `ok` field to check -- unlike the other
+        four single-stage kinds, so `require_ok=False` keeps this the exit
+        code alone, exactly as it was before `_run_single_stage` existed.
         """
         tools = os.path.dirname(os.path.abspath(__file__))
         argv = [sys.executable, os.path.join(tools, "extract_library.py"), self.library,
                 "--passage", target]
-        self._emit(job_id, "stage", "extract", stage="extract")
-        code, out = self._spawn(job_id, "extract", argv)
-        result = parse_json_tail(out) or {}
-        db = self._db()
-        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
-        db.commit()
-        db.close()
-        return self._finish(job_id, "done" if code == 0 else "failed")
+        self._run_single_stage(job_id, "extract", argv, require_ok=False)
 
     def _spawn(self, job_id, stage, argv):
         # UTF-8 on both sides. `ingest_folder.say()` falls back to the console
