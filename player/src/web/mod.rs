@@ -44,9 +44,12 @@ mod skins;
 use bluetooth::*;
 use browse::*;
 use control::*;
+#[cfg(feature = "sampo-support")]
 use edit::*;
 use media::*;
+#[cfg(feature = "sampo-support")]
 use musicbrainz::*;
+#[cfg(feature = "sampo-support")]
 use review::*;
 use settings::*;
 use skins::*;

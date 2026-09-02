@@ -1282,6 +1282,7 @@ impl PlayerStore {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
+    #[cfg(feature = "sampo-support")]
     use crate::db::Library; // several tests read back through Library, by design
 
     /// A decided passage comes back carrying its judgement, so it can be found
