@@ -104,14 +104,7 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
         // stored front is a JPEG today; a PNG would be misread by anything
         // trusting the extension.
         let name = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) { "cover.png" } else { "cover.jpg" };
-        if dry_run {
-            rep.wrote();
-            continue;
-        }
-        match std::fs::write(dir.join(name), &bytes) {
-            Ok(()) => rep.wrote(),
-            Err(e) => rep.failed(format!("{}: {e}", dir.join(name).display())),
-        }
+        crate::report::write_or_report(&dir.join(name), &bytes, dry_run, &mut rep);
     }
     Ok(rep)
 }

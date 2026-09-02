@@ -86,14 +86,7 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
             }
             continue;
         }
-        if dry_run {
-            rep.wrote();
-            continue;
-        }
-        match std::fs::write(&side, &text) {
-            Ok(()) => rep.wrote(),
-            Err(e) => rep.failed(format!("{}: {e}", side.display())),
-        }
+        crate::report::write_or_report(&side, text.as_bytes(), dry_run, &mut rep);
     }
     Ok(rep)
 }

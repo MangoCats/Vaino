@@ -10,6 +10,15 @@
 //! A listener reads those sentences one after another on the settings page. They
 //! should differ where the runs differ and nowhere else, so the sentence is
 //! built once here and each module supplies only its own nouns and reasons.
+//!
+//! The four modules also share a tail: once a module has decided *this*
+//! candidate should be written, every one of them dry-runs, writes and reports
+//! the same way. [`write_or_report`] is that tail, factored out so it can only
+//! drift once instead of four times. The decision above it — *which*
+//! candidates, and why the others were passed over — stays in each module,
+//! because that part genuinely differs.
+
+use std::path::Path;
 
 /// A tally of one run over a folder.
 #[derive(Debug, Default, PartialEq)]
@@ -77,6 +86,23 @@ impl Written {
     }
 }
 
+/// Write `bytes` to `path` and record the outcome — or, for a dry run, count
+/// what would have been written without touching the filesystem at all.
+///
+/// Shared by [`crate::cue`], [`crate::covers`], [`crate::lyrics_cache`] and
+/// [`crate::lyrics_sidecar`]: the one part of "write this candidate" that was
+/// identical in all four already, ahead of this being pulled out.
+pub fn write_or_report(path: &Path, bytes: &[u8], dry_run: bool, rep: &mut Written) {
+    if dry_run {
+        rep.wrote();
+        return;
+    }
+    match std::fs::write(path, bytes) {
+        Ok(()) => rep.wrote(),
+        Err(e) => rep.failed(format!("{}: {e}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +144,53 @@ mod tests {
         assert!(!r.summary("file").contains("failed"));
         r.failed("C:/x/y.cue: access denied".into());
         assert!(r.summary("file").ends_with(", 1 failed"));
+    }
+
+    fn tmp() -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "vaino_report_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// A dry run counts as written but never touches the filesystem.
+    #[test]
+    fn a_dry_run_counts_without_writing() {
+        let dir = tmp();
+        let path = dir.join("x.txt");
+        let mut r = Written::default();
+        write_or_report(&path, b"hello", true, &mut r);
+        assert_eq!(r.written, 1);
+        assert!(!path.exists(), "dry run must not create the file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real run writes the bytes and reports one write.
+    #[test]
+    fn a_real_run_writes_and_reports() {
+        let dir = tmp();
+        let path = dir.join("x.txt");
+        let mut r = Written::default();
+        write_or_report(&path, b"hello", false, &mut r);
+        assert_eq!(r.written, 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A write that cannot land — no such directory — is reported as a named
+    /// failure, not silently dropped.
+    #[test]
+    fn a_failed_write_is_reported_by_name() {
+        let dir = tmp();
+        let path = dir.join("nowhere").join("x.txt"); // parent does not exist
+        let mut r = Written::default();
+        write_or_report(&path, b"hello", false, &mut r);
+        assert_eq!(r.written, 0);
+        assert_eq!(r.failed.len(), 1);
+        assert!(r.failed[0].contains("x.txt"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
