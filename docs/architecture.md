@@ -18,7 +18,7 @@ than against a plan — where something is designed but not built, it says so.
 | | language | licence | writes |
 | :--- | :--- | :--- | :--- |
 | `player/` | Rust | MIT | listener state only |
-| `tools/` — "Sampo", 38 scripts | Python | AGPL-3.0 | reference data only |
+| `tools/` — "Sampo", 90 files, flat, no subpackages | Python | AGPL-3.0 | reference data only |
 
 Everything that plays, or is played to, is in `player/`. Everything that *makes*
 reference data — ingest, identification, flavor extraction, lyrics import — is

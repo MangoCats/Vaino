@@ -19,7 +19,7 @@ To ensure that both human contributors and AI coding assistants can quickly insp
 2. **`[GOV-DOC-030]` Inherited documents are segregated and prefixed**:
    - Material copied from predecessor projects lives only under `docs/inherited/`, carries an `MCR-` (or equivalent) filename prefix, and opens with a banner stating its class.
    - This is required because McRhythm and Vaino both number `SPEC003`–`SPEC006` with different meanings. See [inherited/README.md](inherited/README.md) `[INH-HAZ-010]`.
-   - **`[GOV-DOC-040]` Enforced by `tools/check_docs.py`**, which also fails on new identifier collisions, dangling tags and unresolvable links. Run it before committing documentation changes.
+   - **`[GOV-DOC-040]` Enforced by `tools/check_docs.py`**, which also fails on new identifier collisions, dangling tags and unresolvable links. Run it before committing documentation changes. *(Since 2026-09-02, also enforced in CI — [`.github/workflows/check-docs.yml`](../.github/workflows/check-docs.yml) runs it with `--strict` on every push and pull request to `main`, so a doc/code drift that fails it can't land silently.)*
    - **Searches over `REQ`/`ENT` must be scoped**: `grep -rn "REQ-AUD" docs/ --exclude-dir=inherited`. Inherited material defines 651 tags of its own `[INH-HAZ-020]`.
 
 3. **Unique Grep-Searchable Identifiers**:

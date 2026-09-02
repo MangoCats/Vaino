@@ -6,6 +6,16 @@ How Vaino's Program Director `[SPEC009]` reaches the MPD ecosystem: what MPD alr
 
 > **Related:** [GUIDE007](../GUIDE007-external-backends-investigation.md) measured the cost · [GUIDE006](../GUIDE006-director-as-a-guest.md) posed it · [SPEC013](SPEC013-sampo-console.md) for the two-UI precedent
 
+> **Naming note, corrected 2026-09-02:** this document was written against a
+> separate `vaino-mpd` binary that was never built. What shipped instead —
+> measured in [IMPL005 §Stage 5](../IMPL005-mpd-prototype-results.md) — is the
+> MPD integration folded into the single `vaino` binary behind `--features
+> mpd`, reached through `switch.rs`/`mpd_backend.rs` as one more backend per
+> the seam `[SPEC-BK-020]`, described in
+> [architecture.md §3](../architecture.md#3-the-backend-seam). `vaino-mpd`
+> below names the **role** — the Director acting as an MPD client — not a
+> literal binary; `[SPEC-MPD-070]` gives the corrected mechanism.
+
 ---
 
 ## 1. Shape
@@ -104,7 +114,25 @@ Resolution order, narrowest first, in the spirit of `[SPEC-DF-040]`:
 
 ## 6. Containment
 
-**`[SPEC-MPD-070]` A separate binary behind a default-off feature.** `player/src/bin/vaino-mpd.rs`, gated by `--features mpd`, using `std::net` and no new dependency. The appliance build is byte-identical to today's `[REQ-HW-140]`, and a user who does not want this never compiles it.
+**`[SPEC-MPD-070]` Folded into the one binary, behind a default-off feature —
+not the separate binary this section originally specified.** MPD support
+lives in `player/src/mpd_backend.rs`, reached through `switch.rs` as a
+`Backend` `[SPEC-BK-020]` beside the local `Engine`, gated by `--features
+mpd`, using `std::net` and no new dependency. `player/src/bin/` also carries
+`mpd_direct.rs`, `mpd_fill.rs`, `mpd_map.rs`, `mpd_session.rs` and
+`mpd_watch.rs` — the staged prototype and ops tools from
+[IMPL004](../IMPL004-mpd-prototype.md), not the shipping integration point.
+
+The byte-identical claim does not hold as originally stated: `[GDE-BAK-050]`
+`[REQ-HW-140]` promised a build indistinguishable from one without this
+branch, but the branch also changed the local player (scrobbling alignment,
+skip/dequeue suppression) for reasons unrelated to MPD. What **does** hold,
+measured in [IMPL005 §Stage 5](../IMPL005-mpd-prototype-results.md): with
+`--features mpd` off, the binary contains zero occurrences of MPD protocol
+strings (`listallinfo`, `rangeid`, `sticker set song`, `OK MPD`); with it on,
+the binary grows by 8,192 bytes, none of it MPD code. A user who does not
+want this compiles without the feature and gets a binary with none of it —
+which is the property this spec actually needs.
 
 **`[SPEC-MPD-075]` Vaino's own UI keeps its job.** MPD clients drive playback; Vaino's web UI stays for what they cannot show — browse with provenance, the review queue, the why panel `[REQ-VIS-180]`. The same division SPEC013 draws between the console and the player: two surfaces, two questions, one database.
 
