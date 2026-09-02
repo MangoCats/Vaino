@@ -27,7 +27,7 @@ _SQRT2 = math.sqrt(2.0)
 sys.path.insert(0, str(Path(__file__).parent))
 import gaia_history as gh  # noqa: E402
 
-SVM_DIR = Path(os.environ.get("GAIA_SVM_DIR", "data/essentia/svm/essentia-extractor-svm_models-v2.1_beta5"))
+SVM_DIR = Path(os.environ.get("GAIA_SVM_DIR", "data/essentia/svm_beta1"))
 LOWLEVEL_DIR = Path("data/essentia/ab_lowlevel")
 REFERENCE_DB = Path("data/flavor-sample.db")
 
