@@ -150,10 +150,9 @@ pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Written,
             rep.failed(format!("{}: {e}", folder.display()));
             continue;
         }
-        match std::fs::write(&path, &text) {
-            Ok(()) => rep.wrote(),
-            Err(e) => rep.failed(format!("{}: {e}", path.display())),
-        }
+        // Past this point the directory exists, so this is never itself a dry
+        // run — the dry-run report already happened above.
+        crate::report::write_or_report(&path, text.as_bytes(), false, &mut rep);
     }
     Ok(rep)
 }
