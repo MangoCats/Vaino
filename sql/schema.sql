@@ -51,8 +51,9 @@ CREATE TABLE IF NOT EXISTS file_tags (
 );
 
 -- Recording scope: this music, any encoding. Portable across installations.
--- mbid is a MusicBrainz recording MBID, or 'local:<n>' where identification
--- has not happened -- unidentified audio must still be playable [ENT-MP-035].
+-- mbid is a MusicBrainz recording MBID, or 'local:audio:<md5>' where
+-- identification has not happened -- unidentified audio must still be
+-- playable [ENT-MP-035].
 CREATE TABLE IF NOT EXISTS recordings (
     mbid       TEXT PRIMARY KEY,
     title      TEXT NOT NULL,

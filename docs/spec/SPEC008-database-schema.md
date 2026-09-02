@@ -51,6 +51,21 @@ CREATE TABLE recordings (
 
 **`[SPEC-SC-035]` `path` is deliberately not unique and never a key.** MuLibPlay's ability to relocate a moved library came from matching content, not paths `[GDE-BMK-050]`; that property is preserved by keying on `audio_md5`.
 
+**`[SPEC-SC-037]` `file_tags` is library, not cache — encoding scope, one row per `files.file_id`.** The player resolves a display name MusicBrainz → tag → filename, so for audio with no MusicBrainz entry `file_tags` is the *only* place an artist name exists `[SPEC-PL-050]`; that is also why tags travel in a payload `[SPEC-DF-092]`.
+
+```sql
+CREATE TABLE file_tags (
+    file_id     INTEGER PRIMARY KEY REFERENCES files(file_id) ON DELETE CASCADE,
+    title       TEXT,
+    artist      TEXT,
+    album       TEXT,
+    track_no    INTEGER,
+    disc_no     INTEGER,
+    has_art     INTEGER NOT NULL DEFAULT 0,
+    scanned_at  INTEGER NOT NULL
+);
+```
+
 ---
 
 ## 3. Passages — the Album/Radio Duality
@@ -87,7 +102,7 @@ Not to be confused with `skip_fade_ms`/`skip_lead_ms` `[REQ-AUD-162]` — a thir
 **`[SPEC-SC-047]` What `radio` and `album` actually change.** Both are the *same* recording-in-file span, played back two different ways — see `[SPEC023]` for the term itself:
 
 - **`radio`**: trimmed toward minimal start/end silence, meant for freeform rotation play; `lead_in_ms`/`lead_out_ms` set the timing window in which this passage's tail may overlap the next one's head, and `fade_in_ms`/`fade_out_ms` are the audible ramp, per `[SPEC-SC-046]` above.
-- **`album`**: preserves whatever between-track silence the source actually has — commonly present, never guaranteed — the span a listener hears playing straight through. On a DAO capture specifically, consecutive `album`-kind passages **abut exactly**: one's `end_ms` is the next's `start_ms`, no gap and no overlap, so playing them in sequence reproduces an uninterrupted full-disc listen, shaped only by each passage's own (typically minimal) fade.
+- **`album`**: preserves whatever between-track silence the source actually has — commonly present, never guaranteed — the span a listener hears playing straight through. On a DAO capture specifically, `tools/segment_dao.py` deliberately leaves the detected inter-track silence **out** of both neighbouring spans: one passage's `end_ms` is the *start* of the detected silence and the next's `start_ms` is where the silence *ends*, a real gap of at least `MIN_SILENCE_S` (0.5 s), not an abutment — validated this way against 188 files. Playing them in sequence still reproduces the disc as captured, since the gap is exactly the silence a straight-through listen would also have.
 
 Neither `kind` implies anything about whether the underlying recording or file belongs to a catalogued MusicBrainz release — see `[SPEC023]`'s "Album" entry for that distinct, informal sense of the word.
 
@@ -230,8 +245,24 @@ Both are append-only, bounded by retention, and are **Vaino-local**: they descri
 ## 8. Open
 
 1. **`[SPEC-SC-110]`** Per-passage extraction may add a minimum-duration or flavor-eligibility column `[SPEC-SA-090]`. Additive.
-2. **`[SPEC-SC-115]`** Cover art storage — MuLibPlay held BLOBs in `albums` (95 MB db, mostly art). Filesystem cache keyed by release MBID is likely better; not yet decided.
-3. **`[SPEC-SC-120]`** Retention policy for the two decision tables.
+2. **`[SPEC-SC-120]`** Retention policy for the two decision tables.
+
+**`[SPEC-SC-115]` Cover art storage — decided and built.** BLOBs, the MuLibPlay
+approach (`[GDE-BMK-030]`; MuLibPlay held them in `albums`, 95 MB db, mostly
+art), not the filesystem cache once floated here — but keyed by **release
+MBID** in its own table, not folded into `albums`:
+
+```sql
+CREATE TABLE cover_art (
+    release_mbid TEXT PRIMARY KEY,
+    front        BLOB,
+    back         BLOB,
+    source       TEXT NOT NULL,
+    fetched_at   TEXT NOT NULL
+);
+```
+
+Built by `tools/fetch_cover_art.py`; not yet emitted in payloads `[SPEC-PL-105]`.
 
 ---
 

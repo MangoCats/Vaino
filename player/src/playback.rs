@@ -11,7 +11,8 @@
 //! * `Session` calls **seven** methods on `Engine`, and a binary's loop three
 //!   more.
 //! * The **Director touches `path` nowhere** — the only occurrences under
-//!   `director/` are a comment and a test fixture's DDL.
+//!   `director/` are confined to a handful of comments and a test fixture's
+//!   DDL, not code.
 //! * Exactly **one line** turns a queue entry into audio:
 //!   `PassageDecoder::open(&e.path, …)` in `engine.rs`. Every other use of
 //!   `entry.path` is an error message, a filename for display, or `relink`,

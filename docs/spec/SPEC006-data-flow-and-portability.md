@@ -76,6 +76,8 @@ What the rule prevents is silent by construction. A stale or foreign `passage_id
 
 ### T1 · Embedded tags — travels inside the file
 
+*Designed, not yet built.* No tag-writing code exists in the tree yet — `player/src/tags.rs` only reads embedded cover art. T2 (sidecar) and T3 are the transports actually implemented today; treat what follows as the settled design for T1, not a description of current behavior.
+
 Written into the container's native tag block, so the data survives any copy, move, or rename, with nothing to keep alongside it. This is the mechanism that makes a "straight, playable audio file" self-describing.
 
 | Container | Mechanism |
@@ -141,7 +143,7 @@ The same export is the **sync unit between a user's own machines**, so the backu
 **`[SPEC-DF-091]` Sidecars are per-file `.vaino.json`.**
 Sidecars are the fallback for when embedding is impossible — read-only media, unsupported containers, or a user who declines tag writes. On an exception path robustness outranks tidiness, and a per-file sidecar survives single-file copies that a directory manifest would not. Directory clutter is accepted as the cost.
 
-**`[SPEC-DF-092]` Embedded tags: informed consent once at first import, then default on.**
+**`[SPEC-DF-092]` Embedded tags: informed consent once at first import, then default on.** *(Designed, not yet built — see T1's status note in §4.)*
 Not permanently opt-in. A default-off path receives little real-world exercise and rots, while self-describing files are the point of the design `[SPEC-DF-060]`. Not default-on-silent either: modifying a user's music library without asking is not justifiable even with verification.
 
 Every write is **temp-file → verify → atomic replace**:
@@ -173,7 +175,7 @@ Rejected: *on clean shutdown* (a 24/7 appliance may never shut down cleanly — 
 
 **Built and verified as `REQ-LIB-160`.** That is the authoritative account of the shipped mechanism — the SQLite backup API against a read-only-attached library, atomic rename, `restore_listener`'s rehearse-by-default restore, the pre-restore safety copy exempt from rotation, re-pointing plays through `recording_mbid` rather than the unstable `passage_id`, and the Howard Hinnant civil-from-days date arithmetic that keeps the yearly tier from drifting. This section states the design decision and why; `REQ-LIB-160` states what was built to meet it and how it was measured — read both rather than expecting either alone to be complete.
 
-**`[SPEC-DF-095]` Headless Sampo falls back to sidecar-only, with an explicit `--embed` override.**
+**`[SPEC-DF-095]` Headless Sampo falls back to sidecar-only, with an explicit `--embed` override.** *(Designed, not yet built — T1 embedding itself does not exist yet; see §4.)*
 
 Consent applies solely where Sampo runs. Vaino only ever *reads* tags, and the appliance never runs Sampo `[GDE-ARC-010]`, so the Pi never faces this question.
 

@@ -435,8 +435,9 @@ works with every speaker rather than one model.
 
 **`[PI-IMG-010]` The deliverable is a script, not a procedure.** A documented
 sequence of manual steps is a procedure nobody performs identically twice. Not
-yet written — a future `VainoPi/build-image.sh` should take a Pi OS Lite image
-and a prepared `library.db` and produce a flashable `.img`.
+yet written — a future *VainoPi/build-image.sh* (no such file exists yet; not a
+citation) should take a Pi OS Lite image and a prepared `library.db` and
+produce a flashable `.img`.
 
 Sketch, in the order the steps depend on each other (unimplemented — no such
 script exists in the tree yet):

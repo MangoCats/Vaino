@@ -73,15 +73,14 @@ How Vaino's Program Director `[SPEC009]` reaches the MPD ecosystem: what MPD alr
 
 ## 4. Extending MPD without patching MPD
 
-**`[SPEC-MPD-050]` The sticker database is the extension point, and it is a real one.** MPD attaches arbitrary name/value pairs to a song URI, persists them, and `sticker find` supports `==`, `<`, `>`, `contains` and `starts_with`. Nothing needs to be added to MPD for Vaino to publish into the world MPD's clients already read.
-
-Proposed namespace, all under `vaino.`:
+**`[SPEC-MPD-050]` The sticker database is the extension point, and it is a real one.** MPD attaches arbitrary name/value pairs to a song URI, persists them, and `sticker find` supports `==`, `<`, `>`, `contains` and `starts_with`. Nothing needs to be added to MPD for Vaino to publish into the world MPD's clients already read. Proposed namespace, all under `vaino.`:
 
 | Sticker | Value | Read by |
 | :--- | :--- | :--- |
 | `vaino.passage` | passage id in `vaino.db` | `vaino-mpd` itself — see `[SPEC-MPD-060]` |
 | `vaino.why` | the weight decomposition, JSON `[REQ-VIS-100]` | any sticker-aware client |
 | `vaino.flavor` | a short human summary, e.g. `danceable · not sad` | any sticker-aware client |
+| `vaino.title`, `vaino.artist` | the passage's real title/artist | any sticker-aware client — `naming: false` in `Capabilities::MPD`, see `[SPEC-MPD-052]` |
 | `vaino.chosen_at` | unix seconds | `sticker find` for "what did it pick today" |
 
 **A client that knows nothing of Vaino is unaffected**; one that shows stickers gains the "why this passage" panel for free. That is the whole of the extension, and it requires no MPD change, no fork, and no protocol addition.

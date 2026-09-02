@@ -8,11 +8,13 @@
 //! Read out of Cantata's `context/songview.cpp` rather than guessed:
 //!
 //! ```text
-//! 1. <audiofile>.lyrics          beside the music   <- wins over the cache
-//! 2. <audiofile>.txt
-//! 3. cache/lyrics/<artist>/<title>.lyrics           <- this
-//! 4. cache/lyrics/<artist>/<title>.txt
-//! 6. online
+//! 1. lyrics embedded in the tags (TagLib)
+//! 2. <audiofile>.lyrics          beside the music   <- wins over the cache
+//! 3. <audiofile>.txt
+//! 4. cache/lyrics/<artist>/<title>.lyrics           <- this
+//! 5. cache/lyrics/<artist>/<title>.txt
+//! 6. ~/.lyrics/…   (not on Windows)
+//! 7. online
 //! ```
 //!
 //! **The cache is on the machine the client runs on, not the server.** That is
