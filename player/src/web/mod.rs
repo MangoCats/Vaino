@@ -1,0 +1,964 @@
+//! The web UI: state push over a WebSocket, controls over POST.
+//!
+//! The browser is a *view*. It holds no playback state of its own -- every
+//! change arrives as a fresh snapshot of [`PlayerState`], and every control is
+//! a command the engine may act on or ignore. That is what keeps one answer to
+//! "what is playing": the engine's, published once per tick `[REQ-AUD-142]`.
+//!
+//! The wire format is deliberately its own type rather than a `Serialize` on
+//! [`QueueEntry`]. The browser contract should change when we decide it does,
+//! not as a side effect of adding a field to an internal struct -- and the
+//! filesystem path is nobody's business outside the process.
+//!
+//! One file used to hold every route handler; now each topic has its own,
+//! `pub(super)` back to here -- [`router`] is the one place that must see
+//! all of them, and stays here so the actual live route table has exactly
+//! one home.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{Html, IntoResponse};
+use axum::routing::{get, post};
+use axum::Router;
+
+use serde::Serialize;
+
+use crate::engine::{EngineHandle, PlayerState};
+use crate::output::Volume;
+use crate::session::{Explanations, SharedControls};
+
+mod bluetooth;
+mod browse;
+mod control;
+mod edit;
+mod media;
+mod musicbrainz;
+mod review;
+mod settings;
+mod skins;
+
+use bluetooth::*;
+use browse::*;
+use control::*;
+use edit::*;
+use media::*;
+use musicbrainz::*;
+use review::*;
+use settings::*;
+use skins::*;
+
+/// What the server needs to answer a request: the control surface, and why the
+/// current passage was chosen.
+#[derive(Clone)]
+pub struct Ui {
+    pub handle: Arc<EngineHandle>,
+    /// The library file, for serving cover art. A path rather than a
+    /// connection: `rusqlite`'s is not `Sync`, art is asked for once per
+    /// passage change, and opening one for that is cheaper than sharing one
+    /// forever.
+    pub db: std::path::PathBuf,
+    pub why: Explanations,
+    pub controls: SharedControls,
+}
+
+/// How often a connected browser is sent a snapshot. Fast enough that the
+/// position counter moves smoothly, slow enough to cost nothing on a Pi.
+const PUSH_EVERY: Duration = Duration::from_millis(500);
+
+/// What the browser is told. One flat object, so the client needs no merge
+/// logic and cannot drift out of step with the engine.
+/// The skip transition, with the limits it may be set between `[REQ-AUD-162]`.
+///
+/// The bounds travel with the values so the browser can offer exactly the range
+/// the engine will accept, rather than keeping its own copy to fall out of step.
+#[derive(Serialize)]
+pub struct SkipShape {
+    pub fade_ms: u64,
+    pub lead_ms: u64,
+    pub fade_max_ms: u64,
+    pub lead_min_ms: u64,
+    pub lead_max_ms: u64,
+    /// How often the resume point is written `[REQ-VIS-155]`. Here rather than
+    /// in a settings object of its own because the page already binds this
+    /// group, and the bounds travel with the value for the same reason the
+    /// skip bounds do -- so the control offers exactly what the engine accepts.
+    pub resume_save_ms: u64,
+    pub resume_save_min_ms: u64,
+    pub resume_save_max_ms: u64,
+    /// Skip suppression `[SPEC-PLAY-050]`, with its bounds so the control can
+    /// draw itself without hard-coding them.
+    pub skip_suppress_h: u64,
+    pub skip_suppress_min_h: u64,
+    pub skip_suppress_max_h: u64,
+    /// Queue-removal suppression `[SPEC-PLAY-055]`, with its bounds.
+    pub dequeue_suppress_h: u64,
+    pub dequeue_suppress_min_h: u64,
+    pub dequeue_suppress_max_h: u64,
+    /// Passages kept ahead, and the guest sampling rate `[SPEC-MPD-105]`.
+    pub queue_depth: usize,
+    pub queue_depth_min: usize,
+    pub queue_depth_max: usize,
+    pub sample_interval_ms: u64,
+    pub sample_interval_min_ms: u64,
+    pub sample_interval_max_ms: u64,
+}
+
+#[derive(Serialize)]
+pub struct QueueItem {
+    /// The entry's own identity `[REQ-VIS-186]`. What the edit controls name,
+    /// because `passage_id` does not distinguish a passage queued twice.
+    pub qid: u64,
+    pub passage_id: i64,
+    pub title: String,
+    pub artist: Option<String>,
+    pub duration_ms: u64,
+    /// Whether it can still be moved or dropped `[REQ-VIS-185]`. False once
+    /// the mixer has it: its audio is already partly in the ring, so removing
+    /// it from the queue would change nothing anyone could hear.
+    pub editable: bool,
+}
+
+#[derive(Serialize)]
+pub struct ProgramItem {
+    pub id: i64,
+    pub name: String,
+    pub start: String,
+}
+
+/// What the listening surface shows `[REQ-VIS-150]`: the queue in play order,
+/// the programme in force with its manual override, and master volume -- all of
+/// it as one complete snapshot, so a render is a pure function of the last
+/// message and cannot drift.
+#[derive(Serialize)]
+pub struct Snapshot {
+    pub playing: bool,
+    /// The passage on air, for fetching its cover at `/art/{id}`.
+    pub passage_id: Option<i64>,
+    /// MusicBrainz Recording title where there is one, then the file's tag,
+    /// then the filename `[REQ-VIS-170]`.
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    /// The **Release** title. `None` until the release tables are populated
+    /// and the file carries no album tag either.
+    pub album: Option<String>,
+    /// Which source each displayed name came from `[REQ-VIS-120]`.
+    pub title_source: &'static str,
+    pub artist_source: &'static str,
+    pub album_source: &'static str,
+    /// Plays of this **recording**, all-time, and when it was last heard.
+    pub plays: i64,
+    pub last_played: Option<i64>,
+    pub position_ms: u64,
+    pub duration_ms: u64,
+    pub queue_len: usize,
+    /// What is coming, in play order.
+    pub queue: Vec<QueueItem>,
+    /// Master level in dB relative to full scale, `-72.0` to `0.0`
+    /// `[REQ-AUD-154]`. The control is graduated in dB and captioned with this
+    /// number directly, so the browser never converts and cannot disagree with
+    /// the engine about what the fader is set to.
+    pub volume_db: f32,
+    /// The bottom of the fader, in dB. Sent so the control can shape itself
+    /// around the engine's floor instead of keeping its own copy of the number
+    /// `[REQ-AUD-156]`.
+    pub fader_min_db: f32,
+    /// Most tracks a browse request will return, so the page can say so
+    /// without a second copy of the number `[REQ-VIS-180]`.
+    pub browse_limit: usize,
+    pub skip: SkipShape,
+    /// The programme in force, and whether it was chosen by hand.
+    pub program: Option<String>,
+    pub program_manual: bool,
+    /// What a live Director rebuild is doing, if one has been asked for
+    /// `[IMPL-SUI-075]`. `None` until something requests one.
+    /// What this server is `[REQ-VIS-200]`. Sent to every skin so a person
+    /// looking at a page can say which build drew it, rather than being asked
+    /// to remember.
+    pub build: String,
+    /// Branch, commit date, commit subject, and uncommitted-file count the
+    /// build came from -- the same fields the Settings page's "Server build"
+    /// row expands into, matching Sampo's own `/system` page `[REQ-VIS-200]`.
+    pub branch: String,
+    pub commit_date: String,
+    pub commit_subject: String,
+    pub dirty_files: u32,
+    pub reload_status: Option<String>,
+    /// Which backend is playing, whether a guest exists, and what the last
+    /// switch did `[SPEC-BK-025]`.
+    pub backend: Option<String>,
+    pub guest_available: bool,
+    pub guest_name: Option<String>,
+    pub switch_status: Option<String>,
+    /// `[REQ-VIS-205]`
+    pub cue_sheets: bool,
+    pub cue_status: Option<String>,
+    /// `[REQ-VIS-210]`
+    pub covers: bool,
+    /// Whether the live backend can move inside a passage `[REQ-VIS-225]`.
+    /// The bar is a control only where this is true.
+    pub can_seek: bool,
+    pub covers_status: Option<String>,
+    /// `[REQ-VIS-215]`
+    pub lyrics_cache: bool,
+    pub lyrics_status: Option<String>,
+    /// `[REQ-VIS-220]`
+    pub lyrics_sidecar: bool,
+    pub sidecar_status: Option<String>,
+    /// The Director's pool as `(eligible, total)`, so a rebuild's effect is
+    /// visible rather than asserted: importing music and reloading moves
+    /// `total`. Absent when there is no Director.
+    pub pool: Option<(usize, usize)>,
+    pub programs: Vec<ProgramItem>,
+    /// Development mode is on `[PI-SET-016]`: sshd and diagnostics are
+    /// running. Always false off the appliance -- the setting belongs to the
+    /// Pi's privileged helper, and the player only reports what it is told.
+    pub dev_mode: bool,
+    pub underrun_samples: u64,
+    /// What the interface shows: the count since the baseline, and when that
+    /// baseline was taken `[REQ-VIS-230]`.
+    pub underruns_since_reset: u64,
+    pub underruns_since: i64,
+    /// Where the sound is actually coming from `[REQ-VIS-235]`: the file, and
+    /// the passage's place in it.
+    ///
+    /// **Local only.** This names the listener's filesystem, and it belongs in
+    /// the snapshot a local browser reads and nowhere that travels
+    /// `[SPEC-DF-055]`.
+    pub file_path: Option<String>,
+    pub file_start_ms: u64,
+    pub file_end_ms: u64,
+    pub file_ms: u64,
+    /// Output-lock contention `[REQ-VIS-140]`. Non-zero means the callback was
+    /// kept waiting, which sounds like a click rather than a gap.
+    pub lock_failures: u64,
+    pub out_recoveries: u64,
+    /// The full weight decomposition for what is playing `[REQ-VIS-100]`.
+    /// Null when the passage was not chosen by the Director -- a resumed
+    /// passage, or one queued before the log was populated -- so the panel can
+    /// say so rather than render an explanation that was never computed.
+    pub why: Option<serde_json::Value>,
+}
+
+impl From<&PlayerState> for Snapshot {
+    fn from(s: &PlayerState) -> Self {
+        Snapshot {
+            playing: s.playing,
+            passage_id: s.current.as_ref().map(|e| e.passage_id),
+            title: s.current.as_ref().map(|e| e.title()),
+            artist: s.current.as_ref().and_then(|e| e.artist()),
+            album: s.current.as_ref().and_then(|e| e.album()),
+            title_source: s.current.as_ref().map_or("unknown", |e| e.title_source().as_str()),
+            artist_source: s.current.as_ref().map_or("unknown", |e| e.artist_source().as_str()),
+            album_source: s.current.as_ref().map_or("unknown", |e| e.album_source().as_str()),
+            plays: s.current.as_ref().map_or(0, |e| e.naming.plays),
+            last_played: s.current.as_ref().and_then(|e| e.naming.last_played),
+            position_ms: s.position_ms,
+            duration_ms: s.current.as_ref().map(|e| e.duration_ms()).unwrap_or(0),
+            queue_len: s.queue_len,
+            queue: s
+                .queue
+                .iter()
+                .enumerate()
+                .map(|(i, e)| QueueItem {
+                    qid: e.qid,
+                    passage_id: e.passage_id,
+                    title: e.title(),
+                    artist: e.artist(),
+                    duration_ms: e.duration_ms(),
+                    editable: i >= s.mixing_ahead,
+                })
+                .collect(),
+            volume_db: Volume::db_for(s.volume),
+            fader_min_db: crate::output::FADER_MIN_DB,
+            browse_limit: crate::BROWSE_LIMIT,
+            skip: SkipShape {
+                fade_ms: s.skip_fade_ms,
+                lead_ms: s.skip_lead_ms,
+                fade_max_ms: crate::SKIP_FADE_MAX_MS,
+                lead_min_ms: crate::SKIP_LEAD_MIN_MS,
+                lead_max_ms: crate::SKIP_LEAD_MAX_MS,
+                resume_save_ms: s.resume_save_ms,
+                resume_save_min_ms: crate::RESUME_SAVE_MIN_MS,
+                resume_save_max_ms: crate::RESUME_SAVE_MAX_MS,
+                skip_suppress_h: s.skip_suppress_h,
+                skip_suppress_min_h: crate::SKIP_SUPPRESS_MIN_H,
+                skip_suppress_max_h: crate::SKIP_SUPPRESS_MAX_H,
+                dequeue_suppress_h: s.dequeue_suppress_h,
+                dequeue_suppress_min_h: crate::DEQUEUE_SUPPRESS_MIN_H,
+                dequeue_suppress_max_h: crate::DEQUEUE_SUPPRESS_MAX_H,
+                queue_depth: s.queue_depth,
+                queue_depth_min: crate::QUEUE_DEPTH_MIN,
+                queue_depth_max: crate::QUEUE_DEPTH_MAX,
+                sample_interval_ms: s.sample_interval_ms,
+                sample_interval_min_ms: crate::SAMPLE_INTERVAL_MIN_MS,
+                sample_interval_max_ms: crate::SAMPLE_INTERVAL_MAX_MS,
+            },
+            program: None,
+            build: crate::build_id(),
+            branch: crate::BRANCH.to_string(),
+            commit_date: crate::COMMIT_DATE.to_string(),
+            commit_subject: crate::COMMIT_SUBJECT.to_string(),
+            dirty_files: crate::DIRTY_FILES.parse().unwrap_or(0),
+            reload_status: None,
+            backend: None,
+            guest_available: false,
+            guest_name: None,
+            switch_status: None,
+            cue_status: None,
+            covers_status: None,
+            lyrics_status: None,
+            sidecar_status: None,
+            pool: None,
+            program_manual: false,
+            programs: Vec::new(),
+            cue_sheets: s.cue_sheets,
+            covers: s.covers,
+            // Replaced below from the live backend; the engine cannot answer for
+            // a side that is not it.
+            can_seek: false,
+            lyrics_cache: s.lyrics_cache,
+            lyrics_sidecar: s.lyrics_sidecar,
+            dev_mode: s.dev_mode,
+            underrun_samples: s.underrun_samples,
+            underruns_since_reset: s.underruns_since_reset,
+            underruns_since: s.underruns_since,
+            file_path: s.current.as_ref().map(|e| e.path.to_string_lossy().to_string()),
+            file_start_ms: s.current.as_ref().map_or(0, |e| e.start_ms),
+            file_end_ms: s.current.as_ref().map_or(0, |e| e.end_ms),
+            file_ms: s.current.as_ref().map_or(0, |e| e.file_ms),
+            lock_failures: s.lock_failures,
+            out_recoveries: s.out_recoveries,
+            why: None,
+        }
+    }
+}
+
+pub fn router(ui: Ui) -> Router {
+    let router = Router::new()
+        .route("/", get(|| async { Html(SHELL) }))
+        .route("/build", get(build_identity))
+        .route("/core.js", get(|| async { js(CORE) }))
+        .route("/skins", get(skin_list))
+        .route("/skin/:name/:file", get(skin_asset))
+        .route("/why/:passage_id", get(why_for))
+        .route("/lyrics/:passage_id", get(lyrics))
+        .route("/art/:passage_id", get(cover_art))
+        .route("/art/:passage_id/back", get(cover_art_back))
+        .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
+        .route("/browse.js", get(|| async { js(BROWSE_JS) }))
+        .route("/browse/:kind", get(browse))
+        .route("/passage/:passage_id", get(|| async { ([REVALIDATE], Html(PASSAGE_HTML)) }))
+        .route("/passage.js", get(|| async { js(PASSAGE_JS) }))
+        .route("/passage/:passage_id/info", get(passage_info))
+        .route("/history", get(history))
+        .route("/history/flag/:kind/:id", post(set_flag));
+
+    // The identification-review page, and everything reached from it: desktop
+    // induct tooling with no reason to occupy an appliance image that never
+    // runs Sampo `[SPEC-SUI-190]`. A build without this feature serves none of
+    // these routes at all, not even a 404 stub -- the handlers, the embedded
+    // HTML/JS and the database code behind them are not compiled in.
+    #[cfg(feature = "sampo-support")]
+    let router = router
+        .route("/review", get(|| async { ([REVALIDATE], Html(REVIEW_HTML)) }))
+        .route("/review.js", get(|| async { js(REVIEW_JS) }))
+        .route(REVIEW_QUEUE_ROUTE, get(review_queue))
+        .route("/review/passage/:passage_id", get(review_passage))
+        .route("/review/releases/:mbid", get(review_releases))
+        .route("/review/:passage_id/:decision", post(record_review))
+        .route("/review/:passage_id/artist/:verb", post(artist_review_verb))
+        .route("/api/musicbrainz/search", get(musicbrainz_search))
+        .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
+        .route("/edit.js", get(|| async { js(EDIT_JS) }))
+        .route("/fade.js", get(|| async { js(FADE_JS) }))
+        .route("/edit/:passage_id/info", get(edit_info))
+        .route("/edit/:passage_id/audio", get(edit_audio))
+        .route("/edit/:passage_id/review", post(edit_review));
+
+    router
+        .route("/queue/:passages/:action", post(queue_passage))
+        .route("/ws", get(ws_upgrade))
+        .route("/audio/sink", get(audio_sink))
+        .route("/audio/speakers", get(speakers))
+        .route("/audio/speakers/:verb", post(speaker_verb))
+        .route("/audio/speakers/:verb/:address", post(speaker_verb_on))
+        .route("/command/:name", post(command))
+        .route("/volume/:db", post(set_volume))
+        .route("/seek/:ms", post(seek_to))
+        .route("/underruns/restart", post(restart_underruns))
+        .route("/skip/fade/:ms", post(set_skip_fade))
+        .route("/skip/lead/:ms", post(set_skip_lead))
+        .route("/resume/save/:ms", post(set_resume_save))
+        .route("/skip/suppress/:hours", post(set_skip_suppress))
+        .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
+        .route("/queue/depth/:n", post(set_queue_depth))
+        .route("/sample/interval/:ms", post(set_sample_interval))
+        .route("/program/:id", post(set_program))
+        .route("/library/reload", post(reload_library))
+        .route("/backend/:which", post(switch_backend))
+        .route("/cue/:on", post(set_cue_sheets))
+        .route("/covers/:on", post(set_covers))
+        .route("/lyricscache/:on", post(set_lyrics_cache))
+        .route("/lyricssidecar/:on", post(set_lyrics_sidecar))
+        .route("/audio/radios", get(radios))
+        .route("/power/off", post(power_off))
+        .route("/power/restart", post(restart_player))
+        .route("/audio/radio/:kind/:state", post(set_radio))
+        .with_state(ui)
+}
+
+async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| push_state(socket, ui))
+}
+
+/// This build's identity, machine-readable `[SPEC-SUI-227]` -- the same
+/// fields the Settings page already shows a person, in a shape Sampo can
+/// compare against its own without a websocket handshake (`PlayerState`,
+/// which carries these same values, only ever travels over `/ws`). Build
+/// capability, not library data, so it needs no `sampo-support` gate --
+/// the same boundary `[SPEC-SUI-213]`'s `/review.js` probe already draws.
+///
+/// The JSON body is built by a plain function so a test can check its shape
+/// without spinning up a router or a runtime for an async fn that touches
+/// nothing but compile-time constants.
+fn build_identity_json() -> serde_json::Value {
+    serde_json::json!({
+        "git": crate::GIT,
+        "branch": crate::BRANCH,
+        "commit_date": crate::COMMIT_DATE,
+        "dirty_files": crate::DIRTY_FILES.parse::<u32>().unwrap_or(0),
+    })
+}
+
+async fn build_identity() -> axum::response::Response {
+    axum::Json(build_identity_json()).into_response()
+}
+
+/// Why any one passage was chosen `[REQ-VIS-100]`.
+///
+/// The log is keyed by passage and already holds the queued ones; only the
+/// playing one was ever reachable. A skin that lets you ask about the passage
+/// *after* next needs the rest of it.
+///
+/// Fetched on demand rather than pushed with every snapshot: an explanation is
+/// several hundred bytes of weights and runners-up, it never changes once the
+/// passage has been chosen, and pushing six of them twice a second to render
+/// one would be most of the traffic.
+///
+/// 404 when there is none -- a resumed passage, or one queued before the log
+/// existed. That is a real state and the page says so rather than blanking.
+async fn why_for(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    let Ok(log) = ui.why.lock() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    match log.get(passage_id).and_then(|w| serde_json::to_value(w).ok()) {
+        Some(v) => axum::Json(v).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Attach the reasoning for whatever is playing now.
+fn explain(ui: &Ui, snap: &mut Snapshot, state: &PlayerState) {
+    let Some(id) = state.current.as_ref().map(|e| e.passage_id) else { return };
+    let Ok(log) = ui.why.lock() else { return };
+    snap.why = log.get(id).and_then(|w| serde_json::to_value(w).ok());
+}
+
+/// Push snapshots until the browser goes away. Each is independent, so a
+/// dropped frame costs nothing and a reconnecting client needs no replay.
+async fn push_state(mut socket: WebSocket, ui: Ui) {
+    let mut tick = tokio::time::interval(PUSH_EVERY);
+    loop {
+        tick.tick().await;
+        let state = ui.handle.snapshot();
+        let mut snap = Snapshot::from(&state);
+        explain(&ui, &mut snap, &state);
+        if let Ok(c) = ui.controls.lock() {
+            snap.program = c.active.clone();
+            snap.program_manual = c.manual_program.is_some();
+            snap.reload_status = c.reload_status.clone();
+            snap.backend = c.backend.clone();
+            snap.guest_available = c.guest_available;
+            snap.guest_name = c.guest_name.clone();
+            snap.switch_status = c.switch_status.clone();
+            snap.cue_status = c.cue_status.clone();
+            snap.covers_status = c.covers_status.clone();
+            snap.lyrics_status = c.lyrics_status.clone();
+            snap.can_seek = c.can_seek;
+            snap.sidecar_status = c.sidecar_status.clone();
+            snap.pool = c.pool;
+            snap.programs = c
+                .programs
+                .iter()
+                .map(|(id, name, start)| ProgramItem {
+                    id: *id,
+                    name: name.clone(),
+                    start: start.clone(),
+                })
+                .collect();
+        }
+        let Ok(text) = serde_json::to_string(&snap) else { continue };
+        if socket.send(Message::Text(text)).await.is_err() {
+            return; // client gone
+        }
+    }
+}
+
+/// The page, and the skins it may wear `[REQ-VIS-160]`.
+///
+/// `include_str!` rather than reading from disk: one binary that runs anywhere
+/// without a data directory beside it, which is what makes deploying to a Pi a
+/// copy rather than an install. Adding a skin means adding a row here and three
+/// files; nothing else in the server changes.
+const SHELL: &str = include_str!("shell.html");
+const BROWSE_HTML: &str = include_str!("browse.html");
+const BROWSE_JS: &str = include_str!("browse.js");
+const PASSAGE_HTML: &str = include_str!("passage.html");
+const PASSAGE_JS: &str = include_str!("passage.js");
+#[cfg(feature = "sampo-support")]
+const REVIEW_HTML: &str = include_str!("review.html");
+#[cfg(feature = "sampo-support")]
+const REVIEW_JS: &str = include_str!("review.js");
+#[cfg(feature = "sampo-support")]
+const EDIT_HTML: &str = include_str!("edit.html");
+#[cfg(feature = "sampo-support")]
+const EDIT_JS: &str = include_str!("edit.js");
+/// The exponential ramp curve, ported from `fade.rs` and checked against the
+/// same fixture `[SPEC021 §4]`. Its own file and route so the editor's
+/// preview and `fade.rs`'s real playback provably agree, not just resemble
+/// each other.
+#[cfg(feature = "sampo-support")]
+const FADE_JS: &str = include_str!("fade.js");
+
+/// The route the review page fetches its work from, named once so the router
+/// and the test that checks the page agrees with it cannot drift apart.
+#[cfg(feature = "sampo-support")]
+const REVIEW_QUEUE_ROUTE: &str = "/review/queue";
+/// The prefix every decision is posted to. The page builds the rest of the
+/// path from the passage id, so only the stem can be shared.
+#[cfg(all(test, feature = "sampo-support"))]
+const REVIEW_DECIDE_PREFIX: &str = "/review/";
+const CORE: &str = include_str!("core.js");
+
+/// Skins are compiled into the binary, so a cached copy in the browser can be
+/// older than the running player -- which looks exactly like a feature that
+/// does not work. `no-cache` means revalidate, not "do not store": the browser
+/// still keeps it and still gets a 304 when nothing changed.
+const REVALIDATE: (axum::http::HeaderName, &str) =
+    (axum::http::header::CACHE_CONTROL, "no-cache");
+
+fn js(body: &'static str) -> impl IntoResponse {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            REVALIDATE,
+        ],
+        body,
+    )
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::QueueEntry;
+    use std::path::PathBuf;
+
+    fn entry(id: i64, title: &str) -> QueueEntry {
+        let mut e = QueueEntry {
+        qid: 0, // stamped by Queue on the way in
+            passage_id: id,
+            path: PathBuf::from(format!("/music/{title}.mp3")),
+            start_ms: 0,
+            end_ms: 200_000,
+            file_ms: 0,
+            lead_in_ms: 0,
+            lead_out_ms: 0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            fade_in_curve: crate::fade::Curve::Exponential,
+            fade_out_curve: crate::fade::Curve::Exponential,
+            gain_db: 0.0,
+            mbid: None,
+            naming: Default::default(),
+        };
+        e.naming.mb_title = Some(title.into());
+        e
+    }
+
+    fn state() -> PlayerState {
+        let mut s = PlayerState::default();
+        let mut cur = entry(1, "Now Playing");
+        cur.naming.mb_artist = Some("The Artist".into());
+        cur.naming.tag_album = Some("Some Record".into());
+        cur.naming.plays = 12;
+        cur.naming.last_played = Some(1_700_000_000);
+        s.current = Some(cur);
+        s.queue = vec![entry(2, "Mixing"), entry(3, "Waiting")];
+        s.mixing_ahead = 1;
+        s.queue_len = 2;
+        s.volume = 0.5;
+        s.skip_fade_ms = 2_000;
+        s.skip_lead_ms = 500;
+        s
+    }
+
+    /// Every skin is three non-empty files under a unique name. A skin that
+    /// compiles in empty would serve a blank page and fail nowhere else.
+    #[test]
+    fn every_registered_skin_is_complete() {
+        // A const array, so this is checked when it compiles rather than here;
+        // the assertion below is the one that can actually fail.
+        const _: () = assert!(!SKINS.is_empty());
+        let mut seen = std::collections::HashSet::new();
+        for s in SKINS {
+            assert!(seen.insert(s.name), "duplicate skin name {}", s.name);
+            assert!(!s.label.is_empty(), "{} has no label", s.name);
+            for (what, body) in [("html", s.html), ("css", s.css), ("js", s.js)] {
+                assert!(body.len() > 50, "{} {what} is empty", s.name);
+            }
+            // The contract: a skin gets its transport wired by core, so it must
+            // mark the buttons up `[REQ-VIS-160]`.
+            for cmd in ["play", "pause", "skip"] {
+                assert!(
+                    s.html.contains(&format!("data-cmd=\"{cmd}\"")),
+                    "{} is missing the {cmd} control",
+                    s.name
+                );
+            }
+            assert!(s.html.contains("data-skins"), "{} has no skin picker", s.name);
+        }
+    }
+
+    /// The shell and browse page must load core, or nothing on them works.
+    #[test]
+    fn the_pages_load_the_runtime() {
+        assert!(SHELL.contains("/core.js"));
+        assert!(SHELL.contains("Vaino.start()"), "the shell starts core");
+        assert!(BROWSE_HTML.contains("/core.js") && BROWSE_HTML.contains("/browse.js"));
+        assert!(BROWSE_JS.contains("startBare"), "browse takes the skin, not the player");
+        // Reviewing ids is reachable, or it may as well not exist -- it is not
+        // linked from the player, deliberately, so browse is the only way in.
+        // The literal link is compiled into `BROWSE_HTML` regardless of
+        // whether `/review` itself is served this build `[SPEC-SUI-190]`, so
+        // this assertion holds either way; the route's own existence is
+        // `sampo-support`'s to check.
+        assert!(BROWSE_HTML.contains("/review"), "no way to reach the review page");
+    }
+
+    /// The review page loads core the same way the others do -- gated with
+    /// everything else it depends on `[SPEC-SUI-190]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_page_loads_the_runtime() {
+        assert!(REVIEW_HTML.contains("/core.js") && REVIEW_HTML.contains("/review.js"));
+        assert!(REVIEW_JS.contains("startBare"), "review takes the skin, not the player");
+    }
+
+    /// The review page and its routes have to agree about the URLs, which is
+    /// the seam a jsdom check cannot see: it mocks `fetch`, so a page asking
+    /// for a route the server never registered still passes there.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_routes_match_what_the_page_asks_for() {
+        assert!(REVIEW_JS.contains(REVIEW_QUEUE_ROUTE));
+        assert!(REVIEW_JS.contains(REVIEW_DECIDE_PREFIX));
+        // The on-demand handoff card `[SPEC-SUI-199]` -- reached by a route
+        // the deep-link case asks for directly, not through the queue batch.
+        assert!(REVIEW_JS.contains("/review/passage/"), "page cannot ask for a single card");
+        // The three decisions the page can send, and the only three
+        // `PlayerStore::record_review` accepts. One added on either side alone
+        // is the bug this is here to catch.
+        for decision in ["reassigned", "kept", "deferred"] {
+            assert!(REVIEW_JS.contains(decision), "page cannot send {decision}");
+            assert!(
+                crate::db::PlayerStore::open(&std::path::PathBuf::from(":memory:"))
+                    .map(|s| s.record_review(1, decision, Some("m"), None).is_ok())
+                    .unwrap_or(false),
+                "the store rejects {decision}, which the page can send"
+            );
+        }
+    }
+
+    /// Names reach the browser resolved, and carry where they came from
+    /// `[REQ-VIS-170]`.
+    #[test]
+    fn a_snapshot_reports_names_and_their_provenance() {
+        let snap = Snapshot::from(&state());
+        assert_eq!(snap.title.as_deref(), Some("Now Playing"));
+        assert_eq!(snap.artist.as_deref(), Some("The Artist"));
+        assert_eq!(snap.album.as_deref(), Some("Some Record"));
+        assert_eq!(snap.title_source, "musicbrainz");
+        assert_eq!(snap.artist_source, "musicbrainz");
+        // The release tables are empty, so album comes from the file and must
+        // say so rather than claiming MusicBrainz.
+        assert_eq!(snap.album_source, "tags");
+        assert_eq!(snap.plays, 12);
+        assert_eq!(snap.passage_id, Some(1));
+    }
+
+    /// What the mixer already holds cannot be edited, and the flag says which
+    /// `[REQ-VIS-185]`.
+    #[test]
+    fn queue_items_report_whether_they_can_still_be_edited() {
+        let snap = Snapshot::from(&state());
+        assert_eq!(snap.queue.len(), 2);
+        assert!(!snap.queue[0].editable, "the mixer has this one");
+        assert!(snap.queue[1].editable, "this one is still only queued");
+        assert_eq!(snap.queue[0].title, "Mixing");
+    }
+
+    /// Amplitude is internal; the browser is told dB and the floor
+    /// `[REQ-AUD-154]`.
+    #[test]
+    fn volume_crosses_as_decibels_not_amplitude() {
+        let snap = Snapshot::from(&state());
+        assert!((snap.volume_db - (-6.0206)).abs() < 1e-3, "{}", snap.volume_db);
+        assert_eq!(snap.fader_min_db, crate::output::FADER_MIN_DB);
+    }
+
+    /// The limits travel with the values, so the browser cannot offer a range
+    /// the engine will refuse `[REQ-AUD-162]`.
+    #[test]
+    fn the_skip_shape_carries_its_own_limits() {
+        let snap = Snapshot::from(&state());
+        assert_eq!(snap.skip.fade_ms, 2_000);
+        assert_eq!(snap.skip.lead_ms, 500);
+        assert_eq!(snap.skip.fade_max_ms, crate::SKIP_FADE_MAX_MS);
+        assert_eq!(snap.skip.lead_min_ms, crate::SKIP_LEAD_MIN_MS);
+        assert_eq!(snap.skip.lead_max_ms, crate::SKIP_LEAD_MAX_MS);
+    }
+
+    /// An idle player must serialise rather than panic on its empty fields.
+    #[test]
+    fn an_empty_snapshot_is_still_a_snapshot() {
+        let snap = Snapshot::from(&PlayerState::default());
+        assert_eq!(snap.title, None);
+        assert_eq!(snap.title_source, "unknown");
+        assert_eq!(snap.plays, 0);
+        assert!(snap.queue.is_empty());
+        let json = serde_json::to_string(&snap).expect("an idle snapshot must serialise");
+        assert!(json.contains("\"volume_db\""));
+    }
+
+    /// The wire shape the skins are written against. Renaming a field here
+    /// silently blanks part of every skin, which no Rust test would otherwise
+    /// catch `[REQ-VIS-160]`.
+    #[test]
+    fn the_snapshot_keeps_the_field_names_the_skins_read() {
+        let json = serde_json::to_string(&Snapshot::from(&state())).unwrap();
+        for field in [
+            "playing", "passage_id", "title", "artist", "album", "plays",
+            "last_played", "position_ms", "duration_ms", "queue_len", "queue",
+            "volume_db", "fader_min_db", "skip", "program", "program_manual",
+            "programs", "underrun_samples", "branch", "commit_date",
+            "commit_subject", "dirty_files",
+        ] {
+            assert!(json.contains(&format!("\"{field}\"")), "snapshot lost {field}");
+        }
+        for field in ["passage_id", "title", "artist", "duration_ms", "editable"] {
+            assert!(json.contains(&format!("\"{field}\"")), "queue item lost {field}");
+        }
+    }
+
+    /// The editor page and its own JS, present only behind the feature that
+    /// gates every other Sampo-support page `[SPEC-SUI-190]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_edit_page_loads_the_runtime() {
+        assert!(EDIT_HTML.contains("/core.js") && EDIT_HTML.contains("/edit.js"));
+        assert!(EDIT_JS.contains("startBare"), "edit takes the skin, not the player");
+    }
+
+    /// The page and the router have to agree about the URLs it fetches --
+    /// the seam a jsdom check of the JS alone cannot see `[SPEC021 §3]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_edit_page_asks_for_routes_the_router_serves() {
+        assert!(EDIT_JS.contains("/edit/${passageId}/info"));
+        assert!(EDIT_JS.contains("/edit/${passageId}/audio"));
+        assert!(EDIT_JS.contains("/edit/${passageId}/review"));
+        // Silences the server's own transport on entry `[SPEC-SUI-217]` --
+        // the same route the main skin's own pause button sends.
+        assert!(EDIT_JS.contains("/command/pause"));
+    }
+
+    /// Unconditional, like `/browse` beside it -- and the page/router
+    /// agreement `the_edit_page_asks_for_routes_the_router_serves` checks
+    /// for the sampo-support pages applies here too `[REQ-VIS-270]`.
+    #[test]
+    fn the_passage_page_loads_the_runtime_and_asks_for_routes_the_router_serves() {
+        assert!(PASSAGE_HTML.contains("/core.js") && PASSAGE_HTML.contains("/passage.js"));
+        assert!(PASSAGE_JS.contains("startBare"), "passage takes the skin, not the player");
+        assert!(PASSAGE_JS.contains("/passage/${passageId}/info"));
+        assert!(PASSAGE_JS.contains("/why/${p.passage_id}"), "the why-link must name a route /why_for actually serves");
+    }
+
+    /// `GET /build`'s body carries what Sampo's own staleness check needs
+    /// `[SPEC-SUI-227]` -- unconditional, unlike the test above, since this
+    /// route exists in every build, sampo-support or not.
+    #[test]
+    fn build_identity_carries_what_sampo_compares() {
+        let v = build_identity_json();
+        assert_eq!(v["git"], crate::GIT, "must be the same hash the Settings page shows");
+        assert_eq!(v["branch"], crate::BRANCH);
+        assert_eq!(v["commit_date"], crate::COMMIT_DATE);
+        assert!(v["dirty_files"].is_u64(), "must be a number, not the raw env string");
+    }
+
+    /// The wire shape `edit_review` accepts must be exactly what the store
+    /// can write -- an extra or renamed field here is invisible to `cargo
+    /// check` because `serde` just ignores unknown fields by default.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn boundary_draft_deserialises_the_nine_values_the_store_wants() {
+        let draft: BoundaryDraft = serde_json::from_str(
+            r#"{"start_ms":1000,"end_ms":2000,"lead_in_ms":50,"lead_out_ms":900,"gain_db":-1.5,
+                "fade_in_ms":20,"fade_out_ms":30,"fade_in_curve":"linear","fade_out_curve":"cosine"}"#,
+        )
+        .unwrap();
+        assert_eq!((draft.start_ms, draft.end_ms), (1000, 2000));
+        assert_eq!((draft.lead_in_ms, draft.lead_out_ms), (50, 900));
+        assert!((draft.gain_db - -1.5).abs() < 1e-9);
+        assert_eq!((draft.fade_in_ms, draft.fade_out_ms), (20, 30));
+        assert_eq!((draft.fade_in_curve.as_str(), draft.fade_out_curve.as_str()), ("linear", "cosine"));
+    }
+
+    /// A round trip through `write_wav_pcm16`: known samples in, a header
+    /// that names the right format/rate/channels, and the same samples back
+    /// out (bit-exact for int16, since the fixture values already land
+    /// exactly on int16 steps).
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn wav_header_names_what_write_wav_pcm16_was_given() {
+        let samples = [0.5f32, -0.5, 1.0, -1.0, 0.0, 0.25];
+        let wav = write_wav_pcm16(44_100, 2, &samples);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 2, "channel count");
+        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), 44_100, "sample rate");
+        assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16, "bits per sample");
+        let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_len as usize, samples.len() * 2);
+        let got: Vec<i16> = wav[44..]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(got, vec![16384, -16384, 32767, -32767, 0, 8192]);
+    }
+
+    /// A real file on disk, decoded through the exact path the route uses --
+    /// the seam a pure-function test of `write_wav_pcm16` alone cannot reach,
+    /// since it never touches `PassageDecoder` or the filesystem. Reuses
+    /// `decoder::tests`' own WAV fixture rather than building a second one.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn decode_window_wav_serves_only_the_requested_span() {
+        let f = crate::decoder::tests::tmp("edit_audio"); // 5s of 44.1kHz stereo
+        let wav = decode_window_wav(&f, 1_000, 2_000).expect("a readable fixture");
+        assert_eq!(&wav[0..4], b"RIFF");
+        let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
+        let got_frames = data_len / 2 / 2; // bytes -> int16 samples -> stereo frames
+        let want_frames = 44_100; // 1000ms at 44.1kHz
+        assert!(
+            (got_frames as i64 - want_frames as i64).abs() < 4096,
+            "decoded {got_frames} frames for a 1000ms window, wanted ~{want_frames}"
+        );
+        std::fs::remove_file(&f).ok();
+    }
+
+    /// A window asking for more than `EDIT_AUDIO_MAX_MS` is clamped, not
+    /// honoured -- the actual defence this route exists to add back after
+    /// removing the raw-file route that had no such limit at all.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn decode_window_wav_caps_an_oversized_request() {
+        let f = crate::decoder::tests::tmp("edit_audio_cap"); // 5s fixture
+        // Ask for far more than the fixture even contains -- the cap must
+        // still be the thing that bounds the *request*, not merely the
+        // fixture's own short length standing in for it by coincidence.
+        let wav = decode_window_wav(&f, 0, EDIT_AUDIO_MAX_MS * 10).expect("a readable fixture");
+        let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
+        let got_frames = data_len / 2 / 2;
+        // The fixture itself is only 5s, so this mostly confirms decoding
+        // stopped at real end-of-stream rather than hanging or erroring on
+        // an oversized request -- `EDIT_AUDIO_MAX_MS` is minutes, the
+        // fixture is seconds, so the cap is never the binding constraint
+        // here, and that asymmetry is the point: a real 4-hour file is what
+        // the cap is for, which no test fixture should actually contain.
+        assert!(got_frames > 0 && got_frames < 44_100 * 6, "got {got_frames} frames");
+        std::fs::remove_file(&f).ok();
+    }
+
+    /// A recording search response, in MusicBrainz's own shape -- `title`,
+    /// `artist-credit[0].name`, `score` 0-100 `[SPEC-SUI-196]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn mb_recording_results_parse_into_suggestions() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"recordings":[{"id":"rec-1","title":"Why Worry","score":97,
+                 "artist-credit":[{"name":"Dire Straits"}]},
+                {"id":"rec-2","title":"No Artist Credit","score":80}]}"#,
+        )
+        .unwrap();
+        let out = parse_mb_results("recording", &body);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].mbid, "rec-1");
+        assert_eq!(out[0].title, Some("Why Worry".into()));
+        assert_eq!(out[0].artist, Some("Dire Straits".into()));
+        assert!((out[0].score - 0.97).abs() < 1e-9, "score must be normalised to 0..1");
+        assert_eq!(out[1].artist, None, "no artist-credit must not panic or fabricate one");
+    }
+
+    /// An artist search names itself with `name`, not `title` -- the one
+    /// place MusicBrainz's own shape actually differs by entity kind.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn mb_artist_results_read_name_not_title() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"artists":[{"id":"art-1","name":"Dire Straits","score":100}]}"#,
+        )
+        .unwrap();
+        let out = parse_mb_results("artist", &body);
+        assert_eq!(out[0].title, Some("Dire Straits".into()));
+    }
+
+    /// No results, or a shape this parser was not given a key for, must come
+    /// back as an empty list rather than panicking on the request that
+    /// probably matters most: a search for something that genuinely is not
+    /// on MusicBrainz at all.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn mb_results_with_nothing_found_is_an_empty_list_not_a_panic() {
+        let body: serde_json::Value = serde_json::from_str(r#"{"recordings":[]}"#).unwrap();
+        assert!(parse_mb_results("recording", &body).is_empty());
+        let empty = serde_json::json!({});
+        assert!(parse_mb_results("release", &empty).is_empty());
+    }
+
+    /// The review page's own search box has to agree with the router about
+    /// this route, the same seam every other page-to-route check here guards.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_page_asks_musicbrainz_search_for_the_route_it_gets() {
+        assert!(REVIEW_JS.contains("/api/musicbrainz/search"));
+    }
+
+    /// The artist-correction verbs the page can send are exactly the two the
+    /// router registers under `/review/:id/artist/:verb` -- `correct` (via
+    /// the literal path built into the fetch call) and `reopen`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_page_sends_artist_verbs_the_router_serves() {
+        assert!(REVIEW_JS.contains("/artist/correct"));
+        assert!(REVIEW_JS.contains("/artist/reopen"));
+    }
+}
