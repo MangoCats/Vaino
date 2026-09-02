@@ -3,13 +3,15 @@
 """Tests for `console.py`'s `flag_sync_status()`/`unflag_everywhere()`
 `[REQ-VIS-265]`.
 
-`console._peek` (remote reads) and `console._vaino_set_flag`/
-`console._remote_set_flag` (the two writes -- both signals into a running
-Vaino, never a `listener_flags` write from this process) are all faked, so
-these run with no `ssh`, no network, and no co-resident player. What is
-under test is the subject resolution (`[SPEC-DF-112]`'s own passage+
-recording shape, reused rather than reinvented) and the three-outcome
-remote logic these two functions share with `remote_status()`.
+`console._peek` (remote reads, still `console.py`'s own) and
+`vaino_control._vaino_set_flag`/`vaino_control._remote_set_flag` (the two
+writes -- both signals into a running Vaino, never a `listener_flags` write
+from this process, split into `vaino_control.py` per the console.py/
+vaino_control.py split) are all faked, so these run with no `ssh`, no
+network, and no co-resident player. What is under test is the subject
+resolution (`[SPEC-DF-112]`'s own passage+recording shape, reused rather
+than reinvented) and the three-outcome remote logic these two functions
+share with `remote_status()`.
 
     python tools/test_console_unflag.py
 """
@@ -22,6 +24,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import console  # noqa: E402
+import vaino_control  # noqa: E402
 
 SCHEMA = """
 CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL,
@@ -142,13 +145,13 @@ def test_unflag_everywhere_no_remote() -> None:
     print("unflag_everywhere(): local clear only, when no remote is configured")
     console.STATE["jobs"] = FakeJobs(None)
     calls = []
-    real_set = console._vaino_set_flag
-    console._vaino_set_flag = lambda port, kind, sid, flagged, timeout=2.0: calls.append(
+    real_set = vaino_control._vaino_set_flag
+    vaino_control._vaino_set_flag = lambda port, kind, sid, flagged, timeout=2.0: calls.append(
         (kind, sid, flagged)) or True
     try:
         r = console.unflag_everywhere(build([("recording", REC)]), 1)
     finally:
-        console._vaino_set_flag = real_set
+        vaino_control._vaino_set_flag = real_set
     check(set(calls) == {("passage", "1", False), ("recording", REC, False)}, f"got {calls}")
     check(r["local"] == {"ok": True, "cleared": 2, "of": 2}, f"got {r}")
     check(r["remote"] == {"configured": False}, f"got {r}")
@@ -158,18 +161,20 @@ def test_unflag_everywhere_translates_passage_id_for_remote() -> None:
     print("unflag_everywhere(): the passage-keyed subject is translated to the "
           "remote's OWN local passage_id before being sent there")
     console.STATE["jobs"] = FakeJobs("pi@vainopi:/srv/library/vaino.db")
-    real_peek, real_local, real_remote = console._peek, console._vaino_set_flag, console._remote_set_flag
+    real_peek = console._peek
+    real_local, real_remote = vaino_control._vaino_set_flag, vaino_control._remote_set_flag
     console._peek = lambda remote, kind, args, timeout=12.0: {
         "ok": True, "current": {"remote_passage_id": 999, "flagged": 1,
                                  "remote_mbids": json.dumps([REC])}}
-    console._vaino_set_flag = lambda *a, **k: True
+    vaino_control._vaino_set_flag = lambda *a, **k: True
     remote_calls = []
-    console._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
+    vaino_control._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
         remote_calls.append((kind, sid, flagged)) or True)
     try:
         r = console.unflag_everywhere(build(), 1)
     finally:
-        console._peek, console._vaino_set_flag, console._remote_set_flag = real_peek, real_local, real_remote
+        console._peek = real_peek
+        vaino_control._vaino_set_flag, vaino_control._remote_set_flag = real_local, real_remote
     check(("passage", "999", False) in remote_calls,
           f"the LOCAL pid (1) must never be sent to the remote as-is, got {remote_calls}")
     check(("recording", REC, False) in remote_calls, f"got {remote_calls}")
@@ -181,17 +186,19 @@ def test_unflag_everywhere_remote_missing_passage() -> None:
     print("unflag_everywhere(): a remote with no such passage skips only the "
           "passage-keyed subject, and still clears the recording-keyed one")
     console.STATE["jobs"] = FakeJobs("pi@vainopi:/srv/library/vaino.db")
-    real_peek, real_local, real_remote = console._peek, console._vaino_set_flag, console._remote_set_flag
+    real_peek = console._peek
+    real_local, real_remote = vaino_control._vaino_set_flag, vaino_control._remote_set_flag
     console._peek = lambda remote, kind, args, timeout=12.0: {
         "ok": True, "current": {"remote_passage_id": None, "flagged": 0, "remote_mbids": "[]"}}
-    console._vaino_set_flag = lambda *a, **k: True
+    vaino_control._vaino_set_flag = lambda *a, **k: True
     remote_calls = []
-    console._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
+    vaino_control._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
         remote_calls.append((kind, sid, flagged)) or True)
     try:
         r = console.unflag_everywhere(build(), 1)
     finally:
-        console._peek, console._vaino_set_flag, console._remote_set_flag = real_peek, real_local, real_remote
+        console._peek = real_peek
+        vaino_control._vaino_set_flag, vaino_control._remote_set_flag = real_local, real_remote
     check(remote_calls == [("recording", REC, False)],
           f"only the recording subject can be resolved remotely, got {remote_calls}")
     check(r["remote"]["of"] == 1, f"got {r}")
@@ -208,21 +215,23 @@ def test_unflag_everywhere_clears_a_stale_remote_recording_too() -> None:
           "library has since moved away from is cleared too, not just this "
           "library's own current one")
     console.STATE["jobs"] = FakeJobs("pi@vainopi:/srv/library/vaino.db")
-    real_peek, real_local, real_remote = console._peek, console._vaino_set_flag, console._remote_set_flag
+    real_peek = console._peek
+    real_local, real_remote = vaino_control._vaino_set_flag, vaino_control._remote_set_flag
     old_remote_mbid = "local:audio:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     console._peek = lambda remote, kind, args, timeout=12.0: {
         "ok": True, "current": {"remote_passage_id": 1, "flagged": 1,
                                  "remote_mbids": json.dumps([old_remote_mbid])}}
-    console._vaino_set_flag = lambda *a, **k: True
+    vaino_control._vaino_set_flag = lambda *a, **k: True
     remote_calls = []
-    console._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
+    vaino_control._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
         remote_calls.append((kind, sid, flagged)) or True)
     try:
         # `build()` links passage 1 to REC, a DIFFERENT mbid than what the
         # remote itself reports -- the exact divergence found live.
         r = console.unflag_everywhere(build(), 1)
     finally:
-        console._peek, console._vaino_set_flag, console._remote_set_flag = real_peek, real_local, real_remote
+        console._peek = real_peek
+        vaino_control._vaino_set_flag, vaino_control._remote_set_flag = real_local, real_remote
     check(("recording", old_remote_mbid, False) in remote_calls,
           f"the remote's OWN stale link must be cleared -- this is the bug found live, got {remote_calls}")
     check(("recording", REC, False) in remote_calls,

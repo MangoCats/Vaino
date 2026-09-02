@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The Sampo console, read-only half `[SPEC013]`, `[IMPL-SUI-040]`.
 
-Stage 2 of [IMPL003](../docs/IMPL003-sampo-console-build.md): the views, and
-nothing that writes. There is no POST route in this file and the database is
-opened `mode=ro`, so the safety claim is structural rather than promised -- a
-console that cannot write cannot damage a library a player is using.
+Stage 2 of [IMPL003](../docs/IMPL003-sampo-console-build.md): the views. This
+file's own connection to the library stays `mode=ro` throughout -- nothing in
+it ever executes a `sqlite3` write -- so the safety claim is structural
+rather than promised: a console that cannot open the database for writing
+cannot damage a library a player is using, whatever route triggers the
+request. That is narrower than "no POST route in this file," which was true
+once but no longer is: stage 3's job dispatch and `[REQ-VIS-265]`'s unflag
+both hang off `do_POST` below. Neither writes *here* -- a job runs the same
+CLI a person would run by hand, against its own connection; unflaging
+signals the already-running Vaino to write its own listener state over HTTP,
+in `vaino_control.py`, never a `listener_flags` write from this process.
 
 That is what makes it runnable against the live database on day one. The
 library is WAL `[SPEC-SUI-082]`, so readers never block the player: browsing
@@ -17,22 +24,13 @@ Three views:
   /folder      what is on disk, against what the database claims
   /profile/N   one passage's whole derivation
 
-Jobs and induct are stage 3; a GUI over the bundle exporter is stage 4 of
-`[IMPL007]`. All three write only through a subprocess running the same CLI
-a person would run by hand -- this file's own connection to the library
-stays `mode=ro` throughout.
-
     python tools/console.py data/vaino_new.db --root "C:/Users/Mango Cat/Music"
 """
 
 import argparse
 import html
-import http.client
 import json
 import os
-import shlex
-import shutil
-import socket
 import socketserver
 import sqlite3
 import subprocess
@@ -45,15 +43,16 @@ from urllib.parse import urlparse, parse_qs, unquote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ingest_folder import AUDIO  # noqa: E402  -- one list of what counts as audio
 import jobs as jobmod  # noqa: E402
+import vaino_control  # noqa: E402  -- process/network side of the handoff
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The player is 5720. A different number because they are different services on
-# the same machine, and because `[SPEC-SUI-170]` may start the player: colliding
-# would make each look like the other's failure.
+# Sampo's own port. Different from vaino_control.VAINO_PORT (5720) because
+# they are different services on the same machine, and because
+# `[SPEC-SUI-170]` may start the player: colliding would make each look like
+# the other's failure.
 DEFAULT_PORT = 5730
-VAINO_PORT = 5720
 
 # 71 (characteristic, class) pairs across 18 characteristics is a complete
 # vector `[SPEC-SA-040]`. Measured on the four reference tracks, and the number
@@ -521,315 +520,25 @@ def _shutdown_soon(httpd) -> None:
 # `[SPEC-SUI-213]` a socket alone cannot answer. The round trip closes through
 # the shared database on Sampo's next scan, not through this connection
 # `[SPEC-SUI-145]`.
-
-def _vaino_reachable(port: int, timeout: float = 0.5) -> bool:
-    """A socket question, not a route question `[SPEC-SUI-170]`."""
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def _vaino_has_sampo_support(port: int, timeout: float = 2.0) -> bool:
-    """Whether *this* running Vaino was built with `--features sampo-support`
-    `[SPEC-SUI-213]` -- the one thing `_vaino_reachable`'s socket question
-    cannot tell apart: an appliance-equivalent build and a desktop build
-    listen identically, and only one of them has anywhere for a handoff to
-    land. `/review.js` is a static asset compiled in only by that feature
-    `[SPEC-SUI-190]`, so its presence is a build-capability question, not a
-    library one -- nothing about *this* library, or any library, is read
-    here, which is the boundary `[SPEC-SUI-025]` actually protects. A
-    real-world dead handoff (a Vaino running, answering, and 404ing every
-    review link) is what this exists to catch before a person clicks it.
-    """
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-        try:
-            conn.request("GET", "/review.js")
-            r = conn.getresponse()
-            r.read()  # drain -- the body is never inspected, only the status
-            return r.status < 400
-        finally:
-            conn.close()
-    except OSError:
-        return False
-
-
-def _vaino_set_flag(port: int, kind: str, subject_id: str, flagged: bool,
-                     timeout: float = 2.0) -> bool:
-    """Sampo signals; Vaino writes `[SPEC-SC-020]` -- the identical `POST
-    /history/flag/:kind/:id` route the play-history page's own checkbox
-    already calls (`player/src/web.rs`'s `set_flag`), never a direct
-    `listener_flags` write from this process. `204` is the only success;
-    anything else (a malformed kind, a closed connection, an older Vaino
-    with no such route) is `False`, for the caller to report.
-    """
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-        try:
-            conn.request("POST", f"/history/flag/{kind}/{subject_id}"
-                                  f"?flagged={'true' if flagged else 'false'}")
-            r = conn.getresponse()
-            r.read()
-            return r.status == 204
-        finally:
-            conn.close()
-    except OSError:
-        return False
-
-
-def _remote_set_flag(remote: str, port: int, kind: str, subject_id: str, flagged: bool,
-                      timeout: float = 8.0) -> bool:
-    """The identical signal `_vaino_set_flag` sends locally, sent instead to
-    vainopi's own already-running Vaino over one `ssh ... curl` round trip.
-    Never a database write from this process, and never a service
-    interruption: unlike `[SPEC-DF-111]`'s patch-apply recipe, nothing here
-    writes to vainopi's database directly, so there is nothing for its own
-    running player to race against and no reason to stop it.
-    """
-    host, _, _ = remote.partition(":")
-    url = (f"http://localhost:{port}/history/flag/{kind}/{subject_id}"
-           f"?flagged={'true' if flagged else 'false'}")
-    try:
-        r = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host,
-             f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 -X POST {shlex.quote(url)}"],
-            capture_output=True, text=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    return r.returncode == 0 and r.stdout.strip() == "204"
-
+#
+# The process/network primitives live in `vaino_control.py`, not here --
+# reaching the player's own process, and signaling it to write, is a
+# different concern than reading this file's own (`mode=ro`) connection, and
+# keeping them apart is what makes this file's safety claim structural again.
+# `unflag_everywhere` below stays a thin wrapper: the *read* side -- which
+# subjects, whether a remote is configured, what it currently thinks -- is
+# this file's own, resolved from `conn`; only the actual signal to each
+# Vaino crosses into `vaino_control`.
 
 def unflag_everywhere(conn, pid: int) -> dict:
     """Clear every plausible flag on this passage, locally and on the
-    remote, in one action `[REQ-VIS-265]`. Both writes go through Vaino's
-    own `set_flag` -- co-resident over plain HTTP, vainopi's over one `ssh
-    ... curl` round trip -- never this process's own `listener_flags` write,
-    the same boundary `flags()`'s own docstring already states: listener
-    state is Vaino's to write, not Sampo's.
-
-    A `("passage", pid)` subject is only ever meaningful locally --
-    `pid` is not portable `[SPEC-DF-103]` -- so it is translated to the
-    remote's OWN local passage_id (already resolved by `flag_sync_status`'s
-    `passage_flag` peek) before being sent there. A `("recording", mbid)`
-    subject needs no translation, but it is not simply reused either: the
-    remote's *own* currently-linked recording(s) are unioned in too, found
-    live the first time this ran for real -- an id correction accepted
-    locally but not yet pushed left the remote still linked to the *old*
-    recording, so resolving subjects only from this library's own current
-    link cleared nothing where the flag actually was, `_remote_set_flag`
-    reporting success regardless (a DELETE matching zero rows is not an
-    error). The same reasoning `[SPEC-DF-112]`'s `clear_flags_for()` already
-    applies for an `id_review`'s own target+baseline, generalized: ask what
-    the far side currently thinks too, clear the union. A remote passage
-    that does not exist there at all (`remote_pid is None`) has its
-    passage-keyed subject skipped and named, not silently dropped.
+    remote, in one action `[REQ-VIS-265]`. See `vaino_control.unflag_everywhere`
+    for how the clear itself happens; this resolves what to clear.
     """
     subjects = passage_flag_subjects(conn, pid)
-    local_ok = [_vaino_set_flag(VAINO_PORT, kind, sid, False) for kind, sid in subjects]
-    result = {"local": {"ok": all(local_ok), "cleared": sum(local_ok), "of": len(local_ok)}}
-
     remote = STATE["jobs"].get_remote()
-    if not remote:
-        result["remote"] = {"configured": False}
-        return result
-
-    status = flag_sync_status(conn, pid)
-    if not status["reachable"]:
-        result["remote"] = {"configured": True, "reachable": False}
-        return result
-    remote_subjects = {("recording", mbid) for mbid in status["remote_mbids"]}
-    remote_subjects |= {(k, sid) for k, sid in subjects if k == "recording"}
-    if status["remote_pid"] is not None:
-        remote_subjects.add(("passage", str(status["remote_pid"])))
-    remote_ok = [_remote_set_flag(remote, VAINO_PORT, kind, sid, False)
-                 for kind, sid in sorted(remote_subjects)]
-    result["remote"] = {"configured": True, "reachable": True, "ok": all(remote_ok),
-                         "cleared": sum(remote_ok), "of": len(remote_ok)}
-    return result
-
-
-def _vaino_binary() -> str | None:
-    """Where the co-resident player's binary is, if one can be found at all.
-
-    Checked against this repository's own build layout first -- the case
-    while Sampo and Vaino are developed side by side -- then `PATH`, for an
-    installed player. Never guessed beyond that: a wrong binary started
-    against the wrong database is worse than admitting there is none.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    for rel in (
-        os.path.join(here, "..", "player", "target", "release", "vaino.exe"),
-        os.path.join(here, "..", "player", "target", "release", "vaino"),
-    ):
-        if os.path.isfile(rel):
-            return os.path.abspath(rel)
-    return shutil.which("vaino")
-
-
-def _vaino_build(port: int, timeout: float = 2.0) -> dict | None:
-    """This co-resident Vaino's own build identity `[SPEC-SUI-227]` -- `GET
-    /build`, the machine-readable sibling of the Settings page's "Server
-    build" row `player/src/web.rs`'s `build_identity` serves. `None` on
-    anything that stops this from being read -- an older Vaino with no such
-    route, a non-JSON body, a closed connection -- and the caller treats an
-    unknown build the same honest way `build_info()` already treats a
-    missing git checkout: silently skipping a check it cannot make, never
-    guessing `[SPEC-DF-095]`.
-    """
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-        try:
-            conn.request("GET", "/build")
-            r = conn.getresponse()
-            body = r.read()
-            if r.status >= 400:
-                return None
-            return json.loads(body)
-        finally:
-            conn.close()
-    except (OSError, ValueError):
-        return None
-
-
-def _vaino_staleness(port: int) -> str | None:
-    """Whether the co-resident Vaino was built from a different commit than
-    *this* Sampo is running from `[SPEC-SUI-227]` -- found live 2026-08-31: a
-    Vaino that was the only one running, and was sampo-support-capable, was
-    still hours behind the checkout, so a boundary edit saved through it
-    silently failed to reappear on reopening the editor -- the merge-with-
-    draft logic that fixed did not exist in that build. Neither
-    `[SPEC-SUI-170]`'s reuse check nor `[SPEC-SUI-213]`'s capability probe
-    would have caught that; both ask "is something there," never "is it the
-    same something this checkout would build."
-
-    `None` -- no mismatch, or nothing to compare -- whenever either side's
-    identity is unknown: no git checkout, git missing from `PATH`, or a
-    Vaino too old to serve `/build` at all. A silent skip, not a guess,
-    matching `build_info()`'s own posture toward an absent checkout.
-    """
-    sampo = STATE.get("build") or {}
-    sampo_commit = sampo.get("commit") if sampo.get("available") else None
-    if not sampo_commit:
-        return None
-    vaino = _vaino_build(port)
-    vaino_git = (vaino or {}).get("git")
-    if not vaino_git or vaino_git == "unknown":
-        return None
-    vaino_hash = vaino_git.removesuffix("+dirty")
-    if sampo_commit.startswith(vaino_hash):
-        return None
-    return (f"Sampo is running from commit {sampo.get('commit_short') or sampo_commit[:12]}, "
-            f"but the co-resident Vaino on this port was built from a different commit "
-            f"({vaino_git}, {vaino.get('commit_date', 'date unknown')}) -- "
-            "rebuild whichever one is behind (see HOWTO.md §2) and restart it")
-
-
-def _vaino_ready(port: int, started: bool) -> dict:
-    """A reachable Vaino is not necessarily a *useful* one for this handoff
-    `[SPEC-SUI-213]` -- found live several times over on 2026-08-30: a plain
-    appliance-equivalent build answers every socket check `ensure_vaino()`
-    could make and still 404s every review/edit link, which read in a
-    browser as a dead page with no explanation. Named here instead, the same
-    "say which capability is unavailable, and why" `[SPEC-SUI-170]` already
-    commits to for a missing binary or a start that timed out.
-    """
-    if not _vaino_has_sampo_support(port):
-        binary = _vaino_binary()
-        return {"ok": False, "port": port, "started": started,
-                "error": ("Sampo just started a local Vaino, but " if started else
-                          "a Vaino is already running on this port, but ")
-                         + (f"{binary} " if binary else "the binary ")
-                         + "was built without --features sampo-support, so the review page "
-                           "and waveform editor don't exist in it (see HOWTO.md §2). "
-                           "Rebuild player/ with that flag, then " +
-                           ("restart it" if started else "stop this one and reopen this page")}
-    stale = _vaino_staleness(port)
-    if stale:
-        return {"ok": False, "port": port, "started": started, "error": stale}
-    return {"ok": True, "port": port, "started": started}
-
-
-def ensure_vaino(port: int = VAINO_PORT) -> dict:
-    """Start the co-resident player if one is not already there `[SPEC-SUI-170]`.
-
-    1. **Already running?** Use it. Do not start a second -- two players on
-       one library contend for the audio device and both write the single
-       resume row `[SPEC-SC-098]`.
-    2. **Not running?** Start it, on **Sampo's own database path**. This is
-       what makes `[SPEC-SUI-150]`'s passage-id handoff sound: the player
-       reads the exact file the id came from because Sampo told it to, not
-       because a configuration happened to agree.
-    3. **Start failed, or started without the routes this handoff needs?**
-       Say which capability is unavailable, and why. Silent degradation is
-       its own failure `[SPEC-DF-095]`.
-    """
-    if _vaino_reachable(port):
-        return _vaino_ready(port, started=False)
-
-    if not STATE["path"]:
-        return {"ok": False, "port": port, "error": "no library open"}
-
-    binary = _vaino_binary()
-    if not binary:
-        return {"ok": False, "port": port,
-                "error": "no local Vaino binary found -- build player/ first "
-                         "(see build/README.md)"}
-
-    try:
-        subprocess.Popen(
-            [binary, STATE["path"], "--port", str(port)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except OSError as e:
-        return {"ok": False, "port": port, "error": f"could not start vaino: {e}"}
-
-    # Polled, not a fixed wait: the Program Director's own startup time scales
-    # with library size, the same reason `deploy-player.sh` polls rather than
-    # sleeping a fixed span before declaring a new build alive.
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        if _vaino_reachable(port):
-            return _vaino_ready(port, started=True)
-        time.sleep(0.25)
-    return {"ok": False, "port": port,
-            "error": "vaino did not answer within 20s of starting"}
-
-
-def open_terminal(directory: str) -> dict:
-    """Open an ordinary terminal on THIS machine, in `directory` `[IMPL007
-    Stage 5]`.
-
-    Not SSH, not rsync, no remote host known to this process at all -- opening
-    a local terminal is the same act as the operator opening one themselves,
-    just one click closer to the deploy commands the page already prints as
-    plain, selectable text. The commands are never typed for them and never
-    run by this process; the window is a place to paste them, or type them by
-    hand, and see exactly what runs before it does.
-    """
-    if not os.path.isdir(directory):
-        return {"ok": False, "error": f"no such directory: {directory}"}
-    try:
-        if sys.platform == "win32":
-            subprocess.Popen(["cmd", "/K", f'cd /d "{directory}"'],
-                             creationflags=subprocess.CREATE_NEW_CONSOLE)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-a", "Terminal", directory])
-        else:
-            # Best effort across desktops -- there is no single "the terminal"
-            # on Linux the way there is on the other two platforms.
-            for candidate in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
-                if shutil.which(candidate):
-                    subprocess.Popen([candidate], cwd=directory)
-                    break
-            else:
-                return {"ok": False,
-                        "error": "no terminal emulator found on PATH "
-                                 "(tried x-terminal-emulator, gnome-terminal, konsole, xterm)"}
-        return {"ok": True}
-    except OSError as e:
-        return {"ok": False, "error": f"could not open a terminal: {e}"}
+    status = flag_sync_status(conn, pid) if remote else None
+    return vaino_control.unflag_everywhere(subjects, remote, status)
 
 
 # -------------------------------------------------------------------- scan ---
@@ -1027,7 +736,8 @@ class Handler(BaseHTTPRequestHandler):
                 # Idempotent -- GET rather than a POST, the same reasoning as
                 # the folder scan above: asking twice costs nothing when a
                 # player is already there, which is the common case.
-                return self.send_json(ensure_vaino())
+                return self.send_json(vaino_control.ensure_vaino(
+                    db_path=STATE["path"], sampo_build=STATE["build"]))
             self.send_error(404)
         except BrokenPipeError:
             pass
@@ -1230,7 +940,7 @@ class Handler(BaseHTTPRequestHandler):
                 # or idempotent to run twice, since a process starts each time.
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 d = (json.loads(body or b"{}") or {}).get("dir", "")
-                return self.send_json(open_terminal(d))
+                return self.send_json(vaino_control.open_terminal(d))
             self.send_error(404)
         except Exception as e:
             self.send_json({"error": f"{type(e).__name__}: {e}"}, code=500)
