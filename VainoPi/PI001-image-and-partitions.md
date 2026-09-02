@@ -434,11 +434,12 @@ works with every speaker rather than one model.
 ## 6. Toward an image build
 
 **`[PI-IMG-010]` The deliverable is a script, not a procedure.** A documented
-sequence of manual steps is a procedure nobody performs identically twice.
-`VainoPi/build-image.sh` should take a Pi OS Lite image and a prepared
-`library.db` and produce a flashable `.img`.
+sequence of manual steps is a procedure nobody performs identically twice. Not
+yet written — a future `VainoPi/build-image.sh` should take a Pi OS Lite image
+and a prepared `library.db` and produce a flashable `.img`.
 
-Sketch, in the order the steps depend on each other:
+Sketch, in the order the steps depend on each other (unimplemented — no such
+script exists in the tree yet):
 
 1. start from Pi OS Lite (64-bit, Bookworm), `aarch64`;
 2. repartition: A ~4 GB, C ~1 GB, B the remainder;
