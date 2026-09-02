@@ -34,7 +34,7 @@ something it only reads.
 ```
  browser ──ws snapshot──┐        ┌─ Controls (intent cells) ─┐
                         ▼        ▼                           │
-   web.rs  ──Command──▶ EngineHandle ──▶ vaino.rs loop ───────┘
+   web/    ──Command──▶ EngineHandle ──▶ vaino.rs loop ───────┘
                                             │
                                     Session (session.rs)
                                        │         │
@@ -131,7 +131,7 @@ no idea whether its choice will be decoded locally or handed to MPD.
 
 ## 6. Data
 
-`db.rs` is the only gateway to SQLite. Two classes of data, and the distinction
+`db/` is the only gateway to SQLite (`db/{mod,library,player_store}.rs`, split from a single `db.rs` 2026-09-01). Two classes of data, and the distinction
 is load-bearing `[SPEC-DF-055]`:
 
 * **Class C — reference data** (recordings, artists, releases, flavor, lyrics,

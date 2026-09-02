@@ -342,7 +342,7 @@ The third is the interesting one: *You* is among Radiohead's heaviest early trac
 
 **`[SPEC-FD-110]`** User-defined characteristics `[GDE-MCR-060]` participate identically: they are distributions summing to 1.0 and take part in `S` whenever present in both vectors. Their `β_c` and `w_c` cannot be measured from AcousticBrainz submissions and must be assigned — default `w_c = 1.0`, `β_c` = observed mean between-recording TV over the library.
 
-**`[SPEC-FD-120]`** Locally extracted flavor values carry their own reliability, which is bounded above by the ceiling in `[GDE-FEX-085]`. Where a characteristic comes from local extraction rather than the dump, `w_c` should be scaled by the extractor's measured agreement for that characteristic, so less trustworthy data automatically contributes less.
+**`[SPEC-FD-120]`** *Superseded by `[SPEC-FD-145]`/`[SPEC-FD-150]`, 2026-08-13 — kept for its history, not as current design.* This originally proposed scaling `w_c` by a locally-extracted characteristic's own measured agreement, bounded above by the ceiling in `[GDE-FEX-085]`, so a less trustworthy characteristic contributed less. That assumed a library holding a mix of dump-sourced and locally-extracted values with different reliability per recording. Once provenance was made uniform-local `[SPEC-FD-084]`, the premise disappeared: every recording shares the same extractor, so there is no per-recording provenance signal left to scale by — `[SPEC-FD-150]` says this in as many words. `w_c` in `player/src/director/flavor.rs` is, correctly, a single corpus-wide reliability per characteristic (`[SPEC-FD-052]`), not a per-value one; `flavor.accuracy` (`[SPEC-SC-070]`) is populated but not read into distance, and that is no longer a gap.
 
 ---
 

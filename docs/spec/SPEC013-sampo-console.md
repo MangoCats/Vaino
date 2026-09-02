@@ -62,22 +62,25 @@ A **link** is not a channel, and §3.4 leans on the difference: a hyperlink or a
 
 ## 3. The interface
 
-**`[SPEC-SUI-030]`** Four views, one page each, and a flat route table in the player's idiom:
+**`[SPEC-SUI-030]`** *(Route table corrected 2026-09-02 — the original below was a day-one sketch; `console.py`'s own comments already flagged two of its entries as stale. This reflects the real, larger surface, grown well past "four views, one page each.")*
 
 ```
-GET  /library                     browse: artist / album / unidentified
-GET  /library/profile/<passage>   one passage, everything known and how
-GET  /folder                      configured roots, and their state
-GET  /folder/scan                 cheap pass — read-only, so a refresh is safe
-POST /folder/hash                 hash a named subset; a job, because it is slow
-POST /induct                      propose -> a plan, nothing written
-POST /induct/<plan>/commit        run the plan as a job
-GET  /jobs                        running and recent
-GET  /jobs/<id>/stream            progress, server-sent events
-POST /jobs/<id>/stop              interrupt; resumable [REQ-LIB-130]
-GET  /export/<target>/delta       what that target lacks
-POST /export/<target>             build a bundle and push it, as a job
+GET  /                          library: artist / album / unidentified
+GET  /profile/<id>              one recording or passage, everything known and how
+GET  /folder                    configured roots, and their state
+GET  /api/folder/scan           cheap pass — read-only, so a refresh is safe
+POST /api/induct/propose        propose -> a plan, nothing written
+POST /api/induct/<plan>/commit  run the plan as a job
+GET  /jobs                      running and recent
+GET  /api/jobs/<id>/stream      progress, server-sent events
+POST /api/jobs/<id>/stop        interrupt; resumable [REQ-LIB-130]
+GET  /export                    the deploy page
+POST /api/export/bundle         build a bundle, as a job — pushing it is prepared, not performed [SPEC-SUI-110]
+GET  /flags                     Vaino's own "flag this" worklist [SPEC-SUI-202]
+GET  /system                    which instance this is, and stopping it [SPEC-SUI-210]
 ```
+
+Not exhaustive — `/api/profile/<id>/{remote,flag,accept-remote,unflag}`, `/api/remote{,/pull,/push}`, `/api/reanalyze`, `/api/analyze-amplitude`, `/api/release/{suggest,accept}` and `/api/system/shutdown` all exist beside these (§§3.5–3.8, §4) but are workflow detail this table isn't meant to enumerate. Two entries from the original sketch were never built at all: `POST /folder/hash` — `[SPEC-SUI-060]`'s named remediation for an *assumed* file remains unimplemented (§3.2) — and `GET /export/<target>/delta`.
 
 Server-sent events rather than a WebSocket: the player pushes continuous state at a listener and needs a duplex socket; a job emits progress in one direction and takes its commands as POSTs. SSE is the smaller mechanism that fits `[GDE-FBD-060]`.
 

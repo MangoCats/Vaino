@@ -68,15 +68,13 @@ CREATE TABLE passages (
     lead_out_ms    INTEGER,
     gain_db        REAL,                     -- loudness match; MuLibPlay observed ~0.70-0.75 linear
     boundary_src   TEXT    NOT NULL,         -- 'computed:<algo>@<ver>' | 'manual' | 'imported:<x>'
-    fade_in_ms     INTEGER NOT NULL DEFAULT 20,          -- this passage's own volume envelope [SPEC-SC-046]
-    fade_out_ms    INTEGER NOT NULL DEFAULT 20,
-    fade_in_curve  TEXT    NOT NULL DEFAULT 'exponential', -- 'linear' | 'cosine' | 'exponential'
-    fade_out_curve TEXT    NOT NULL DEFAULT 'exponential',
     CHECK (end_ms > start_ms)
 );
 CREATE INDEX passages_file ON passages(file_id);
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 ```
+
+**`tools/add_fade_columns.py` grows `passages` past this base shape**, the same layering `tools/fetch_releases.py` uses for `releases` (§3b): it idempotently `ALTER TABLE`s in `fade_in_ms`/`fade_out_ms` (`INTEGER NOT NULL DEFAULT 20`) and `fade_in_curve`/`fade_out_curve` (`TEXT NOT NULL DEFAULT 'exponential'`) — this passage's own volume envelope `[SPEC-SC-046]`, described below.
 
 **`[SPEC-SC-043]` Lead durations are normally milliseconds, deliberately.** Across the migrated library the lead-in median is **5 ms** and the lead-out median **946 ms**. **Lead does not itself apply any gain ramp** `[SPEC-SC-046]` — it only times *when* a crossfade with a neighbour is permitted, never *how loud* either side is during it — so these numbers control overlap duration, not loudness shape. Near-zero overlap `[SPEC-DIR-*]` is therefore the intended default, and these values should not be inflated to "enable crossfading": doing so widens the window a crossfade is *allowed* to use, but produces no audible blend on its own. Audible crossfade is the uncommon case, and reaching it needs two things set together, not one: a long-enough `lead_out_ms`/`lead_in_ms` to admit the overlap, *and* a comparably long `fade_out_ms`/`fade_in_ms` `[SPEC-SC-046]` to actually ramp gain across it — every passage's fixed 20 ms fade default will not produce a slow blend even inside a long lead window, since it finishes in the first 20 ms of whatever `lead_out_ms` admits.
 
@@ -111,7 +109,7 @@ CREATE TABLE passage_recordings (
 
 ## 3b. Artists, Releases and Credits
 
-**`[SPEC-SC-048]`** `artists` and `releases` are MusicBrainz-keyed entities shaped exactly like `recordings` above (`[SPEC-SC-030]`); `recording_artists` and `release_recordings` are the weighted junctions onto them, shaped like `passage_recordings`. Base DDL for all four lives in [`sql/schema.sql`](../../sql/schema.sql) — this section explains what they're for and how they relate, not a second hand-typed copy of the columns, which is exactly how this section went stale before: it previously said "follow the same shape... omitted for length," which stopped being true the moment `release_recordings` grew `position`/`chosen`/`disc`/`track_length_ms` of its own.
+**`[SPEC-SC-048]`** `artists` and `releases` are MusicBrainz-keyed entities shaped exactly like `recordings` above (`[SPEC-SC-030]`). `recording_artists` is the weighted junction onto them, shaped like `passage_recordings`. `release_recordings` is not weighted — it has no `weight` column at all — because a track's placement on a release is a fact, not a probabilistic credit; it is instead an *ordered* junction (`position`/`chosen`/`disc`, below). Base DDL for all four lives in [`sql/schema.sql`](../../sql/schema.sql) — this section explains what they're for and how they relate, not a second hand-typed copy of the columns, which is exactly how this section went stale before: it previously said "follow the same shape... omitted for length," which stopped being true the moment `release_recordings` grew `position`/`chosen`/`disc`/`track_length_ms` of its own.
 
 **Migrations grow `releases` past its base shape.** `sql/schema.sql` bootstraps a fresh database; `tools/fetch_releases.py` idempotently `ALTER TABLE`s in `release_group`/`status`/`primary_type`/`secondary_types`/`country`/`track_count` the first time a library needs release identification (`[SPEC010 §3]`) — the same layering `tools/add_fade_columns.py` uses for `passages`' own fade columns (`[SPEC-SC-046]`).
 
@@ -142,7 +140,7 @@ CREATE INDEX flavor_subject ON flavor(subject_kind, subject_id);
 
 **`[SPEC-SC-065]` Two subject kinds, deliberately.** Recording-scope flavor is portable and shareable `[SPEC-DF-040]`; passage-scope covers audio with no MusicBrainz identity, which must still be selectable. A passage prefers its own flavor and falls back to its recording's.
 
-**`[SPEC-SC-070]` `accuracy` carries the model's measured error into the distance metric** `[SPEC-FD-120]`, so a weak characteristic degrades similarity gracefully instead of poisoning it. Populated from the model manifest.
+**`[SPEC-SC-070]` `accuracy` is populated from the model manifest, per subject and characteristic** — but does not currently feed the distance metric. `[SPEC-FD-120]` originally specified scaling `w_c` by it; that premise was superseded once the library moved to uniform-local provenance `[SPEC-FD-150]`, where every recording shares one extractor and there is no per-recording accuracy signal left to weight by. `w_c` in `player/src/director/flavor.rs` is a single corpus-wide reliability per characteristic (`[SPEC-FD-052]`), not a per-value one built from this column.
 
 **`[SPEC-SC-075]` Classes of a characteristic must sum to 1.0 ± 1e-4** `[MFL-DEF-040]`. Not expressible as a SQL constraint; enforced on write and audited in bulk. Verified clean on 21,636 of 21,636 instances in the sample dump.
 
@@ -179,9 +177,12 @@ CREATE TABLE listener_play_history (          -- 37,134 rows in MuLibPlay since 
     play_id     INTEGER PRIMARY KEY,
     played_at   INTEGER NOT NULL,             -- unix seconds
     passage_id  INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
-    mbid        TEXT                          -- survives passage deletion
+    mbid        TEXT,                         -- survives passage deletion
+    heard_ms    INTEGER,                      -- how much was heard [REQ-VIS-250]
+    span_ms     INTEGER                       -- how long the passage was; both NULL on rows predating the columns
 );
 CREATE INDEX listener_play_time ON listener_play_history(played_at);
+CREATE INDEX listener_play_mbid ON listener_play_history(mbid);
 
 CREATE TABLE listener_preferences (           -- MuLibPlay's rotation/recovery/restraint
     subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','artist')),
@@ -195,6 +196,8 @@ CREATE TABLE listener_preferences (           -- MuLibPlay's rotation/recovery/r
 ```
 
 `listener_programs` / `listener_program_seeds` hold the time-of-day programs as **seed track lists** `[GDE-PD-040]`, and `listener_likes` holds weighted Like/Dislike events with their timestamps `[GDE-MCR-070]`.
+
+Five more `listener_`-prefixed tables complete Class D. `listener_rejections` records a skip or dequeue only so the same passage is not re-offered immediately `[SPEC-PLAY-050]`; it feeds no ramp, count or artist damping. `listener_settings` is the single-row home for the artist/recording rotation-scale master multipliers and the appliance's `utc_offset_minutes` for wall-clock programme starts `[SPEC-DIR-118]`. `listener_occasions` and `listener_occasion_points` hold seasonal curves as data, not code — a new occasion is rows here plus `flavor` values, never an engine edit `[SPEC-DIR-130]`. `listener_flags` is a plain "look at this" marker a listener sets from a play-history row, carrying no verdict of its own `[REQ-VIS-265]`.
 
 **`[SPEC-SC-095]` `mbid` is denormalised into play history on purpose.** MuLibPlay did the same, and it means six years of history survives a library rescan that renumbers passages.
 
