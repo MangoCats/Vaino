@@ -16,7 +16,7 @@ What it would cost to let the Director drive MPD or an OpenSubsonic server, whet
 | :--- | ---: |
 | Methods `Session` calls on `Engine` | **7** |
 | More that a binary's own loop calls | 3 |
-| Occurrences of `path` anywhere under `director/` | **0** — a comment and a test's DDL |
+| Occurrences of `path` anywhere under `director/` | **0** — confined to a handful of comments and a test's DDL, not code |
 | Lines that turn a queue entry into audio | **1** — `PassageDecoder::open(&e.path, …)` |
 
 Every other use of `entry.path` is an error message, a filename for display, or `relink`, which is a different subsystem.

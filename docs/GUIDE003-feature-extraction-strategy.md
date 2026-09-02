@@ -185,7 +185,7 @@ All 18 extract cleanly, and **their class counts independently confirm they are 
 
 Every model carries `probA`/`probB`, so the 0–1 values AcousticBrainz publishes are libsvm's Platt-scaled probability estimates — reproducible from the stored coefficients rather than needing to be inferred.
 
-**One trap:** `danceability` uses a **polynomial** kernel while the other seventeen use RBF, and its `.param` file says RBF. Trust the model, not the parameter file.
+**One trap:** `danceability` uses a **polynomial** kernel while the other seventeen use RBF, and its `.param` file says RBF. Trust the model, not the parameter file. *(This was measured against the beta5 model set; under the beta1 models actually used in production, `mood_aggressive` and `mood_happy` are polynomial too — see `[GDE-FEX-100]`, which supersedes the "danceability alone" scope of this claim without changing the trap itself.)*
 
 Support-vector counts are small (68–1,569), so prediction costs nothing next to the ~27 s extraction that precedes it.
 
@@ -506,9 +506,9 @@ label value i, the mapping whose positional guess caused `[GDE-FEX-102]`. All 18
 read cleanly, and all are already in sorted order, which retroactively confirms
 the `sorted()` assumption the verification relied on.
 
-`tools/gaia_classify.py` is the production path: load the 18 chains once (~5 s),
-then classify any lowlevel JSON. Run against **our own beta2 extraction** rather
-than the archive:
+`tools/gaia_classify.py` is the production path: load the 18 chains once (~10 s,
+per the module's own measurement — 83 MB of models), then classify any lowlevel
+JSON. Run against **our own beta2 extraction** rather than the archive:
 
 ```
 danceability not_danceable 0.857   mood_aggressive aggressive 0.987

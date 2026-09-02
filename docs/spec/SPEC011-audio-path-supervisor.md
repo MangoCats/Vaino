@@ -20,13 +20,14 @@ path to the chosen speaker" is implemented across:
 | `player/src/bluetooth.rs` → `vaino-btctl` | BlueZ policy, in shell, behind sudo |
 | `VainoPi/vaino-speaker.sh` + timer | reconnect policy, in systemd |
 | `VainoPi/vaino-wait-sink` | startup ordering, in shell |
-| `player/src/engine/` (formerly `engine.rs`) | the retry/backoff state machine, inside the mix loop |
+| `player/src/engine/` (formerly `engine.rs`) | held the retry/backoff state machine, inside the mix loop, before extraction |
 
-No component owns the concern, so no component can be tested for it, and the
-recovery state machine lives inside the one loop that must never stall. This is
-why the file reached 1,297 lines before `[SPEC-APS-100]` step 1 pulled the
-supervisor out of it: it held mixing and device policy, two concerns whose
-timing requirements have nothing in common.
+No component owns the concern, so no component can be tested for it, and (at
+the time this table was written) the recovery state machine lived inside the
+one loop that must never stall. This is why the file reached 1,297 lines before
+`[SPEC-APS-100]` step 1 pulled the supervisor out of it into `player/src/path.rs`
+— see §3/§4 below for what has since moved and what has not: it held mixing and
+device policy, two concerns whose timing requirements have nothing in common.
 
 **`[SPEC-APS-020]` The periphery accreted patches; the core did not.** Every
 defect of 2026-08-15/16 was in this seam, and none were in the decoders, the

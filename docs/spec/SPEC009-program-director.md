@@ -250,7 +250,7 @@ Two decisions:
 
 **`[SPEC-DIR-180]` Hard switch at the programme's start time**, as MuLibPlay does. Eight programmes are defined by start time `[GDE-PD-040]`; the active one is whichever most recently started. Blending was rejected: six years of production show no complaint, the flow stage already smooths transitions `[SPEC-DIR-160]`, and blending introduces a tunable nobody asked for while making "which programme am I in?" ambiguous. Start times are the listener's own local clock, via `listener_settings.utc_offset_minutes` — synced from the OS rather than left at its unconfigured default, since that default is UTC and most listeners are not `[REQ-VIS-255]`.
 
-**`[SPEC-DIR-185]`** Manual programme selection overrides time-of-day until the user reverts to automatic. Reverting is a specific programme id, same as choosing one — there is no bare "off", so a control offering to revert without naming one has to pick something on the user's behalf `[REQ-VIS-255]`.
+**`[SPEC-DIR-185]`** Manual programme selection overrides time-of-day until the user reverts to automatic. `POST /program/:id` accepts the literal id `"auto"` as a real, parameterless revert: it clears `manual_program` and lets the time-of-day schedule resume, and the settings panel offers it as an ordinary "Automatic (by time of day)" option alongside the named programmes `[REQ-VIS-255]`.
 
 ---
 

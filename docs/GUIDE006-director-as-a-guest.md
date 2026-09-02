@@ -81,7 +81,7 @@ This is also the argument against treating [GUIDE005](GUIDE005-flavor-service.md
 | **Spotify** | **no** — deprecated, no previews | yes | **not feasible** |
 | Apple Music / Tidal / Deezer **catalogue** | **no** — DRM | yes | **not feasible** |
 
-**`[GDE-EXT-055]` The one artifact worth building first is not an integration.** Every row that says *feasible* wants the same thing: the selection engine, separated from the audio path, with a small interface for "here is the next passage — play it". That is `vaino-core` plus an output trait, and it is already most of the way there — the Director imports only `rusqlite`, `serde`, `crate::db` and `crate::queue::QueueEntry` `[GDE-AND-020]`.
+**`[GDE-EXT-055]` The one artifact worth building first is not an integration.** Every row that says *feasible* wants the same thing: the selection engine, separated from the audio path, with a small interface for "here is the next passage — play it". That is `vaino-core` plus an output trait, and it is already most of the way there — the Director imports only `rusqlite`, `serde`, `crate::db` and `crate::queue::QueueEntry` `[GDE-AND-020]`, with one platform-conditional exception: `director/program.rs`'s OS UTC-offset sync calls `libc` on Unix and shells out to `powershell` on Windows.
 
 Build that and MPD is a few hundred lines; skip it and every host is a fork.
 

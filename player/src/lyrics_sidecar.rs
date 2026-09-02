@@ -19,6 +19,7 @@
 //! 3. <audiofile>.txt
 //! 4. cache/lyrics/<artist>/<title>.lyrics                <- lyrics_cache
 //! 5. cache/lyrics/<artist>/<title>.txt
+//! 6. ~/.lyrics/…   (not on Windows)
 //! 7. online
 //! ```
 //!

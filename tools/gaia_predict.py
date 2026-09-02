@@ -267,7 +267,9 @@ class SvmModel:
                 if k not in seen:
                     s += x[k - 1] * x[k - 1]
             return math.exp(-self.gamma * s)
-        # polynomial: danceability alone uses this [GDE-FEX-068]
+        # polynomial: under the beta1 models actually in production, danceability,
+        # mood_aggressive and mood_happy use this, not danceability alone
+        # [GDE-FEX-100] (supersedes the beta5-specific claim in [GDE-FEX-068])
         dot = sum(v * (x[k - 1] if k - 1 < len(x) else 0.0) for k, v in sv.items())
         return (self.gamma * dot + self.coef0) ** self.degree
 
