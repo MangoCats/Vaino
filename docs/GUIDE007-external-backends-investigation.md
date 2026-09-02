@@ -21,7 +21,7 @@ What it would cost to let the Director drive MPD or an OpenSubsonic server, whet
 
 Every other use of `entry.path` is an error message, a filename for display, or `relink`, which is a different subsystem.
 
-**`[GDE-BAK-015]` `Engine` satisfies a `Playback` trait with no change to `engine.rs` at all.** The spike defines the trait, implements it for `Engine` by forwarding to methods that already existed with matching signatures, and **237 tests pass**. Nothing was refactored to make that true; the separation of selection from playback was already real and merely unnamed.
+**`[GDE-BAK-015]` `Engine` satisfies a `Playback` trait with no change to `engine.rs` at all** (`engine.rs` as it was then; split into `engine/{mod,persist}.rs` 2026-09-02, file-organization only, unrelated to this finding). The spike defines the trait, implements it for `Engine` by forwarding to methods that already existed with matching signatures, and **237 tests pass**. Nothing was refactored to make that true; the separation of selection from playback was already real and merely unnamed.
 
 **So the cost of the seam itself is approximately zero.** It has been paid, by whoever kept the Director from reaching for a file path.
 
@@ -95,7 +95,7 @@ A build without them contains no adapter code, no adapter dependencies, and no l
 **`[GDE-BAK-055]` Three further rules keep the blast radius at zero:**
 
 1. **No schema change.** Any passage-to-server mapping lives in a **sidecar**, not `vaino.db` — the precedent already exists twice, in `vaino_new.idchecks.db` and `<library>.console.db` `[IMPL-SUI-055]`. A local-only user never grows a table they will not fill `[SPEC-SC-015]`.
-2. **The trait is internal.** `Engine` implements it and behaves identically; no local code path changes, and the spike proves it by leaving `engine.rs` untouched.
+2. **The trait is internal.** `Engine` implements it and behaves identically; no local code path changes, and the spike proves it by leaving `engine.rs` (now `engine/`) untouched.
 3. **Static dispatch.** Make `Session` generic over `P: Playback` rather than holding a `dyn`, and the local build monomorphises to what it compiles today.
 
 **`[GDE-BAK-060]` What genuinely does get harder.** Honesty about the cost, not just the containment:

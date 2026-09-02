@@ -198,9 +198,11 @@ moves over the network in that arrangement is control, not sound.
 * **MPD resident versus on-demand is undecided** `[SPEC-BK-060]`: it is not
   installed on the appliance at all, and everything MPD-related has only ever
   run on a Windows host.
-* **No integration tests.** `player/tests/` is empty; coverage is unit tests
-  inside modules, so cross-module invariants — cue numbering against
-  `cue_uris`, for one — are held by comments rather than by tests.
+* ~~**No integration tests.**~~ *(Closed 2026-08-22, missed in the 2026-09-01
+  pass over this section.)* `player/tests/invariants.rs` now holds
+  cross-module agreements no single module's unit tests can reach — the cue
+  numbering against `cue_uris` named here as the example was the first one
+  written.
 
 ---
 
