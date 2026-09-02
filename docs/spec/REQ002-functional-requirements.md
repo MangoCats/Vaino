@@ -616,7 +616,7 @@ the clock cannot run past the music however long it sits there.
 > of fault that is invisible from a terminal and obvious from a chair.
 
 **`[REQ-VIS-235]` The Vaino skin shows where the sound is actually coming
-from.** *(Requested 2026-08-23; not built.)* Immediately below the State and
+from.** *(Requested 2026-08-23; built.)* Immediately below the State and
 Underruns display: the **system path and filename** of the file being played,
 with the passage's **start offset**, **end offset**, and the **total audio
 length of the file**.
@@ -638,13 +638,12 @@ almost no information: the same file holds fourteen passages across 64 minutes.
 `2552 s → 2710 s of 3840 s` says where in it the needle is, and makes a
 mis-trimmed span visible as a number rather than as a listening complaint.
 
-**Three of the four are already in hand.** `QueueEntry` carries `path`,
-`start_ms` and `end_ms`. The file's own length is **not** on it —
-`QueueEntry::duration_ms()` is the passage span, and the file's is
-`files.duration_ms` in the library. Carrying it means widening the entry where
-`Library::passage` builds it, which is the honest place: the queue entry is what
-crosses to a backend `[SPEC-BK-030]`, and a length it does not carry is a length
-the far side cannot show either.
+**All four are on `QueueEntry`.** `path`, `start_ms` and `end_ms` were already
+there; the file's own length is carried too, as `file_ms` — distinct from
+`QueueEntry::duration_ms()`, which is the passage span, not the file's. It is
+widened where `Library::passage` builds the entry, the honest place: the queue
+entry is what crosses to a backend `[SPEC-BK-030]`, and a length it did not
+carry would be a length the far side could not show either.
 
 > **The path names the listener's filesystem**, and it should stay as local as
 > the browser it is drawn in. It belongs in the snapshot the local UI reads and
@@ -653,7 +652,7 @@ the far side cannot show either.
 > business.
 
 **`[REQ-VIS-230]` The underrun count can be restarted, and says what it counts
-from.** *(Requested 2026-08-23; not built.)* A **Restart** button beside the
+from.** *(Requested 2026-08-23; built.)* A **Restart** button beside the
 Underruns label in the Vaino skin, and **"since {date time}"** to the right of
 the count. Clicking it zeroes the displayed count and captures the moment.
 
@@ -663,14 +662,15 @@ number that only ever grows stops being read: after a rough hour, a clean day
 looks identical to another rough one. Restarting it turns the display into a
 question about the present, which is the question a listener actually has.
 
-Three things fall out of the shape, and are the reason this is written down
-before it is built rather than discovered during:
+Three things fall out of the shape, and were reasoned through before this was
+built rather than discovered during:
 
 * **The underlying counter is not reset.** It keeps running, per process, as it
-  does today — the button moves a **baseline**, and the display shows the
-  difference. Resetting the real counter would throw away the one number that
-  answers the other question, and would mean the diagnostic lied to whoever was
-  not looking at the button.
+  does today — the button moves a **baseline** (`underrun_baseline` in
+  `player/src/engine/mod.rs`), and the display shows the difference
+  (`underruns_since_reset`). Resetting the real counter would throw away the
+  one number that answers the other question, and would mean the diagnostic
+  lied to whoever was not looking at the button.
 * **"Since" has an answer before anyone clicks.** It starts as the moment the
   process began, so a fresh player reads *since 09:14* rather than *since
   never*. That is also the honest label for the count it is showing.

@@ -195,9 +195,14 @@ moves over the network in that arrangement is control, not sound.
 * **The UI is blank while MPD is the live backend** — title, position and
   duration come from the local engine's published state, so the seek bar is not
   offered there.
-* **MPD resident versus on-demand is undecided** `[SPEC-BK-060]`: it is not
-  installed on the appliance at all, and everything MPD-related has only ever
-  run on a Windows host.
+* ~~**MPD resident versus on-demand is undecided.**~~ *(Settled 2026-08-23,
+  missed in the 2026-09-01 pass over this section.)* `[SPEC-BK-060]` measured
+  both on the appliance itself (MPD 0.23.12) and decided resident: 100.8 MB for
+  MPD, 264 MB free with both running, versus a 242 s cold index rebuilt every
+  time on-demand would pay. The real remaining gap is narrower: every protocol
+  finding in [SPEC020](spec/SPEC020-the-handoff.md) was measured against MPD
+  0.24.0 on the development machine, not re-checked against the appliance's
+  0.23.12 beyond `seekid`.
 * ~~**No integration tests.**~~ *(Closed 2026-08-22, missed in the 2026-09-01
   pass over this section.)* `player/tests/invariants.rs` now holds
   cross-module agreements no single module's unit tests can reach — the cue
