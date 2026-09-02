@@ -15,6 +15,8 @@ Checks:
   4. Every relative markdown link resolves (code spans excluded).
   5. Vaino documents: 100-250 line target, 300-line hard limit [GOV-DOC-010]; warn only.
   6. Every cited tag is defined somewhere; no tag is defined twice.
+  7. Every doc-cited player/tools/sql/docs/build/VainoPi/BosePi/sendspin path
+     exists in the tree [GOV-DOC-040]; warn only.
 
 Usage:
     python tools/check_docs.py            # report
@@ -43,6 +45,29 @@ PREFIX = re.compile(r"^(?:\s+|>|\#{1,6}|\d+[.)]|[-+]\s|\*\s|\||~~"
                     r"|[←-⯿️\U0001F300-\U0001FAFF])")
 LINK = re.compile(r"\[[^\]\[]*\]\((?!https?:|file:|mailto:|#)([^)]+)\)")
 CODESPAN = re.compile(r"`[^`\n]*`")
+CODESPAN_INNER = re.compile(r"`([^`\n]*)`")
+
+# [GOV-DOC-040]. A doc-cited repository path that no longer exists is the same
+# class of failure as a broken markdown link, just inside backticks instead of
+# `[]()`. Added 2026-09-02 after a review found six specs across two days
+# still citing `player/src/db.rs`, `player/src/web.rs` and `player/src/
+# engine.rs` by name -- some with the file's own line count -- after each had
+# been split into a subdirectory of topic files. Scoped to the prefixes below,
+# deliberately narrow: a prefix like `src/` or `go/` would also match paths
+# GUIDE001/GUIDE002 cite *about a predecessor repository on its own disposal
+# path*, where "does not exist here" is the point being made, not an error.
+PATH_PREFIXES = ("player", "tools", "sql", "VainoPi", "BosePi", "sendspin",
+                  "docs", "build")
+CODE_PATH = re.compile(r"\b(?:%s)(?:/[\w.\-]+)+" % "|".join(PATH_PREFIXES))
+
+
+def cited_paths(text):
+    """Repository-looking paths inside backtick spans, trailing '.' stripped
+    (a path ending a sentence, e.g. "...in `db.rs`.", is not part of it)."""
+    out = []
+    for span in CODESPAN_INNER.findall(text):
+        out.extend(m.group(0).rstrip(".") for m in CODE_PATH.finditer(span))
+    return out
 
 # Prefixes owned by inherited material. Vaino must not mint new tags with these.
 # Vaino MAY cite them (e.g. [MFL-DEF-040]) -- citation is not definition, so the
@@ -76,6 +101,16 @@ KNOWN_COLLISIONS = set()
 PREEXISTING_V1_DANGLING = {"REQ-AUD-020", "REQ-AUD-040", "REQ-MB-010",
                            "REQ-PD-010", "REQ-HW-020", "SPEC-AUD-010",
                            "SPEC-DB-010", "SPEC-RUST-010"}
+
+# Paths cited only to record that they were deleted on purpose -- GUIDE002's
+# disposal register [GDE-DIS-010] and the open questions naming the docs it
+# superseded. "Does not exist" is the point those sentences make, not drift;
+# an entry here retires only if the citing text is removed or rewritten to
+# stop naming the dead path.
+KNOWN_DELETED_PATHS = {"docs/spec/SPEC004-go-migration-guide.md", "docs/roadmap.md",
+                        "docs/phase1-plan.md", "docs/user-interface.md",
+                        "docs/audio-database.md", "docs/tech-stack-investigation.md",
+                        "docs/cost-estimate.md", "docs/timeline-estimate.md"}
 
 # Tags used illustratively in GOV001's taxonomy table -- examples of the FORM
 # of an identifier, not references to real ones.
@@ -287,6 +322,18 @@ def main():
             same_doc = len({l.rsplit(":", 1)[0] for l in locs}) == 1
             hint = " -- summary table and detail? check they still agree" if same_doc else ""
             warnings.append(f"tag {t} defined {len(locs)}x: {', '.join(locs)}{hint}")
+
+    # 7 -- doc-cited repository paths must exist, advisory [GOV-DOC-040]
+    #
+    # Excludes docs/inherited/: those documents describe a predecessor
+    # repository this tree never contained, so a cited path never existing
+    # here is the expected case, not drift.
+    for p in vaino_docs():
+        for cited in cited_paths(open(p, encoding="utf-8").read()):
+            if cited in KNOWN_DELETED_PATHS or os.path.exists(cited):
+                continue
+            warnings.append(f"[GOV-DOC-040] {p} cites `{cited}`, "
+                            f"which does not exist in the tree")
 
     # 5 -- line-count governance, advisory, two tiers [GOV-DOC-010]
     #

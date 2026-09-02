@@ -20,12 +20,13 @@ path to the chosen speaker" is implemented across:
 | `player/src/bluetooth.rs` → `vaino-btctl` | BlueZ policy, in shell, behind sudo |
 | `VainoPi/vaino-speaker.sh` + timer | reconnect policy, in systemd |
 | `VainoPi/vaino-wait-sink` | startup ordering, in shell |
-| `player/src/engine.rs` | the retry/backoff state machine, inside the mix loop |
+| `player/src/engine/` (formerly `engine.rs`) | the retry/backoff state machine, inside the mix loop |
 
 No component owns the concern, so no component can be tested for it, and the
 recovery state machine lives inside the one loop that must never stall. This is
-why `engine.rs` reached 1,297 lines: it holds mixing and device policy, two
-concerns whose timing requirements have nothing in common.
+why the file reached 1,297 lines before `[SPEC-APS-100]` step 1 pulled the
+supervisor out of it: it held mixing and device policy, two concerns whose
+timing requirements have nothing in common.
 
 **`[SPEC-APS-020]` The periphery accreted patches; the core did not.** Every
 defect of 2026-08-15/16 was in this seam, and none were in the decoders, the
@@ -150,9 +151,29 @@ risky one lands last with a test harness already under it:
 4. **Retire the shell layer** — `vaino-speaker.sh`, its timer, `vaino-wait-sink`,
    and the `vaino-btctl` verbs the supervisor subsumes.
 
-**`[SPEC-APS-110]` Explicitly not in scope.** Splitting `db.rs` (1,853 lines)
-and `web.rs` (1,018). Both are large, both have a single concern, and neither
-has produced a defect. Size alone is not a reason `[GDE-FBD-050]`.
+**`[SPEC-APS-110]` Explicitly not in scope, when this was written (2026-08-16).**
+Splitting `db.rs` (1,853 lines) and `web.rs` (1,018). Both were large, both had
+a single concern, and neither had produced a defect. Size alone is not a
+reason `[GDE-FBD-050]`.
+
+*Superseded 2026-09-01/02.* Both were split anyway, along with `engine.rs`
+(never named above, but the same shape of change): `db.rs` into
+`db/{mod,library,player_store}.rs` (2026-09-01), `web.rs` into
+`web/{mod,browse,review,musicbrainz,media,edit,settings,bluetooth,skins,control}.rs`
+and `engine.rs` into `engine/{mod,persist}.rs` (both 2026-09-02). What changed
+was not the reasoning above — none of the three had produced a defect either —
+but the measured cost `[GDE-FBD-050]` now on record for each: `db.rs` had grown
+to 4,149 lines with `impl Library` split into two non-contiguous blocks around
+`PlayerStore`, an architecturally load-bearing distinction invisible in the
+file layout; `web.rs` (2,287 lines) mixed roughly ten unrelated route
+concerns with no boundary between them; `engine.rs` (1,242 lines in its
+`impl Engine` block) mixed the tick/mixing methods `[GDE-FBD-090]` forbids
+ever blocking with settings/history persistence triggered by events rather
+than every sample. Each split was file-boundary-only — same structs, same
+threads, same behaviour, verified equivalent by full test suite plus a
+runtime smoke test against a real library, not merely "compiles." This
+supersedes the "not in scope" verdict; it does not overturn `[GDE-FBD-050]`,
+it satisfies it with numbers the original note didn't have.
 
 ---
 
