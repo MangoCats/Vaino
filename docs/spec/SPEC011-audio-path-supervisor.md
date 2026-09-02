@@ -132,6 +132,15 @@ It also replaces "ask every few seconds and hope the sample lands on the fault"
 with the events named in `[SPEC-APS-050]`. Transport teardown becomes a fact the
 supervisor is told, at the moment it happens.
 
+**Status, against `[SPEC-APS-100]` below: this section is target design, not yet
+the shape of `path.rs`.** Step 1 (done) extracted the supervisor with today's
+subprocess backend behind it and nothing else — `PathHandle`/`PathRequest` and a
+free-function `supervise` loop calling `crate::sink::current()`/`Output`
+directly. None of `PathState`, `PathBackend`, `PathEvent`, `LinkState`,
+`SinkState` or `Tristate` exist in the tree yet, and `audible()` returns a plain
+`bool` rather than the `Tristate` `[SPEC-APS-030]` calls for. They arrive with
+steps 2 and 3, not before.
+
 ---
 
 ## 4. Migration order

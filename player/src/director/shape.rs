@@ -21,10 +21,12 @@ use std::collections::HashSet;
 
 use super::flavor::{distance, Flavor, FlavorSchema};
 
-/// `[SPEC-DIR-195]`. Marked **re-derive** against the retrieval harness
-/// `[SPEC-DIR-200]`: they were tuned for 11 unweighted dimensions, and on 11
-/// dimensions they are still the right values. Revisit when the flavor vector
-/// grows, not before — re-deriving now would mean deriving them twice.
+/// `[SPEC-DIR-195]`. Re-derived and kept `[SPEC-DIR-205]`: measured against the
+/// retrieval harness on the local 18-characteristic metric, the pool
+/// boundaries these values select land in the same place as they did on the
+/// 11 unweighted dimensions they were tuned for. No longer marked re-derive;
+/// revisit only if the library's composition changes substantially, not
+/// because the vector grew.
 pub const EXCL_POOL: usize = 1000;
 pub const RAND_POOL: usize = 100;
 
