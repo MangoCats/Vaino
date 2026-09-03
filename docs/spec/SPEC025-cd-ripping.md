@@ -9,12 +9,13 @@ data is long gone, this document is for the case where it isn't gone yet —
 the disc is in the drive, and its own table of contents (TOC) states
 boundaries to the sector rather than asking anything to be inferred.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-220..245]`.
-> No code exists yet. Flagged in the spec itself rather than left to the
-> reader to assume: the ripping-tool choice (§2) is a real open question,
-> not a settled implementation detail, because it was not tested against
-> this project's own desktop platform before this document was written
-> `[GOV-SRC-020]`.
+> **Status.** Requirements and specification only, per `[REQ-LIB-220..250]`.
+> No code exists yet. The ripping-tool choice (§2) is decided **per
+> platform** — EAC on Windows, `cdrdao` on Linux, checked rather than
+> assumed `[GOV-SRC-020]` — and both are optional, user-installed
+> dependencies: the whole capability degrades gracefully to unavailable
+> when neither is present, the same posture `analyze_amplitude.py` already
+> takes toward a missing `ffmpeg`.
 
 > **Related:** [SPEC024](SPEC024-dao-segmentation-cascade.md) for the
 > audio-content cascade this supersedes for a fresh rip, and remains the
@@ -45,44 +46,66 @@ audio-based match and one that arrives for free once a TOC exists at all.
 
 ---
 
-## 2. The ripping tool — an open question, not a settled choice
+## 2. The ripping tool — decided per platform
 
-**`[SPEC-RIP-020]`** Two real candidates, and this project's own desktop
-platform has not yet decided between them:
+**`[SPEC-RIP-020]` EAC on Windows, `cdrdao` on Linux — checked, not
+assumed.** cdrdao's own Win32 build
+([`README.Win32`](https://github.com/Distrotech/cdrdao/blob/master/README.Win32))
+states plainly that it requires a working **ASPI** installation to reach
+the drive — Adaptec's SCSI interface, unsupported by Windows natively since
+Vista, and increasingly hostile territory on Windows 11 as cross-signed
+legacy kernel drivers lose blanket trust. Exact Audio Copy, by contrast, is
+actively maintained, genuinely Windows-11-compatible, and built on the
+modern **SPTI** interface — the thing cdrdao's Windows port was never
+adapted to use. On Linux, cdrdao needs none of this: ASPI's Windows-only
+baggage doesn't apply, and it is the actively-supported, natural choice
+there.
 
-| | cdrdao | Exact Audio Copy (EAC) |
+| | cdrdao (Linux) | Exact Audio Copy (Windows) |
 | :--- | :--- | :--- |
-| Platform | Linux-first; Windows builds exist, less actively exercised there | Windows-native |
-| Output | `.toc` (text) + audio | `.cue` + log, equivalent boundary data |
-| Read verification | `--paranoia-mode 0-3`, built in (§5) | "Secure mode," its own settings |
-| Licence | GPL-2.0-or-later | Freeware, not open source |
+| Platform | Native, actively maintained | Native, actively maintained (v1.8, 2025) |
+| Drive access | Direct SCSI, no legacy layer needed | Modern SPTI |
+| Output | `.toc` (text) + audio | `.cue` + log — same `MM:SS:FF` frame timebase (§3) |
+| Read verification | `--paranoia-mode 0-3`, built in (§5) | "Secure mode" (multiple read passes); mapped to the same 0-3 scale at the adapter, not exposed as a second setting |
+| Automation | Pure CLI, built for scripting | Real command-line switches (`-testandcopy -imagewav ...`), driven the same way Sampo already drives every other subprocess tool |
+| Licence | GPL-2.0-or-later | Freeware, **not open source** |
 
-Sampo already invokes external tools as subprocesses and nothing else —
-`ffmpeg`, `fpcalc`, the Essentia extractor `[SPEC-SA-030]`, `[SPEC-SA-060]`
-— so a GPL-2.0 tool run this way raises no licensing question distinct from
-what `[GDE-ARC-018]` already settled for those. The open question is
-practical, not architectural: which one actually runs cleanly on this
-project's own Windows desktop, unverified as of this document.
+**`[SPEC-RIP-022]` The one real tradeoff, named rather than absorbed
+silently.** Every other external tool Sampo depends on — `ffmpeg`,
+`fpcalc`, the Essentia extractor, cdrdao itself — is open source, matching
+`[GDE-ARC-018]`'s own licence-direction discipline; EAC is not. Subprocess
+invocation (never linking) is the same posture that already keeps AGPL/GPL
+tools clean of that question, but it does not make EAC open source — this
+is a deliberate, Windows-specific compromise, not a clean architectural
+fit, made because the alternative (chasing an abandoned Adaptec driver
+into an OS actively hardening against it) is not a realistic path today.
 
-**Designed for either without committing to one**: a thin adapter
-boundary — "produce a TOC/cue-equivalent structure plus the ripped audio" —
-with `cdrdao` as the reference implementation this document specifies
-against (its `--paranoia-mode` scale is what `[REQ-LIB-245]`/§5 names
-directly) and `EAC` as a documented alternative behind the same interface,
-resolved by whichever build-and-test pass actually implements this. Do not
-build for both before the platform question is answered — one working path
-is the deliverable, not an abstraction exercised by a single caller
-`[GDE-FBD-050]`.
+**`[SPEC-RIP-024]` Both are optional, user-installed dependencies; the
+capability degrades gracefully, never crashes, when neither is found.**
+The same posture `analyze_amplitude.py` already takes toward a missing
+`ffmpeg` (`shutil.which()` at startup, a clean `{"ok": false, "error":
+"..."}`/plain message at the point of use, never a traceback) applies here:
+detect the platform's own tool on PATH, and if it is absent, the "Rip a
+CD" action is offered as unavailable with a plain reason rather than failing
+opaquely mid-rip. Nothing else in Sampo requires either tool — a library
+built entirely from files already on disk `[SPEC024]` never touches this
+code path at all `[REQ-LIB-250]`.
+
+A thin adapter boundary — "produce a TOC/cue-equivalent structure plus the
+ripped audio" — is what the rest of this document specifies against,
+letting §§3-7 read identically regardless of which side actually ran.
 
 ---
 
 ## 3. Reading the TOC
 
-**`[SPEC-RIP-030]`** cdrdao's own TOC positions are `MM:SS:FF` — minutes,
-seconds, **frames**, 75 frames per second, the CD's own timebase, not
-milliseconds. Converting is one function, tested on its own rather than
-folded into a larger one, the same lesson McRhythm's own tick-based timing
-already cost this project's lineage once (`[GDE-MCR-*]`):
+**`[SPEC-RIP-030]`** cdrdao's `.toc` and EAC's `.cue` both express positions
+as `MM:SS:FF` — minutes, seconds, **frames**, 75 frames per second, the
+CD's own timebase, not milliseconds — the standard CD-frame convention
+shared by both formats, not a coincidence needing two conversions. One
+function, tested on its own rather than folded into a larger one, the same
+lesson McRhythm's own tick-based timing already cost this project's
+lineage once (`[GDE-MCR-*]`):
 
 ```
 ms = round((minutes * 60 + seconds) * 1000 + frames * 1000 / 75)
@@ -192,9 +215,6 @@ already covers.
 
 **`[SPEC-RIP-080]`** Genuinely undecided, left here rather than guessed at:
 
-- **Which ripping tool actually runs cleanly on this project's own Windows
-  desktop** (§2) — cdrdao or EAC, resolved only by testing, not by this
-  document.
 - **Hidden and pregap-only audio.** A disc with genuine audio inside a
   pregap or at `INDEX 00` (a hidden intro, a run-out groove recording) is
   real audio a naive track-by-`INDEX 01` split would drop. Whether Vaino
@@ -216,6 +236,6 @@ already covers.
 
 ---
 
-**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..245]` ·
+**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..250]` ·
 extends `[SPEC-SC-045]`'s provenance ladder and `[SPEC008]`'s `imported:`
 convention · complements, does not replace, `[SPEC024](SPEC024-dao-segmentation-cascade.md)`

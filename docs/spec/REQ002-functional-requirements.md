@@ -916,6 +916,8 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-LIB-245]` The rip's read-verification aggressiveness is a user-adjustable setting, defaulting to a level that trades a little resilience for materially faster rips.** Designed in [SPEC025](SPEC025-cd-ripping.md) §5 — matching the underlying tool's own 0–3 scale, defaulting to **2**.
 
+**`[REQ-LIB-250]` The ripping tool is optional and user-installed; its absence degrades this one capability, never the rest of Sampo.** EAC on Windows, `cdrdao` on Linux `[SPEC-RIP-020]` — neither is a hard dependency of anything else Sampo does, so "Rip a CD" is offered as unavailable with a plain reason when its platform's tool is not found, the same posture `analyze_amplitude.py` already takes toward a missing `ffmpeg`, never a crash or an opaque failure mid-rip.
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Vaino installation with **no Sampo** can receive derived data and use every advanced feature `[SPEC-DF-080]`.
