@@ -709,7 +709,7 @@ Note the strong implication for `[GDE-FEX-090]`: **Stage B carries none of this 
 - **Binary characteristics** — Pearson r per classifier, plus MAE. Directly comparable to the `mulib.db` baseline.
 - **Complex characteristics** — per-dimension r is necessary but insufficient on a simplex. Report alongside it top-1 class agreement and a distributional measure (Jensen–Shannon divergence or cosine over the full simplex).
 - **What actually matters downstream** is flavor *distance* — specified in [SPEC005](spec/SPEC005-flavor-distance.md), not raw per-dimension agreement. Report rank correlation between distances computed on reproduced vectors versus ground-truth vectors, over sampled recording pairs. A vector can be mediocre per-dimension and still rank neighbours correctly, and ranking neighbours is what the Program Director consumes `[GDE-PD-050]`.
-- **Per-characteristic reliability feeds straight back into the metric** `[SPEC-FD-120]`: a locally extracted characteristic contributes to distance in proportion to its measured agreement, so a weak extractor degrades similarity gracefully rather than poisoning it.
+- **Per-characteristic reliability feeds straight back into the metric** as a corpus-wide `w_c` per characteristic `[SPEC-FD-052]`, not per-value scaling by measured agreement — that per-value premise (`[SPEC-FD-120]`) was superseded once the library moved to uniform-local provenance `[SPEC-FD-150]`. Either way, a weak characteristic degrades similarity gracefully rather than poisoning it.
 
 ### `[GDE-FEX-100]` Iteration protocol — best effort, no pass/fail gate
 

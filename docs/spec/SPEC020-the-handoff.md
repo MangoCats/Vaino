@@ -46,7 +46,7 @@ Neither fades unconditionally, and **which happened is reported**: saying
 skip shape is borrowed and given back.
 
 **`[SPEC-BK-032]` The queue crosses as passage ids, and is rebuilt on arrival.**
-*(Built 2026-08-21.)* `Session::hand_over` switches the side, reads each carried
+*(Built 2026-08-21.)* `Session::hand_over_seamless` switches the side, reads each carried
 id back out of the library, and enqueues it into the incoming backend. **Spans
 are re-derived rather than carried**: `start_ms`, `end_ms`, gain and ramps
 belong to the passage, not to whichever backend last played it, and handing over
@@ -59,7 +59,7 @@ renumbered away since the queue was built is skipped and named, and the
 Director's queueing mark for it is undone `[REQ-PD-112]` — it never played.
 
 Demonstrated against a live MPD and a **real** `Engine` on a silent output: MPD
-holding three Director-selected passages, `hand_over` to the local side, all
+holding three Director-selected passages, `hand_over_seamless` to the local side, all
 three rebuilt and queued there, and the reported capabilities flipping from
 `gain false ramps false` to `gain true ramps true` in the same breath.
 

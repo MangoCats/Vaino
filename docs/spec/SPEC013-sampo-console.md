@@ -30,7 +30,7 @@ Three consequences, and together they are the requirement:
 | :--- | :--- | :--- |
 | Language | Python | Sampo is Python `[SPEC-SA-010]`; another language would shell into it anyway |
 | Binding | **`127.0.0.1` only** | it holds the library's write lock, spawns subprocesses and reaches ssh keys |
-| Server | stdlib `ThreadingHTTPServer` | [requirements.txt](../../tools/requirements.txt) records fastapi/uvicorn as the **v1 player's**, since removed; four pages do not justify their return `[GDE-FBD-060]` |
+| Server | stdlib `socketserver.ThreadingTCPServer` + a `BaseHTTPRequestHandler` | [requirements.txt](../../tools/requirements.txt) records fastapi/uvicorn as the **v1 player's**, since removed; four pages do not justify their return `[GDE-FBD-060]` |
 | Concurrency | one job at a time | §4 |
 
 Vaino's player is a LAN service for a household. This is an operator's console on the machine that owns the library, and the two exposures are not comparable.

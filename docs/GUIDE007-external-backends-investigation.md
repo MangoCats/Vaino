@@ -6,6 +6,8 @@ What it would cost to let the Director drive MPD or an OpenSubsonic server, whet
 
 > **Related:** [GUIDE006](GUIDE006-director-as-a-guest.md) posed the question · [`player/src/playback.rs`](../player/src/playback.rs) is the spike · [SPEC009](spec/SPEC009-program-director.md)
 
+> **Outcome, added 2026-09-02:** this investigation's MPD recommendation was accepted and built — see [IMPL004](IMPL004-mpd-prototype.md)/[IMPL005](IMPL005-mpd-prototype-results.md) for the build order and results, [SPEC015](spec/SPEC015-mpd-director.md)/[SPEC018](spec/SPEC018-switching-backends.md)/[SPEC020](spec/SPEC020-the-handoff.md) for the shipped design. `player/Cargo.toml` carries the `mpd` feature gate exactly as proposed below (§6/§7), and `player/src/mpd_backend.rs`, `switch.rs` are merged to `main`. What follows is kept as the reasoning that produced that decision, not as an open proposal — read §4/§6/§7's "if built" / "would" framing as history, not as a live question. OpenSubsonic was not pursued.
+
 ---
 
 ## 1. The seam already existed
