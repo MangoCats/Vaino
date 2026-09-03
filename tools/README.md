@@ -1,6 +1,6 @@
 # `tools/` — Sampo
 
-Everything here is Sampo: the library-building side of Vaino, Python, AGPL-3.0-or-later — see [GUIDE002 §2](../docs/GUIDE002-rearchitecture-plan.md#2-architectural-decisions) (`[GDE-ARC-010]`) for why it's a separate entity from `player/`. 90 files in one flat directory with no subpackages; this index exists so "where is the code that does X" has an answer without moving anything, per `[GDE-CHT-040]`'s scope discipline — restructuring into subpackages was considered and set aside precisely because the flat layout is what every doc's CLI example, every path Sampo's own job runner builds, and every `test_*.py`'s import already assume.
+Everything here is Sampo: the library-building side of Vaino, Python, AGPL-3.0-or-later — see [GUIDE002 §2](../docs/GUIDE002-rearchitecture-plan.md#2-architectural-decisions) (`[GDE-ARC-010]`) for why it's a separate entity from `player/`. 92 files in one flat directory with no subpackages; this index exists so "where is the code that does X" has an answer without moving anything, per `[GDE-CHT-040]`'s scope discipline — restructuring into subpackages was considered and set aside precisely because the flat layout is what every doc's CLI example, every path Sampo's own job runner builds, and every `test_*.py`'s import already assume.
 
 Each script is run directly — `python tools/whatever.py --help` for its own arguments — and most carry a runnable example in their own module docstring. `test_X.py` beside `X.py` is that module's own tests, run the same way (`python tools/test_X.py`); a handful of `test_console_*.py` files test slices of `console.py` instead of a same-named module.
 
@@ -27,7 +27,7 @@ Bringing audio into the library and keeping its schema current.
 | `extract_library.py` | Extract lowlevel features and classify them into flavor `[LOG-FEX-102]`. |
 | `fingerprint_ids.py` | Check every recording MBID against the audio itself `[REQ-LIB-165]`. |
 | `verify_ids.py` | Are the recording MBIDs on these passages actually right? |
-| `segment_dao.py` | Segment a disc-at-once capture into its tracks `[SPEC-SA-070]`. |
+| `segment_dao.py` | Segment a disc-at-once capture into its tracks — grid search, DP assembly, RMS fallback, extra-track merging `[SPEC-SA-070]`, `[SPEC024]`. |
 | `analyze_amplitude.py` | Automatic lead-in/lead-out detection `[SPEC-SA-075]`. |
 | `backfill_album_cuts.py` | Give an old radio-only passage the album twin it never got `[SPEC-SA-110]`. |
 | `backfill_file_tags.py` | Re-read tags for a file whose `file_tags` row came back entirely empty. |

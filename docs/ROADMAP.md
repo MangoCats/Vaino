@@ -60,19 +60,33 @@ for the phases that have already shipped.)*
 
 ### P4 — Ingest & DAO Segmentation
 
-**Reproduce** McRhythm's cascade `[GDE-MCR-010]` — not merely port it. The inherited [MCR-SPEC033](inherited/mcrhythm/MCR-SPEC033-album_matching.md) describes *McRhythm's implementation*, not Vaino's contract, so reproduction has three deliverables in order:
+Requirements (`[REQ-LIB-200..215]`) and specification
+([SPEC024](spec/SPEC024-dao-segmentation-cascade.md)) are done; the four
+reproducible cascade stages (grid search, DP assembly, RMS quiet-spot
+fallback, extra-track merging) are built — see
+[GUIDE001 §8](GUIDE001-lineage-and-lessons.md#8-rearchitecture-phases--retrospective)
+for what shipped. Two pieces remain genuinely open, both detailed in
+[SPEC024 §8](spec/SPEC024-dao-segmentation-cascade.md#8-open):
 
-1. **Requirements** — what Vaino demands of segmentation, independent of how McRhythm did it. Source material: MCR-SPEC033, MCR-IMPL005.
-2. **Specification** — Vaino's own cascade spec: grid search → DP assembly → RMS quiet-spot → extra merging, 7-strategy MusicBrainz edition search, windowed-dB-profile optimization, Stage-6 RMS boundary refinement.
-3. **Implementation + review UI** — waveform with draggable boundaries, lead-in/lead-out markers and gain `[SPEC-SA-080]`; fade-in/fade-out markers and curves `[SPEC-SC-046]` were added to the same editor after the fact, once real playback turned out to need them.
+1. **The 7-strategy automatic MusicBrainz edition search** that would
+   supply the cascade's expected track count/durations without a human
+   typing them in — real query design, rate-limited network calls, and
+   its own accuracy measurement, genuinely separate work from the cascade
+   itself.
+2. **McRhythm's "Stage 6" boundary refinement** — no recoverable
+   algorithm survives to reproduce, only tuning thresholds and aggregate
+   results in a historical test-results document. A future pass would be
+   new design work informed by those numbers, not a port.
 
-`start_ms`/`end_ms` (the `radio`-kind's own trim) and `lead_in_ms`/`lead_out_ms` are **computed**, from the inherited amplitude analysis [MCR-SPEC025](inherited/mcrhythm/MCR-SPEC025-amplitude_analysis.md) `[SPEC-SA-075]` — this supplies the Radio side of the Album/Radio duality `[GDE-BMK-030]` that MuLibPlay only ever produced by hand. Automatic placement is always reviewable and overridable; manual edits outrank computed values permanently.
-
-Every decision persisted as an inspectable **ingest decision record** — which stage matched, at what confidence, which editions were considered and rejected `[GDE-CHT-030]`. This turns "undocumented ritual" into "reviewable process".
-
-> **Reports:** measured against McRhythm's 93% album match / 96% mean boundary accuracy `[GDE-MCR-010]` on the 189 known DAO files. **These must be independently re-verified** — at present they are simultaneously the target and the only evidence, which is not a test.
-
-*(Status note: `tools/segment_dao.py` implements a threshold-sweep silence detector, measured at 16/20 (80%) exact track-count match and 94% of boundary starts within 2s on the hardest known files, and now wired to `--commit`, but this is not the McRhythm cascade above — no grid search, no DP assembly, no MusicBrainz edition search. [SPEC007](spec/SPEC007-sampo-architecture.md) §6 stays PROVISIONAL pending this work.)*
+**Independent re-verification against Vaino's own library — partial.**
+`[GOV-SRC-020]`: no CI-portable ground-truth corpus exists in this repo —
+`segment_dao.py --validate` checks against the user's own live `vaino.db`
+(188 files / 2,676 boundaries). A 40-file sample, run 2026-09-03: 40/40
+exact track count (100%), 94% of boundary starts within 2s, all resolved
+by Stage 2 alone — see [SPEC024](spec/SPEC024-dao-segmentation-cascade.md)'s
+own status banner. The full 188-file population, and a real case that
+actually exercises DP assembly/the RMS fallback/merging rather than only
+their synthetic unit tests, remain unrun.
 
 ### Open questions
 

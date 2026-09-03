@@ -896,6 +896,14 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-LIB-195]` A track flagged on one installation can be reviewed on another that shares an overlapping library, and the resulting correction can return to where the flag was made.** *(Requested 2026-08-27; built 2026-08-27.)* `[REQ-VIS-265]`'s flag is set from vainopi's own play-history page — the appliance a listener actually hears something wrong on — but the appliance carries no Sampo to act on it, and `[REQ-LIB-190]`'s list only ever reads a console's own local `listener_flags`, blind to what a *different* installation flagged. `[REQ-LIB-185]`'s sync answers "a correction reaches a remote installation" once the desktop already knows which track; this closes the leg before it — the name of the track — and, once reviewed, carries the correction back by the same mechanism, rather than requiring a whole-library replacement `[PI005 §1]` already found the wrong tool for exactly this appliance. Designed in [SPEC022](SPEC022-flag-and-edit-sync.md) `[SPEC-DF-107..118]` (split out of SPEC006 §10 once that document passed its own line limit).
 
+**`[REQ-LIB-200]` `[REQ-LIB-110]`'s segmentation falls back through stages rather than accepting the first attempt.** A single silence-threshold guess is not a cascade; grid search, dynamic-programming assembly, an RMS quiet-spot fallback and extra-track merging are each tried in order, whichever resolves a file with the fewest assumptions. Designed in [SPEC024](SPEC024-dao-segmentation-cascade.md).
+
+**`[REQ-LIB-205]` Every segmentation decision is recorded, not just applied.** Which stage matched, its confidence, and the candidates it did not choose — the same `ingest_decisions` discipline `[SPEC-SA-085]` every other Sampo stage already keeps, closing the one place segmentation was silent about how it decided.
+
+**`[REQ-LIB-210]` A cascade result is always reviewable and overridable, and a human's correction is permanent.** Restates `[REQ-LIB-175]`/`[SPEC-SA-080]` explicitly for the cascade: `boundary_src='manual'` permanently outranks recomputation `[SPEC-SC-045]`, so accepting the machine's split and correcting it are both first-class, and neither is silently undone by a later re-run.
+
+**`[REQ-LIB-215]` An unconfirmed automatic segmentation is discoverable as a worklist, not only reachable one profile page at a time.** Segmentation without a way to find what still needs a look is a machine nobody checks. Designed in [SPEC024](SPEC024-dao-segmentation-cascade.md) §7.
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Vaino installation with **no Sampo** can receive derived data and use every advanced feature `[SPEC-DF-080]`.

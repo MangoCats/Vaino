@@ -228,7 +228,14 @@ The phased plan is [GUIDE002 §3](GUIDE002-rearchitecture-plan.md#3-phased-plan)
 
 **P5 — Appliance: done, with named gaps**, per `[GDE-PHS-050]`. Fast boot and the 3-partition resilient storage model are built ([PI001](../VainoPi/PI001-image-and-partitions.md)); Bluetooth output is built **and measured on real hardware** ([PI006](../VainoPi/PI006-appliance-characterisation.md)). Two things are built but not yet measured on hardware: the I2S DAC HAT output path (Profile B) has never been run on a device, and hard-power-loss survival has no power-pull test behind it — PI001 §5a says so directly. Wall Art / kiosk display was never built — it remains an open item, see [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead).
 
-*(P4 — Ingest & DAO Segmentation — has not shipped: [SPEC007](spec/SPEC007-sampo-architecture.md) §6 remains explicitly PROVISIONAL on the McRhythm segmentation cascade. See [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead).)*
+**P4 — Ingest & DAO Segmentation: partly shipped.** Requirements
+(`[REQ-LIB-200..215]`) and specification ([SPEC024](spec/SPEC024-dao-segmentation-cascade.md))
+are done; the four reproducible cascade stages — grid search, DP assembly,
+RMS quiet-spot fallback, extra-track merging — are built, driven by a
+hand-supplied expected track count rather than an automatic MusicBrainz
+match. [SPEC007](spec/SPEC007-sampo-architecture.md) §6 stays PROVISIONAL
+because of what's still open: the automatic edition search and McRhythm's
+unspecified "Stage 6" refinement, see [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead).
 
 ---
 

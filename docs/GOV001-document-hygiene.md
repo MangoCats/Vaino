@@ -157,7 +157,8 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-SC-030]` | Identity spine: files / recordings / passages DDL | [SPEC008-database-schema.md](spec/SPEC008-database-schema.md#2-identity-spine) |
 | `[SPEC-SC-060]` | Flavor storage: long/narrow, per-characteristic provenance | [SPEC008-database-schema.md](spec/SPEC008-database-schema.md#4-flavor) |
 | `[SPEC-SA-020]` | Sampo pipeline stages S1-S7 | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#2-pipeline) |
-| `[SPEC-SA-090]` | OPEN: per-passage extraction, untested | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
+| `[SPEC-SA-090]` | Per-passage extraction — measured, the mechanism works | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
+| `[SPEC-SA-115..128]` | DAO segmentation cascade: grid search, DP assembly, RMS fallback, extra-track merging — built; MusicBrainz edition search and "Stage 6" refinement — open | [SPEC024-dao-segmentation-cascade.md](spec/SPEC024-dao-segmentation-cascade.md) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |

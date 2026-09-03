@@ -815,6 +815,73 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// "Accept as-is" `[SPEC024 §7]`, `[SPEC-SA-125]`: a passage the
+    /// segmentation cascade drew boundaries for, confirmed without opening
+    /// the waveform editor. Writes a `boundary_reviews` row equal to the
+    /// passage's own current values -- a fourth verb alongside a
+    /// correction, playing the same role for a cascade result that
+    /// `record_review`'s `kept` plays for an identification: nothing to
+    /// change, only a decision to record.
+    ///
+    /// A thin wrapper, not a second writer: every guard `record_boundary_review`
+    /// already enforces (an edit already applied is refused, the pre-edit
+    /// baseline is captured from `passages` itself, `start_ms < end_ms`)
+    /// applies here unchanged, because this only supplies that method's nine
+    /// values by reading them back from the same row rather than from a
+    /// posted draft. `boundary_src` is not touched here -- exactly like a
+    /// waveform correction, that happens only once
+    /// `tools/apply_boundary_reviews.py` next folds the recorded row into
+    /// `passages` `[SPEC-SC-045]`.
+    #[cfg(feature = "sampo-support")]
+    pub fn accept_segment(&self, passage_id: i64) -> Result<(), DbError> {
+        // Refused for anything the queue itself would not have offered --
+        // otherwise "accept as-is" could silently create a `boundary_reviews`
+        // row for a passage nobody asked to confirm.
+        let boundary_src: String = self
+            .conn
+            .query_row(
+                "SELECT boundary_src FROM passages WHERE passage_id = ?1",
+                [passage_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| DbError::Query("no such passage".into()))?;
+        if !boundary_src.starts_with("computed:segment-cascade") {
+            return Err(DbError::Query(
+                "this passage's boundaries were not set by the segmentation cascade".into(),
+            ));
+        }
+        #[allow(clippy::type_complexity)]
+        let (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, fade_in_ms, fade_out_ms,
+             fade_in_curve, fade_out_curve):
+            (i64, i64, Option<i64>, Option<i64>, Option<f64>, i64, i64, String, String) = self
+            .conn
+            .query_row(
+                "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, \
+                        fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve \
+                   FROM passages WHERE passage_id = ?1",
+                [passage_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
+                        r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+            )
+            .map_err(|_| DbError::Query("no such passage".into()))?;
+        self.record_boundary_review(
+            passage_id,
+            start_ms as u64,
+            end_ms as u64,
+            // NULL lead means "not analysed" -- the same fallback
+            // `row_to_entry` already takes for live playback, so accepting
+            // "as-is" really does mean the passage's current behaviour, not
+            // a fabricated lead.
+            lead_in_ms.unwrap_or(0).max(0) as u64,
+            lead_out_ms.unwrap_or(0).max(0) as u64,
+            gain_db.unwrap_or(0.0),
+            fade_in_ms.max(0) as u64,
+            fade_out_ms.max(0) as u64,
+            &fade_in_curve,
+            &fade_out_curve,
+        )
+    }
+
     /// Correct a recording's credited artist without touching the recording
     /// itself `[SPEC-SUI-197]` -- the one correction today's review page
     /// cannot make any other way.
@@ -1768,6 +1835,115 @@ mod tests {
         let store = PlayerStore::open(&tmp).unwrap();
         assert!(store.record_boundary_review(2, 5000, 5000, 0, 0, 0.0, 20, 20, "exponential", "exponential").is_err());
         assert!(store.record_boundary_review(2, 6000, 5000, 0, 0, 0.0, 20, 20, "exponential", "exponential").is_err());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// "Accept as-is" writes a `boundary_reviews` row equal to the passage's
+    /// own current values `[SPEC024 §7]`, `[SPEC-SA-125]`, readable back
+    /// through `Library::segment_queue`'s own `decided` flag -- without
+    /// touching `boundary_src`, which stays the cascade's own until
+    /// `tools/apply_boundary_reviews.py` next runs `[SPEC-SC-045]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn accept_segment_confirms_a_cascade_passage_with_its_own_values() {
+        let tmp = std::env::temp_dir().join(format!("vaino-seg-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            // `segmentable()`, not `fixture()`: `segment_queue` below joins
+            // through the same naming tables `review_queue` does, and a bare
+            // `fixture()` db has none of them.
+            let c = segmentable();
+            c.execute_batch(
+                "INSERT INTO passages VALUES
+                     (30,1,'radio',5000,65000,700,900,-3.0,'computed:segment-cascade@v1',15,25,'linear','linear');",
+            )
+            .unwrap();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.accept_segment(30).unwrap();
+
+        let lib = Library::open(&tmp).unwrap();
+        let got = lib.boundary_review(30).expect("accept-as-is must leave a readable row");
+        assert_eq!((got.start_ms, got.end_ms), (5000, 65000));
+        assert_eq!(got.lead_in_ms, Some(700));
+        assert_eq!(got.lead_out_ms, Some(900));
+        assert!((got.gain_db.unwrap() - -3.0).abs() < 1e-9);
+        assert_eq!(got.fade_in_ms, Some(15));
+        assert_eq!(got.fade_out_ms, Some(25));
+        assert_eq!((got.fade_in_curve.as_deref(), got.fade_out_curve.as_deref()),
+                   (Some("linear"), Some("linear")));
+
+        let applied_at: Option<String> = store
+            .conn
+            .query_row("SELECT applied_at FROM boundary_reviews WHERE passage_id = 30", [], |r| r.get(0))
+            .unwrap();
+        assert!(applied_at.is_none(),
+                "the Rust side records; only tools/apply_boundary_reviews.py stamps applied_at");
+        let boundary_src: String = store
+            .conn
+            .query_row("SELECT boundary_src FROM passages WHERE passage_id = 30", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(boundary_src, "computed:segment-cascade@v1",
+                    "unchanged until the apply step folds the confirmation in");
+
+        // `[SPEC-SA-124]`'s own criterion is `applied_at`, not merely a row
+        // existing -- so the passage still shows here until
+        // `tools/apply_boundary_reviews.py` next runs, but now carries
+        // `decided: true`, telling the queue's own reader that a look is no
+        // longer needed even though the row has not dropped out yet.
+        let q = lib.segment_queue(50).unwrap();
+        let item = q.iter().find(|i| i.passage_id == 30)
+            .expect("recorded but unapplied still shows, by [SPEC-SA-124]'s own criterion");
+        assert!(item.decided, "a passage with a recorded decision must say so");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Only a passage the cascade actually produced can be "accepted as-is"
+    /// -- otherwise the route could create a `boundary_reviews` row for a
+    /// passage `segment_queue` never offered.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn accept_segment_refuses_a_passage_the_cascade_did_not_produce() {
+        let tmp = std::env::temp_dir().join(format!("vaino-seg2-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = fixture(); // passage 2 carries boundary_src = 'src'
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        let err = store.accept_segment(2).unwrap_err();
+        assert!(err.message().contains("segmentation cascade"), "{}", err.message());
+        assert!(store.accept_segment(999_999).is_err(), "no such passage either");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The same "cannot recommit once applied" guard `record_boundary_review`
+    /// enforces for a full correction applies here unchanged, since
+    /// `accept_segment` is a thin wrapper around it rather than a second
+    /// writer with its own rules.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn accept_segment_cannot_be_repeated_once_applied() {
+        let tmp = std::env::temp_dir().join(format!("vaino-seg3-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let c = fixture();
+            c.execute_batch(
+                "INSERT INTO passages VALUES
+                     (31,1,'radio',5000,65000,NULL,NULL,NULL,'computed:segment-cascade@v1',20,20,'exponential','exponential');",
+            )
+            .unwrap();
+            c.execute("VACUUM INTO ?1", [tmp.to_string_lossy()]).unwrap();
+        }
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.accept_segment(31).unwrap();
+        store
+            .conn
+            .execute("UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = 31", [])
+            .unwrap();
+        assert!(store.accept_segment(31).is_err());
         let _ = std::fs::remove_file(&tmp);
     }
 

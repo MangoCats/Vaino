@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Segment a disc-at-once capture into its tracks `[SPEC-SA-070]`.
+"""Segment a disc-at-once capture into its tracks `[SPEC-SA-070]`, `[SPEC024]`.
 
 A DAO file is a whole side or disc in one recording. Ingested whole it becomes
 one 160-minute "track": useless for rotation, and its flavor is the average of
@@ -15,11 +15,12 @@ between two of them is the gap between two songs. Matching the existing
 convention is what makes the result comparable with 2,676 hand-checked
 boundaries rather than merely plausible.
 
-    python tools/segment_dao.py <db> --validate [--limit N]         against known files
-    python tools/segment_dao.py <db> --file <path>                 propose, print only
-    python tools/segment_dao.py <db> --file <path> --expect N       count-driven, print only
-    python tools/segment_dao.py <db> --file <path> --commit         propose, identify, write
-    python tools/segment_dao.py <db> --file <path> --expect N --commit
+    python tools/segment_dao.py <db> --validate [--limit N]                against known files
+    python tools/segment_dao.py <db> --file <path>                        propose, print only
+    python tools/segment_dao.py <db> --file <path> --expect N              count-driven, grid only
+    python tools/segment_dao.py <db> --file <path> --expect 245,198,312    full cascade, print only
+    python tools/segment_dao.py <db> --file <path> --commit                propose, identify, write
+    python tools/segment_dao.py <db> --file <path> --expect 245,198,312 --commit --json
 
 `--commit` requires the file to already be in the library -- run
 `tools/ingest_folder.py` on its folder first `[SPEC-SA-070]`, `[SPEC-SA-110]`.
@@ -29,13 +30,24 @@ by default for a single-track file `[GDE-BMK-030]`. Without `--expect`, both
 the preview and `--commit` need an AcoustID key (`secrets/acoustid.key` or
 `ACOUSTID_KEY`) -- `propose()`'s own threshold choice is identification
 rate, so even looking has to look things up.
+
+`--expect` as a bare count runs Stage 2's grid search alone -- today's
+behaviour, unchanged. As a comma-separated list of expected per-track
+durations in seconds, it drives the full cascade `[SPEC-SA-115..121]`: grid
+search, then DP assembly or extra-track merging if it over-segmented, or an
+RMS quiet-spot fallback if silence detection found nothing usable at all.
+Stage 3/4 need durations to score against, not only a count, so a bare
+integer skips them rather than guessing at values it was not given
+`[GOV-SRC-040]`.
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+import time
 
 # `[AFS-SIL-020]` gives one threshold per source medium, and measurement says
 # that is not enough. These are MP3 rips: lossy encoding leaves noise where the
@@ -58,6 +70,35 @@ MIN_SILENCE_S = 0.5          # `[AFS-SIL-020]`
 # Below this a "track" is an artefact -- a lead-in tick, applause between
 # movements -- not something to put in rotation.
 MIN_TRACK_S = 20.0
+
+# ------------------------------------------------------ cascade `[SPEC024]` --
+# Stage 2's own grid `[SPEC-SA-116]`: 15 thresholds x 12 durations = 180
+# combinations, McRhythm's own bounds, not yet re-derived against this
+# library `[GOV-SRC-020]`. Kept coarse-to-fine only in the trivial sense that
+# an exact match still exits the search early; McRhythm's own "run27
+# frequency" reordering is corpus-specific to its own 2024 test set and is
+# not reproduced here.
+def _linspace(lo: float, hi: float, n: int, digits: int) -> list[float]:
+    if n <= 1:
+        return [round(lo, digits)]
+    step = (hi - lo) / (n - 1)
+    return [round(lo + step * i, digits) for i in range(n)]
+
+
+GRID_THRESHOLDS_DB = _linspace(-80.0, -30.0, 15, 0)
+GRID_MIN_SILENCE_S = _linspace(0.1, 3.0, 12, 2)
+
+# `[SPEC-SA-116]`'s floor -- lowered by McRhythm from 0.80 "to reduce false
+# negatives"; carried forward as a starting point, not a re-derived figure.
+STAGE2_MIN_MATCH_PCT = 0.65
+
+# `[SPEC-SA-121]` -- past this many pair-merges the mismatch is too large for
+# merging to be the right fix.
+MAX_MERGES = 3
+
+# `[SPEC-SA-120]` -- how far either side of an expected boundary position the
+# RMS fallback searches for the true quiet spot.
+RMS_SEARCH_S = 5.0
 
 
 def say(text: str) -> None:
@@ -98,17 +139,28 @@ def duration(path: str) -> float | None:
         return None
 
 
-def spans_at(path: str, threshold_db: int, total: float,
-             min_track_s: float = MIN_TRACK_S):
-    """Audible spans, in seconds. The silence between them belongs to neither."""
+def audible_spans_from_silences(sils: list[tuple[float, float]], total: float,
+                                 min_track_s: float = MIN_TRACK_S):
+    """Audible spans, in seconds, from a list of silent spans -- the silence
+    between two of them belongs to neither. Shared by `spans_at` (ffmpeg's
+    own `silencedetect`) and `spans_from_profile` (a decoded-once RMS
+    profile, `[SPEC-SA-117]`), so the two paths can never disagree about
+    what a silence list means."""
     spans, at = [], 0.0
-    for s, e in silences(path, threshold_db, MIN_SILENCE_S):
+    for s, e in sils:
         if s - at >= min_track_s:
             spans.append((at, s))
         at = e
     if total - at >= min_track_s:
         spans.append((at, total))
     return spans
+
+
+def spans_at(path: str, threshold_db: int, total: float,
+             min_track_s: float = MIN_TRACK_S):
+    """Audible spans, in seconds. The silence between them belongs to neither."""
+    return audible_spans_from_silences(
+        silences(path, threshold_db, MIN_SILENCE_S), total, min_track_s)
 
 
 def segment_with_threshold(path: str, medium: str = "cd", min_track_s: float = MIN_TRACK_S,
@@ -150,6 +202,285 @@ def segment(path: str, medium: str = "cd", min_track_s: float = MIN_TRACK_S,
     """
     result = segment_with_threshold(path, medium, min_track_s, expect)
     return None if result is None else result[1]
+
+
+# --------------------------------------------------- cascade: Stage 2 `[SPEC024]`
+#
+# One decode into a windowed RMS profile, then 180 cheap re-filters against
+# it instead of 180 separate `silencedetect` subprocesses `[SPEC-SA-117]`,
+# `[GDE-FBD-010]`. Reuses `analyze_amplitude`'s own decode/RMS machinery
+# rather than a second copy of it -- imported lazily so a caller that never
+# touches the cascade (the plain `--file`/`--validate` paths above) pays
+# nothing for numpy.
+
+# Fine enough to resolve the grid's own tightest candidate, 0.1s.
+PROFILE_WINDOW_MS = 20
+
+
+def _amp():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import analyze_amplitude  # noqa: E402
+    return analyze_amplitude
+
+
+def db_profile(path: str, window_ms: int = PROFILE_WINDOW_MS, sample_rate: int = 44100):
+    """One decode, one windowed RMS envelope. `None` if the file would not
+    decode. Returns `(envelope, window_ms)` -- the window travels with the
+    envelope because every reader needs it to convert an index back to a
+    time.
+    """
+    amp = _amp()
+    samples = amp.decode_pcm(path, 0, 0, sample_rate)
+    if samples is None:
+        return None
+    return amp.rms_envelope(samples, sample_rate, window_ms), window_ms
+
+
+def silences_from_profile(envelope, window_ms: int, threshold_db: float,
+                           min_silence_s: float) -> list[tuple[float, float]]:
+    """What ffmpeg's `silencedetect` would report, read instead off an
+    already-decoded profile. An approximation of ffmpeg's own running
+    filter over fixed non-overlapping windows, not byte-identical to it --
+    calibrated the same way `SWEEP`'s own thresholds already are, against
+    the library's own known segmentations, not asserted to match exactly.
+    """
+    amp = _amp()
+    linear = amp.db_to_linear(-threshold_db)
+    window_s = window_ms / 1000.0
+    min_windows = max(1, round(min_silence_s / window_s))
+    is_silent = envelope < linear
+    out = []
+    run_start = None
+    for i, silent in enumerate(is_silent):
+        if silent:
+            if run_start is None:
+                run_start = i
+        else:
+            if run_start is not None and i - run_start >= min_windows:
+                out.append((run_start * window_s, i * window_s))
+            run_start = None
+    if run_start is not None and len(is_silent) - run_start >= min_windows:
+        out.append((run_start * window_s, len(is_silent) * window_s))
+    return out
+
+
+def spans_from_profile(envelope, window_ms: int, threshold_db: float, min_silence_s: float,
+                        total_s: float, min_track_s: float = MIN_TRACK_S):
+    sils = silences_from_profile(envelope, window_ms, threshold_db, min_silence_s)
+    return audible_spans_from_silences(sils, total_s, min_track_s)
+
+
+def grid_search_profile(envelope, window_ms: int, total_s: float, expected_count: int,
+                         min_track_s: float = MIN_TRACK_S,
+                         thresholds=GRID_THRESHOLDS_DB, durations=GRID_MIN_SILENCE_S,
+                         min_match_pct: float = STAGE2_MIN_MATCH_PCT):
+    """Stage 2 `[SPEC-SA-116]`: every (threshold, min-silence) combination in
+    the grid, against the profile, until one hits the expected count
+    exactly.
+
+    Returns `(spans, threshold_db, min_silence_s, match_pct, outcome, tested)`.
+    `outcome` is one of `'exact'` (accept, cascade ends here), `'close'`
+    (within +-1, Stage 3 should run), `'partial'` (>= `min_match_pct`,
+    accept outright) or `'none'` (Stage 4/5 should try). `tested` is every
+    `(threshold_db, min_silence_s, count)` tried, for `ingest_decisions`.
+    """
+    best = None
+    tested = []
+    for db in thresholds:
+        for min_s in durations:
+            spans = spans_from_profile(envelope, window_ms, db, min_s, total_s, min_track_s)
+            n = len(spans)
+            tested.append((db, min_s, n))
+            if n == 0:
+                continue
+            pct = min(n, expected_count) / max(n, expected_count)
+            if best is None or pct > best[3]:
+                best = (spans, db, min_s, pct)
+            if n == expected_count:
+                return spans, db, min_s, 1.0, "exact", tested
+    if best is None:
+        return None, None, None, 0.0, "none", tested
+    spans, db, min_s, pct = best
+    n = len(spans)
+    if abs(n - expected_count) <= 1:
+        outcome = "close"
+    elif pct >= min_match_pct:
+        outcome = "partial"
+    else:
+        outcome = "none"
+    return spans, db, min_s, pct, outcome, tested
+
+
+# --------------------------------------------------- cascade: Stage 3 `[SPEC024]`
+
+def assemble_boundaries_dp(spans: list[tuple[float, float]],
+                            expected_durations: list[float]) -> list[tuple[float, float]]:
+    """Stage 3 `[SPEC-SA-119]`: partition N over-detected spans into K
+    contiguous groups, one per expected track, minimizing the summed
+    absolute duration error -- O(N^2 K). A group's span is (start of its
+    first member, end of its last); the silences *inside* a group are
+    folded away, kept only where two different expected tracks still meet
+    at that boundary. Falls back to the input unchanged if there are fewer
+    spans than expected tracks, which Stage 3 was never meant to resolve.
+    """
+    n, k = len(spans), len(expected_durations)
+    if k == 0 or n < k:
+        return spans
+
+    def group_duration(j: int, i: int) -> float:
+        return spans[i - 1][1] - spans[j][0]
+
+    INF = float("inf")
+    dp = [[INF] * (k + 1) for _ in range(n + 1)]
+    choice = [[-1] * (k + 1) for _ in range(n + 1)]
+    dp[0][0] = 0.0
+    for t in range(1, k + 1):
+        for i in range(t, n - (k - t) + 1):
+            best_cost, best_j = INF, -1
+            for j in range(t - 1, i):
+                if dp[j][t - 1] == INF:
+                    continue
+                cost = dp[j][t - 1] + abs(group_duration(j, i) - expected_durations[t - 1])
+                if cost < best_cost:
+                    best_cost, best_j = cost, j
+            dp[i][t] = best_cost
+            choice[i][t] = best_j
+    if dp[n][k] == INF:
+        return spans
+    groups = []
+    i, t = n, k
+    while t > 0:
+        j = choice[i][t]
+        groups.append((j, i))
+        i, t = j, t - 1
+    groups.reverse()
+    return [(spans[j][0], spans[i - 1][1]) for j, i in groups]
+
+
+# --------------------------------------------------- cascade: Stage 4 `[SPEC024]`
+
+def rms_window_ms(min_expected_duration_s: float) -> int:
+    """`[SPEC-SA-120]`'s adaptive window -- finer where the expected gap
+    between boundaries is tighter, so the search does not blur past it."""
+    if min_expected_duration_s <= 0.3:
+        return 25
+    if min_expected_duration_s <= 0.6:
+        return 50
+    return 100
+
+
+def rms_quiet_spot(envelope, window_ms: int, expected_pos_s: float,
+                    search_s: float = RMS_SEARCH_S) -> float:
+    """Stage 4 `[SPEC-SA-120]`: the RMS-minimum position within `search_s`
+    of `expected_pos_s`, read off an already-decoded profile. Falls back to
+    the expected position unchanged if the envelope is empty or the search
+    window lands entirely outside it.
+    """
+    if len(envelope) == 0:
+        return expected_pos_s
+    window_s = window_ms / 1000.0
+    center = round(expected_pos_s / window_s)
+    span = max(1, round(search_s / window_s))
+    lo, hi = max(0, center - span), min(len(envelope), center + span + 1)
+    if lo >= hi:
+        return expected_pos_s
+    local = envelope[lo:hi]
+    best = 0
+    for idx in range(1, len(local)):
+        if local[idx] < local[best]:
+            best = idx
+    return (lo + best) * window_s
+
+
+# --------------------------------------------------- cascade: Stage 5 `[SPEC024]`
+
+def merge_extra_tracks(spans: list[tuple[float, float]], expected_count: int,
+                        max_merges: int = MAX_MERGES) -> list[tuple[float, float]]:
+    """Stage 5 `[SPEC-SA-121]`: keep the first K-1 detected spans intact;
+    merge the remaining N-K+1 into one final track. Capped at `max_merges`
+    pair-merges -- past that the mismatch is too large for merging to be
+    the right fix, and the input is returned unchanged so the caller can
+    fall through to the RMS fallback instead.
+    """
+    n, k = len(spans), expected_count
+    if k <= 0 or n <= k:
+        return spans
+    extra = n - k + 1
+    if extra - 1 > max_merges:
+        return spans
+    kept = spans[: k - 1]
+    return kept + [(spans[k - 1][0], spans[-1][1])]
+
+
+# --------------------------------------------------- cascade: orchestration `[SPEC024]`
+
+def segment_cascade(path: str, expected_durations: list[float],
+                     min_track_s: float = MIN_TRACK_S) -> dict | None:
+    """The full cascade `[SPEC-SA-115..121]`: grid search, then whichever of
+    DP assembly, extra-track merging or the RMS fallback the grid result
+    calls for. `None` if the file would not decode.
+
+    Returns `{"spans", "stage", "confidence", "threshold_db",
+    "min_silence_s", "match_pct", "tested"}` -- `stage` is `'grid'`,
+    `'dp'`, `'merge'` or `'rms'`, and everything here is what
+    `commit_segments` writes to `ingest_decisions` `[SPEC-SA-123]`.
+    """
+    total = duration(path)
+    if total is None:
+        return None
+    expected_count = len(expected_durations)
+    profile = db_profile(path)
+    if profile is None:
+        return None
+    envelope, window_ms = profile
+    spans, db, min_s, pct, outcome, tested = grid_search_profile(
+        envelope, window_ms, total, expected_count, min_track_s)
+
+    if outcome == "exact":
+        return {"spans": spans, "stage": "grid", "confidence": 1.0,
+                "threshold_db": db, "min_silence_s": min_s,
+                "match_pct": 1.0, "tested": tested}
+
+    if outcome == "close" and spans is not None:
+        assembled = assemble_boundaries_dp(spans, expected_durations)
+        if len(assembled) == expected_count:
+            return {"spans": assembled, "stage": "dp", "confidence": 1.0,
+                    "threshold_db": db, "min_silence_s": min_s,
+                    "match_pct": pct, "tested": tested}
+
+    if spans is not None and len(spans) > expected_count:
+        merged = merge_extra_tracks(spans, expected_count)
+        if len(merged) == expected_count:
+            return {"spans": merged, "stage": "merge", "confidence": 0.9,
+                    "threshold_db": db, "min_silence_s": min_s,
+                    "match_pct": pct, "tested": tested}
+
+    if outcome == "partial" and spans is not None:
+        return {"spans": spans, "stage": "grid", "confidence": pct,
+                "threshold_db": db, "min_silence_s": min_s,
+                "match_pct": pct, "tested": tested}
+
+    # Nothing above resolved it -- Stage 4, the RMS fallback `[SPEC-SA-120]`.
+    win_ms = rms_window_ms(min(expected_durations)) if expected_durations else PROFILE_WINDOW_MS
+    fine_envelope, fine_window_ms = envelope, window_ms
+    if win_ms != window_ms:
+        fine = db_profile(path, window_ms=win_ms)
+        if fine is not None:
+            fine_envelope, fine_window_ms = fine
+
+    positions, acc = [], 0.0
+    for d in expected_durations[:-1]:
+        acc += d
+        positions.append(acc)
+    bounds = [rms_quiet_spot(fine_envelope, fine_window_ms, p) for p in positions]
+
+    rms_spans, prev = [], 0.0
+    for b in bounds + [total]:
+        rms_spans.append((prev, b))
+        prev = b
+    return {"spans": rms_spans, "stage": "rms", "confidence": 0.7,
+            "threshold_db": None, "min_silence_s": None,
+            "match_pct": pct, "tested": tested}
 
 
 # ------------------------------------------------------------- identification
@@ -248,11 +579,18 @@ def propose(path: str, key: str, samples: int = 8, grid=SWEEP):
 
 # ------------------------------------------------------------------ validate
 
-def validate(db: str, limit: int, medium: str, tolerance: float) -> int:
+def validate(db: str, limit: int, medium: str, tolerance: float, cascade: bool = False) -> int:
     """Run the detector over files whose segmentation is already known.
 
     The only honest way to find out whether this works. 188 files, 2,676
     boundaries, none of them produced by this code.
+
+    `cascade=False` (the default) reproduces the original threshold-sweep
+    baseline exactly, for comparison. `cascade=True` runs the full cascade
+    `[SPEC-SA-115..121]`, with the known passages' own durations standing in
+    for what a real MusicBrainz match would supply -- the only honest way to
+    measure whether DP assembly, the RMS fallback and extra-track merging
+    actually improve on Stage 2 alone, per `[GOV-SRC-020]`.
     """
     import sqlite3
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -263,18 +601,27 @@ def validate(db: str, limit: int, medium: str, tolerance: float) -> int:
     if limit:
         files = files[:limit]
 
-    say(f"{len(files)} already-segmented file(s); threshold swept per file\n")
+    say(f"{len(files)} already-segmented file(s); "
+        f"{'full cascade' if cascade else 'threshold swept'} per file\n")
     exact = 0
     total_known = total_found = matched = 0
+    stage_counts: dict[str, int] = {}
     off = []
     drift = []
     for i, (fid, path, n) in enumerate(files, 1):
         known = [(s / 1000.0, e / 1000.0) for s, e in c.execute(
             "SELECT start_ms,end_ms FROM passages WHERE file_id=?1 AND kind='radio' "
             "ORDER BY start_ms", (fid,))]
-        # The known count stands in for the release's track count, which
-        # is what `[AFS-MB-030]` supplies in the real pipeline.
-        found = segment(path, medium, expect=len(known))
+        if cascade:
+            durations = [e - s for s, e in known]
+            result = segment_cascade(path, durations)
+            found = None if result is None else result["spans"]
+            if result is not None:
+                stage_counts[result["stage"]] = stage_counts.get(result["stage"], 0) + 1
+        else:
+            # The known count stands in for the release's track count, which
+            # is what `[AFS-MB-030]` supplies in the real pipeline.
+            found = segment(path, medium, expect=len(known))
         if found is None:
             say(f"  {os.path.basename(path)[:44]}: would not decode")
             continue
@@ -303,6 +650,8 @@ def validate(db: str, limit: int, medium: str, tolerance: float) -> int:
     say(f"  boundaries known / found         : {total_known} / {total_found}")
     say(f"  starts matched within {tolerance:.1f}s        : {matched} "
         f"({matched/max(total_known,1):.0%})")
+    if cascade and stage_counts:
+        say(f"  resolved by: " + ", ".join(f"{k}={v}" for k, v in sorted(stage_counts.items())))
     if off:
         say(f"\n  worst count mismatches (of {len(off)}):")
         for name, k, f in sorted(off, key=lambda x: -abs(x[1]-x[2]))[:8]:
@@ -313,7 +662,7 @@ def validate(db: str, limit: int, medium: str, tolerance: float) -> int:
 # --------------------------------------------------------------------- commit
 
 def commit_segments(conn, file_id: int, audio_md5: str, path: str,
-                     spans: list[tuple[float, float]], threshold_db: int, key: str) -> dict:
+                     spans: list[tuple[float, float]], decision: dict, key: str) -> dict:
     """Replace `file_id`'s passages with a real segmentation `[SPEC-SA-070]`,
     one identified `radio`/`album` pair per track `[SPEC-SA-110]`,
     `[GDE-BMK-030]`.
@@ -331,6 +680,12 @@ def commit_segments(conn, file_id: int, audio_md5: str, path: str,
     same placeholder shape `local:audio:<md5>` alone already means for a
     single-track file, extended with the one thing that makes it unique
     inside a DAO capture -- where in the file it starts.
+
+    `decision` carries which stage resolved it, at what confidence, and
+    what the grid tried and rejected -- `boundary_src` names the algorithm
+    and version only `[SPEC-SA-122]`; the parameters that produced this
+    particular result go to `ingest_decisions` instead `[SPEC-SA-123]`,
+    following `choose_release.py`'s own established shape.
     """
     old = [r[0] for r in conn.execute(
         "SELECT passage_id FROM passages WHERE file_id=?1", (file_id,))]
@@ -339,7 +694,7 @@ def commit_segments(conn, file_id: int, audio_md5: str, path: str,
             f"DELETE FROM passage_recordings WHERE passage_id IN ({','.join('?' * len(old))})", old)
         conn.execute("DELETE FROM passages WHERE file_id=?1", (file_id,))
 
-    boundary_src = f"segment:silence-{threshold_db}dB+acoustid"
+    boundary_src = "computed:segment-cascade@v1"
     identified = unidentified = 0
     for start_s, end_s in spans:
         start_ms, end_ms = round(start_s * 1000), round(end_s * 1000)
@@ -386,11 +741,25 @@ def commit_segments(conn, file_id: int, audio_md5: str, path: str,
                 "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
                 "VALUES (?1,?2,1.0,?3)", (pid, mbid, source))
 
+    detail = {
+        "expected_count": decision.get("expected_count"),
+        "threshold_db": decision.get("threshold_db"),
+        "min_silence_s": decision.get("min_silence_s"),
+        "match_pct": decision.get("match_pct"),
+        "tracks_found": len(spans),
+        "tested": decision.get("tested"),
+    }
+    conn.execute(
+        "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+        "VALUES (?1,'segment',?2,?3,?4,?5)",
+        (audio_md5, decision.get("stage", "unknown"), decision.get("confidence"),
+         json.dumps(detail), int(time.time())))
+
     return {"tracks": len(spans), "identified": identified,
             "unidentified": unidentified, "replaced": len(old)}
 
 
-def do_commit(db_path: str, path: str, spans: list[tuple[float, float]], threshold_db: int) -> int:
+def do_commit(db_path: str, path: str, spans: list[tuple[float, float]], decision: dict) -> int:
     """`--commit`'s own I/O: find the file, get a key, write the transaction.
 
     Deliberately does not create `files`/`file_tags` rows itself -- that is
@@ -420,12 +789,23 @@ def do_commit(db_path: str, path: str, spans: list[tuple[float, float]], thresho
 
     key = secret.acoustid_key()  # required=True: --commit always identifies
     conn.execute("BEGIN IMMEDIATE")
-    result = commit_segments(conn, file_id, md5, path, spans, threshold_db, key)
+    result = commit_segments(conn, file_id, md5, path, spans, decision, key)
     conn.commit()
     say(f"\nreplaced {result['replaced']} old passage(s) with {result['tracks']} track(s), "
         f"{result['tracks']} radio + {result['tracks']} album: "
-        f"{result['identified']} identified, {result['unidentified']} not")
+        f"{result['identified']} identified, {result['unidentified']} not "
+        f"(stage: {decision.get('stage', 'unknown')})")
     return 0
+
+
+def _parse_expect(value: str):
+    """`--expect`: a bare count (Stage 2's grid search alone, today's
+    behaviour) or a comma-separated list of expected per-track durations in
+    seconds (the full cascade `[SPEC-SA-115..121]` -- Stage 3/4 need
+    durations to score against, not only a count)."""
+    if "," in value:
+        return [float(v) for v in value.split(",") if v.strip()]
+    return int(value)
 
 
 def main() -> int:
@@ -436,23 +816,47 @@ def main() -> int:
     ap.add_argument("--medium", default="cd", choices=sorted(THRESHOLDS))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--tolerance", type=float, default=2.0)
+    ap.add_argument("--cascade", action="store_true",
+                    help="with --validate, run the full cascade instead of Stage 2 alone")
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--json", action="store_true",
+                    help="one final JSON summary line, for job wiring")
     # The release's own track count, when it is known `[AFS-MB-030]` -- swept
     # for the threshold hitting that count, no AcoustID lookup needed to
-    # *choose* one. Without it, the threshold is chosen by identification
-    # rate instead (`propose()`), which does need a key even just to preview.
-    ap.add_argument("--expect", type=int)
+    # *choose* one. As a comma-separated list of durations instead, drives
+    # the full cascade rather than the grid search alone. Without it, the
+    # threshold is chosen by identification rate instead (`propose()`),
+    # which does need a key even just to preview.
+    ap.add_argument("--expect", type=_parse_expect)
     args = ap.parse_args()
 
     if args.validate:
-        return validate(args.db, args.limit, args.medium, args.tolerance)
+        return validate(args.db, args.limit, args.medium, args.tolerance, args.cascade)
     if args.file:
-        if args.expect:
+        decision: dict = {}
+        if isinstance(args.expect, list) and args.expect:
+            result = segment_cascade(args.file, args.expect)
+            if result is None:
+                if args.json:
+                    say(json.dumps({"ok": False, "error": "would not decode"}))
+                else:
+                    say("would not decode")
+                return 1
+            spans = result["spans"]
+            threshold_db = result["threshold_db"]
+            decision = dict(result, expected_count=len(args.expect))
+        elif args.expect:
             found = segment_with_threshold(args.file, args.medium, expect=args.expect)
             if found is None:
-                say("would not decode")
+                if args.json:
+                    say(json.dumps({"ok": False, "error": "would not decode"}))
+                else:
+                    say("would not decode")
                 return 1
             threshold_db, spans = found
+            decision = {"stage": "grid", "confidence": None, "threshold_db": threshold_db,
+                        "min_silence_s": None, "match_pct": None, "tested": None,
+                        "expected_count": args.expect}
         else:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             import secret  # noqa: E402
@@ -462,14 +866,34 @@ def main() -> int:
             key = secret.acoustid_key()
             proposed = propose(args.file, key)
             if proposed is None:
-                say("would not decode, or nothing identified at any threshold")
+                if args.json:
+                    say(json.dumps({"ok": False,
+                                    "error": "would not decode, or nothing identified"}))
+                else:
+                    say("would not decode, or nothing identified at any threshold")
                 return 1
-            _, threshold_db, spans = proposed
-        say(f"\n{len(spans)} track(s) in {os.path.basename(args.file)} ({threshold_db} dB)")
-        for i, (s, e) in enumerate(spans, 1):
-            say(f"  {i:3d}  {s/60:6.2f}–{e/60:6.2f} min   ({e-s:6.1f}s)")
+            rate, threshold_db, spans = proposed
+            decision = {"stage": "propose", "confidence": rate, "threshold_db": threshold_db,
+                        "min_silence_s": MIN_SILENCE_S, "match_pct": None, "tested": None,
+                        "expected_count": None}
+
+        if not args.json:
+            say(f"\n{len(spans)} track(s) in {os.path.basename(args.file)} "
+                f"({threshold_db} dB, stage: {decision.get('stage')})")
+            for i, (s, e) in enumerate(spans, 1):
+                say(f"  {i:3d}  {s/60:6.2f}–{e/60:6.2f} min   ({e-s:6.1f}s)")
+
         if args.commit:
-            return do_commit(args.db, args.file, spans, threshold_db)
+            rc = do_commit(args.db, args.file, spans, decision)
+            if args.json:
+                say(json.dumps({"ok": rc == 0, "tracks": len(spans),
+                                "stage": decision.get("stage"),
+                                "confidence": decision.get("confidence")}))
+            return rc
+        if args.json:
+            say(json.dumps({"ok": True, "tracks": len(spans),
+                            "stage": decision.get("stage"),
+                            "confidence": decision.get("confidence")}))
         return 0
     say(__doc__)
     return 2
