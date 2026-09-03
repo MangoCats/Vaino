@@ -904,6 +904,18 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-LIB-215]` An unconfirmed automatic segmentation is discoverable as a worklist, not only reachable one profile page at a time.** Segmentation without a way to find what still needs a look is a machine nobody checks. Designed in [SPEC024](SPEC024-dao-segmentation-cascade.md) §7.
 
+**`[REQ-LIB-220]` Sampo can rip a physical CD directly, obtaining exact track boundaries from the disc's own table of contents rather than inferring them from audio content.** Ground truth beats a guess: a disc-at-once rip's own TOC states boundaries to the sector, which is what `[REQ-LIB-200]`'s cascade otherwise exists to approximate from silence and duration alone. Designed in [SPEC025](SPEC025-cd-ripping.md).
+
+**`[REQ-LIB-225]` TOC-derived boundaries outrank the cascade, and a human's correction still outranks either.** The same ladder `[SPEC-SC-045]` already establishes for `manual` over `computed`, extended one rung: `imported` (a disc's own TOC) sits above `computed` (the cascade's inference) and below `manual` (a person's own review) — ground truth beats a guess, and a person who has actually listened outranks both.
+
+**`[REQ-LIB-230]` Ripping is user-initiated and interactive; a read failure is reported, never silently guessed at.** A scratched disc, a drive that needs a disc swapped, or a track that would not verify are told to the person doing the ripping, the same `[PI3-API-030]` discipline against a status implying success it did not earn.
+
+**`[REQ-LIB-235]` When the disc's TOC resolves a MusicBrainz release directly, that release's own track metadata is used rather than falling back to per-track audio fingerprinting.** A Disc ID match identifies the exact pressing from the disc's own geometry; AcoustID's per-track guess-and-confirm remains the fallback for a disc that resolves no release this way (a self-burned compilation, an unreleased recording), not the first resort when a stronger answer is available.
+
+**`[REQ-LIB-240]` A ripped file is encoded before it enters the library, and any lossless intermediate is temporary unless the user asks to keep it.** Consistent with `[REQ-VIS-205]`'s standing rule for anything written beyond what the library strictly needs: a working WAV/FLAC exists only long enough to produce the library's own encoded copy, and an archival lossless copy is opt-in, never a silent default.
+
+**`[REQ-LIB-245]` The rip's read-verification aggressiveness is a user-adjustable setting, defaulting to a level that trades a little resilience for materially faster rips.** Designed in [SPEC025](SPEC025-cd-ripping.md) §5 — matching the underlying tool's own 0–3 scale, defaulting to **2**.
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Vaino installation with **no Sampo** can receive derived data and use every advanced feature `[SPEC-DF-080]`.
