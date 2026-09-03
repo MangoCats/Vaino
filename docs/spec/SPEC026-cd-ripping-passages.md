@@ -10,7 +10,7 @@ together pushed SPEC025 past `[GOV-DOC-010]`'s 300-line hard limit, not
 because the subject is unrelated. Read SPEC025 first; this document only
 covers what happens to the audio once §3/§6 have already run.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-255..260]`.
+> **Status.** Requirements and specification only, per `[REQ-LIB-255..265]`.
 > No code exists yet — same posture as [SPEC025](SPEC025-cd-ripping.md),
 > which this depends on entirely; neither can be built independently of
 > the other.
@@ -48,6 +48,17 @@ evidently intended when skipping straight to the visible track would clip
 a deliberate segue. Both, either, or neither may exist for a given hidden
 span — nothing requires the second passage to be created.
 
+**`[SPEC-RIP-093]` Creating the folded-in passage is the user's decision,
+never an automatic heuristic.** No threshold reliably tells a short
+hidden intro that leads into the next track apart from a long,
+self-contained hidden bonus track — rather than guess, Sampo detects the
+hidden span (`[SPEC-RIP-090]`) and surfaces it as a one-action offer at
+review time ("also create a passage combining this with the next track?"),
+the same discover-then-let-a-person-confirm shape `[SPEC-SUI-215]`'s
+release-suggestion flow already takes: the tool finds the candidate and
+writes nothing until the operator picks it. The console makes the choice
+easy; it does not make the choice.
+
 ---
 
 ## 2. Multi-disc sets — one file per disc, one Release, passage-per-track by default
@@ -78,22 +89,28 @@ wider-span-alongside-the-per-track-ones pattern §1 already established for
 hidden audio folded into a neighbour, applied at a larger granularity
 rather than a new mechanism.
 
+**`[SPEC-RIP-100]` Which wider passage to create, if any, is the user's
+call, made easy rather than made automatically.** Whole-disc and per-side
+groupings are offered as one-action choices once a disc's tracks are
+segmented (§2) — not inferred from disc length, track count, or any other
+heuristic, for the same reason `[SPEC-RIP-093]` keeps the folded-in-passage
+decision with the person ripping rather than a threshold: nothing about
+the audio itself says whether a listener wants a whole disc played as one
+continuous passage. Zero, one, or several wider passages may exist per
+disc; declining every offer leaves the ordinary per-track passages
+exactly as segmented.
+
 ---
 
 ## 3. Open
 
-**`[SPEC-RIP-099]`** Genuinely undecided, left here rather than guessed at:
-
-- **When the folded-in passage (§1) is warranted.** §1 decides the
-  *representation*; which discs earn the second passage automatically (a
-  short hidden intro that clearly leads into the next track) versus which
-  don't (a long, self-contained hidden bonus track) is not yet designed —
-  a threshold, a heuristic, or a plain user prompt at rip time are all
-  still on the table.
-- **Which grouping — whole-disc, side, both, or neither — a box set's
-  optional wider passage (§2) defaults to**, and whether it is offered
-  automatically or only on request; undesigned for the same reason as the
-  item above.
+**`[SPEC-RIP-102]`** Both wider-passage triggers (§1, §2) are now decided
+— user's choice, offered rather than inferred (`[SPEC-RIP-093]`,
+`[SPEC-RIP-100]`) — so nothing about *when* a wider passage gets created
+remains open here. What the offer's own interaction looks like (a
+checkbox at review time, a prompt during the rip itself, something else)
+is first-build UI detail, not a design question this document exists to
+settle.
 
 `[SPEC025 §8](SPEC025-cd-ripping.md#8-open)` covers what remains open in
 the ripping mechanics this document does not touch — multi-disc
@@ -102,7 +119,7 @@ failure modes.
 
 ---
 
-**Traceability:** `[SPEC-RIP-090..099]` · derives `[REQ-LIB-255..260]` ·
+**Traceability:** `[SPEC-RIP-090..102]` · derives `[REQ-LIB-255..265]` ·
 extends [SPEC025](SPEC025-cd-ripping.md), `[SPEC008]` §3's
 `release_recordings.disc` and `passages` schema, and
 [SPEC023](SPEC023-domain-vocabulary.md)'s Passage/File definitions.
