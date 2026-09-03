@@ -152,6 +152,26 @@ pub(crate) mod test_support {
         c
     }
 
+    /// The segment-queue fixture `[SPEC024 §7]`: everything `reviewable()`
+    /// already sets up (naming tables, `file_tags`) plus `boundary_reviews`
+    /// -- created here the same way `PlayerStore::open` creates it for a
+    /// running server, since `reviewable()` stops at `ensure_review_table`/
+    /// `ensure_artist_review_table` -- and `ingest_decisions` `[SPEC008
+    /// §7]`, which neither fixture includes since the ordinary playback and
+    /// identification paths never touch it.
+    pub(crate) fn segmentable() -> Connection {
+        let c = reviewable();
+        #[cfg(feature = "sampo-support")]
+        ensure_boundary_review_table(&c).unwrap();
+        c.execute_batch(
+            "CREATE TABLE ingest_decisions (decision_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL,
+                 stage TEXT NOT NULL, outcome TEXT NOT NULL, confidence REAL, detail BLOB,
+                 decided_at TEXT NOT NULL);",
+        )
+        .unwrap();
+        c
+    }
+
     /// The naming tables `play_history` reads, filled with one recording that
     /// has both an artist and a chosen release -- enough to exercise every
     /// column the page shows.

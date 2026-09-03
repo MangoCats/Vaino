@@ -38,6 +38,7 @@ mod edit;
 mod media;
 mod musicbrainz;
 mod review;
+mod segment;
 mod settings;
 mod skins;
 
@@ -51,6 +52,8 @@ use media::*;
 use musicbrainz::*;
 #[cfg(feature = "sampo-support")]
 use review::*;
+#[cfg(feature = "sampo-support")]
+use segment::*;
 use settings::*;
 use skins::*;
 
@@ -380,7 +383,9 @@ pub fn router(ui: Ui) -> Router {
         .route("/fade.js", get(|| async { js(FADE_JS) }))
         .route("/edit/:passage_id/info", get(edit_info))
         .route("/edit/:passage_id/audio", get(edit_audio))
-        .route("/edit/:passage_id/review", post(edit_review));
+        .route("/edit/:passage_id/review", post(edit_review))
+        .route(SEGMENT_QUEUE_ROUTE, get(segment_queue))
+        .route("/segment/:passage_id/accept", post(accept_segment));
 
     router
         .route("/queue/:passages/:action", post(queue_passage))
@@ -544,6 +549,12 @@ const FADE_JS: &str = include_str!("fade.js");
 /// and the test that checks the page agrees with it cannot drift apart.
 #[cfg(feature = "sampo-support")]
 const REVIEW_QUEUE_ROUTE: &str = "/review/queue";
+/// The segmentation-cascade queue's own route `[SPEC024 §7]`, named the same
+/// way `REVIEW_QUEUE_ROUTE` is -- no page fetches it from inside Vaino yet
+/// (Sampo's own console is the reader, `[SPEC-SA-125]`), but the router and
+/// this file's own tests still share one spelling rather than two.
+#[cfg(feature = "sampo-support")]
+const SEGMENT_QUEUE_ROUTE: &str = "/segment/queue";
 /// The prefix every decision is posted to. The page builds the rest of the
 /// path from the passage id, so only the stem can be shared.
 #[cfg(all(test, feature = "sampo-support"))]
@@ -963,5 +974,29 @@ mod tests {
     fn the_review_page_sends_artist_verbs_the_router_serves() {
         assert!(REVIEW_JS.contains("/artist/correct"));
         assert!(REVIEW_JS.contains("/artist/reopen"));
+    }
+
+    /// `SEGMENT_QUEUE_ROUTE` is what the router actually registers
+    /// `[SPEC024 §7]` -- named once, the same reason `REVIEW_QUEUE_ROUTE`
+    /// is, so the router table and any future reader of it cannot drift
+    /// apart on the spelling.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_segment_queue_route_is_named_once() {
+        assert_eq!(SEGMENT_QUEUE_ROUTE, "/segment/queue");
+    }
+
+    /// `accept_segment`'s refusal for a passage the queue never offered
+    /// travels back as readable text, the same posture `record_review`'s own
+    /// check above exercises for its own vocabulary `[SPEC-SA-125]` --
+    /// `accept_segment` is what `POST /segment/:passage_id/accept` calls
+    /// through `PlayerStore`, exactly as `record_review` is what `POST
+    /// /review/:passage_id/:decision` calls.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn accept_segment_refuses_what_the_queue_never_offered() {
+        let store = crate::db::PlayerStore::open(&std::path::PathBuf::from(":memory:")).unwrap();
+        let err = store.accept_segment(1).unwrap_err();
+        assert!(err.message().contains("no such passage"), "{}", err.message());
     }
 }

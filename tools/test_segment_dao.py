@@ -15,6 +15,7 @@ them replaced, not added alongside.
     python tools/test_segment_dao.py
 """
 
+import json
 import os
 import sqlite3
 import sys
@@ -44,6 +45,8 @@ CREATE TABLE recording_artists (mbid TEXT NOT NULL, artist_mbid TEXT NOT NULL,
     weight REAL, source TEXT);
 CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL, mbid TEXT NOT NULL,
     weight REAL, source TEXT);
+CREATE TABLE ingest_decisions (decision_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL,
+    stage TEXT NOT NULL, outcome TEXT NOT NULL, confidence REAL, detail TEXT, decided_at INTEGER);
 """
 
 MD5 = "6ceaf106f3b6cd19ac91bc68f4bc0d3d"
@@ -57,6 +60,9 @@ CANNED = {
           "artists": [("0d76d8e2-1ae6-4d42-858b-91137b65cfcd", "Some Artist")]},
     180.0: None,
 }
+
+DECISION = {"stage": "grid", "confidence": 1.0, "threshold_db": -40, "min_silence_s": 0.5,
+            "match_pct": 1.0, "tested": [(-40, 0.5, 2)], "expected_count": 2}
 
 
 def fixture() -> sqlite3.Connection:
@@ -74,7 +80,7 @@ def main() -> int:
         print("commit_segments: both kinds per span, real recording where "
               "identified, placeholder where not")
         c = fixture()
-        result = segment_dao.commit_segments(c, 1, MD5, "dao.mp3", SPANS, 40, "fake-key")
+        result = segment_dao.commit_segments(c, 1, MD5, "dao.mp3", SPANS, DECISION, "fake-key")
         check(result == {"tracks": 2, "identified": 1, "unidentified": 1, "replaced": 0},
               f"got {result}")
 
@@ -86,7 +92,7 @@ def main() -> int:
         check(all(k == {"radio", "album"} for k in kinds_per_start.values()),
               f"every span must carry both kinds, got {kinds_per_start}")
         for r in rows:
-            check(r["boundary_src"] == "segment:silence-40dB+acoustid",
+            check(r["boundary_src"] == "computed:segment-cascade@v1",
                   f"got {r['boundary_src']}")
             if r["kind"] == "album":
                 check((r["lead_in_ms"], r["lead_out_ms"], r["gain_db"]) == (0, 0, 0.0),
@@ -125,11 +131,28 @@ def main() -> int:
                   f"must link to {mbid}, got {dict(pr) if pr else None}")
 
         print()
+        print("every segmentation decision lands in ingest_decisions [SPEC-SA-123]")
+        decisions = c.execute(
+            "SELECT * FROM ingest_decisions WHERE audio_md5=? AND stage='segment'", (MD5,)
+        ).fetchall()
+        check(len(decisions) == 1, f"one commit, one decision row, got {len(decisions)}")
+        d = decisions[0]
+        check(d["outcome"] == "grid", f"got {d['outcome']}")
+        check(d["confidence"] == 1.0, f"got {d['confidence']}")
+        detail = json.loads(d["detail"])
+        check(detail["threshold_db"] == -40, f"got {detail}")
+        check(detail["tracks_found"] == 2, f"got {detail}")
+
+        print()
         print("a second segmentation replaces the first, not adds to it")
-        result2 = segment_dao.commit_segments(c, 1, MD5, "dao.mp3", SPANS, 40, "fake-key")
+        result2 = segment_dao.commit_segments(c, 1, MD5, "dao.mp3", SPANS, DECISION, "fake-key")
         check(result2["replaced"] == 4, f"expected the prior 4 passages replaced, got {result2}")
         n = c.execute("SELECT COUNT(*) FROM passages WHERE file_id=1").fetchone()[0]
         check(n == 4, f"replacing must not accumulate, got {n} passages")
+        decisions2 = c.execute(
+            "SELECT * FROM ingest_decisions WHERE audio_md5=? AND stage='segment'", (MD5,)
+        ).fetchall()
+        check(len(decisions2) == 2, f"a second commit adds a second decision row, got {len(decisions2)}")
         c.close()
     finally:
         segment_dao.identify_recording = old_identify

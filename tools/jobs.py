@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'remote-push' | 'accept-remote'
                                         -- | 'suggest-release' | 'accept-release'
                                         -- | 'analyze-amplitude' | 'analyze-flavor'
+                                        -- | 'segment-dao'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -96,7 +97,10 @@ def steps_for(db: str, folder: str, recheck: bool = False) -> list:
 
 
 SKIPPED = [
-    ("segment", "for DAO captures; these are single-track files [SPEC-SA-070]"),
+    ("segment", "for DAO captures; these are single-track files [SPEC-SA-070]. "
+                "Built [SPEC024], offered as its own action (\"Segment DAO capture\"), "
+                "never run silently by induct -- it needs an expected track count/"
+                "durations no folder scan can infer on its own"),
     ("releases", "needs a MusicBrainz id, which ingest does not invent"),
     ("cover art", "needs a release id; art beside the file is found by the player"),
     ("amplitude", "built [SPEC-SA-075], not yet measured for Vaino -- offered as its "
@@ -318,6 +322,9 @@ class Runner:
 
         if kind == "accept-release":
             return self._accept_release(job_id, target)
+
+        if kind == "segment-dao":
+            return self._segment_dao(job_id, target)
 
         if kind == "analyze-amplitude":
             return self._analyze_amplitude(job_id, target)
@@ -580,6 +587,25 @@ class Runner:
                 self.library, payload["folder"], "--accept", payload["release_mbid"],
                 "--commit", "--json"]
         self._run_single_stage(job_id, "apply", argv)
+
+    def _segment_dao(self, job_id: int, target: str):
+        """`[SPEC-SA-115..121]`, `[SPEC024]` -- `target` is
+        `{"file", "expect"}`, the same JSON-in-`target` shape `suggest-release`
+        already uses. `expect` is either an integer track count (Stage 2's
+        grid search alone) or a comma-separated string of expected per-track
+        durations in seconds (the full cascade) -- `segment_dao.py`'s own
+        `--expect` accepts both, unchanged. Deliberately its own job kind
+        rather than folded into `steps_for()`: named in `SKIPPED` for the
+        same reason `amplitude` already is there -- it needs an expected
+        count/durations no folder scan can supply on its own, so never run
+        silently by `induct`/`reanalyze`, only by this explicit action.
+        """
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "segment_dao.py"), self.library,
+                "--file", payload["file"], "--expect", str(payload["expect"]),
+                "--commit", "--json"]
+        self._run_single_stage(job_id, "segment", argv)
 
     def _analyze_amplitude(self, job_id: int, target: str):
         """`[SPEC-SA-075]` -- `target` is a folder path, or empty for the

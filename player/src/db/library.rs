@@ -697,6 +697,64 @@ pub struct BoundaryReview {
     pub fade_out_curve: Option<String>,
 }
 
+/// A passage the segmentation cascade drew boundaries for, still waiting on
+/// a look `[SPEC024 §7]`, `[SPEC-SA-124]`.
+#[cfg(feature = "sampo-support")]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SegmentQueueItem {
+    pub passage_id: i64,
+    pub path: String,
+    /// `radio` or `album` -- the cascade writes both for the same span from
+    /// one file `[SPEC024 §1]`, `tools/segment_dao.py`'s own `for kind in
+    /// ("radio", "album")`, and each is its own passage to confirm.
+    pub kind: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    /// Always `computed:segment-cascade@<something>` here -- the queue's own
+    /// selection criterion, carried along so a card can show it rather than
+    /// the caller re-deriving what it already knows.
+    pub boundary_src: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// The cascade's own confidence for this span, from `ingest_decisions`
+    /// (`stage = 'segment'`) `[SPEC-SA-123]`, `[SPEC008 §7]` -- `None` when
+    /// that stage never recorded one for this audio (an older cascade run,
+    /// or a library that predates the table).
+    pub confidence: Option<f64>,
+    /// Which stage resolved it -- `grid:100%`, `rms_fallback`, `merged:2`
+    /// -- the same short summary `ingest_decisions.outcome` already carries
+    /// `[SPEC-SA-123]`.
+    pub outcome: Option<String>,
+    /// A decision (accept-as-is or a full correction) has been recorded for
+    /// this passage but not yet folded in by
+    /// `tools/apply_boundary_reviews.py` -- so the row still qualifies for
+    /// this queue by `[SPEC-SA-124]`'s own literal `applied_at` criterion,
+    /// but is not sitting untouched either. The same distinction
+    /// `ReviewItem::decision`/`applied` draw for identification, collapsed
+    /// to one flag here since a segmentation decision carries no verb worth
+    /// showing back (there is only ever the one set of values, whichever
+    /// route wrote them).
+    pub decided: bool,
+}
+
+/// How much segmentation-cascade confirmation there is to do, and how much
+/// has been done -- the same shape [`ReviewProgress`] gives the
+/// identification queue, and for the same reason: an empty list alone
+/// cannot say whether the cascade has never run, ran and produced nothing,
+/// or produced things that have all since been confirmed.
+#[cfg(feature = "sampo-support")]
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct SegmentProgress {
+    /// True once anything in `passages` carries a `computed:segment-cascade`
+    /// `boundary_src` -- there is no separate "has this pass ever run" table
+    /// the way `id_checks` is for fingerprinting, so the mark the cascade
+    /// itself leaves behind is read directly instead.
+    pub ran: bool,
+    pub segmented: i64,
+    pub confirmed: i64,
+}
+
 /// What to narrow a browse to. Every field is a whole-value match except `q`,
 /// which is a substring -- the difference between "this artist" and "anything
 /// that looks like this".
@@ -1091,6 +1149,126 @@ impl Library {
             .ok()
     }
 
+    /// Passages the segmentation cascade drew boundaries for and nobody has
+    /// confirmed yet `[SPEC024 §7]`, `[SPEC-SA-124]`.
+    ///
+    /// Parallel to `review_queue` above: `boundary_src LIKE
+    /// 'computed:segment-cascade%'`, with no `boundary_reviews` row whose
+    /// `applied_at` is set -- i.e. never confirmed, whether by "accept
+    /// as-is" (`PlayerStore::accept_segment`) or a full correction through
+    /// the waveform editor `[SPEC021]`. Both write the same table, so one
+    /// `NOT EXISTS` covers either kind of confirmation.
+    ///
+    /// `boundary_reviews` is created by `PlayerStore::open`, not by this
+    /// read-only handle, so its absence is guarded the same way
+    /// `boundary_review` above guards it, and `review_queue` guards
+    /// `id_checks`: a query naming a missing table fails outright rather
+    /// than finding nothing, and "nothing to review" must not look like a
+    /// broken page.
+    ///
+    /// `ingest_decisions` `[SPEC008 §7]` is joined for `confidence`/
+    /// `outcome` only when the table exists -- it is core schema on any
+    /// library `sql/schema.sql` built, but is never required for the queue
+    /// itself to work, so an older library that predates it still gets a
+    /// queue, just without that one extra column.
+    #[cfg(feature = "sampo-support")]
+    pub fn segment_queue(&self, limit: usize) -> Result<Vec<SegmentQueueItem>, DbError> {
+        if !self.has_table("boundary_reviews") {
+            return Ok(Vec::new());
+        }
+        let (confidence_expr, outcome_expr) = if self.has_table("ingest_decisions") {
+            (
+                "(SELECT d.confidence FROM ingest_decisions d \
+                    WHERE d.audio_md5 = f.audio_md5 AND d.stage = 'segment' \
+                    ORDER BY d.decided_at DESC, d.decision_id DESC LIMIT 1)",
+                "(SELECT d.outcome FROM ingest_decisions d \
+                    WHERE d.audio_md5 = f.audio_md5 AND d.stage = 'segment' \
+                    ORDER BY d.decided_at DESC, d.decision_id DESC LIMIT 1)",
+            )
+        } else {
+            ("NULL", "NULL")
+        };
+        // `m`/`ft` are the same naming shape `NAMED`/`ARTIST_EXPR`/
+        // `ALBUM_EXPR`/`TITLE_EXPR` already establish, rebuilt locally rather
+        // than reused: `NAMED` restricts to `kind = 'radio'`, and the
+        // cascade's `album` passages `[SPEC024 §1]` belong in this queue too.
+        let sql = format!(
+            "SELECT p.passage_id, f.path, p.kind, p.start_ms, p.end_ms, p.boundary_src, \
+                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
+                    {confidence_expr}, {outcome_expr}, \
+                    EXISTS (SELECT 1 FROM boundary_reviews br2 WHERE br2.passage_id = p.passage_id) \
+               FROM passages p \
+               JOIN files f ON f.file_id = p.file_id \
+               LEFT JOIN file_tags ft ON ft.file_id = p.file_id \
+               LEFT JOIN (SELECT p2.passage_id AS passage_id, \
+                                 (SELECT pr.mbid FROM passage_recordings pr \
+                                   WHERE pr.passage_id = p2.passage_id \
+                                   ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS mbid \
+                            FROM passages p2) m ON m.passage_id = p.passage_id \
+              WHERE p.boundary_src LIKE 'computed:segment-cascade%' \
+                AND NOT EXISTS (SELECT 1 FROM boundary_reviews br \
+                                 WHERE br.passage_id = p.passage_id \
+                                   AND br.applied_at IS NOT NULL) \
+              ORDER BY p.passage_id LIMIT ?1"
+        );
+        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map([limit as i64], |r| {
+                Ok(SegmentQueueItem {
+                    passage_id: r.get(0)?,
+                    path: r.get(1)?,
+                    kind: r.get(2)?,
+                    start_ms: r.get(3)?,
+                    end_ms: r.get(4)?,
+                    boundary_src: r.get(5)?,
+                    title: r.get(6)?,
+                    artist: r.get(7)?,
+                    album: r.get(8)?,
+                    confidence: r.get(9)?,
+                    outcome: r.get(10)?,
+                    decided: r.get::<_, i64>(11)? != 0,
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// How much segmentation-cascade confirmation there is to do, and how
+    /// much has been done `[SPEC024 §7]`. Read the same defensive way
+    /// `review_progress` above is: every count comes back `0` rather than an
+    /// error when the table behind it (`boundary_reviews`) does not exist
+    /// yet, since "no findings" and "never looked" must still be told apart
+    /// by `ran` rather than by which query happened to fail.
+    ///
+    /// **Both counts are live snapshots of `passages.boundary_src`, not a
+    /// running total.** Unlike `id_checks` (never rewritten once written),
+    /// `tools/apply_boundary_reviews.py` flips a passage's `boundary_src` to
+    /// `'manual'` the moment it folds a confirmed decision in -- so a fully
+    /// applied passage stops matching `LIKE 'computed:segment-cascade%'`
+    /// altogether and drops out of *both* `segmented` and `confirmed`
+    /// together, rather than moving from the first bucket to the second.
+    /// `confirmed` is therefore only ever the count sitting in the window
+    /// between a decision being recorded here and that tool next applying
+    /// it -- correct as "how much is left", not as history, and there is no
+    /// column recording a passage's origin once `boundary_src` has moved on
+    /// from it `[SPEC-SC-045]`.
+    #[cfg(feature = "sampo-support")]
+    pub fn segment_progress(&self) -> SegmentProgress {
+        let n = |sql: &str| -> i64 { self.conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+        let segmented =
+            n("SELECT COUNT(*) FROM passages WHERE boundary_src LIKE 'computed:segment-cascade%'");
+        SegmentProgress {
+            ran: segmented > 0,
+            segmented,
+            confirmed: n(
+                "SELECT COUNT(*) FROM passages p \
+                   JOIN boundary_reviews br ON br.passage_id = p.passage_id \
+                  WHERE p.boundary_src LIKE 'computed:segment-cascade%' \
+                    AND br.applied_at IS NOT NULL",
+            ),
+        }
+    }
+
     fn has_table(&self, name: &str) -> bool {
         self.conn
             .query_row(
@@ -1370,6 +1548,8 @@ mod tests {
     use crate::db::test_support::*;
     use crate::db::PlayerStore; // the one cross-cutting round-trip test below
     use super::super::ART_TABLE;
+    #[cfg(feature = "sampo-support")]
+    use super::super::ensure_boundary_review_table;
 
     /// Confirmed ids never reach a person: 6,591 of them here, and there is
     /// nothing to decide about a passage the audio agrees with. What does
@@ -1724,6 +1904,108 @@ mod tests {
         let p = lib.review_progress();
         assert!(!p.ran, "the page must be able to say the pass never ran");
         assert_eq!(p.contradicted, 0);
+    }
+
+    /// A library nothing has ever segmented has no `boundary_reviews` table
+    /// at all -- the same "missing table means never looked, not nothing
+    /// found" distinction `review_queue`/`boundary_review` already make
+    /// `[SPEC024 §7]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn a_library_never_segmented_has_an_empty_segment_queue() {
+        let lib = Library { conn: fixture() };
+        assert!(lib.segment_queue(50).unwrap().is_empty());
+        let p = lib.segment_progress();
+        assert!(!p.ran, "the page must be able to say the cascade never ran");
+        assert_eq!(p.segmented, 0);
+        assert_eq!(p.confirmed, 0);
+    }
+
+    /// The queue's own selection `[SPEC-SA-124]`: a cascade passage never
+    /// confirmed is in; a passage the cascade did not segment, and a cascade
+    /// passage already confirmed (an applied `boundary_reviews` row), are
+    /// both out. `confidence`/`outcome` are joined in through
+    /// `files.audio_md5 -> ingest_decisions` `[SPEC008 §7]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn segment_queue_selects_only_unconfirmed_cascade_passages() {
+        let c = segmentable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES
+                 (20,1,'radio',5000,65000,NULL,NULL,NULL,
+                  'computed:segment-cascade@v1',20,20,'exponential','exponential'),
+                 (21,1,'radio',65000,125000,NULL,NULL,NULL,
+                  'computed:segment-cascade@v1',20,20,'exponential','exponential'),
+                 (22,1,'radio',125000,185000,NULL,NULL,NULL,
+                  'src',20,20,'exponential','exponential');
+             INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at, applied_at)
+                 VALUES (21, 65000, 125000, 't', 't');
+             INSERT INTO ingest_decisions (audio_md5, stage, outcome, confidence, decided_at)
+                 VALUES ('md5', 'segment', 'grid:82%', 0.82, 't');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.segment_queue(50).unwrap();
+        let ids: Vec<i64> = q.iter().map(|i| i.passage_id).collect();
+        assert!(ids.contains(&20), "an unconfirmed cascade passage belongs in the queue");
+        assert!(!ids.contains(&21), "already confirmed (applied_at set) drops out");
+        assert!(!ids.contains(&22), "not a cascade passage at all");
+
+        let item = q.iter().find(|i| i.passage_id == 20).unwrap();
+        assert_eq!((item.start_ms, item.end_ms), (5000, 65000));
+        assert_eq!(item.kind, "radio");
+        assert_eq!(item.confidence, Some(0.82), "joined through files.audio_md5 -> ingest_decisions");
+        assert_eq!(item.outcome.as_deref(), Some("grid:82%"));
+        assert!(!item.decided, "no boundary_reviews row at all for this one yet");
+
+        let p = lib.segment_progress();
+        assert!(p.ran);
+        assert_eq!(p.segmented, 2, "both cascade passages, confirmed or not");
+        assert_eq!(p.confirmed, 1, "only the one with an applied boundary_reviews row");
+    }
+
+    /// The literal criterion `[SPEC-SA-124]` gives is `applied_at` set, not
+    /// merely a `boundary_reviews` row existing -- a decision recorded but
+    /// not yet folded in by `tools/apply_boundary_reviews.py` still wants a
+    /// look from the page's point of view.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn a_recorded_but_unapplied_decision_still_shows_in_the_queue() {
+        let c = segmentable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES
+                 (23,1,'radio',5000,65000,NULL,NULL,NULL,
+                  'computed:segment-cascade@v1',20,20,'exponential','exponential');
+             INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at)
+                 VALUES (23, 5000, 65000, 't');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.segment_queue(50).unwrap();
+        let item = q.iter().find(|i| i.passage_id == 23)
+            .expect("recorded but not yet applied is not yet confirmed");
+        assert!(item.decided, "but the row must say a decision already exists");
+    }
+
+    /// `ingest_decisions` is core schema on a real library, but the queue
+    /// itself must not depend on it -- an older library that predates the
+    /// table still gets a queue, just without confidence/outcome.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn segment_queue_works_without_ingest_decisions() {
+        let c = reviewable(); // no ingest_decisions table, unlike segmentable()
+        ensure_boundary_review_table(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO passages VALUES
+                 (24,1,'radio',5000,65000,NULL,NULL,NULL,
+                  'computed:segment-cascade@v1',20,20,'exponential','exponential');",
+        )
+        .unwrap();
+        let lib = Library { conn: c };
+        let q = lib.segment_queue(50).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].confidence, None);
+        assert_eq!(q[0].outcome, None);
     }
 
     #[test]
