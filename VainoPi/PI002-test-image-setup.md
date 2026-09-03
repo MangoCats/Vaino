@@ -166,11 +166,14 @@ understood.
 
 ## 6a. What the first hardware run left as current design
 
-**The unit now refuses to start against a `Dummy Output`, and the player
-recovers from an output error instead of playing on silently.**
-`vaino-wait-sink` blocks the service until a real sink exists, and the player
-accepts a `--device` flag with output-error recovery built into the engine —
-both current fact, not narrative.
+**The unit now delays against a `Dummy Output`, and the player recovers from
+an output error instead of playing on silently.**
+`vaino-wait-sink` waits up to `VAINO_SINK_WAIT` (default 45s) for a real sink
+to appear, then starts the service anyway if none shows up — a speaker-less
+appliance should still come up and say so in its interface, rather than a
+service that refuses to run — and the player accepts a `--device` flag with
+output-error recovery built into the engine. Both current fact, not
+narrative.
 
 What the first run actually found — a stream that played happily into silence
 for two days before anyone noticed, and why — is history rather than setup
