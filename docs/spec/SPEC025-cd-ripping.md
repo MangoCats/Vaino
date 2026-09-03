@@ -9,7 +9,7 @@ data is long gone, this document is for the case where it isn't gone yet —
 the disc is in the drive, and its own table of contents (TOC) states
 boundaries to the sector rather than asking anything to be inferred.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-220..275]`.
+> **Status.** Requirements and specification only, per `[REQ-LIB-220..290]`.
 > No code exists yet. The ripping-tool choice (§2) is decided **per
 > platform** — EAC on Windows, `cdrdao` on Linux, checked rather than
 > assumed `[GOV-SRC-020]` — and both are optional, user-installed
@@ -174,6 +174,38 @@ not listener state.
 
 ---
 
+## 5a. Handling rip failures — best effort, never silent
+
+**`[SPEC-RIP-052]` No optical drive detected degrades exactly like no
+ripping tool found (`[SPEC-RIP-024]`).** The two checks — tool on PATH,
+drive present — run together at the same point, and either absence has
+the same effect: "Rip a CD" is offered as unavailable with a plain reason
+rather than left to fail on click.
+
+**`[SPEC-RIP-054]` A track that fails to verify at the configured
+paranoia level does not abort the rip.** The tool's own retries (§5) run
+first; if a track still won't verify, ripping continues with the
+remaining tracks rather than stopping the whole disc, and the failed
+track is written anyway rather than silently dropped — a degraded rip of
+a scratched disc is more useful than none. The attempt is recorded as its
+own `ingest_decisions` row (`stage='rip'`, the same shape `[SPEC-RIP-075]`
+already writes for Disc ID matches), outcome `verification_failed`,
+discoverable as a worklist the same way an unconfirmed segmentation
+already is (`[REQ-LIB-215]`, [SPEC024 §7](SPEC024-dao-segmentation-cascade.md#7-review-queue))
+— reviewed and re-ripped, or accepted as-is, not left in the library with
+no marker at all.
+
+**`[SPEC-RIP-056]` A drive that stops responding mid-rip — a jammed tray,
+a disc needing to be reseated — is the same failure shape as a
+verification failure, not a new one.** Report which track was in
+progress, offer retry, and treat anything ripped before the stall as
+already good: `ingest_decisions` rows are per-track, not per-disc, so a
+stall on track 7 does not implicate tracks 1-6. This is the single-disc
+case; a *disc* needing to be swapped deliberately, mid-set, is the
+multi-disc rip session's own prompt (`[SPEC-RIP-104]`), already covered.
+
+---
+
 ## 6. Disc ID, CD-TEXT, and MusicBrainz
 
 **`[SPEC-RIP-060]`** The TOC's track count and sector offsets, sent to
@@ -245,22 +277,17 @@ already covers.
 
 ## 8. Open
 
-**`[SPEC-RIP-080]`** Genuinely undecided, left here rather than guessed at:
-
-- **Drive/hardware failure modes.** A read error, a drive needing a disc
-  swapped mid-rip, or no optical drive present at all `[REQ-LIB-230]`
-  names the discipline (report, never guess) but not the exact UI for any
-  of these — first real design work for a build pass, not a paper
-  exercise.
-
-Everything else this document used to leave open here — hidden/pregap
+**`[SPEC-RIP-080]`** Nothing genuinely undecided remains. Every question
+this section used to hold open — the ripping-tool choice, hidden/pregap
 audio, multi-disc sets including the rip-session prompt flow, CD-TEXT vs.
-MusicBrainz — is now decided, in [SPEC026](SPEC026-cd-ripping-passages.md)
-or §6 above.
+MusicBrainz, and drive/hardware failure modes — is decided, in this
+document (§§2, 5a, 6) or in [SPEC026](SPEC026-cd-ripping-passages.md).
+SPEC025 and SPEC026 together are fully designed and not yet built; what
+remains is implementation, not more design.
 
 ---
 
-**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..275]` ·
+**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..290]` ·
 extends `[SPEC-SC-045]`'s provenance ladder and `[SPEC008]`'s `imported:`
 convention · complements, does not replace, `[SPEC024](SPEC024-dao-segmentation-cascade.md)`
 · extended by [SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio

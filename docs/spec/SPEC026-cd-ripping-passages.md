@@ -135,9 +135,9 @@ checkbox at review time, a prompt during the rip itself, something else)
 is first-build UI detail, not a design question this document exists to
 settle.
 
-`[SPEC025 §8](SPEC025-cd-ripping.md#8-open)` covers the one thing that
-remains open in the ripping mechanics this document does not touch:
-drive/hardware failure modes.
+[SPEC025 §8](SPEC025-cd-ripping.md#8-open) confirms nothing else remains
+open in the ripping mechanics this document does not touch either —
+drive/hardware failure modes, the last item there, is now decided too.
 
 ---
 

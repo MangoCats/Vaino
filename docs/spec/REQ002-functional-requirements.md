@@ -928,6 +928,12 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-LIB-275]` A multi-disc rip session prompts for each next disc but never blocks on one being unavailable or ripped out of order.** Designed in [SPEC026](SPEC026-cd-ripping-passages.md) §2 — the operator may skip a disc that isn't at hand, insert discs out of sequence, or stop early, and whatever was actually ripped is recorded as part of the set. Which disc a physical disc actually is comes from its own Disc ID lookup (`[REQ-LIB-235]`), not from session sequence, so an accidental duplicate or an unrelated disc is identified rather than assumed.
 
+**`[REQ-LIB-280]` No optical drive detected degrades this one capability exactly like no ripping tool found.** Designed in [SPEC025](SPEC025-cd-ripping.md) §5a — checked at the same point as `[REQ-LIB-250]`'s tool check, so "Rip a CD" is offered as unavailable with a plain reason rather than failing on click, regardless of which of the two is actually missing.
+
+**`[REQ-LIB-285]` A track that fails read verification does not abort the rip; the disc is ripped best-effort and the failure is recorded, never silent.** Designed in [SPEC025](SPEC025-cd-ripping.md) §5a — ripping continues with the remaining tracks after the tool's own retries are exhausted, and the failed track is written anyway rather than dropped, with an `ingest_decisions` row marking it for review the same way an unconfirmed segmentation already is (`[REQ-LIB-215]`).
+
+**`[REQ-LIB-290]` A drive that stalls mid-rip is reported and retried per track, without discarding tracks already ripped.** Designed in [SPEC025](SPEC025-cd-ripping.md) §5a — the same failure shape as a verification failure (`[REQ-LIB-285]`), since `ingest_decisions` rows are per-track; a stall on one track does not implicate the ones ripped before it.
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Vaino installation with **no Sampo** can receive derived data and use every advanced feature `[SPEC-DF-080]`.
