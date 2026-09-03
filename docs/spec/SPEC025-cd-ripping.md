@@ -176,6 +176,8 @@ not listener state.
 
 ## 5a. Handling rip failures — best effort, never silent
 
+**First real-hardware finding, 2026-09-03: see [LOG005](../LOG005-cd-ripping-hardware-findings.md).**
+
 **`[SPEC-RIP-052]` No optical drive detected degrades exactly like no
 ripping tool found (`[SPEC-RIP-024]`).** The two checks — tool on PATH,
 drive present — run together at the same point, and either absence has

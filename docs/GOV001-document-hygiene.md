@@ -149,6 +149,7 @@ grep -rn "SPEC-PD" docs/
 | `[LOG-I*-*]` | Extraction iteration history & measured results (Route 3, distillation — not what ships) | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
 | `[LOG-FEX-*]` | Route 2 (Gaia/SVM chain reproduction) reverse-engineering and production validation — what ships | [LOG002-feature-reproduction-investigation.md](LOG002-feature-reproduction-investigation.md), [LOG003-feature-reproduction-verification.md](LOG003-feature-reproduction-verification.md) |
 | `[LOG-WFE-*]` | Waveform boundary editor: incident and build history behind SPEC021's usability pass and fade addition | [LOG004-waveform-editor-build-log.md](LOG004-waveform-editor-build-log.md) |
+| `[LOG-RIP-*]` | CD ripping: real-hardware findings behind SPEC025 §5a's failure-handling design | [LOG005-cd-ripping-hardware-findings.md](LOG005-cd-ripping-hardware-findings.md) |
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
