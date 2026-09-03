@@ -65,7 +65,7 @@ Four traits, deliberately separate, in `playback.rs` and `switch.rs`:
 
 | trait | methods | who wants it |
 | :--- | :--- | :--- |
-| `Playback` | `capabilities`, `enqueue`, `queued_ids`, `queued_ms`, `shortfall`, `take_dropped`, `resume_at`, `seek_to`, `tick`, `is_shutdown` | ordinary playback |
+| `Playback` | `capabilities`, `enqueue`, `queued_ids`, `queued_ms`, `shortfall`, `take_dropped`, `resume_at`, `seek_to`, `tick`, `is_shutdown`, `apply_queue_settings` | ordinary playback |
 | `FadeOut` | `fade_out`, `hand_off` | a handoff |
 | `Publish` | `publish` | a guest's clients |
 | `Progress` | `head_position`, `refresh`, `head_counted`, `adopt_counted` | a handoff |

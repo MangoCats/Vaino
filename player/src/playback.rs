@@ -115,8 +115,9 @@ pub const WHOLE_FILE_SLACK_MS: u64 = 5_000;
 
 /// The whole of what a session asks of a player.
 ///
-/// **Nine methods, and the shape now comes from the callers.** *(Narrowed
-/// 2026-08-21, when a session was first driven through it.)*
+/// **Eleven methods, and the shape now comes from the callers.** *(Narrowed
+/// 2026-08-21, when a session was first driven through it; `apply_queue_settings`
+/// added 2026-09-03 `[SPEC-MPD-105]`.)*
 ///
 /// The spike's own finding stands: every method forwards to one that already
 /// existed, and nothing in `engine.rs` was touched to make it compile. What did
@@ -167,6 +168,19 @@ pub trait Playback {
     fn tick(&mut self) -> usize;
 
     fn is_shutdown(&self) -> bool;
+
+    /// Apply the listener's queue-depth and sample-interval settings live,
+    /// without a reconnect `[SPEC-MPD-105]`.
+    ///
+    /// The local engine already receives these through its own `Command`
+    /// channel (`Engine::drain_commands`), which reaches it whether or not it
+    /// is the side sounding — `Switching::tick` ticks both sides every pass,
+    /// so `Engine` keeps draining its channel regardless. A remote guest has
+    /// no such channel: until this method existed, changing either setting
+    /// while a guest was live had no visible effect there at all, only on the
+    /// (possibly idle) local engine. Defaulted to nothing for a backend with
+    /// no such state of its own to update.
+    fn apply_queue_settings(&mut self, _depth: usize, _sample_interval_ms: u64) {}
 }
 
 /// The local engine is a backend like any other, and the one that can do

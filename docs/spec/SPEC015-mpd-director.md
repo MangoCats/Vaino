@@ -189,16 +189,17 @@ the engine accepts rather than keeping a second copy of the limits.
 Moving it to the settings page makes it adjustable on an appliance whose only
 interface is a web page.
 
-**As shipped, neither tunable is actually live for the MPD guest.** Editing
-either on the settings page sends `Command::SetQueueDepth`/`SetSampleInterval`
-over `EngineHandle`, which only the local `Engine`'s command loop drains
-(`player/src/engine/mod.rs`). `MpdBackend` has no channel and no setter for
-either field — `depth`/`interval_ms` are set once, at `connect()`, from the
-`--depth` CLI flag and the compiled-in `SAMPLE_INTERVAL_MS`, and never touched
-again. So today it is "one place" only while the local engine is the live
-backend; changing either setting while MPD is sounding has no effect on MPD's
-polling or promotion depth until the guest is reconnected. Wiring a live update
-into `MpdBackend` (mirroring `Engine`'s command loop) would close this gap.
+**Built 2026-09-03: both tunables are live for whichever backend is sounding,
+not only the local engine.** `Playback::apply_queue_settings` (a tenth method
+on the trait, defaulted to nothing for a backend with no such state) is called
+once per pass of `vaino`'s own loop with the settings page's current values,
+read back from the same published `Snapshot` the engine already keeps them in.
+`Switching` forwards the call to **both** sides, mirroring `tick`'s own
+reasoning: a switch must not leave the side just vacated holding a stale
+value, or switching back would show it briefly wrong. The local engine's own
+`Command`/`EngineHandle` path is unaffected and still works exactly as before
+— `Engine` relies on the trait's default no-op here, since its own channel
+already reaches it whether or not it is the side sounding.
 
 **The sample interval has a floor worth respecting.** `[SPEC-MPD-110]` is why:
 five seconds resolves a four-minute rule easily and a 12-second passage badly,
@@ -238,26 +239,30 @@ about what happened without either writing the other's data.
 ---
 
 **`[SPEC-MPD-110]` One interval serves the judgement; only a known deadline earns
-a tighter one.** *(Settled 2026-08-21, by measurement.)* Across 8,330 radio
-passages the median is 241 s, so five seconds is about 4% of a typical threshold.
-The interval exceeds **half** the threshold for **7 passages (0.1%)** and a
-quarter of it for 37 (0.4%). Sampling adaptively to serve seven passages is
-complexity bought at the wrong price, and the fixed interval stands.
+a tighter one.** *(Settled 2026-08-21, by measurement; built 2026-09-03.)* Across
+8,330 radio passages the median is 241 s, so five seconds is about 4% of a
+typical threshold. The interval exceeds **half** the threshold for
+**7 passages (0.1%)** and a quarter of it for 37 (0.4%). Sampling *uniformly*
+faster to serve seven passages was rejected as complexity bought at the wrong
+price — the fixed interval is still the baseline rate.
 
 The pressure the original question anticipated turned out to come from elsewhere.
 For **judgement** a late sample only risks calling a play a skip, bounded and
 rare. For the **span end** `[SPEC-MPD-096]` the same interval is an *absolute*
-overrun of unwanted audio on 6.4% of passages. So the rule ought to be not a
-smaller global interval but a local one: sample at the configured rate, and when
-a **known boundary** is close — the span end, or the play threshold of an
+overrun of unwanted audio on 6.4% of passages. So the rule is not a smaller
+global interval but a local one: sample at the configured rate, and when a
+**known boundary** is close — the span end, or the play threshold of an
 unusually short passage — sample to meet it. A deadline that is known is worth
 sampling for; a uniformly faster clock is not.
 
-**Proposed, not built.** `MpdBackend::tick()` (`player/src/mpd_backend.rs`) only
-checks the fixed interval described above — there is no boundary-aware
-adjustment in the code today. The 6.4% span-end overrun this paragraph reasons
-about remains as `[SPEC-MPD-096]` measured it, uncorrected by any deadline-aware
-sampling.
+`MpdBackend::effective_interval()` (`player/src/mpd_backend.rs`) implements
+exactly that: estimated from the last poll's own position plus wall-clock time
+elapsed since — MPD is not asked again just to answer this — it returns the
+configured interval unchanged until either deadline is within it, then tightens
+to meet the nearer one, floored at 250 ms so a boundary a few milliseconds away
+cannot turn "sample to meet it" into a busy loop. The 6.4% span-end overrun
+`[SPEC-MPD-096]` measured is what this exists to shrink; it was not re-measured
+after this change.
 
 **`[SPEC-MPD-115]` A person's own additions feed rotation — and must clear
 `[SPEC-MPD-090]`'s threshold like anything else.** *(Settled 2026-08-21,
