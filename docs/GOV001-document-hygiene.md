@@ -83,6 +83,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `LYR` — Lyrics: where they live, and how far they travel
 - `BK` — Switching playback backends without stopping, see [SPEC018](spec/SPEC018-switching-backends.md) for the seam and [SPEC020](spec/SPEC020-the-handoff.md) for the handoff
 - `VOC` — Domain vocabulary: what file/passage/recording/release/album/artist/track mean and do not mean, see [SPEC023](spec/SPEC023-domain-vocabulary.md)
+- `RIP` — CD ripping via a disc's own table of contents, see [SPEC025](spec/SPEC025-cd-ripping.md)
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -159,6 +160,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-SA-020]` | Sampo pipeline stages S1-S7 | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#2-pipeline) |
 | `[SPEC-SA-090]` | Per-passage extraction — measured, the mechanism works | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
 | `[SPEC-SA-115..128]` | DAO segmentation cascade: grid search, DP assembly, RMS fallback, extra-track merging — built; MusicBrainz edition search and "Stage 6" refinement — open | [SPEC024-dao-segmentation-cascade.md](spec/SPEC024-dao-segmentation-cascade.md) |
+| `[SPEC-RIP-010..080]` | CD ripping via a disc's own TOC: exact boundaries and a Disc ID match instead of inferring either — designed, not yet built | [SPEC025-cd-ripping.md](spec/SPEC025-cd-ripping.md) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |

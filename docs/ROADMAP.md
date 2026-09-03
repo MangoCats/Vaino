@@ -24,6 +24,8 @@ folded into one spec.
 | Functional requirements | [REQ002](spec/REQ002-functional-requirements.md) | [§8 Coverage Gaps](spec/REQ002-functional-requirements.md#8-coverage-gaps) |
 | Flavor distance | [SPEC005](spec/SPEC005-flavor-distance.md) | [§5a Future Direction — entry/exit flavor](spec/SPEC005-flavor-distance.md#5a-future-direction--entry-and-exit-flavor) |
 | Sampo pipeline | [SPEC007](spec/SPEC007-sampo-architecture.md) | [§6 Segmentation & Amplitude — PROVISIONAL](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
+| DAO segmentation cascade | [SPEC024](spec/SPEC024-dao-segmentation-cascade.md) | [§8 Open](spec/SPEC024-dao-segmentation-cascade.md#8-open) |
+| CD ripping (designed, not yet built) | [SPEC025](spec/SPEC025-cd-ripping.md) | [§8 Open](spec/SPEC025-cd-ripping.md#8-open) |
 | Database schema | [SPEC008](spec/SPEC008-database-schema.md) | [§8 Open](spec/SPEC008-database-schema.md#8-open) |
 | Program Director | [SPEC009](spec/SPEC009-program-director.md) | [§9 Open](spec/SPEC009-program-director.md#9-open) |
 | Audio path supervisor | [SPEC011](spec/SPEC011-audio-path-supervisor.md) | [§5 Risks and open questions](spec/SPEC011-audio-path-supervisor.md#5-risks-and-open-questions) |
