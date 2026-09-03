@@ -1,10 +1,10 @@
 //! What a session needs of whatever is playing `[GDE-EXT-055]`.
 //!
-//! **A spike, on `investigate/external-players`.** It exists to measure the
-//! cost of driving something other than the built-in engine — MPD, an
-//! OpenSubsonic server — rather than to ship that. The measurement it makes is
-//! the width of this file: if the trait is small, the Director is portable; if
-//! it is wide, it is not.
+//! **Began as a spike, on `investigate/external-players`, to measure the cost
+//! of driving something other than the built-in engine.** The measurement it
+//! made was the width of this file: if the trait stayed small, the Director
+//! was portable. It did, and MPD is now a shipped backend (`SPEC015`,
+//! `SPEC018`) built on this trait — OpenSubsonic was not pursued.
 //!
 //! The seam was already here and had not been named. Measured on this tree:
 //!

@@ -1,6 +1,6 @@
 # SPEC019: Lyrics
 
-**Design Specification — Tier 2 · storage, Vaino's own skins, and the cache route built and confirmed against a client; the music-folder sidecar measured, not built**
+**Design Specification — Tier 2 · storage, Vaino's own skins, the cache route built and confirmed against a client, and the music-folder sidecar built (`[SPEC-LYR-080]`)**
 
 MuLibPlay accumulated lyrics for a quarter of the library. This is how they
 reach Vaino, its own skins, and — as far as the protocol allows — a guest's

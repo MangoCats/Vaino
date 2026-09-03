@@ -187,8 +187,18 @@ the engine accepts rather than keeping a second copy of the limits.
 **Queue depth is a promotion, not a new setting.** It exists today as
 `vaino --depth N`, defaulting to 5, reachable only by editing a service file.
 Moving it to the settings page makes it adjustable on an appliance whose only
-interface is a web page, and it applies to the **local** engine as well — the
-same number, one place, whichever backend is playing.
+interface is a web page.
+
+**As shipped, neither tunable is actually live for the MPD guest.** Editing
+either on the settings page sends `Command::SetQueueDepth`/`SetSampleInterval`
+over `EngineHandle`, which only the local `Engine`'s command loop drains
+(`player/src/engine/mod.rs`). `MpdBackend` has no channel and no setter for
+either field — `depth`/`interval_ms` are set once, at `connect()`, from the
+`--depth` CLI flag and the compiled-in `SAMPLE_INTERVAL_MS`, and never touched
+again. So today it is "one place" only while the local engine is the live
+backend; changing either setting while MPD is sounding has no effect on MPD's
+polling or promotion depth until the guest is reconnected. Wiring a live update
+into `MpdBackend` (mirroring `Engine`'s command loop) would close this gap.
 
 **The sample interval has a floor worth respecting.** `[SPEC-MPD-110]` is why:
 five seconds resolves a four-minute rule easily and a 12-second passage badly,
@@ -237,11 +247,17 @@ complexity bought at the wrong price, and the fixed interval stands.
 The pressure the original question anticipated turned out to come from elsewhere.
 For **judgement** a late sample only risks calling a play a skip, bounded and
 rare. For the **span end** `[SPEC-MPD-096]` the same interval is an *absolute*
-overrun of unwanted audio on 6.4% of passages. So the rule is not a smaller global
-interval but a local one: sample at the configured rate, and when a **known
-boundary** is close — the span end, or the play threshold of an unusually short
-passage — sample to meet it. A deadline that is known is worth sampling for; a
-uniformly faster clock is not.
+overrun of unwanted audio on 6.4% of passages. So the rule ought to be not a
+smaller global interval but a local one: sample at the configured rate, and when
+a **known boundary** is close — the span end, or the play threshold of an
+unusually short passage — sample to meet it. A deadline that is known is worth
+sampling for; a uniformly faster clock is not.
+
+**Proposed, not built.** `MpdBackend::tick()` (`player/src/mpd_backend.rs`) only
+checks the fixed interval described above — there is no boundary-aware
+adjustment in the code today. The 6.4% span-end overrun this paragraph reasons
+about remains as `[SPEC-MPD-096]` measured it, uncorrected by any deadline-aware
+sampling.
 
 **`[SPEC-MPD-115]` A person's own additions feed rotation — and must clear
 `[SPEC-MPD-090]`'s threshold like anything else.** *(Settled 2026-08-21,

@@ -112,7 +112,7 @@ Two consequences to watch:
 1. **The artist ramp is now load-bearing, so its defaults are too.** Artist rotation 1.0 and recovery 1.0 `[SPEC-DIR-120]` mean an artist blocks for 10 hours and then damps across the following 10. That second window has never had any effect and has therefore never been tuned by anyone. Treat the artist defaults as unvalidated until observed.
 2. **Damping can now push a weight under `min_weight`**, excluding a passage early in the artist's recovery where it would previously have been eligible at full weight. This slightly extends the effective block. It is a consequence of the fix, not a separate decision.
 
-**Still open:** the same block contains a second instance of the pattern — related-recording recovery damping passes the *primary* recording's age rather than the related recording's, so it too is largely inert. Related recordings are not yet modelled in Stage A; fix it when they are, rather than porting the defect forward.
+**Resolved by `[SPEC-DIR-116]`:** the same block originally contained a second instance of the pattern — related-recording recovery damping passed the *primary* recording's age rather than each related recording's own. Related recordings are now modelled in Stage A (`player/src/director/frequency.rs`'s `Related` handling, `player/src/director/library.rs` loading `recording_relations`), and the damping uses each relation's own age, not the primary's — see `[SPEC-DIR-116]` above.
 
 **`[SPEC-DIR-120]` Defaults matter more than they look.** Only 2,918 of 8,116 MuLibPlay tracks (36%) ever received tuned values `[GDE-BMK-020]`, so most selection runs on defaults:
 
@@ -256,7 +256,7 @@ Two decisions:
 
 ## 7. Visibility Contract
 
-**`[SPEC-DIR-190]`** Every automatic selection writes a `selection_decisions` record `[SPEC-SC-100]` sufficient to reconstruct the choice `[REQ-VIS-100]`: artist weight and block state, recording weight and ramp position, occasion multiplier with the characteristic and curve value that produced it, length bonus, final Stage-A weight, distance to each seed, Taste effect, flow distance, rank, roulette position and target — **and the runners-up that lost, with their weights**.
+**`[SPEC-DIR-190]`** Every automatic selection writes a `selection_decisions` record `[SPEC-SC-100]` sufficient to reconstruct the choice `[REQ-VIS-100]`: artist weight and block state, recording weight and ramp position, occasion multiplier, length bonus, final Stage-A weight, distance to each seed, flow distance, rank, roulette position and target — **and the runners-up that lost, with their weights**. The occasion multiplier is currently recorded as the combined scalar only, not broken out by the characteristic/curve value that produced it; Taste's effect is likewise not yet a distinct field — it is folded into `seed_distances` undifferentiated from programme seeds. Both are recordable extensions of `Weighing`/`Explanation`, not yet built.
 
 The orthogonality of `[SPEC-DIR-100]` is what makes this legible: the panel shows *how often* and *does it fit* as two separate stories rather than one opaque product.
 

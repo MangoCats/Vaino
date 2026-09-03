@@ -219,4 +219,4 @@ Test it on accuracy, **not** on size: at 44 MB the fully dedicated models ship c
 
 **`[LOG-CAV-020]`** Test data comes from the same 2022-06-23 sample dump as training. Held out by recording, but not by era, genre distribution, or encoding population. Real-world accuracy on **new** music — the 729 tracks that motivate this work `[GDE-FEX-010]` — is inferred, not measured, and cannot be measured directly since no ground truth exists for them `[GDE-FEX-160]`.
 
-**`[LOG-CAV-030]`** Every value produced carries its provenance and its measured per-characteristic accuracy `[GDE-FBD-020]`, and feeds flavor distance weighted by that accuracy `[SPEC-FD-120]`. A weak characteristic degrades similarity gracefully rather than poisoning it.
+**`[LOG-CAV-030]`** Every value produced carries its provenance `[GDE-FBD-020]`, and feeds flavor distance weighted by a corpus-wide reliability per characteristic `[SPEC-FD-052]` (the earlier per-value-accuracy premise, `[SPEC-FD-120]`, was superseded once the library moved to uniform-local provenance `[SPEC-FD-150]`). A weak characteristic degrades similarity gracefully rather than poisoning it.

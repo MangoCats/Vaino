@@ -44,10 +44,11 @@ something a listener does on impulse. Loading the Director once and switching
 the output costs neither.
 
 **`[SPEC-BK-022]` The session drives a backend, not the engine.** *(Built
-2026-08-21.)* `Session::refill`, `tend_rebuild` and `adopt` take
-`&mut dyn Playback`. `Engine` satisfies the trait with nothing in `engine.rs`
-(now `engine/`, split 2026-09-02, file-organization only) touched, which was
-the spike's claim and survives contact.
+2026-08-21.)* `Session::refill` takes `&mut dyn Backend` — it publishes,
+which sits outside `Playback` — while `tend_rebuild` and `adopt` take the
+narrower, read-only `&dyn Playback`. `Engine` satisfies the trait with
+nothing in `engine.rs` (now `engine/`, split 2026-09-02, file-organization
+only) touched, which was the spike's claim and survives contact.
 
 **The trait had to narrow to carry weight, though.** As written it asked for
 `queued() -> Vec<QueueEntry>` — a deep clone of every queued passage, per tick,

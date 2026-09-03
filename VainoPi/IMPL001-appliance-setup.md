@@ -4,7 +4,7 @@
 
 Step-by-step build of a Pi Zero 2W as a Vaino appliance. Implements the hardware and storage model in [embedded-hardware.md](embedded-hardware.md) and the requirements in [REQ002 §6](../docs/spec/REQ002-functional-requirements.md#6-appliance--hw).
 
-> **Status: UNVALIDATED.** Written from specification and the target's known constraints; not yet executed on hardware. Each step carries a **Verify** line — record the actual result, and correct this document where reality disagrees. MuLibPlay's Pi notes decayed into scattered tips precisely because nothing was checked back in.
+> **Status, updated 2026-09-02:** this plan *has* since been run against real hardware — see [PI002](PI002-test-image-setup.md) through [PI007](PI007-mpd-on-the-appliance.md) for the actual build, Bluetooth pairing, thermal/CPU characterisation and MPD setup, all measured on a real Pi Zero 2W. One load-bearing decision below did not survive contact: §5's `bluez-alsa` choice was superseded by **PipeWire** (`[PI2-KNOWN-010]`) — see the note at §5. The rest of this document was written from specification ahead of that hardware work; each step still carries its own **Verify** line, and where the PI-series notes correct something here, that correction is noted inline rather than silently overwritten, per this project's own MuLibPlay lesson about notes that decay into scattered tips because nothing was checked back in.
 
 ---
 
@@ -85,15 +85,17 @@ sudo systemctl restart zramswap
 
 ## 5. Audio — Profile A (Bluetooth)
 
+> **Superseded 2026-09-02:** the `bluez-alsa` choice below was the pre-hardware plan. What was actually built and measured on the appliance is **PipeWire** — `pipewire pipewire-pulse wireplumber libspa-0.2-bluetooth`, with ALSA pointed at PipeWire rather than at `bluealsa` (`[PI2-KNOWN-010]`, [PI002](PI002-test-image-setup.md) §0) — carried through pairing, characterisation and MPD setup in [PI002](PI002-test-image-setup.md)–[PI007](PI007-mpd-on-the-appliance.md). The footprint reasoning below did not hold up against a real device; PipeWire's measured cost on the appliance is recorded in [PI006](PI006-appliance-characterisation.md). The `bluez-alsa` steps are kept for their history, not as current instructions.
+
 **`[IMPL-AUD-010]`** Identify what exists first: `aplay -l`, and after setup `vaino --list-devices`.
 
-**`[IMPL-AUD-050]` A2DP needs a bridge into ALSA.** Vaino's `cpal` backend speaks ALSA, and BlueZ alone does not expose an A2DP sink as an ALSA PCM. This corrects the "no PulseAudio, ALSA directly" guidance elsewhere in this document — that holds for Profiles B–D, **not** for Bluetooth.
+**`[IMPL-AUD-050]` A2DP needs a bridge into ALSA.** Vaino's `cpal` backend speaks ALSA, and BlueZ alone does not expose an A2DP sink as an ALSA PCM. This corrects the "no PulseAudio, ALSA directly" guidance elsewhere in this document — that holds for Profiles B–D, **not** for Bluetooth. *(As shipped, the bridge is PipeWire, not the `bluez-alsa` steps immediately below — see the superseded note above.)*
 
 ```bash
 sudo apt-get install -y bluez bluez-alsa-utils
 ```
 
-`bluez-alsa` (`bluealsa`) is preferred over PipeWire or PulseAudio here purely on footprint: this is a 512 MB machine with a ≤150 MB budget for Vaino `[REQ-HW-100]`.
+`bluez-alsa` (`bluealsa`) was the plan here, preferred over PipeWire or PulseAudio purely on footprint: this is a 512 MB machine with a ≤150 MB budget for Vaino `[REQ-HW-100]`. PipeWire was chosen instead once real hardware was available — see the superseded note above.
 
 **`[IMPL-AUD-060]` Pair and trust once**, so later boots reconnect without interaction:
 
@@ -209,6 +211,6 @@ WantedBy=multi-user.target
 ## 9. Open
 
 1. ~~**`[IMPL-OPN-010]`** Which audio output~~ — **DECIDED: Profile A (Bluetooth) is tested first** `[IMPL-PROF-020]`, with B–D kept supported and configurable `[IMPL-PROF-030]`. Its boot delay is accepted for that profile alone.
-2. ~~**`[IMPL-OPN-040]`** bluez-alsa vs PipeWire~~ — **DECIDED: `bluez-alsa`**, on footprint for a 512 MB host.
+2. ~~**`[IMPL-OPN-040]`** bluez-alsa vs PipeWire~~ — **DECIDED (revised 2026-09-02): PipeWire**, built and measured on real hardware `[PI2-KNOWN-010]`, [PI006](PI006-appliance-characterisation.md). The original footprint-driven `bluez-alsa` decision below did not survive contact with the device — see §5's superseded note.
 2. **`[IMPL-OPN-020]`** Whether 64-bit is right at 512 MB. It matches the verified build, but 32-bit uses less memory for pointer-heavy work. Vaino's footprint is buffer-dominated, so the difference should be small — worth measuring both if the margin proves tight.
 3. **`[IMPL-OPN-030]`** Where the class-D export goes off-device `[SPEC-DF-094]`, since on-card backups die with the card.
