@@ -9,7 +9,7 @@ data is long gone, this document is for the case where it isn't gone yet —
 the disc is in the drive, and its own table of contents (TOC) states
 boundaries to the sector rather than asking anything to be inferred.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-220..250]`.
+> **Status.** Requirements and specification only, per `[REQ-LIB-220..270]`.
 > No code exists yet. The ripping-tool choice (§2) is decided **per
 > platform** — EAC on Windows, `cdrdao` on Linux, checked rather than
 > assumed `[GOV-SRC-020]` — and both are optional, user-installed
@@ -174,7 +174,7 @@ not listener state.
 
 ---
 
-## 6. Disc ID and MusicBrainz
+## 6. Disc ID, CD-TEXT, and MusicBrainz
 
 **`[SPEC-RIP-060]`** The TOC's track count and sector offsets, sent to
 MusicBrainz's own Disc ID lookup (`GET /ws/2/discid/<disc-id>?toc=...`),
@@ -193,6 +193,31 @@ unchanged. Ripping never blocks on an unresolved disc; it degrades to
 exactly the path a file with no TOC already takes. How a multi-disc set's
 own several TOCs and Disc ID lookups combine into one library entry is
 designed in [SPEC026 §2](SPEC026-cd-ripping-passages.md#2-multi-disc-sets--one-file-per-disc-one-release-passage-per-track-by-default).
+
+**`[SPEC-RIP-066]` CD-TEXT, when the disc carries it, is the default
+source for title/artist/track metadata; a resolved MusicBrainz match is
+offered as an alternative the user may accept instead.** Both are read
+where present — CD-TEXT from the TOC read itself (§3), MusicBrainz from
+Disc ID (`[SPEC-RIP-060]`) — and the two are not measured against each
+other under `[GOV-SRC-020]` before this default is set: unlike §2's
+platform check, no corpus of discs carrying both exists yet to measure
+disagreement rate against. The default instead follows §1's own standing
+reason to prefer a disc's own data — CD-TEXT is burned onto *this*
+pressing, where a Disc ID match, exact or fuzzy, still identifies a
+*release* that may be a different edition, remaster, or regional pressing
+of the same recordings. That reasoning does not make CD-TEXT more
+*accurate* — a disc can carry misspelled or abbreviated CD-TEXT the same
+way a file can carry a bad tag — only more *authoritative about this
+specific object*, which is the same distinction `[SPEC-RIP-010]` already
+draws for boundaries.
+
+**`[SPEC-RIP-068]` Accepting the MusicBrainz alternative is a one-action
+choice at review time, never automatic.** The same discover-then-confirm
+shape `[SPEC-RIP-093]` and `[SPEC-RIP-100]` establish for a wider
+passage: both readings are shown side by side when they disagree, and
+picking either is a single click, recorded the same way a release match
+already is (`[SPEC-RIP-075]`). A disc with no CD-TEXT at all simply shows
+the MusicBrainz result alone, unchanged from today.
 
 ---
 
@@ -229,11 +254,6 @@ already covers.
   progress" distinct from an unrelated re-rip of disc 1, or surfaces that
   state to the person swapping discs — a UI question for a build pass,
   not a schema gap.
-- **CD-TEXT versus MusicBrainz, when both exist and disagree.** A disc
-  carrying its own CD-TEXT title/artist is a second source next to
-  whatever Disc ID resolves; no ranking between them has been measured or
-  decided, so per `[GOV-SRC-050]` this stays an open question rather than
-  an assumed answer.
 - **Drive/hardware failure modes.** A read error, a drive needing a disc
   swapped mid-rip, or no optical drive present at all `[REQ-LIB-230]`
   names the discipline (report, never guess) but not the exact UI for any
@@ -248,7 +268,7 @@ rather than duplicated here.
 
 ---
 
-**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..250]` ·
+**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..270]` ·
 extends `[SPEC-SC-045]`'s provenance ladder and `[SPEC008]`'s `imported:`
 convention · complements, does not replace, `[SPEC024](SPEC024-dao-segmentation-cascade.md)`
 · extended by [SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio

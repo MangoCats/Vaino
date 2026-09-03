@@ -924,6 +924,8 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-LIB-265]` Creating a folded-in or wider passage is always the user's choice, made easy rather than made automatically.** Designed in [SPEC026](SPEC026-cd-ripping-passages.md) §§1-2 — Sampo detects and offers the candidate span (hidden audio plus its neighbour, a whole disc, an album side) as a one-action confirmation, the same discover-then-let-a-person-confirm shape `[SPEC-SUI-215]`'s release suggestion already uses; nothing about the audio itself is trusted to decide whether a listener wants the wider passage to exist.
 
+**`[REQ-LIB-270]` CD-TEXT is the default source for a ripped disc's title/artist/track metadata when the disc carries it; a resolved MusicBrainz match remains available as a one-action alternative.** Designed in [SPEC025](SPEC025-cd-ripping.md) §6 — an unmeasured default per `[GOV-SRC-020]` (no corpus of discs carrying both exists to rank them by disagreement rate), following the same disc's-own-data reasoning `[REQ-LIB-220]` already uses for boundaries rather than a reliability finding. A disc with no CD-TEXT shows the MusicBrainz result alone, unchanged from today.
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Vaino installation with **no Sampo** can receive derived data and use every advanced feature `[SPEC-DF-080]`.
