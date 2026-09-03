@@ -285,10 +285,27 @@ fn engine_thread(
         let submitted = vaino_player::playback::Playback::tick(&mut backend);
         // Continuous radio: the queue never runs dry, so playback never ends.
         // The backend plays; the settings belong to the process `[SPEC-BK-020]`.
-        let suppress = published
+        let (suppress, queue_settings) = published
             .lock()
-            .map(|s| (s.skip_suppress_h, s.dequeue_suppress_h))
-            .unwrap_or((vaino_player::SKIP_SUPPRESS_H, vaino_player::DEQUEUE_SUPPRESS_H));
+            .map(|s| {
+                (
+                    (s.skip_suppress_h, s.dequeue_suppress_h),
+                    (s.queue_depth, s.sample_interval_ms),
+                )
+            })
+            .unwrap_or((
+                (vaino_player::SKIP_SUPPRESS_H, vaino_player::DEQUEUE_SUPPRESS_H),
+                (vaino_player::QUEUE_DEPTH, vaino_player::SAMPLE_INTERVAL_MS),
+            ));
+        // Reaches whichever backend is live, and the one that is not
+        // `[SPEC-MPD-105]`: the local engine already sees a change through its
+        // own `Command` channel regardless, but a guest has no such channel,
+        // so this is the only path that ever reaches it.
+        vaino_player::playback::Playback::apply_queue_settings(
+            &mut backend,
+            queue_settings.0,
+            queue_settings.1,
+        );
         // The four folder-writing settings, run here rather than in a request
         // handler: each walks the library and writes into a folder Vaino does
         // not own `[REQ-VIS-205]`, which is not work to do while a browser

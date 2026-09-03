@@ -371,6 +371,17 @@ impl Playback for Switching {
     fn is_shutdown(&self) -> bool {
         self.live().is_shutdown()
     }
+
+    /// **Both sides get it, not only the live one** — the same reasoning as
+    /// `tick`: a switch must not leave the side just vacated holding a stale
+    /// depth or interval, or switching back would show it briefly wrong
+    /// `[SPEC-MPD-105]`.
+    fn apply_queue_settings(&mut self, depth: usize, sample_interval_ms: u64) {
+        self.local.apply_queue_settings(depth, sample_interval_ms);
+        if let Some(g) = self.guest.as_deref_mut() {
+            g.apply_queue_settings(depth, sample_interval_ms);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -400,6 +411,10 @@ mod tests {
         /// of the socket — and says so only by dropping them.
         refuses: Vec<i64>,
         dropped: Vec<i64>,
+        /// What `apply_queue_settings` was last told, if anything. Shared for
+        /// the same reason `handed_off` is: once boxed as a `Backend` the
+        /// field itself is out of a test's reach.
+        applied_settings: std::sync::Arc<std::sync::Mutex<Option<(usize, u64)>>>,
     }
 
     impl Progress for Fake {
@@ -461,6 +476,9 @@ mod tests {
         }
         fn is_shutdown(&self) -> bool {
             false
+        }
+        fn apply_queue_settings(&mut self, depth: usize, sample_interval_ms: u64) {
+            *self.applied_settings.lock().unwrap() = Some((depth, sample_interval_ms));
         }
     }
 
@@ -586,6 +604,34 @@ mod tests {
 
         assert_eq!(s.switch_to(Side::Local).unwrap(), vec![2]);
         assert_eq!(s.queued_ids(), vec![1], "the local side kept what it had");
+    }
+
+    /// A settings change reaches both sides, not only whichever is sounding
+    /// `[SPEC-MPD-105]` — the same reasoning `tick` already gets, since a
+    /// switch back to the other side must not find it holding a stale value.
+    #[test]
+    fn a_queue_settings_change_reaches_both_sides() {
+        let local_applied = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let guest_applied = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut s = Switching::new(Box::new(Fake {
+            applied_settings: local_applied.clone(),
+            ..Default::default()
+        }));
+        s.attach_guest(Box::new(Fake {
+            caps: Some(Capabilities::MPD),
+            applied_settings: guest_applied.clone(),
+            ..Default::default()
+        }));
+
+        let backend: &mut dyn Playback = &mut s;
+        backend.apply_queue_settings(8, 2_500);
+
+        assert_eq!(*local_applied.lock().unwrap(), Some((8, 2_500)), "the local side got it");
+        assert_eq!(
+            *guest_applied.lock().unwrap(),
+            Some((8, 2_500)),
+            "and so did the guest, whether or not it is the one sounding"
+        );
     }
 
     /// The **outgoing** side is the one that stops, and it stops before the

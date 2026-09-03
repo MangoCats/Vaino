@@ -22,13 +22,22 @@ use crate::db::{PlayerStore, Rejection};
 use crate::mpd::{quote, Mpd};
 use crate::playback::{Capabilities, Playback};
 use crate::queue::QueueEntry;
-use crate::scrobble::counts_as_play;
+use crate::scrobble::{counts_as_play, FOUR_MINUTES_MS};
 
 /// How far short of the span's end a seek is allowed to land `[SPEC-BK-055]`.
 ///
 /// MPD stops a song seeked past its span outright, and "past" includes the
 /// last instant of it. A second short is inaudible and cannot trip that.
 const SEEK_MARGIN_MS: u64 = 1_000;
+
+/// The floor `effective_interval` will not poll tighter than `[SPEC-MPD-110]`.
+///
+/// A boundary a few milliseconds away would otherwise be chased with a
+/// near-zero interval, turning "sample to meet it" into a busy loop against a
+/// server that still has to answer each one. A quarter of a second is well
+/// inside what a listener can hear as delay and nowhere near tight enough to
+/// trouble MPD.
+const BOUNDARY_POLL_FLOOR_MS: u64 = 250;
 
 /// The URI MPD would use for a path, or `None` if it is outside MPD's tree.
 ///
@@ -567,6 +576,45 @@ impl MpdBackend {
         }
     }
 
+    /// The rate `SPEC-MPD-105`'s setting configures, tightened near a
+    /// boundary this backend already has enough to know about `[SPEC-MPD-110]`.
+    ///
+    /// Between boundaries a fixed interval is the right answer -- measurement
+    /// found a uniformly faster clock is not worth its own cost. But two
+    /// moments matter more than the rest: the **span end**, where a late
+    /// sample is an *absolute* overrun of unwanted audio bounded only by this
+    /// interval `[SPEC-MPD-096]`, and the **play/skip threshold**
+    /// `[SPEC-PLAY-010]` of an unusually short passage, where a late sample
+    /// only risks calling a play a skip. Estimated from the last poll's own
+    /// position plus wall-clock time elapsed since -- MPD is not asked again
+    /// just to answer this -- so it degrades to the configured interval
+    /// whenever nothing is playing or nothing about the current passage is
+    /// known yet.
+    fn effective_interval(&self) -> Duration {
+        if !self.playing {
+            return self.interval;
+        }
+        let Some((passage_id, pos_at_poll)) = self.head else {
+            return self.interval;
+        };
+        let Some(o) = self.ours.values().find(|o| o.passage_id == passage_id) else {
+            return self.interval;
+        };
+        let since_poll =
+            self.last_poll.map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+        let estimated_pos = pos_at_poll.saturating_add(since_poll);
+        let to_span_end = o.span_ms.saturating_sub(estimated_pos);
+        let threshold = (o.span_ms / 2).min(FOUR_MINUTES_MS);
+        let to_threshold =
+            if estimated_pos < threshold { threshold - estimated_pos } else { u64::MAX };
+        let nearest = to_span_end.min(to_threshold);
+        if nearest < self.interval.as_millis() as u64 {
+            Duration::from_millis(nearest.max(BOUNDARY_POLL_FLOOR_MS))
+        } else {
+            self.interval
+        }
+    }
+
     /// One sample: where playback is, what has left the queue, and whether a
     /// span MPD would not honour has run past its end.
     fn poll(&mut self) {
@@ -951,7 +999,8 @@ impl Playback for MpdBackend {
 
     fn tick(&mut self) -> usize {
         // The session spins far faster than MPD should be asked anything.
-        let due = self.last_poll.map(|t| t.elapsed() >= self.interval).unwrap_or(true);
+        let interval = self.effective_interval();
+        let due = self.last_poll.map(|t| t.elapsed() >= interval).unwrap_or(true);
         if due {
             self.last_poll = Some(Instant::now());
             if self.lost {
@@ -962,6 +1011,16 @@ impl Playback for MpdBackend {
             }
         }
         0
+    }
+
+    /// Update the two listener-facing tunables live, without a reconnect
+    /// `[SPEC-MPD-105]`. Until this existed, `depth`/`interval` were set once
+    /// at `connect()` from the CLI flag and the compiled-in default, and never
+    /// touched again -- changing either on the settings page while a guest was
+    /// live had no effect here at all.
+    fn apply_queue_settings(&mut self, depth: usize, sample_interval_ms: u64) {
+        self.depth = depth;
+        self.interval = Duration::from_millis(sample_interval_ms);
     }
 
     /// **A dead socket is not a shutdown until MPD has really gone.**
@@ -1407,6 +1466,105 @@ mod tests {
                 ("9".to_string(), "b.mp3".to_string())
             ]
         );
+    }
+
+    fn offered_at(passage_id: i64, span_ms: u64, at_ms: u64) -> Offered {
+        Offered {
+            passage_id,
+            uri: "a.mp3".into(),
+            mbid: None,
+            span_ms,
+            furthest_ms: at_ms,
+            heard_ms: 0,
+            seen_at_ms: None,
+            span_honoured: true,
+            was_current: true,
+        }
+    }
+
+    /// `effective_interval` degrades to the configured interval whenever
+    /// nothing is known to be playing, or the passage is far from either
+    /// boundary — the common case, and the one `[SPEC-MPD-110]` decided was
+    /// not worth a uniformly faster clock on its own.
+    #[test]
+    fn effective_interval_is_unchanged_far_from_any_boundary() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.interval = Duration::from_secs(5);
+        assert_eq!(b.effective_interval(), Duration::from_secs(5), "nothing is playing yet");
+
+        b.playing = true;
+        b.head = Some((1, 30_000));
+        b.ours.insert("9".to_string(), offered_at(1, 240_000, 30_000));
+        assert_eq!(
+            b.effective_interval(),
+            Duration::from_secs(5),
+            "far from both the span end and the play threshold"
+        );
+    }
+
+    /// A close span end earns a tighter interval, the case `[SPEC-MPD-096]`
+    /// measured as an absolute overrun bounded only by the old fixed interval.
+    #[test]
+    fn effective_interval_tightens_near_the_span_end() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.interval = Duration::from_secs(5);
+        b.playing = true;
+        b.head = Some((1, 239_000)); // one second from a 240s span
+        b.ours.insert("9".to_string(), offered_at(1, 240_000, 239_000));
+
+        let got = b.effective_interval();
+        assert!(got < Duration::from_secs(5), "tightened rather than the fixed 5s: {got:?}");
+        assert!(
+            got >= Duration::from_millis(BOUNDARY_POLL_FLOOR_MS),
+            "never tighter than the floor: {got:?}"
+        );
+    }
+
+    /// A short passage's play/skip threshold `[SPEC-PLAY-010]` earns the same
+    /// treatment as the span end — both are boundaries `[SPEC-MPD-110]` names.
+    #[test]
+    fn effective_interval_tightens_near_the_play_threshold() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.interval = Duration::from_secs(5);
+        b.playing = true;
+        // A 20s passage: threshold is min(10s, 4min) = 10s. At 9.8s in, the
+        // threshold is 200ms away -- much closer than the 10.2s-away span end.
+        b.head = Some((1, 9_800));
+        b.ours.insert("9".to_string(), offered_at(1, 20_000, 9_800));
+
+        let got = b.effective_interval();
+        assert!(got <= Duration::from_millis(500), "the threshold is 200ms away: {got:?}");
+    }
+
+    /// The floor stops a boundary a few milliseconds away from turning
+    /// "sample to meet it" into a busy loop against a server that still has
+    /// to answer each poll `[SPEC-MPD-110]`.
+    #[test]
+    fn effective_interval_never_polls_tighter_than_the_floor() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.interval = Duration::from_secs(5);
+        b.playing = true;
+        b.head = Some((1, 239_999)); // one millisecond from the span end
+        b.ours.insert("9".to_string(), offered_at(1, 240_000, 239_999));
+
+        assert_eq!(b.effective_interval(), Duration::from_millis(BOUNDARY_POLL_FLOOR_MS));
+    }
+
+    /// A live setting change reaches this backend without a reconnect
+    /// `[SPEC-MPD-105]` — until this method existed, a change made while a
+    /// guest was live was only ever visible to the (possibly idle) local
+    /// engine.
+    #[test]
+    fn queue_settings_apply_live() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.apply_queue_settings(8, 2_500);
+        assert_eq!(b.depth, 8);
+        assert_eq!(b.interval, Duration::from_millis(2_500));
     }
 
     /// A URI is the path with the music directory taken off the front — rung 1
