@@ -195,4 +195,51 @@ For this library's largest file (244.9 min): **~2.6 GB** decoded at int16, **~5.
 
 ---
 
+## 7. Disposal Register
+
+Per `[GDE-ARC-060]`, predecessors are retained only while they still teach. Each entry is deleted when its column empties.
+
+**`[GDE-DIS-010]` Outstanding learning value:**
+
+| Artifact | Still to be learned from it |
+| :--- | :--- |
+| `vaino.db` | 74,299 play-history rows (vs MuLibPlay's 37,134) — reconcile the surplus and establish which are genuine. The 2,279 DAO slice boundaries — compare against McRhythm's segmenter output as a test case. The 729 novel tracks — the P0 target population. |
+| `src/audio/selector.py` | Reference cross-check for the P3 port `[GDE-V1-060]`. |
+| `src/db/dao_slicer.py`, `resolver.py`, `acoustic_resolver.py` | Whether any identification heuristic here outperforms McRhythm's cascade. Probably not — verify, then discard. |
+| `go/` (3,481 lines) | **Nothing.** Incomplete, duplicative `[GDE-V1-050]`. **Delete now.** |
+| v1 `docs/spec/*`: `REQ001`, `SPEC001`, `SPEC002`, `SPEC003`, `SPEC004-rust-migration-guide.md` | **Historical, informational, and on the disposal path.** These are working-tree remnants of v1 thinking, not live specifications, and describe an architecture (single Python/FastAPI process, `≤30MB`/`<1s` boot, Essentia FFI-linked into the player) `[GDE-CHT-050]` rejected. *Correction 2026-08-30: this row previously named `docs/spec/SPEC004-go-migration-guide.md`, a file that has never existed in this tree — the real `SPEC004` is the Rust migration guide above, and `go/` never had a doc of its own to delete alongside it. `SPEC001` (audio-engine trait contracts / ramp math) was omitted from this row entirely; its ramp formulas are superseded by `player/src/fade.rs` and the newly-registered `MCR-SPEC002-crossfade.md` (`[INH-*]`), not by anything in `docs/spec/`.* Retained only until every idea of value has been extracted into the current document set — done, per the harvest below — **then deleted**, in the same 2026-08-30 commit that wrote this row's current wording. |
+| `docs/roadmap.md`, `docs/phase1-plan.md`, `docs/user-interface.md`, `docs/audio-database.md`, `docs/tech-stack-investigation.md`, `docs/cost-estimate.md`, `docs/timeline-estimate.md` | **Added to this register 2026-08-30 — the same disposal-path status as the `docs/spec/*` row above, but never previously named here**, which is how they survived un-superseded and uncited by `README.md`'s own doc index for three weeks after the rearchitecture. Same architecture rejection applies. Two ideas were found in them with no home elsewhere and are now open questions instead of silently lost: Wall Art / Kiosk display mode, and the Phase 7 feature list (station-ID/jingle injection, news/weather TTS, MQTT/smart-home) — see [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead). Nothing else in these seven files is uncaptured elsewhere. The column is now empty — deleted below, per `[GDE-DIS-020]`. |
+
+**`[GDE-DIS-020]`** Deletion is deletion — removed from the working tree, recoverable from git history if ever needed. Do not leave `_old`, `_v1`, or `legacy` directories; that is exactly the pattern McRhythm's own debt analysis flagged as CRITICAL `[GDE-MCR-030]`.
+
+---
+
+## 8. Rearchitecture Phases — Retrospective
+
+The phased plan is [GUIDE002 §3](GUIDE002-rearchitecture-plan.md#3-phased-plan), tags `[GDE-PHS-000..050]`. What actually shipped, in brief, for each phase now complete. Phases not yet executed are tracked in [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead) instead of here.
+
+**P0 — Local Feature Extraction: done**, per `[GDE-PHS-000]`. Strategy in [GUIDE003](GUIDE003-feature-extraction-strategy.md); reverse-engineering and validation history in [LOG002](LOG002-feature-reproduction-investigation.md) and [LOG003](LOG003-feature-reproduction-verification.md). All 18 AcousticBrainz classifiers reproduce via the reimplemented Gaia/SVM chain (route 2) — maximum error 0.0072 across all eighteen, three exact `[LOG-FEX-102]`. Promoted to production 2026-08-13: `tools/extract_library.py` runs `gaia_classify.py` uniformly across all 71 dimensions, and `data/vaino_new.db` carries locally-extracted flavor for all 8,078 radio passages `[LOG-FEX-108]`.
+
+**P1 — Data Foundation: done**, per `[GDE-PHS-010]`. Schema built per `[GDE-ARC-030..040]` ([SPEC008](spec/SPEC008-database-schema.md)); `tools/migrate_mulib.py` imports `mulib.db`. The promoted library carries the full migrated history — 37,134 play events unchanged — alongside uniformly local 71-dimension flavor for every recording `[LOG-FEX-108]`.
+
+**P2 — The Player: done**, per `[GDE-PHS-020]`. Rust streaming engine (`player/src/{decoder,resample,mixer,fade,output,engine,queue,web}.rs`) ported from `wkmp-ap`'s design; deployed to the Pi Zero 2W appliance and measured there: 36 MB RSS paused / 53 MB playing — well inside the 150 MB budget — 15 s power-on to a serving web UI `[PI-CHR-020]`, and 10 hard power cuts with no database corruption `[IMPL-ACC-010]`.
+
+**P3 — Program Director + Visibility: done**, per `[GDE-PHS-030]`. All four selection stages ([SPEC009](spec/SPEC009-program-director.md) §§3–6) implemented and measured against the real library; the "Why this passage?" panel is the `selection_decisions` record `[SPEC-DIR-190]`. One deliberate, recorded divergence from MuLibPlay: the artist recovery ramp, dead in the shipped C++ via variable shadowing, is implemented as designed in Vaino rather than reproduced as it actually ran `[SPEC-DIR-117]`.
+
+**P5 — Appliance: done, with one named gap**, per `[GDE-PHS-050]`. Fast boot, the 3-partition resilient storage model ([PI001](../VainoPi/PI001-image-and-partitions.md)), hard-power-loss survival, and Bluetooth/D-A-HAT output are all built and measured on real hardware ([PI006](../VainoPi/PI006-appliance-characterisation.md)). Wall Art / kiosk display was never built — it remains an open item, see [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead).
+
+*(P4 — Ingest & DAO Segmentation — has not shipped: [SPEC007](spec/SPEC007-sampo-architecture.md) §6 remains explicitly PROVISIONAL on the McRhythm segmentation cascade. See [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead).)*
+
+---
+
+## 9. Resolved Open Questions
+
+Originally logged in [GUIDE002 §6](GUIDE002-rearchitecture-plan.md#6-open-questions). Items still genuinely open live in [ROADMAP §3](ROADMAP.md#3-rearchitecture--whats-still-ahead) instead.
+
+- **`[GDE-OPN-010]` Dump coverage** — answered 2026-08-09: 93.7% (8,001 of 8,542 recordings), skewing 2.3× worse for post-2013 material `[LOG-FEX-055]`. No longer sizes the extraction work — see `[GDE-FEX-025]`, `[GDE-FEX-027]`, `[SPEC-FD-140]`.
+- **`[GDE-OPN-020]` Rust for the player** — confirmed 2026-08-10 on evidence: Vaino v1's Go port shelled out to `mpg123` on Linux, foreclosing sample-accurate crossfade and bounded buffers; McRhythm's Rust stall was in the 71K-line ingest service, not the 27K-line player.
+- **`[GDE-OPN-030]` How Taste feeds the Program Director** — answered 2026-08-09 `[SPEC-DIR-150]`: Taste shapes the candidate pool only, never the frequency weights. Dislike-Taste excludes; Like-Taste seeds.
+
+---
+
 **Next:** [GUIDE002: Re-Architecture Plan](GUIDE002-rearchitecture-plan.md)

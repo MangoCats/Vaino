@@ -9,7 +9,8 @@ than against a plan — where something is designed but not built, it says so.
 > **Related:** [SPEC018](spec/SPEC018-switching-backends.md) for the backend seam ·
 > [SPEC020](spec/SPEC020-the-handoff.md) for what crosses it ·
 > [SPEC016](spec/SPEC016-mpd-protocol-findings.md) for what MPD will and will not carry ·
-> [SPEC017](spec/SPEC017-what-counts-as-a-play.md) for the listening rules
+> [SPEC017](spec/SPEC017-what-counts-as-a-play.md) for the listening rules ·
+> [ROADMAP](ROADMAP.md) for what's not built yet · [GUIDE001](GUIDE001-lineage-and-lessons.md) for how the system got here
 
 ---
 

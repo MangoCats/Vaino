@@ -164,70 +164,17 @@ understood.
 
 ---
 
-## 6a. Findings from the first hardware run (2026-08-16)
+## 6a. What the first hardware run left as current design
 
-**`[PI2-RUN-010]` It plays.** Music reached a Marshall Middleton over A2DP
-from a Pi Zero 2 W. Measured alongside: **26.5 MB RSS** against the 30 MB of
-`[REQ-HW-010A]`, **15.2 s** boot (4.4 kernel + 10.8 userspace), **59-62 °C**
-bare-board with `throttled=0x0` -- no heatsink needed, and no undervoltage.
+**The unit now refuses to start against a `Dummy Output`, and the player
+recovers from an output error instead of playing on silently.**
+`vaino-wait-sink` blocks the service until a real sink exists, and the player
+accepts a `--device` flag with output-error recovery built into the engine —
+both current fact, not narrative.
 
-**`[PI2-RUN-020]` SBC at 44,100 Hz, and no resampling.** The sink negotiated
-SBC; Vaino logged `output: default @ 44100 Hz, 2 ch`. Source and sink match,
-so `rubato` never runs `[PI2-RATE-010]`.
-
-**`[PI2-RUN-030]` The audio stream fails with EIO a few seconds in, and the
-player does not recover.** This is the open problem, and it is not what the
-first diagnosis said.
-
-    output stream error: ALSA function 'snd_pcm_poll_descriptors_revents'
-    failed with error 'Unknown errno (-5)'
-
--5 is EIO on the stream itself. What a listener hears is a couple of seconds
-of music, a second of silence, then the speaker announcing a disconnection --
-and that order is the evidence: **the stream dies first and the link drops
-because nothing is holding it**, not the other way round.
-
-The earlier reading -- that `cpal` opens the default sink once and never
-follows a later change -- was wrong, or at least not the whole story. It was
-tested directly: connect the speaker, set it default, *then* start the player.
-The stream attached to MIDDLETON on both channels, played, and still failed.
-Fifty samples with ssh idle afterwards: **0 connected, 0 attached.**
-
-So the fault is in sustaining the stream, not in selecting it. Two things
-follow for the player, and both are its work rather than the image's:
-
-- **An output error must be recovered from, not merely logged.** The engine
-  reports it once and continues silently for ever; on an appliance the only
-  correct response is to reopen the device and carry on.
-- The proximate cause is still unknown. EIO from the ALSA-to-PipeWire bridge
-  over Bluetooth is worth isolating with a plain `aplay` to the same sink: if
-  that also fails, it is the bridge and not Vaino.
-
-Ruled out by measurement: Wi-Fi/Bluetooth coexistence on the shared radio (it
-fails with ssh idle), thermal throttling and undervoltage (59-62 C,
-`throttled=0x0`), decode headroom (no underruns), the pairing (paired,
-trusted, connected), and sink selection (the stream demonstrably attached to
-MIDDLETON before failing).
-
-**`[PI2-RUN-040]` Resolved.** The cause was `[PI3-WHY-010]`: PipeWire offers a
-`Dummy Output` when no sink is present, and the ALSA bridge binds a stream to
-whichever node was default when it opened. A player started before the speaker
-connects plays perfectly into that dummy, reports itself healthy, and leaves
-the speaker with no audio to hold A2DP open -- which is heard as a drop a few
-seconds in, and sends anyone investigating straight to Bluetooth.
-
-Fixed by `vaino-wait-sink` (the unit will not start against a dummy), a
-`--device` flag, and output recovery in the engine. Measured with audio
-genuinely flowing, confirmed by `pw-top` and by ear across two tracks:
-**40/40 samples connected over two minutes, no errors, no recoveries.**
-
-**`[PI2-RUN-050]` Interference was not the cause, and is not being designed
-around.** `radio-silence-test.sh` can take the shared radio out of the
-measurement entirely -- one antenna serves Wi-Fi and Bluetooth, so a reading
-taken over ssh competes with what it measures -- and its `KEEP_WIFI=1` control
-arm measures the same thing with the radio up. The control arm is clean, so the
-dark arm has not been run. It is the tool to reach for if unexplained
-connection problems appear later `[PI3-NOT-010]`.
+What the first run actually found — a stream that played happily into silence
+for two days before anyone noticed, and why — is history rather than setup
+guidance: see [PI008 §1](PI008-appliance-bringup-history.md#1-the-dummy-sink-that-played-into-nothing).
 
 ## 7. What this image is not
 

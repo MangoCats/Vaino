@@ -32,6 +32,13 @@ To ensure that both human contributors and AI coding assistants can quickly insp
 5. **`[GOV-DOC-020]` Synchronous Specification & Test Maintenance Rule**:
    - Whenever an interactive conversation or prompt results in new code creation, architectural refinement, or settled design decisions, the corresponding formal requirements/specifications (`docs/spec/`) and automated test suites (`tests/`) MUST be updated synchronously within the same conversation turn.
 
+6. **`[GOV-DOC-050]` Current, historical and future are segregated, not intermixed** *(added 2026-09-03, after a pass that found six documents where they weren't)*:
+   - A mainline document — `architecture.md`, anything in `docs/spec/`, `REQ002`, and the current-state parts of `GUIDE*`/`IMPL*` — describes **only the current system, present tense.** It is not a diary of how that state was reached.
+   - A dated finding, an abandoned approach, or a resolved incident is **historical**: it gets at most a one-line pointer inline ("see `LOG00N`"), and the narrative itself lives in a `[LOG-*]`-tagged document, or in [GUIDE001](GUIDE001-lineage-and-lessons.md) for material from the rearchitecture era, which already serves as that history's home. It is never narrated at length inside a current-state document.
+   - Design that is not yet built lives in that document's own small, clearly-labeled "Open" section when the work is local to that document's subject — most `docs/spec/*` files already do this well — or in [ROADMAP.md](ROADMAP.md) when it spans documents or has no single home. Either way it must read as open, not as settled fact.
+   - **Exempt:** a single-clause `(Built YYYY-MM-DD)` provenance tag is not narrative and stays inline everywhere. The rule targets multi-paragraph digressions, not dating a fact.
+   - A historical/future aside under roughly 40 lines gets an in-place bold-lead-in label (`**Historical:**` / `**Future:**`) rather than a new file of its own, to avoid a swarm of tiny stub documents; only a substantial (roughly 100+ line) narrative earns a dedicated new `LOG` doc, and related small asides from the same subsystem are bundled into one such doc rather than one each.
+
 ---
 
 ## 2. Identifier Taxonomy Standard
@@ -110,13 +117,14 @@ grep -rn "SPEC-PD" docs/
 
 | Tag ID | Component | Location Document |
 | :--- | :--- | :--- |
+| *(no tag — index only)* | Everything not-yet-built, in one place: links into every document's own "Open" section, plus cross-cutting future material with no single home | [ROADMAP.md](ROADMAP.md) |
 | `[GDE-BMK-*]` | MuLibPlay benchmark & selection algorithm | [GUIDE001-lineage-and-lessons.md](GUIDE001-lineage-and-lessons.md) |
 | `[GDE-LES-*]` | Distilled lessons from all predecessors | [GUIDE001-lineage-and-lessons.md](GUIDE001-lineage-and-lessons.md#6-the-lessons-distilled) |
 | `[GDE-ARC-*]` | Re-architecture decisions | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#2-architectural-decisions) |
 | `[GDE-PHS-*]` | Phased implementation plan | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#3-phased-plan) |
 | `[GDE-FBD-*]` | Forbidden patterns | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#4-forbidden-patterns) |
-| `[GDE-DIS-*]` | Predecessor disposal register | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md#5-disposal-register) |
-| `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
+| `[GDE-DIS-*]` | Predecessor disposal register | [GUIDE001-lineage-and-lessons.md](GUIDE001-lineage-and-lessons.md#7-disposal-register) |
+| `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) — current strategy only; reverse-engineering and validation history split out per `[GOV-DOC-050]` | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
 | `[GDE-AND-*]` | Phone ports (Android, iOS): fork vs ground-up, and the licence that decides it | [GUIDE004-phone-port-strategy.md](GUIDE004-phone-port-strategy.md) |
 | `[GDE-CLD-*]` | Hosted flavor lookup instead of Sampo on the device | [GUIDE005-flavor-service.md](GUIDE005-flavor-service.md) |
 | `[GDE-EXT-*]` | The Director driving other players; why streaming is closed | [GUIDE006-director-as-a-guest.md](GUIDE006-director-as-a-guest.md) |
@@ -135,8 +143,11 @@ grep -rn "SPEC-PD" docs/
 | `[PI3-*]` | Speaker link: design and the player's contract | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md) |
 | `[PI3-FOUND-*]`, `[PI3-ROCKER-*]`, `[PI3-LED-*]` | What operating the speaker taught | [PI004-speaker-operation.md](../VainoPi/PI004-speaker-operation.md) |
 | `[PI5-LIB-*]` | Getting the real library onto the appliance, and its cost | [PI005-appliance-library.md](../VainoPi/PI005-appliance-library.md) |
+| `[PI2-RUN-*]`, `[PI3-OPEN-010]`, `[PI5-DEP-*]`, `[PI5-PRIV-*]` | Dated bring-up findings, consolidated out of PI002/PI003/PI005 per `[GOV-DOC-050]` | [PI008-appliance-bringup-history.md](../VainoPi/PI008-appliance-bringup-history.md) |
 | `[PI-CHR-*]` | What the player costs on the appliance: CPU, memory, thermals, latency | [PI006-appliance-characterisation.md](../VainoPi/PI006-appliance-characterisation.md) |
-| `[LOG-I*-*]` | Extraction iteration history & measured results | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
+| `[LOG-I*-*]` | Extraction iteration history & measured results (Route 3, distillation — not what ships) | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
+| `[LOG-FEX-*]` | Route 2 (Gaia/SVM chain reproduction) reverse-engineering and production validation — what ships | [LOG002-feature-reproduction-investigation.md](LOG002-feature-reproduction-investigation.md), [LOG003-feature-reproduction-verification.md](LOG003-feature-reproduction-verification.md) |
+| `[LOG-WFE-*]` | Waveform boundary editor: incident and build history behind SPEC021's usability pass and fade addition | [LOG004-waveform-editor-build-log.md](LOG004-waveform-editor-build-log.md) |
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |

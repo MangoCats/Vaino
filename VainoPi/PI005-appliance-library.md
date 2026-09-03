@@ -111,30 +111,10 @@ which is exactly when a speaker is most likely to be absent.
 
 ## 3. Two things this work exposed
 
-**`[PI5-DEP-010]` The deploy script's health check had rotted, and rolled back a
-good binary.** `deploy-player.sh` waited `sleep 8` then asked the running player
-to identify itself. That was true against the 31-file test library and false the
-moment the appliance held the real one: the Program Director is built at startup
-and takes **9.86 s** over 8,330 passages, so the web server binds at about
-**15 s**. The check failed a perfectly good build and rolled it back, reporting
-*"new build did not answer"* — which invites diagnosing the build rather than the
-deadline. It now **polls** to a bounded deadline instead of guessing one.
-
-This is the same shape as the quadratic browse in `[REQ-LIB-165]`: a number
-tuned against small data, correct when written, silently wrong once the data
-grew, and with no commit to bisect because nothing changed but the library.
-
-**`[PI5-PRIV-010]` The narrow sudoers rule is not currently narrowing anything.**
-`[PI3-PRIV-*]` describes reaching BlueZ "through a sudoers rule naming that one
-binary rather than by granting the player broader rights". Measured on the
-appliance, `/etc/sudoers.d/` also contains the Raspberry Pi OS default:
-
-    pi ALL=(ALL) NOPASSWD: ALL
-
-So the player already has passwordless root for everything, and the closed verb
-set is defence that is not presently defending. The design is still the right
-one — it is what makes the helper safe *if* the blanket rule is removed — but
-the document claims a property the machine does not have. **Settled 2026-08-20: it stays.** This is a
-development machine and passwordless sudo is appropriate to it. A final
-appliance design may want a tighter model; this one does not, and the narrow
-verb set remains the right shape for whenever that happens.
+**Currently:** `deploy-player.sh` polls the new build to a bounded deadline
+instead of assuming it will have answered by a fixed sleep, and the
+appliance's `/etc/sudoers.d/` still carries the Raspberry Pi OS default
+(`pi ALL=(ALL) NOPASSWD: ALL`) alongside `vaino-btctl`'s narrow verb-set rule —
+accepted, since this is a development machine. What exposed each, and why the
+sudoers gap was investigated and left in place, is history: see
+[PI008 §3](PI008-appliance-bringup-history.md#3-what-the-real-library-swap-exposed).

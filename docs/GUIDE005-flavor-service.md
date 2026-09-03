@@ -111,7 +111,7 @@ be kept.
 ## 4. What it cannot do
 
 **`[GDE-CLD-050]` The dataset is frozen, and its coverage decays.** The dump
-ends **2022-06-23**. It covers 93.7% of *this* library `[GDE-FEX-055]` because
+ends **2022-06-23**. It covers 93.7% of *this* library `[LOG-FEX-055]` because
 this library is largely back-catalogue. It covers **nothing released since**, and
 its share falls every year without anything being done wrong.
 
@@ -148,4 +148,4 @@ claim as "you no longer need Sampo".
 
 ---
 
-**Traceability:** `[GDE-CLD-010..080]` · derived from `[GDE-IOS-050]`, `[GDE-FEX-055]`, `[SPEC-SA-055]`, `[GDE-ARC-018]`
+**Traceability:** `[GDE-CLD-010..080]` · derived from `[GDE-IOS-050]`, `[LOG-FEX-055]`, `[SPEC-SA-055]`, `[GDE-ARC-018]`

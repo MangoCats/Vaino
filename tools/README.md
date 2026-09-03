@@ -24,7 +24,7 @@ Bringing audio into the library and keeping its schema current.
 | script | what |
 | :--- | :--- |
 | `ingest_folder.py` | Bring a folder of audio into the library `[REQ-LIB-100]`. |
-| `extract_library.py` | Extract lowlevel features and classify them into flavor `[GDE-FEX-102]`. |
+| `extract_library.py` | Extract lowlevel features and classify them into flavor `[LOG-FEX-102]`. |
 | `fingerprint_ids.py` | Check every recording MBID against the audio itself `[REQ-LIB-165]`. |
 | `verify_ids.py` | Are the recording MBIDs on these passages actually right? |
 | `segment_dao.py` | Segment a disc-at-once capture into its tracks `[SPEC-SA-070]`. |

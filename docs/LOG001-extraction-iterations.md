@@ -2,9 +2,9 @@
 
 **Development Record — Tier 0**
 
-Running record of attempts to replace AcousticBrainz locally. Per `[GDE-FEX-100]`, **the iteration history is itself a deliverable**: it records what was tried, what the numbers were, and why each approach plateaued, so the next attempt starts from evidence rather than from scratch.
+Running record of attempts to replace AcousticBrainz locally. Per `[LOG-FEX-100]`, **the iteration history is itself a deliverable**: it records what was tried, what the numbers were, and why each approach plateaued, so the next attempt starts from evidence rather than from scratch.
 
-> ⚠️ **Not what ships.** Everything below is **Route 3 — distillation**: small MLP/gradient-boosted models trained to predict AcousticBrainz's highlevel output from lowlevel features, reaching a median err/β of **0.182** by [Iteration 6](#iteration-6--library-native-constants). It was the working production plan while **Route 2 — reimplementing AcousticBrainz's own Gaia/SVM chain exactly** was still being reverse-engineered. Route 2 succeeded (`[GDE-FEX-099..108]`, max error **0.0072** across all 18 classifiers — over 25× tighter than distillation, and not an approximation at all) and is the **sole** method `tools/extract_library.py` runs; nothing on this page is loaded in production. Kept in full, per `[GDE-LES-030]`'s discipline of reporting every attempt honestly — see [SPEC007 §4](spec/SPEC007-sampo-architecture.md#4-classification-s5--settled) for the settled production account.
+> ⚠️ **Not what ships.** Everything below is **Route 3 — distillation**: small MLP/gradient-boosted models trained to predict AcousticBrainz's highlevel output from lowlevel features, reaching a median err/β of **0.182** by [Iteration 6](#iteration-6--library-native-constants). It was the working production plan while **Route 2 — reimplementing AcousticBrainz's own Gaia/SVM chain exactly** was still being reverse-engineered. Route 2 succeeded (`[LOG-FEX-099..108]`, max error **0.0072** across all 18 classifiers — over 25× tighter than distillation, and not an approximation at all) and is the **sole** method `tools/extract_library.py` runs; nothing on this page is loaded in production. Kept in full, per `[GDE-LES-030]`'s discipline of reporting every attempt honestly — see [SPEC007 §4](spec/SPEC007-sampo-architecture.md#4-classification-s5--settled) for the settled production account.
 
 Strategy in [GUIDE003](GUIDE003-feature-extraction-strategy.md). Metric definitions in [SPEC005](spec/SPEC005-flavor-distance.md).
 
@@ -36,7 +36,7 @@ Strategy in [GUIDE003](GUIDE003-feature-extraction-strategy.md). Metric definiti
 
 ## Iteration 1 — Distillation baseline
 
-**`[LOG-I1-010]` Approach.** Route 3 `[GDE-FEX-065]`: predict what Gaia predicted. One shared MLP (512, 256) over 928 non-band lowlevel features → all 71 highlevel dimensions. 99,996 paired samples from the 2022-06-23 sample dumps; split by **recording MBID** (79,957 train / 20,039 test rows; 71,051 / 17,763 recordings) so no recording crosses the split.
+**`[LOG-I1-010]` Approach.** Route 3 `[LOG-FEX-065]`: predict what Gaia predicted. One shared MLP (512, 256) over 928 non-band lowlevel features → all 71 highlevel dimensions. 99,996 paired samples from the 2022-06-23 sample dumps; split by **recording MBID** (79,957 train / 20,039 test rows; 71,051 / 17,763 recordings) so no recording crosses the split.
 
 **`[LOG-I1-020]` Result.** Overall r **0.880**, TV 0.090, top-1 **91.5%**. Median err/β **0.223** against the 0.210 floor — the median characteristic reproduced to within ~6% of the noise floor of the thing being copied, on the first attempt.
 
@@ -158,7 +158,7 @@ Largest movers: `mood_sad` 0.119 → **0.077**, `moods_mirex` 0.179 → **0.135*
 | `gender` | 0.337 | 1.72× | dedicated MLP |
 | `genre_tzanetakis` | 0.460 | 2.55× | GBM |
 
-**`[LOG-I5-040]` Analysis.** Distillation `[GDE-FEX-065]` is validated: the median characteristic now reproduces AcousticBrainz **28% more consistently than AcousticBrainz reproduces itself**, with no Gaia, no Essentia build, and no binary-format reverse-engineering.
+**`[LOG-I5-040]` Analysis.** Distillation `[LOG-FEX-065]` is validated: the median characteristic now reproduces AcousticBrainz **28% more consistently than AcousticBrainz reproduces itself**, with no Gaia, no Essentia build, and no binary-format reverse-engineering.
 
 Four characteristics remain above their floor. Three are genre classifiers, plus `gender`. Per `[SPEC-FD-050]` the genre classifiers are the *most reliable* in AcousticBrainz, so the residual error is concentrated where it carries the most information — `[LOG-NEXT-010]` (Nyström kernel approximation of the RBF-SVM teacher) targets exactly this group.
 
@@ -203,7 +203,7 @@ Only `genre_tzanetakis` (1.87×) and `gender` (1.04×) now exceed their floor. `
 
 **`[LOG-NEXT-020]` Raw per-band arrays.** The untested half of H3 `[LOG-I2-040]`.
 
-**`[LOG-NEXT-030]` More paired data.** Currently capped at ~100k by the *sample* lowlevel dump. The full lowlevel dump is 589 GB — infeasible to mirror whole `[GDE-FEX-050]`, but individual ~20 GB shards would multiply training data severalfold. Worth testing whether iteration 3's residual is data-limited or model-limited **before** paying that download cost.
+**`[LOG-NEXT-030]` More paired data.** Currently capped at ~100k by the *sample* lowlevel dump. The full lowlevel dump is 589 GB — infeasible to mirror whole `[LOG-FEX-050]`, but individual ~20 GB shards would multiply training data severalfold. Worth testing whether iteration 3's residual is data-limited or model-limited **before** paying that download cost.
 
 **`[LOG-NEXT-050]` Shared trunk with dedicated heads.** Iterations 4–5 favour dedicated per-characteristic models, but a shared 928→512→256 trunk with 18 small task-specific heads may capture most of that gain — it keeps the task-specific capacity that `[LOG-I2-020]` showed matters, while letting 18 related tasks share a representation. Possibly *more* accurate, not merely smaller.
 
@@ -215,7 +215,7 @@ Test it on accuracy, **not** on size: at 44 MB the fully dedicated models ship c
 
 ## Standing Caveats
 
-**`[LOG-CAV-010]`** All results are Stage B only — lowlevel → highlevel. Stage A needs no validation because the reference extractor binary is run directly `[GDE-FEX-062]`.
+**`[LOG-CAV-010]`** All results are Stage B only — lowlevel → highlevel. Stage A needs no validation because the reference extractor binary is run directly `[LOG-FEX-062]`.
 
 **`[LOG-CAV-020]`** Test data comes from the same 2022-06-23 sample dump as training. Held out by recording, but not by era, genre distribution, or encoding population. Real-world accuracy on **new** music — the 729 tracks that motivate this work `[GDE-FEX-010]` — is inferred, not measured, and cannot be measured directly since no ground truth exists for them `[GDE-FEX-160]`.
 

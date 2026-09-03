@@ -146,7 +146,7 @@ It reports what it *would* record. It does not write `listener_play_history`, do
 
 > **Claims.** Play tracks by hand from any MPD client and the observer agrees with the scrobbling rule: a track played past half its length (or four minutes) is a play, one skipped earlier is not, and a **12-second passage played whole is a play** — which is where the dropped anti-spam floor is proved rather than asserted `[SPEC-MPD-090]`.
 
-> **What it found:** see [IMPL005](IMPL005-mpd-prototype-results.md#stage-1----observe-write-nothing).
+> **DONE 2026-08-21.** All four claims held, and a fifth was found and added: a stop must close the book on a played song, since MPD retains `songid` across it, but a pause must not. See [IMPL005](IMPL005-mpd-prototype-results.md#stage-1----observe-write-nothing) for the measurements — including that MPD's own `duration` cannot be judged against at all (`[SPEC-MPD-092]`, wrong on 36.9% of files), which is why stage 2 replaces it with the passage span rather than trusting it.
 
 ---
 
@@ -158,7 +158,7 @@ It reports what it *would* record. It does not write `listener_play_history`, do
 
 > **Claims.** A passage plays **its span** and stops — verified against a DAO capture, where naming the file would otherwise play forty songs. The queue holds at depth and refills as `consume` drains it. And the etiquette holds under a person's hands `[SPEC-MPD-095]`: adding twenty tracks stops it adding, clearing refills to five, removing a pick produces a **different** one, and reordering is left alone.
 
-> **What it found:** see [IMPL005](IMPL005-mpd-prototype-results.md#stage-2----enqueue-without-the-director).
+> **DONE 2026-08-21.** The span is real — matched to within 1.0 ms across a 400-passage queue — and all four etiquette rules held, unmodified. But `OK` is not evidence: MPD validates a range end against its own (unreliable) duration estimate, drops the end silently when it's exceeded, and plays to EOF anyway — **508 of 7,994 passages (6.4%)**. Every `rangeid` is now read back and checked against the span requested `[SPEC-MPD-096]`. See [IMPL005](IMPL005-mpd-prototype-results.md#stage-2----enqueue-without-the-director) for the measurements.
 
 ---
 
@@ -172,7 +172,7 @@ It reports what it *would* record. It does not write `listener_play_history`, do
 >
 > *(The last clause was written before `[SPEC-PLAY-055]`. Undoing the queueing mark and forgiving the removal are now two different things: the mark comes off, and a dequeue earns its own 18-hour window. Stage 3 writes nothing, so the window is reported rather than applied.)*
 
-> **What it found:** see [IMPL005](IMPL005-mpd-prototype-results.md#stage-3----the-director-drives).
+> **DONE 2026-08-21.** The census moved as it does locally — 280 artist-blocks over one five-passage session — with **no selection logic reimplemented**. The queue diff turned out to be the whole difficulty, and it comes down to one bit: whether a departing song was ever the current one, which only the sampler can know, since `consume` retires a skip exactly as it retires a finish. See [IMPL005](IMPL005-mpd-prototype-results.md#stage-3----the-director-drives) for the measurements.
 
 ---
 
@@ -186,7 +186,7 @@ It reports what it *would* record. It does not write `listener_play_history`, do
 
 > **Claims.** The mapping cache measurably shortens a second run. A sticker-aware client displays the explanation with **no change to that client**. And the class-D guarantee holds in the direction that matters here: `listener_play_history` grows, and nothing Vaino writes leaves the machine.
 
-> **What it found:** see [IMPL005](IMPL005-mpd-prototype-results.md#stage-4----write-back-and-publish).
+> **DONE 2026-08-21.** Writes land correctly divided across three outcomes (play / skip / dequeue), stickers publish and read back through the ordinary protocol, and the class-D guarantee held. **One claim was too generous:** the sticker cache saves ~26 ms per *process*, not per lookup, and saves nothing at all in the same-tree case since rung 1 needs no MPD call — it pays off only where rung 1 fails, which stage 0 measured at 4.8% of this library. See [IMPL005](IMPL005-mpd-prototype-results.md#stage-4----write-back-and-publish) for the measurements.
 
 ---
 
@@ -196,7 +196,7 @@ It reports what it *would* record. It does not write `listener_play_history`, do
 
 **`[IMPL-MPD-065]` Then the feature gate, last.** `--features mpd`, `std::net` only, and the check that matters: **the appliance binary is byte-identical to a build from before this branch** `[GDE-BAK-050]`. Gating first would mean five stages developed behind a flag nobody had turned on.
 
-> **What it found:** see [IMPL005](IMPL005-mpd-prototype-results.md#stage-5----settings-and-containment). The gate holds; **that byte-identical claim does not**, because this branch deliberately changed the local player as well.
+> **DONE 2026-08-21.** Both parameters reached the settings page, persisted and bounded, and are read by `mpd_direct` with the CLI flags demoted to a test-run override. **What it found:** see [IMPL005](IMPL005-mpd-prototype-results.md#stage-5----settings-and-containment). The gate holds — with the feature off, the appliance binary contains no MPD protocol at all; **that byte-identical claim does not**, because this branch deliberately changed the local player as well (the scrobbling alignment and skip/dequeue suppression are now global, not MPD-only).
 
 ---
 
