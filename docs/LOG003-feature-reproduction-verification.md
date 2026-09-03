@@ -176,7 +176,7 @@ The published Windows build is **`win-i686` — 32-bit** `[LOG-FEX-062]`, so thi
 
 ## Promoted to production (2026-08-13)
 
-**`[LOG-FEX-108]` And a schema trap worth naming.** `data/vaino_new.db` was promoted to the fully extracted, uniformly local library: **8,078 radio passages, 8,078 cached, 7,911 recordings** with 18 local characteristics and locally-derived constants. The 37,134 rows of play history — the only irreplaceable data in the system `[SPEC-SC-020]` — were unchanged. The prior database was preserved alongside it.
+**`[LOG-FEX-108]` And a schema trap worth naming.** `data/vaino_new.db` was promoted to the fully extracted, uniformly local library: **8,073 of 8,079 radio passages (99.93%) carrying local flavor** `[LOG-FEX-107]`, 7,911 recordings, 18 local characteristics and locally-derived constants. The 37,134 rows of play history — the only irreplaceable data in the system `[SPEC-SC-020]` — were unchanged. The prior database was preserved alongside it.
 
 **The trap:** the promoted database predated four tables — `listener_settings`, `listener_occasions`, `listener_occasion_points`, `player_state`. Every reader treats a missing table as *absent data* rather than as an error, by design `[SPEC-DIR-158]`, so the master time scales `[SPEC-DIR-118]` and the occasion curves `[SPEC-DIR-130]` would have been **silently inert** — not defaulted, simply never consulted. Applying `sql/schema.sql` (all `IF NOT EXISTS`) fixed it, and `listener_settings` got its defaults row. Graceful degradation and silent inertness are the same mechanism seen from two sides. A migrated or restored database should have the current schema applied before use.
 

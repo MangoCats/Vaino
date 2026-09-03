@@ -72,7 +72,7 @@ Every decision persisted as an inspectable **ingest decision record** — which 
 
 > **Reports:** measured against McRhythm's 93% album match / 96% mean boundary accuracy `[GDE-MCR-010]` on the 189 known DAO files. **These must be independently re-verified** — at present they are simultaneously the target and the only evidence, which is not a test.
 
-*(Status note: `tools/segment_dao.py` implements a threshold-sweep silence detector, validated 14/14 on known files and now wired to `--commit`, but this is not the McRhythm cascade above — no grid search, no DP assembly, no MusicBrainz edition search. [SPEC007](spec/SPEC007-sampo-architecture.md) §6 stays PROVISIONAL pending this work.)*
+*(Status note: `tools/segment_dao.py` implements a threshold-sweep silence detector, measured at 16/20 (80%) exact track-count match and 94% of boundary starts within 2s on the hardest known files, and now wired to `--commit`, but this is not the McRhythm cascade above — no grid search, no DP assembly, no MusicBrainz edition search. [SPEC007](spec/SPEC007-sampo-architecture.md) §6 stays PROVISIONAL pending this work.)*
 
 ### Open questions
 
