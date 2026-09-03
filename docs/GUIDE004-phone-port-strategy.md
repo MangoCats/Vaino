@@ -176,7 +176,7 @@ the hard part. That is the number that decides adoption, and it is small.
 
 **`[GDE-IOS-050]` The unlock, if one is wanted, is decoupling from Sampo.** The
 2022 AcousticBrainz dump already covers **8,001 of 8,542 recordings — 93.7%** of
-this library `[GDE-FEX-055]`. A phone that fetched flavor *by recording MBID*
+this library `[LOG-FEX-055]`. A phone that fetched flavor *by recording MBID*
 from a precomputed set would need no Essentia, no 22 hours and no desktop for
 mainstream music, and would fall back to tags for the rest. That changes the
 addressable market by orders of magnitude and is a **product decision, not a

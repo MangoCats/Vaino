@@ -234,47 +234,15 @@ with `pw-top` confirming the node running at 1102 quantum, 44100, F32LE 2ch.
 
 ---
 
-## 4a. Open: a reopened stream dies, a fresh one does not
+## 4a. The reopened stream, and feeding silence while paused
 
-**`[PI3-OPEN-010]`** Reproduced repeatedly on 2026-08-16. A stream created by
-`recover()` against an already-running player loses the speaker **about
-twenty-two seconds later**, every time. A stream created fresh at startup, with
-the speaker connected first, holds indefinitely -- two separate runs of ninety
-seconds and two minutes, connected on every sample, no dummy detections, no
-errors.
-
-Ruled out by measurement, not argument: CPU (4% during the failures), the
-`wpctl` call on the engine thread (moved off it, and the failures continue),
-battery (60-70%), pause (link held 8/8 across forty seconds paused), radio
-coexistence (the control arm is clean), and range (80 cm, and the adapter sees
-fourteen other devices).
-
-So something about *rebuilding* the stream leaves it fragile in a way opening
-it once does not -- the old handle not fully released, or the device reopened
-while PipeWire is still settling. This matters because reopening is the
-mechanism the whole speaker panel rests on `[PI3-WHY-020]`.
-
-**STILL OPEN. Improved, not fixed** -- and the way I got that wrong is worth
-recording. The settle moved the failure from about twenty-two seconds to about
-two and a half minutes. A two-minute test reported eight samples out of eight
-and I called it verified; the drop came twenty seconds after the window closed.
-Every clean result of the day shares the flaw: **no test ran longer than the
-failure it was measuring.** Future runs go ten minutes at least, with the
-underrun counter watched throughout, since that is what gave the real signal
-both times it mattered.
-
-What follows is what the settle did achieve.
-
-**The immediate cause was the obvious one nobody had tested.** `recover()`
-released the device and reopened it in the same breath. Giving PipeWire 700 ms
-to finish tearing the old stream down before opening the new one makes a
-reopened stream hold as well as a fresh one: **two minutes, connected on every
-sample, from the worst case** -- player already running, no speaker, then
-connect and select.
-
-Startup was stable only because it never reopens anything in flight. The gap
-was the whole difference, and the connect-then-restart workaround is no longer
-needed.
+**A reopened stream was found to die where a fresh one does not — investigated
+2026-08-16, improved, not proven closed.** What was found, ruled out, and
+fixed is history: see
+[PI008 §2](PI008-appliance-bringup-history.md#2-a-reopened-stream-dies-a-fresh-one-does-not).
+Whether it is now fully closed is a still-open question, tracked in
+[ROADMAP §4](../docs/ROADMAP.md#4-the-appliances-still-open-speaker-questions)
+rather than here.
 
 **`[PI3-OPEN-020]` Feed silence while paused. Built.** McRhythm did this, and
 the same reasoning applies: A2DP tears down when nothing feeds it `[PI3-WHY-030]`, so a

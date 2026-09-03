@@ -103,7 +103,7 @@ Measured over **8,463 multi-submission recordings** and 15,000 random pairs from
 
 *β is smaller for 16 of 18 characteristics* — the library is far more homogeneous in flavor than a random slice of AcousticBrainz, which is unsurprising for one person's collection. Distances are compressed, so the same raw difference reads as a larger normalized distance. This is also why MuLibPlay's pool parameters `[SPEC-DIR-200]` are better founded than they looked: they were tuned *on this library's own distance distribution*.
 
-*Reliability is uniformly lower* — 0.45–0.74 here against 0.75–0.88 on the sample. AcousticBrainz is **less** self-consistent on our library, not more. The likely cause is popularity: our recordings carry a mean of 77 submissions from many different rips `[GDE-FEX-057]`, where a random sample's multi-submission recordings often have just two, frequently from similar sources. More submitters means more encoding diversity means more spread.
+*Reliability is uniformly lower* — 0.45–0.74 here against 0.75–0.88 on the sample. AcousticBrainz is **less** self-consistent on our library, not more. The likely cause is popularity: our recordings carry a mean of 77 submissions from many different rips `[LOG-FEX-057]`, where a random sample's multi-submission recordings often have just two, frequently from similar sources. More submitters means more encoding diversity means more spread.
 
 **`[SPEC-FD-055]` The headline finding survives regeneration: four of the six complex characteristics rank among the seven most reliable.** `genre_electronic` (0.743) and `genre_dortmund` (0.742) still beat every mood classifier, and `genre_rosamerica` sits fourth — the same ordering the generic sample gave. MuLibPlay discarded all six. Including them remains the single largest available improvement to similarity quality `[SPEC-FD-060]`.
 
@@ -158,7 +158,7 @@ This is a concrete, testable prediction: extracting `genre_*`, `ismir04_rhythm` 
 
 **`[SPEC-FD-083]` Tested 2026-08-11 with the complex characteristics present — the prediction was right about *Light* and wrong overall.**
 
-55 programme seeds were extracted locally and classified through all 18 reproduced Gaia chains `[GDE-FEX-102]`; 35 have both inherited and local flavor, so the comparison holds the seed set fixed and varies only the features.
+55 programme seeds were extracted locally and classified through all 18 reproduced Gaia chains `[LOG-FEX-102]`; 35 have both inherited and local flavor, so the comparison holds the seed set fixed and varies only the features.
 
 | feature set | within | cross | ratio |
 | :--- | ---: | ---: | ---: |
@@ -191,7 +191,7 @@ Three caveats, the second serious enough to require work before this is treated 
 
 **`[SPEC-FD-084]` Resolved 2026-08-13 on the fully extracted library — and the ratio was the wrong measure.**
 
-The library is now uniformly local: **8,073 of 8,079 passages** extracted per passage and classified through all 18 reproduced chains `[GDE-FEX-102]`, 7,894 recordings, 0.07% loss.
+The library is now uniformly local: **8,073 of 8,079 passages** extracted per passage and classified through all 18 reproduced chains `[LOG-FEX-102]`, 7,894 recordings, 0.07% loss.
 
 *The constants were re-derived on local values* `[SPEC-FD-090]`, using the 163 recordings that appear in more than one passage as the test–retest set. **Local reliability is higher for every one of the 18:**
 
@@ -200,7 +200,7 @@ The library is now uniformly local: **8,073 of 8,079 passages** extracted per pa
 | dump-derived `[SPEC-FD-052]` | 0.60 | 0.45 – 0.74 |
 | **local** | **0.77** | 0.67 – 0.88 |
 
-`timbre` 0.482 → 0.792, `mood_electronic` 0.454 → 0.746, `genre_tzanetakis` 0.517 → 0.669. This is `[GDE-FEX-028]`'s argument measured directly: the dump's low self-consistency came from ~77 submissions per recording across many rips `[GDE-FEX-057]`; one pipeline over our own files has far less within-recording variance. **Uniform local provenance is not merely equal to the dump — it is measurably more self-consistent.**
+`timbre` 0.482 → 0.792, `mood_electronic` 0.454 → 0.746, `genre_tzanetakis` 0.517 → 0.669. This is `[GDE-FEX-028]`'s argument measured directly: the dump's low self-consistency came from ~77 submissions per recording across many rips `[LOG-FEX-057]`; one pipeline over our own files has far less within-recording variance. **Uniform local provenance is not merely equal to the dump — it is measurably more self-consistent.**
 
 *The comparison, on the 48 seeds present in both, isolating each change:*
 
@@ -280,13 +280,13 @@ The `[SPEC-FD-060]` retrieval test, run under three provenance regimes over 1,50
 
 Two caveats bound that negative result, neither yet resolved:
 - The student here is the **iteration-1 shared MLP** (median err/β 0.223), not the final per-characteristic selection (0.152) `[LOG-I5-030]`. A rerun with the final models would likely close or reverse a 1.2-point gap.
-- `[GDE-FEX-057]` found the dump holds a mean of 77 submissions per library recording. Regime A used single submissions; **averaged references would make the dump stronger still**, cutting against a rerun's favour.
+- `[LOG-FEX-057]` found the dump holds a mean of 77 submissions per library recording. Regime A used single submissions; **averaged references would make the dump stronger still**, cutting against a rerun's favour.
 
 So the honest ordering is **A ≈ B ≫ C**, with A and B within noise of each other and the gap between them unresolved.
 
 **`[SPEC-FD-145]` The design conclusion survives, but for a different reason than argued.** Uniform provenance is required not because local extraction is *better* than the dump, but because mixing is materially worse than either. Since a distributable Vaino cannot ship the dump `[GDE-CHT-045]` and future acquisitions can never be in it `[GDE-FEX-025]`, uniform-local is the only regime reachable in the general case — and it costs at most ~1 point against an all-dump library we could not build anyway.
 
-**`[SPEC-FD-150]` Design consequence — the dumps' role changes.** They remain essential as **validation ground truth** and as the source of the `β_c` and `w_c` constants `[SPEC-FD-050]`, but they should **not** be the production flavor values. Extracting the entire library locally is preferable to using dump values for the covered 93.7% `[GDE-FEX-055]` and local values for the rest — that split is precisely regime C, the one measurably worst option `[SPEC-FD-140]`.
+**`[SPEC-FD-150]` Design consequence — the dumps' role changes.** They remain essential as **validation ground truth** and as the source of the `β_c` and `w_c` constants `[SPEC-FD-050]`, but they should **not** be the production flavor values. Extracting the entire library locally is preferable to using dump values for the covered 93.7% `[LOG-FEX-055]` and local values for the rest — that split is precisely regime C, the one measurably worst option `[SPEC-FD-140]`.
 
 Note this also removes the awkwardness in `[SPEC-FD-120]`: with uniform provenance there is no per-recording provenance weighting to apply, because every recording has the same provenance.
 
@@ -306,7 +306,7 @@ That is a better model of the thing being optimised. Whole-recording similarity 
 
 **Three things to know before attempting it:**
 
-1. **It roughly triples extraction cost.** Lowlevel features are *aggregates* over the analysed window, so an entry vector cannot be derived from a whole-recording extraction — it needs its own run. At `[GDE-FEX-104]`'s 6.4 s per audio-minute, adding two 3-minute windows per passage takes the library from ~64 to roughly ~190 core-hours. The `lowlevel_cache` key `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]` already accommodates the extra rows without schema change.
+1. **It roughly triples extraction cost.** Lowlevel features are *aggregates* over the analysed window, so an entry vector cannot be derived from a whole-recording extraction — it needs its own run. At `[LOG-FEX-104]`'s 6.4 s per audio-minute, adding two 3-minute windows per passage takes the library from ~64 to roughly ~190 core-hours. The `lowlevel_cache` key `(audio_md5, start_ms, end_ms)` `[SPEC-SC-080]` already accommodates the extra rows without schema change.
 2. **`flavor.subject_kind` needs a third value**, or a segment discriminator. It currently allows `recording` and `passage`; entry/exit are neither.
 3. **Short passages have no edges.** A 2-minute recording is its own entry and exit, so the metric must fall back to whole-recording rather than compare a 3-minute window against a 2-minute one. `[SPEC-FD-040]`'s intersection rule handles the shape of this, but the fallback should be explicit.
 

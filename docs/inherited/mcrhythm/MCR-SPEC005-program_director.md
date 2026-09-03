@@ -79,7 +79,7 @@ Where `ending_time_of_last_passage_in_queue` is the anticipated completion time 
 
 **[PD-FLAV-030]** When multiple reference passages are defined for a timeslot:
 - Each passage's flavor vector contributes equally (unweighted centroid)
-- Missing characteristics handled as per [Musical Flavor - Weighted Taste](MCR-SPEC003-musical_flavor.md#mfl-mult-010)
+- Missing characteristics handled as per [Musical Flavor - Weighted Taste](MCR-SPEC003-musical_flavor.md#more-than-one-recording-per-passage-calculation)
 - Result is a single flavor vector representing the timeslot's target
 
 **[PD-FLAV-040]** The Program Director queries the current timeslot based on `target_time` (not current time) to determine which flavor target to use.
@@ -194,7 +194,7 @@ Summed across all available characteristics (binary and complex elements).
 - Flavor distance = 1.0 (maximum distance)
 - Effectively deprioritized but not excluded
 
-> **See:** [Musical Flavor - Distance Calculation](MCR-SPEC003-musical_flavor.md#distance-calculation) for complete algorithm
+> **See:** [Musical Flavor - Distance Calculation](MCR-SPEC003-musical_flavor.md#flavor-distance) for complete algorithm
 
 ### Stage 3: Candidate Ranking
 
