@@ -26,6 +26,7 @@ folded into one spec.
 | Sampo pipeline | [SPEC007](spec/SPEC007-sampo-architecture.md) | [§6 Segmentation & Amplitude — PROVISIONAL](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
 | DAO segmentation cascade | [SPEC024](spec/SPEC024-dao-segmentation-cascade.md) | [§8 Open](spec/SPEC024-dao-segmentation-cascade.md#8-open) |
 | CD ripping (designed, not yet built) | [SPEC025](spec/SPEC025-cd-ripping.md) | [§8 Open](spec/SPEC025-cd-ripping.md#8-open) |
+| CD ripping — hidden-audio & multi-disc passage representation (designed, not yet built) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
 | Database schema | [SPEC008](spec/SPEC008-database-schema.md) | [§8 Open](spec/SPEC008-database-schema.md#8-open) |
 | Program Director | [SPEC009](spec/SPEC009-program-director.md) | [§9 Open](spec/SPEC009-program-director.md#9-open) |
 | Audio path supervisor | [SPEC011](spec/SPEC011-audio-path-supervisor.md) | [§5 Risks and open questions](spec/SPEC011-audio-path-supervisor.md#5-risks-and-open-questions) |

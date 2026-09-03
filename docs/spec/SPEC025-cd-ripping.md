@@ -22,6 +22,9 @@ boundaries to the sector rather than asking anything to be inferred.
 > fallback for everything else · [SPEC007 §2](SPEC007-sampo-architecture.md#2-pipeline)
 > for where this joins Sampo's pipeline · [SPEC008](SPEC008-database-schema.md)
 > §3 for `boundary_src`'s existing `imported:` convention this reuses ·
+> [SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio and
+> multi-disc passage representation, split out once both pushed this
+> document past `[GOV-DOC-010]`'s line limit ·
 > [ROADMAP §3](../ROADMAP.md#3-rearchitecture--whats-still-ahead)
 
 ---
@@ -117,7 +120,9 @@ before track 1; an `INDEX` marks a sub-position inside a track (a hidden
 interlude at `INDEX 00`, the audible start at `INDEX 01`). Both are read
 from the TOC and kept distinct from the track's own `start_ms`/`end_ms` —
 collapsing a pregap into the previous track's length would silently move a
-boundary the disc itself did not draw there.
+boundary the disc itself did not draw there. What becomes of real audio
+found in these spans — rather than the silence a pregap ordinarily is —
+is designed in [SPEC026 §1](SPEC026-cd-ripping-passages.md#1-hidden-and-pregap-only-audio--its-own-passage-optionally-folded-in-too).
 
 ---
 
@@ -185,7 +190,9 @@ compilation, an unreleased recording, a disc MusicBrainz has never seen and
 whose fuzzy match also comes back empty — the ordinary per-track AcoustID
 path (`identify_recording()` in `tools/segment_dao.py`) is the fallback,
 unchanged. Ripping never blocks on an unresolved disc; it degrades to
-exactly the path a file with no TOC already takes.
+exactly the path a file with no TOC already takes. How a multi-disc set's
+own several TOCs and Disc ID lookups combine into one library entry is
+designed in [SPEC026 §2](SPEC026-cd-ripping-passages.md#2-multi-disc-sets--one-file-per-disc-one-release-passage-per-track-by-default).
 
 ---
 
@@ -215,14 +222,13 @@ already covers.
 
 **`[SPEC-RIP-080]`** Genuinely undecided, left here rather than guessed at:
 
-- **Hidden and pregap-only audio.** A disc with genuine audio inside a
-  pregap or at `INDEX 00` (a hidden intro, a run-out groove recording) is
-  real audio a naive track-by-`INDEX 01` split would drop. Whether Vaino
-  represents it as its own passage, folds it into a neighbour, or leaves it
-  out by default is undecided.
-- **Multi-disc sets.** A box set ripped disc-by-disc needs its discs kept
-  in the right order and its later discs distinguished from a second copy
-  of the first — not designed here.
+- **Multi-disc rip-session UX.** [SPEC026 §2](SPEC026-cd-ripping-passages.md#2-multi-disc-sets--one-file-per-disc-one-release-passage-per-track-by-default)
+  decides the *data model* — one file per disc, one shared Release,
+  `release_recordings.disc` carrying medium order. Not designed: how a
+  ripping session itself keeps "disc 2 of this box set, still in
+  progress" distinct from an unrelated re-rip of disc 1, or surfaces that
+  state to the person swapping discs — a UI question for a build pass,
+  not a schema gap.
 - **CD-TEXT versus MusicBrainz, when both exist and disagree.** A disc
   carrying its own CD-TEXT title/artist is a second source next to
   whatever Disc ID resolves; no ranking between them has been measured or
@@ -234,8 +240,16 @@ already covers.
   of these — first real design work for a build pass, not a paper
   exercise.
 
+What becomes of hidden/pregap audio and a multi-disc set's passages is
+*decided*, in [SPEC026](SPEC026-cd-ripping-passages.md); what remains open
+about each — the folded-in-passage trigger, the disc/side grouping
+default — is tracked in [SPEC026 §3](SPEC026-cd-ripping-passages.md#3-open)
+rather than duplicated here.
+
 ---
 
 **Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..250]` ·
 extends `[SPEC-SC-045]`'s provenance ladder and `[SPEC008]`'s `imported:`
 convention · complements, does not replace, `[SPEC024](SPEC024-dao-segmentation-cascade.md)`
+· extended by [SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio
+and multi-disc passage representation
