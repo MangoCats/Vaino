@@ -9,7 +9,7 @@ data is long gone, this document is for the case where it isn't gone yet —
 the disc is in the drive, and its own table of contents (TOC) states
 boundaries to the sector rather than asking anything to be inferred.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-220..270]`.
+> **Status.** Requirements and specification only, per `[REQ-LIB-220..275]`.
 > No code exists yet. The ripping-tool choice (§2) is decided **per
 > platform** — EAC on Windows, `cdrdao` on Linux, checked rather than
 > assumed `[GOV-SRC-020]` — and both are optional, user-installed
@@ -247,28 +247,20 @@ already covers.
 
 **`[SPEC-RIP-080]`** Genuinely undecided, left here rather than guessed at:
 
-- **Multi-disc rip-session UX.** [SPEC026 §2](SPEC026-cd-ripping-passages.md#2-multi-disc-sets--one-file-per-disc-one-release-passage-per-track-by-default)
-  decides the *data model* — one file per disc, one shared Release,
-  `release_recordings.disc` carrying medium order. Not designed: how a
-  ripping session itself keeps "disc 2 of this box set, still in
-  progress" distinct from an unrelated re-rip of disc 1, or surfaces that
-  state to the person swapping discs — a UI question for a build pass,
-  not a schema gap.
 - **Drive/hardware failure modes.** A read error, a drive needing a disc
   swapped mid-rip, or no optical drive present at all `[REQ-LIB-230]`
   names the discipline (report, never guess) but not the exact UI for any
   of these — first real design work for a build pass, not a paper
   exercise.
 
-What becomes of hidden/pregap audio and a multi-disc set's passages is
-*decided*, in [SPEC026](SPEC026-cd-ripping-passages.md); what remains open
-about each — the folded-in-passage trigger, the disc/side grouping
-default — is tracked in [SPEC026 §3](SPEC026-cd-ripping-passages.md#3-open)
-rather than duplicated here.
+Everything else this document used to leave open here — hidden/pregap
+audio, multi-disc sets including the rip-session prompt flow, CD-TEXT vs.
+MusicBrainz — is now decided, in [SPEC026](SPEC026-cd-ripping-passages.md)
+or §6 above.
 
 ---
 
-**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..270]` ·
+**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..275]` ·
 extends `[SPEC-SC-045]`'s provenance ladder and `[SPEC008]`'s `imported:`
 convention · complements, does not replace, `[SPEC024](SPEC024-dao-segmentation-cascade.md)`
 · extended by [SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio

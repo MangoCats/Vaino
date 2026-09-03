@@ -7,10 +7,12 @@ hidden in a pregap or at `INDEX 00`, and a box set ripped disc-by-disc.
 Both build directly on [SPEC025](SPEC025-cd-ripping.md)'s TOC read (§3)
 and Disc ID lookup (§6) — split into its own document once the two
 together pushed SPEC025 past `[GOV-DOC-010]`'s 300-line hard limit, not
-because the subject is unrelated. Read SPEC025 first; this document only
-covers what happens to the audio once §3/§6 have already run.
+because the subject is unrelated. Read SPEC025 first; §1 and most of §2
+cover what happens to the audio once §3/§6 have already run for a given
+disc — §2 also covers the multi-disc session itself, since that is
+squarely part of what a box set is, not a separate topic.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-255..265]`.
+> **Status.** Requirements and specification only, per `[REQ-LIB-255..275]`.
 > No code exists yet — same posture as [SPEC025](SPEC025-cd-ripping.md),
 > which this depends on entirely; neither can be built independently of
 > the other.
@@ -100,6 +102,27 @@ continuous passage. Zero, one, or several wider passages may exist per
 disc; declining every offer leaves the ordinary per-track passages
 exactly as segmented.
 
+**`[SPEC-RIP-104]` A multi-disc rip session prompts to continue with the
+next disc after each one finishes, but never blocks on absence or
+sequence.** The prompt offers "insert disc N+1" — an invitation, not a
+gate: the operator may swap in a disc out of the set's expected order,
+skip one that isn't at hand, or end the session early at any point.
+Whatever was actually ripped is what gets recorded (`[SPEC-RIP-096]`), not
+what a session plan assumed would be — a set missing disc 3, or ripped
+3-1-2, is exactly as valid a library entry as one ripped straight
+through.
+
+**`[SPEC-RIP-106]` Which disc a physical disc actually is comes from its
+own Disc ID lookup (SPEC025 §6), not from session sequence.** Every disc's
+TOC is independently resolved against the shared Release's per-medium
+track list regardless of when in the session it was ripped, so an
+operator who inserts the wrong disc — a duplicate of one already ripped,
+or one belonging to an unrelated release entirely — is told so directly
+rather than having the session assume it must be whichever disc came
+next. Identification, not sequencing, is what a disc's medium number and
+set membership rest on; this is the same per-disc Disc ID lookup §2
+already performs, not a second mechanism built for the session case.
+
 ---
 
 ## 3. Open
@@ -112,14 +135,13 @@ checkbox at review time, a prompt during the rip itself, something else)
 is first-build UI detail, not a design question this document exists to
 settle.
 
-`[SPEC025 §8](SPEC025-cd-ripping.md#8-open)` covers what remains open in
-the ripping mechanics this document does not touch — multi-disc
-rip-session UX, CD-TEXT vs. MusicBrainz precedence, and drive/hardware
-failure modes.
+`[SPEC025 §8](SPEC025-cd-ripping.md#8-open)` covers the one thing that
+remains open in the ripping mechanics this document does not touch:
+drive/hardware failure modes.
 
 ---
 
-**Traceability:** `[SPEC-RIP-090..102]` · derives `[REQ-LIB-255..265]` ·
+**Traceability:** `[SPEC-RIP-090..106]` · derives `[REQ-LIB-255..275]` ·
 extends [SPEC025](SPEC025-cd-ripping.md), `[SPEC008]` §3's
 `release_recordings.disc` and `passages` schema, and
 [SPEC023](SPEC023-domain-vocabulary.md)'s Passage/File definitions.

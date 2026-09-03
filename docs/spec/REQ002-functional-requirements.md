@@ -926,6 +926,8 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-LIB-270]` CD-TEXT is the default source for a ripped disc's title/artist/track metadata when the disc carries it; a resolved MusicBrainz match remains available as a one-action alternative.** Designed in [SPEC025](SPEC025-cd-ripping.md) §6 — an unmeasured default per `[GOV-SRC-020]` (no corpus of discs carrying both exists to rank them by disagreement rate), following the same disc's-own-data reasoning `[REQ-LIB-220]` already uses for boundaries rather than a reliability finding. A disc with no CD-TEXT shows the MusicBrainz result alone, unchanged from today.
 
+**`[REQ-LIB-275]` A multi-disc rip session prompts for each next disc but never blocks on one being unavailable or ripped out of order.** Designed in [SPEC026](SPEC026-cd-ripping-passages.md) §2 — the operator may skip a disc that isn't at hand, insert discs out of sequence, or stop early, and whatever was actually ripped is recorded as part of the set. Which disc a physical disc actually is comes from its own Disc ID lookup (`[REQ-LIB-235]`), not from session sequence, so an accidental duplicate or an unrelated disc is identified rather than assumed.
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Vaino installation with **no Sampo** can receive derived data and use every advanced feature `[SPEC-DF-080]`.

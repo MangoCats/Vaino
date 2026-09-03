@@ -161,7 +161,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-SA-090]` | Per-passage extraction — measured, the mechanism works | [SPEC007-sampo-architecture.md](spec/SPEC007-sampo-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
 | `[SPEC-SA-115..128]` | DAO segmentation cascade: grid search, DP assembly, RMS fallback, extra-track merging — built; MusicBrainz edition search and "Stage 6" refinement — open | [SPEC024-dao-segmentation-cascade.md](spec/SPEC024-dao-segmentation-cascade.md) |
 | `[SPEC-RIP-010..080]` | CD ripping via a disc's own TOC: exact boundaries and a Disc ID match instead of inferring either — designed, not yet built | [SPEC025-cd-ripping.md](spec/SPEC025-cd-ripping.md) |
-| `[SPEC-RIP-090..102]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — designed, not yet built | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
+| `[SPEC-RIP-090..106]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — designed, not yet built | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |
