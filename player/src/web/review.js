@@ -178,28 +178,82 @@
     // Searching MusicBrainz directly `[SPEC-SUI-196]`, `[REQ-LIB-180]` -- for
     // the cases the fingerprint queue cannot reach at all: self-released
     // audio with no AcoustID entry, or a remaster it has never indexed.
+    // Song/Album kind selector `[SPEC-RIP-074]`: searching by *album* --
+    // what a CD ripped by hand actually has printed on it -- finds the
+    // release, then its own tracklist (fetched on pick) feeds the exact
+    // same `addOption` every recording search and fingerprint suggestion
+    // already does. Not a second commit path, only a second way in.
     const search = el('div', 'search');
+    const kindSel = document.createElement('select');
+    for (const [v, label] of [['recording', 'Song'], ['release', 'Album']]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      kindSel.appendChild(o);
+    }
     const box2 = document.createElement('input');
     box2.type = 'search';
     box2.placeholder = 'search MusicBrainz by title…';
     const go = el('button', null, 'Search');
     const status = el('span', 'sub');
-    search.append(box2, go, status);
+    search.append(kindSel, box2, go, status);
     theirs.appendChild(search);
+
+    const releaseResults = el('ul', 'opts release-results');
+    releaseResults.hidden = true;
+    theirs.appendChild(releaseResults);
+
+    const pickRelease = async (mbid, title) => {
+      status.textContent = `fetching ${title || mbid}'s tracklist…`;
+      try {
+        const r = await fetch(`/review/release-tracks/${encodeURIComponent(mbid)}`);
+        const tracks = r.ok ? await r.json() : [];
+        for (const t of tracks) {
+          addOption({ mbid: t.mbid, title: t.title, artist: null, score: 1.0 });
+        }
+        if (tracks.length && none) { none.remove(); none = null; }
+        if (tracks.length) { use.hidden = false; use.title = 'choose one of the matches above first'; }
+        status.textContent = tracks.length
+          ? `${tracks.length} track(s) from “${title || mbid}” added above`
+          : 'that release has no readable tracklist';
+      } catch {
+        status.textContent = 'could not fetch that release’s tracklist';
+      }
+    };
 
     const runSearch = async () => {
       const text = box2.value.trim();
       if (!text) return;
+      const kind = kindSel.value;
       go.disabled = true;
       status.textContent = 'searching…';
+      releaseResults.hidden = true;
+      releaseResults.textContent = '';
       try {
-        const r = await fetch(`/api/musicbrainz/search?kind=recording&q=${encodeURIComponent(text)}`);
+        const r = await fetch(`/api/musicbrainz/search?kind=${kind}&q=${encodeURIComponent(text)}`);
         const found = r.ok ? await r.json() : [];
-        for (const s of found) addOption(s);
-        if (found.length && none) { none.remove(); none = null; }
-        if (found.length) { use.hidden = false; use.title = 'choose one of the matches above first'; }
-        status.textContent = found.length ? `${found.length} result(s) added above`
-                                          : 'no results';
+        if (kind === 'release') {
+          // A release is not itself a candidate to reassign to -- picking
+          // one is a second step (its tracklist), not a direct pick.
+          releaseResults.hidden = found.length === 0;
+          for (const rel of found) {
+            const li = el('li');
+            const btn = el('button', 'pick-release', rel.title || '(untitled)');
+            btn.type = 'button';
+            btn.appendChild(el('span', 'sub', rel.artist || '—'));
+            btn.onclick = () => pickRelease(rel.mbid, rel.title);
+            li.appendChild(btn);
+            releaseResults.appendChild(li);
+          }
+          status.textContent = found.length ? `${found.length} album(s) — pick one for its tracklist`
+                                            : 'no results';
+        } else {
+          for (const s of found) addOption(s);
+          if (found.length && none) { none.remove(); none = null; }
+          if (found.length) { use.hidden = false; use.title = 'choose one of the matches above first'; }
+          status.textContent = found.length ? `${found.length} result(s) added above`
+                                            : 'no results';
+        }
       } catch {
         status.textContent = 'search failed';
       }

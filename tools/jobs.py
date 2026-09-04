@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'remote-push' | 'accept-remote'
                                         -- | 'suggest-release' | 'accept-release'
                                         -- | 'analyze-amplitude' | 'analyze-flavor'
-                                        -- | 'segment-dao'
+                                        -- | 'segment-dao' | 'cd-rip'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -105,6 +105,9 @@ SKIPPED = [
     ("cover art", "needs a release id; art beside the file is found by the player"),
     ("amplitude", "built [SPEC-SA-075], not yet measured for Vaino -- offered as its "
                   "own action (\"Analyze amplitude\"), never run silently by induct"),
+    ("cd-rip", "a physical rip has already happened by the time this runs -- "
+               "[SPEC025..028], person-assisted per [SPEC-RIP-088] -- offered as its "
+               "own action (\"Ingest a CD rip\"), never run silently by induct"),
 ]
 
 
@@ -331,6 +334,9 @@ class Runner:
 
         if kind == "analyze-flavor":
             return self._analyze_flavor(job_id, target)
+
+        if kind == "cd-rip":
+            return self._cd_rip(job_id, target)
 
         # 'induct' and 'reanalyze' `[SPEC-SUI-214]` are the same four-stage
         # pipeline, differing only in whether `identify` is told to retry
@@ -606,6 +612,22 @@ class Runner:
                 "--file", payload["file"], "--expect", str(payload["expect"]),
                 "--commit", "--json"]
         self._run_single_stage(job_id, "segment", argv)
+
+    def _cd_rip(self, job_id: int, target: str):
+        """`[SPEC025..028]` -- `target` is `{"folder"}`, a completed rip a
+        person already ran (EAC's own GUI, or `cdrdao` by hand) and left
+        sitting on disk; `ingest_cd.py` never touches an optical drive
+        itself `[SPEC-RIP-088]`. Deliberately its own job kind, named in
+        `SKIPPED` for the same reason `segment`/`amplitude` already are
+        there -- a physical rip has already happened by the time this
+        runs, so there is nothing for `induct`/`reanalyze` to trigger even
+        if it wanted to.
+        """
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "ingest_cd.py"), self.library,
+                "--folder", payload["folder"], "--commit", "--json"]
+        self._run_single_stage(job_id, "ingest", argv)
 
     def _analyze_amplitude(self, job_id: int, target: str):
         """`[SPEC-SA-075]` -- `target` is a folder path, or empty for the

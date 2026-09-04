@@ -378,6 +378,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/review/:passage_id/:decision", post(record_review))
         .route("/review/:passage_id/artist/:verb", post(artist_review_verb))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
+        .route("/review/release-tracks/:mbid", get(release_tracks))
         .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
         .route("/edit.js", get(|| async { js(EDIT_JS) }))
         .route("/fade.js", get(|| async { js(FADE_JS) }))
@@ -958,12 +959,80 @@ mod tests {
         assert!(parse_mb_results("release", &empty).is_empty());
     }
 
+    /// A release's own tracklist, real shape from `inc=recordings`
+    /// `[SPEC-RIP-074]` -- position, the recording it actually names, and
+    /// the recording's title takes precedence over the track's own (they
+    /// are usually the same string, but the recording is what a reassign
+    /// actually links to).
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn release_tracks_parse_by_position() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"media":[{"tracks":[
+                 {"position":1,"title":"Girls Just Want to Have Fun",
+                  "recording":{"id":"rec-1","title":"Girls Just Want to Have Fun"}},
+                 {"position":2,"title":"Money Changes Everything",
+                  "recording":{"id":"rec-2","title":"Money Changes Everything"}}
+               ]}]}"#,
+        )
+        .unwrap();
+        let out = parse_release_tracks(&body);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].position, 1);
+        assert_eq!(out[0].mbid, "rec-1");
+        assert_eq!(out[0].title, Some("Girls Just Want to Have Fun".into()));
+        assert_eq!(out[1].position, 2);
+    }
+
+    /// A multi-disc release's tracks are read across every medium, not only
+    /// the first -- position numbering restarts per disc, so stopping after
+    /// medium 1 would silently drop every later disc's own tracklist.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn release_tracks_cover_every_medium_not_only_the_first() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"media":[
+                 {"tracks":[{"position":1,"recording":{"id":"d1t1","title":"Disc 1 Track 1"}}]},
+                 {"tracks":[{"position":1,"recording":{"id":"d2t1","title":"Disc 2 Track 1"}}]}
+               ]}"#,
+        )
+        .unwrap();
+        let out = parse_release_tracks(&body);
+        assert_eq!(out.len(), 2, "both discs' own track 1 must both be present");
+        assert_eq!(out[0].mbid, "d1t1");
+        assert_eq!(out[1].mbid, "d2t1");
+    }
+
+    /// No `media`, or a track missing its own `recording`, comes back as
+    /// simply absent from the list -- not a panic on a release the API
+    /// happens to describe incompletely.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn release_tracks_with_nothing_usable_is_an_empty_list_not_a_panic() {
+        assert!(parse_release_tracks(&serde_json::json!({})).is_empty());
+        let no_recording: serde_json::Value = serde_json::from_str(
+            r#"{"media":[{"tracks":[{"position":1,"title":"No recording field"}]}]}"#,
+        )
+        .unwrap();
+        assert!(parse_release_tracks(&no_recording).is_empty());
+    }
+
     /// The review page's own search box has to agree with the router about
     /// this route, the same seam every other page-to-route check here guards.
     #[cfg(feature = "sampo-support")]
     #[test]
     fn the_review_page_asks_musicbrainz_search_for_the_route_it_gets() {
         assert!(REVIEW_JS.contains("/api/musicbrainz/search"));
+    }
+
+    /// The release-kind search's own second step -- fetching a picked
+    /// release's tracklist -- has to agree with the router about this route,
+    /// the same seam every other page-to-route check here guards
+    /// `[SPEC-RIP-074]`.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn the_review_page_asks_for_release_tracks_at_the_route_it_gets() {
+        assert!(REVIEW_JS.contains("/review/release-tracks/"));
     }
 
     /// The artist-correction verbs the page can send are exactly the two the

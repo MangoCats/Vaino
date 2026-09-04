@@ -1,6 +1,6 @@
 # SPEC025: CD Ripping via a Disc's Own Table of Contents
 
-**Design Specification — Tier 2 · Designed, not yet built**
+**Design Specification — Tier 2 · Built, single-disc case, person-assisted**
 
 A new ingest entry point for Sampo: rip a physical CD directly, rather than
 starting from files already on disk. Where `[SPEC024](SPEC024-dao-segmentation-cascade.md)`
@@ -9,13 +9,25 @@ data is long gone, this document is for the case where it isn't gone yet —
 the disc is in the drive, and its own table of contents (TOC) states
 boundaries to the sector rather than asking anything to be inferred.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-220..290]`.
-> No code exists yet. The ripping-tool choice (§2) is decided **per
-> platform** — EAC on Windows, `cdrdao` on Linux, checked rather than
-> assumed `[GOV-SRC-020]` — and both are optional, user-installed
-> dependencies: the whole capability degrades gracefully to unavailable
-> when neither is present, the same posture `analyze_amplitude.py` already
-> takes toward a missing `ffmpeg`.
+> **Status.** Built 2026-09-04, per `[REQ-LIB-220..300]`: `tools/cd_toc.py`
+> (TOC/cue/log parsing, both disc-id algorithms) and `tools/ingest_cd.py`
+> (the orchestrator), wired into `jobs.py` as `cd-rip`. The ripping-tool
+> choice (§2) is decided **per platform** — EAC on Windows, `cdrdao` on
+> Linux — and **confirmed on real hardware, 2026-09-03**
+> ([LOG005](../LOG005-cd-ripping-hardware-findings.md)), then **exercised
+> end-to-end against that same real rip, 2026-09-04**: Disc ID resolved it
+> exactly (MusicBrainz's own `offsets` matched what `cd_toc.py` computed,
+> byte for byte) to "The Essential Cyndi Lauper," all 14 tracks correctly
+> identified with real artist credits. `[SPEC-RIP-082]`'s automation
+> question is resolved **person-assisted** (§2, [SPEC027](SPEC027-cd-ripping-windows-automation.md)) —
+> `ingest_cd.py` reads a rip a person already ran to completion, never
+> drives a drive itself. **Still not built:** Sampo spawning `cdrdao`
+> itself on Linux — per `[LOG-RIP-030]`, the one drive this session tested
+> returns noise, not audio, over `cdrdao`'s Linux DAE path, so a *working*
+> rip needs independent verification on some drive before automating it is
+> worth doing, not merely more test hardware. [SPEC026](SPEC026-cd-ripping-passages.md)'s
+> hidden-audio/multi-disc passages are the other deferred piece — both
+> named explicitly in §8, not silently absent.
 
 > **Related:** [SPEC024](SPEC024-dao-segmentation-cascade.md) for the
 > audio-content cascade this supersedes for a fresh rip, and remains the
@@ -23,8 +35,11 @@ boundaries to the sector rather than asking anything to be inferred.
 > for where this joins Sampo's pipeline · [SPEC008](SPEC008-database-schema.md)
 > §3 for `boundary_src`'s existing `imported:` convention this reuses ·
 > [SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio and
-> multi-disc passage representation, split out once both pushed this
-> document past `[GOV-DOC-010]`'s line limit ·
+> multi-disc passage representation, [SPEC027](SPEC027-cd-ripping-windows-automation.md)
+> for how Sampo drives a GUI-only Windows tool, and
+> [SPEC028](SPEC028-cd-ripping-identification.md) for Disc ID/CD-TEXT/
+> MusicBrainz — all three split out once they pushed this document past
+> `[GOV-DOC-010]`'s line limit ·
 > [ROADMAP §3](../ROADMAP.md#3-rearchitecture--whats-still-ahead)
 
 ---
@@ -44,8 +59,10 @@ library already ripped or downloaded with no TOC of its own.
 
 A second, larger win rides along with the first: the TOC's own sector
 offsets are also a **MusicBrainz Disc ID** — a lookup that identifies the
-exact pressing from disc geometry (§6), a stronger answer than any text or
-audio-based match and one that arrives for free once a TOC exists at all.
+exact pressing from disc geometry
+([SPEC028](SPEC028-cd-ripping-identification.md)), a stronger answer than
+any text or audio-based match and one that arrives for free once a TOC
+exists at all.
 
 ---
 
@@ -70,8 +87,13 @@ there.
 | Drive access | Direct SCSI, no legacy layer needed | Modern SPTI |
 | Output | `.toc` (text) + audio | `.cue` + log — same `MM:SS:FF` frame timebase (§3) |
 | Read verification | `--paranoia-mode 0-3`, built in (§5) | "Secure mode" (multiple read passes); mapped to the same 0-3 scale at the adapter, not exposed as a second setting |
-| Automation | Pure CLI, built for scripting | Real command-line switches (`-testandcopy -imagewav ...`), driven the same way Sampo already drives every other subprocess tool |
+| Automation | Pure CLI, built for scripting | **GUI-only** — checked directly against the real 1.8 build, corrected from an earlier, unverified claim; see [SPEC027](SPEC027-cd-ripping-windows-automation.md) |
 | Licence | GPL-2.0-or-later | Freeware, **not open source** |
+
+**Confirmed on real hardware, not only researched — 2026-09-03, see
+[LOG005](../LOG005-cd-ripping-hardware-findings.md).** The same physical
+USB drive failed DAE via `cdrdao` on Linux and extracted cleanly via
+EAC/SPTI on Windows, exactly as the reasoning above predicts.
 
 **`[SPEC-RIP-022]` The one real tradeoff, named rather than absorbed
 silently.** Every other external tool Sampo depends on — `ffmpeg`,
@@ -210,48 +232,12 @@ multi-disc rip session's own prompt (`[SPEC-RIP-104]`), already covered.
 
 ## 6. Disc ID, CD-TEXT, and MusicBrainz
 
-**`[SPEC-RIP-060]`** The TOC's track count and sector offsets, sent to
-MusicBrainz's own Disc ID lookup (`GET /ws/2/discid/<disc-id>?toc=...`),
-resolve the exact release when the disc is already catalogued, or a fuzzy
-TOC-based match otherwise. When it resolves, that release's own track
-metadata — titles, artists, positions — is used directly `[REQ-LIB-235]`,
-in place of `[SPEC-SA-070]`'s ordinary per-track AcoustID fingerprint
-lookup: a Disc ID match identifies the *pressing itself* from disc
-geometry, a stronger answer than a fingerprint's per-track guess.
-
-**`[SPEC-RIP-065]`** When Disc ID resolves nothing — a self-burned
-compilation, an unreleased recording, a disc MusicBrainz has never seen and
-whose fuzzy match also comes back empty — the ordinary per-track AcoustID
-path (`identify_recording()` in `tools/segment_dao.py`) is the fallback,
-unchanged. Ripping never blocks on an unresolved disc; it degrades to
-exactly the path a file with no TOC already takes. How a multi-disc set's
-own several TOCs and Disc ID lookups combine into one library entry is
-designed in [SPEC026 §2](SPEC026-cd-ripping-passages.md#2-multi-disc-sets--one-file-per-disc-one-release-passage-per-track-by-default).
-
-**`[SPEC-RIP-066]` CD-TEXT, when the disc carries it, is the default
-source for title/artist/track metadata; a resolved MusicBrainz match is
-offered as an alternative the user may accept instead.** Both are read
-where present — CD-TEXT from the TOC read itself (§3), MusicBrainz from
-Disc ID (`[SPEC-RIP-060]`) — and the two are not measured against each
-other under `[GOV-SRC-020]` before this default is set: unlike §2's
-platform check, no corpus of discs carrying both exists yet to measure
-disagreement rate against. The default instead follows §1's own standing
-reason to prefer a disc's own data — CD-TEXT is burned onto *this*
-pressing, where a Disc ID match, exact or fuzzy, still identifies a
-*release* that may be a different edition, remaster, or regional pressing
-of the same recordings. That reasoning does not make CD-TEXT more
-*accurate* — a disc can carry misspelled or abbreviated CD-TEXT the same
-way a file can carry a bad tag — only more *authoritative about this
-specific object*, which is the same distinction `[SPEC-RIP-010]` already
-draws for boundaries.
-
-**`[SPEC-RIP-068]` Accepting the MusicBrainz alternative is a one-action
-choice at review time, never automatic.** The same discover-then-confirm
-shape `[SPEC-RIP-093]` and `[SPEC-RIP-100]` establish for a wider
-passage: both readings are shown side by side when they disagree, and
-picking either is a single click, recorded the same way a release match
-already is (`[SPEC-RIP-075]`). A disc with no CD-TEXT at all simply shows
-the MusicBrainz result alone, unchanged from today.
+**Designed in [SPEC028](SPEC028-cd-ripping-identification.md)**, split out
+once it and [SPEC026](SPEC026-cd-ripping-passages.md) together pushed this
+document past `[GOV-DOC-010]`'s line limit: how the TOC's own sector
+offsets resolve a MusicBrainz Disc ID match (`[SPEC-RIP-060]`), the
+AcoustID fallback when nothing resolves (`[SPEC-RIP-065]`), and CD-TEXT's
+precedence over a MusicBrainz match when both exist (`[SPEC-RIP-066..068]`).
 
 ---
 
@@ -279,18 +265,34 @@ already covers.
 
 ## 8. Open
 
-**`[SPEC-RIP-080]`** Nothing genuinely undecided remains. Every question
-this section used to hold open — the ripping-tool choice, hidden/pregap
-audio, multi-disc sets including the rip-session prompt flow, CD-TEXT vs.
-MusicBrainz, and drive/hardware failure modes — is decided, in this
-document (§§2, 5a, 6) or in [SPEC026](SPEC026-cd-ripping-passages.md).
-SPEC025 and SPEC026 together are fully designed and not yet built; what
-remains is implementation, not more design.
+**`[SPEC-RIP-080]`** Every question this section used to hold open — the
+ripping-tool choice, hidden/pregap audio, multi-disc sets including the
+rip-session prompt flow, CD-TEXT vs. MusicBrainz, and drive/hardware
+failure modes — is decided, in this document (§§2, 5a, 6) or in
+[SPEC026](SPEC026-cd-ripping-passages.md).
+
+**One new question, found by real-hardware testing rather than left
+unexamined: how does Sampo actually drive EAC, given it has no unattended
+CLI mode?** Resolved 2026-09-04 in [SPEC027](SPEC027-cd-ripping-windows-automation.md):
+person-assisted (shape (c) there) — `ingest_cd.py` reads a completed rip
+rather than driving one.
+
+**Still open, named rather than silently absent:** Sampo spawning `cdrdao`
+itself on Linux — this pass's own `.toc` parsing is ready for it, but
+`[LOG-RIP-030]` found the one drive tested returns noise over `cdrdao`'s
+DAE path on Linux, so a *working* rip must be verified on some drive
+before automating it is worth doing — and [SPEC026](SPEC026-cd-ripping-passages.md)'s
+hidden-audio/multi-disc passages, deferred by this build-out's own stated
+scope, not by any remaining design gap.
 
 ---
 
-**Traceability:** `[SPEC-RIP-010..080]` · derives `[REQ-LIB-220..290]` ·
-extends `[SPEC-SC-045]`'s provenance ladder and `[SPEC008]`'s `imported:`
-convention · complements, does not replace, `[SPEC024](SPEC024-dao-segmentation-cascade.md)`
-· extended by [SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio
-and multi-disc passage representation
+**Traceability:** `[SPEC-RIP-010..056]`, `[SPEC-RIP-070..080]` · derives
+`[REQ-LIB-220..290]` · extends `[SPEC-SC-045]`'s provenance ladder and
+`[SPEC008]`'s `imported:` convention · complements, does not replace,
+`[SPEC024](SPEC024-dao-segmentation-cascade.md)` · extended by
+[SPEC026](SPEC026-cd-ripping-passages.md) for hidden-audio and multi-disc
+passage representation, [SPEC027](SPEC027-cd-ripping-windows-automation.md)
+for driving a GUI-only Windows tool, and
+[SPEC028](SPEC028-cd-ripping-identification.md) for Disc ID/CD-TEXT/
+MusicBrainz

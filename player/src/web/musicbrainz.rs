@@ -92,6 +92,82 @@ pub(super) async fn musicbrainz_search(
     axum::Json(parse_mb_results(&q.kind, &body)).into_response()
 }
 
+/// One track of a release's own tracklist -- what
+/// [`release_tracks`] returns, and what `review.js`'s release-kind search
+/// renders as its second step once a release is picked `[SPEC-RIP-074]`.
+#[cfg(feature = "sampo-support")]
+#[derive(serde::Serialize)]
+pub(super) struct ReleaseTrack {
+    pub(super) position: i64,
+    pub(super) mbid: String,
+    pub(super) title: Option<String>,
+}
+
+/// A release's own tracklist, by position -- the direction
+/// [`musicbrainz_search`]`(kind=release)` cannot answer on its own: search
+/// finds the *album*, this finds which *recording* sits at which track
+/// number on it, so a person identifying a CD by its printed track listing
+/// (`[SPEC028] §3`) can pick the one at the position they're looking at.
+/// Closes the release/track-search gap `[SPEC-SUI-197]` already named as
+/// designed but not built -- CD ripping's manual-fallback path is a second,
+/// independent caller for it, not a redesign.
+#[cfg(feature = "sampo-support")]
+pub(super) async fn release_tracks(
+    axum::extract::Path(mbid): axum::extract::Path<String>,
+) -> axum::response::Response {
+    mb_rate_limit().await;
+
+    let client = match reqwest::Client::builder().user_agent(MB_USER_AGENT).build() {
+        Ok(c) => c,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let url = format!("https://musicbrainz.org/ws/2/release/{mbid}");
+    let resp = client
+        .get(&url)
+        .query(&[("inc", "recordings"), ("fmt", "json")])
+        .send()
+        .await;
+    let body: serde_json::Value = match resp {
+        Ok(r) if r.status().is_success() => match r.json().await {
+            Ok(v) => v,
+            Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+        },
+        Ok(r) if r.status().as_u16() == 404 => {
+            return axum::Json(Vec::<ReleaseTrack>::new()).into_response()
+        }
+        _ => return StatusCode::BAD_GATEWAY.into_response(),
+    };
+
+    axum::Json(parse_release_tracks(&body)).into_response()
+}
+
+/// The parsing half of [`release_tracks`], kept separate from the HTTP call
+/// for the same reason [`parse_mb_results`] is -- checkable against a
+/// captured response with no network. A release's `media` array holds one
+/// entry per disc; multi-disc releases are read across all of them, not
+/// only the first, since position numbering restarts per medium and a
+/// caller matching by position alone would otherwise silently prefer disc 1.
+#[cfg(feature = "sampo-support")]
+pub(super) fn parse_release_tracks(body: &serde_json::Value) -> Vec<ReleaseTrack> {
+    body.get("media")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m.get("tracks").and_then(|v| v.as_array()).into_iter().flatten())
+        .filter_map(|t| {
+            let position = t.get("position").and_then(|v| v.as_i64())?;
+            let rec = t.get("recording")?;
+            let mbid = rec.get("id")?.as_str()?.to_string();
+            let title = rec
+                .get("title")
+                .and_then(|v| v.as_str())
+                .or_else(|| t.get("title").and_then(|v| v.as_str()))
+                .map(str::to_string);
+            Some(ReleaseTrack { position, mbid, title })
+        })
+        .collect()
+}
+
 /// The parsing half of [`musicbrainz_search`], kept separate from the HTTP
 /// call so it can be checked against a captured response without a network
 /// -- MusicBrainz's own JSON shape differs per entity (`name` vs. `title`,

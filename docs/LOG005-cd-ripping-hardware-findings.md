@@ -58,6 +58,66 @@ different and harder finding `[SPEC-RIP-020]` does not anticipate.
 
 ---
 
+## 2026-09-03 — Confirmed on Windows: the same physical drive's DAE works cleanly via EAC/SPTI
+
+**`[LOG-RIP-040]` The exact same physical drive, moved to a Windows
+machine, ripped a 14-track CD cleanly through EAC 1.8 — no noise
+signature, on either sample checked.** The disc's own TOC read correctly
+(`REM DISCID B90E090E`, 14 tracks, `INDEX 01` positions in the same
+`MM:SS:FF` timebase `[SPEC-RIP-030]` already specifies), and the full
+extraction produced a 633,927,548-byte WAV (~59.9 min at 44.1kHz/16-bit
+stereo) plus a matching `.cue` — the direct Windows analog of `cdrdao`'s
+`.bin`+`.toc`, and the same drive model (`HL-DT-ST DVDRAM GP65NS60`)
+`[LOG-RIP-030]` diagnosed as failing DAE on Linux.
+
+Applied the identical two-sample diagnostic `[LOG-RIP-010]` established —
+60-second samples (start of track 1; the start of track 5, mid-album) run
+through the same FLAC-compression and spectrogram checks:
+
+| Sample | WAV bytes | FLAC bytes | Ratio | Compressed by |
+| :--- | ---: | ---: | ---: | ---: |
+| Track 1 start | 10,584,078 | 7,689,325 | 72.65% | **27.35%** |
+| Track 5 start | 10,584,078 | 6,285,390 | 59.39% | **40.61%** |
+
+Both **shrank substantially** — the opposite of the Linux failure's
+signature, where both samples *expanded* (+0.6%, +0.8%). Spectrograms of
+both samples show clear harmonic banding and rhythmic transient structure
+throughout, nothing resembling the flat, uniform broadband energy the
+Linux noise samples showed.
+
+**`[LOG-RIP-050]` `[SPEC-RIP-020]`'s reasoning is now confirmed, not just
+plausible.** Same physical drive, same disc-reading task, two different
+hosts/drivers: `cdrdao`'s generic-SCSI path on Linux returned noise where
+EAC's SPTI path on Windows returned real audio. This is exactly the
+"known failure mode for USB optical bridge chipsets" `[LOG-RIP-030]`
+already named — the chipset passes ordinary block reads through cleanly
+(both TOC reads worked, on both hosts) but only correctly implements the
+raw-sector `READ CD` command DAE needs over one of the two paths tested.
+One drive, one clean data point: SPTI succeeded where generic-SCSI did
+not, on the exact question `[SPEC-RIP-020]` asked.
+
+**`[LOG-RIP-060]` A real correction to `[SPEC-RIP-020]`'s own automation
+claim, found in the course of this same test.** EAC's actual command-line
+surface, per its own bundled documentation (`EAC.txt`, `FAQ.txt` —
+checked directly, not assumed from a secondary source), is a handful of
+driver-compatibility flags (`nocdtext`, `nostopcommand`, `notestunit`,
+`nospeedsel`, `noreadsub`, `nomultisession`) and a per-track *post-encode*
+external-program hook — not an unattended full-rip mode. `-testandcopy
+-imagewav -outputdirectory ... -close`, cited in SPEC025 §2 from a
+secondary web source, was tried directly against the real 1.8 build and
+did nothing: the process launched and sat idle, no extraction started, no
+output for the switches that should have triggered one. (`-outputdirectory`
+alone does appear to be honored — the actual rip below, triggered by hand
+through the GUI, wrote its output to the directory that flag named in an
+earlier launch of the same process — but that is not the same as an
+unattended rip.) The GUI extraction itself is trivial and fast once
+reached; there is no confirmed way to reach it without a person or a GUI
+driver clicking the button. `[SPEC-RIP-020]`'s automation row needs
+correcting to match.
+
+---
+
 **Traceability:** first real-hardware validation of `[SPEC-RIP-052..056]`
-(SPEC025 §5a's failure-handling design); informs, does not yet resolve,
-`[SPEC-RIP-020]`'s tool-choice reasoning.
+(SPEC025 §5a's failure-handling design); **confirms** `[SPEC-RIP-020]`'s
+tool-choice reasoning (the DAE question) and **corrects** its automation
+claim (`[LOG-RIP-060]`).
