@@ -32,19 +32,39 @@ body { background-color: black; color: #ccc; }
    not a dialog, in the original's own palette: the same border as every
    other framed block on this page. `.mulib input[type=range]`'s existing
    rules already style the sliders here -- the panel lives inside `.mulib`,
-   so nothing extra is needed for those. */
+   so nothing extra is needed for those. No horizontal padding, and no
+   `max-width`, on the panel itself -- `#bar`/`#volume` reach `.mulib`'s
+   own full width with neither, and the slider has to match that width
+   exactly; text rows carry their own padding instead. */
 .pref-panel:not([hidden]) { border: 2px solid #402080; border-radius: 12px;
-    padding: .75rem 1rem; margin: .6rem auto; text-align: left; max-width: 30rem; }
-.pref-heading { font-weight: bold; margin: 0 0 .5rem; text-align: center; }
-.pref-error { color: #ff8080; margin: 0 0 .5rem; }
-.pref-field { display: grid; grid-template-columns: 6rem 1fr auto auto;
-    align-items: center; gap: .3rem .5rem; padding: .4rem 0; }
-.pref-field label { font-weight: bold; }
-.pref-field input[type=range] { width: 100%; }
+    padding: .75rem 0; margin: .6rem 0; text-align: left; }
+.pref-heading { font-weight: bold; margin: 0 0 .5rem; text-align: center; padding: 0 1rem; }
+.pref-error { color: #ff8080; margin: 0 0 .5rem; padding: 0 1rem; }
+/* Label, readout and Reset share a row; the slider itself gets a full-width
+   row of its own underneath, flush with the panel's own edges -- the same
+   width `#bar` and `#volume` already span. */
+.pref-field { padding: .4rem 0; }
+.pref-field-head { display: flex; align-items: center; gap: .5rem; padding: 0 1rem; }
+.pref-field label { font-weight: bold; margin-right: auto; }
+.pref-field input[type=range] { width: 100%; display: block; margin-top: .3rem; }
 .pref-readout { color: #888; white-space: nowrap; font-size: .85rem; }
 .pref-reset, .pref-cancel, .pref-save { font-size: 16px; padding: 6px 14px; }
-.pref-actions { margin-top: .5rem; text-align: right; }
+.pref-actions { margin-top: .5rem; padding: 0 1rem; text-align: right; }
 .pref-actions button { margin-left: .4rem; }
+
+/* Play frequency [REQ-VIS-300] -- underneath the preference panel, same
+   border/radius/margin as `.pref-panel` itself so the two read as one
+   family; the table's own row rule borrows `hr`'s own line colour rather
+   than inventing a second one. */
+.freq-panel:not([hidden]) { border: 2px solid #402080; border-radius: 12px;
+    padding: .75rem 1rem; margin: .6rem 0; }
+.freq-heading { font-weight: bold; margin: 0 0 .5rem; text-align: center; }
+.freq-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.freq-table th, .freq-table td { padding: .3rem .4rem; border-bottom: 1px solid #333;
+    text-align: right; }
+.freq-table th:first-child, .freq-table td:first-child { text-align: left; }
+.freq-table thead th { color: #888; }
+.freq-table tbody tr:last-child th, .freq-table tbody tr:last-child td { border-bottom: none; }
 
 /* Doubled, as the original does, so the touch target is a target. */
 .mulib input[type=checkbox] { transform: scale(2); padding: 15px; margin-right: .6rem; }

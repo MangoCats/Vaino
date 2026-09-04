@@ -552,7 +552,11 @@ impl MpdBackend {
         // no threshold-crossing figure to correct afterwards `[REQ-VIS-250]`.
         if counts_as_play(o.heard_ms, o.span_ms) {
             if let Some(s) = &self.store {
-                if let Err(e) = s.record_play(o.passage_id, o.mbid.as_deref(), o.heard_ms, o.span_ms) {
+                // This backend does not yet track who queued a passage
+                // `[REQ-VIS-300]` -- such a play still counts toward the
+                // play-frequency panel's "All" row, just not "User" or a
+                // program row.
+                if let Err(e) = s.record_play(o.passage_id, o.mbid.as_deref(), o.heard_ms, o.span_ms, None) {
                     eprintln!("record play: {e}");
                 }
             }
@@ -1202,6 +1206,7 @@ mod tests {
             gain_db: 0.0,
             mbid: None,
             naming: Default::default(),
+            selected_by: None,
         }
     }
 

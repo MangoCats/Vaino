@@ -378,7 +378,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/passage/:passage_id/info", get(passage_info))
         .route("/history", get(history))
         .route("/history/flag/:kind/:id", post(set_flag))
-        .route("/preference/:kind/:id", get(get_preference).post(set_preference));
+        .route("/preference/:kind/:id", get(get_preference).post(set_preference))
+        .route("/play-frequency/:kind/:id", get(play_frequency));
 
     // The identification-review page, and everything reached from it: desktop
     // induct tooling with no reason to occupy an appliance image that never
@@ -621,6 +622,7 @@ mod tests {
             gain_db: 0.0,
             mbid: None,
             naming: Default::default(),
+            selected_by: None,
         };
         e.naming.mb_title = Some(title.into());
         e
@@ -797,6 +799,21 @@ mod tests {
                 skin.js.contains("Vaino.editPreference") || skin.js.contains("editPreference("),
                 "{name} never opens the preference panel"
             );
+        }
+    }
+
+    /// The play-frequency panel's own route and slot, the same shape the
+    /// preference panel's own check above guards `[REQ-VIS-300]`: the
+    /// fetch core.js issues must match a route the router actually serves,
+    /// and each skin that opens a preference panel must carry the `#freq-
+    /// panel` slot it is filled into, or the feature is unreachable dead
+    /// code on that skin.
+    #[test]
+    fn the_play_frequency_panel_reaches_the_route_the_router_serves() {
+        assert!(CORE.contains("/play-frequency/"), "core.js never asks for /play-frequency/");
+        for name in ["vaino", "mulibplay"] {
+            let skin = SKINS.iter().find(|s| s.name == name).expect("skin exists");
+            assert!(skin.html.contains(r#"id="freq-panel""#), "{name} has no #freq-panel slot");
         }
     }
 

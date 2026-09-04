@@ -156,6 +156,30 @@ pub(super) async fn set_preference(
     }
 }
 
+/// How often a subject has played, by window and by who selected it
+/// `[REQ-VIS-300]` -- the play-frequency panel underneath the preference
+/// panel. Never delays that panel: this is its own independent route,
+/// fetched only after the preference panel is already open.
+pub(super) async fn play_frequency(
+    State(ui): State<Ui>,
+    axum::extract::Path((kind, id)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    if kind != "recording" && kind != "artist" {
+        return (StatusCode::BAD_REQUEST, "kind must be recording or artist").into_response();
+    }
+    let db = ui.db.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        store.play_frequency(&kind, &id).map_err(|e| e.message().to_string())
+    })
+    .await;
+    match got {
+        Ok(Ok(rows)) => axum::Json(rows).into_response(),
+        Ok(Err(why)) => (StatusCode::BAD_REQUEST, why).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

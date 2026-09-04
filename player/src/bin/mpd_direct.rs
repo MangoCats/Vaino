@@ -347,7 +347,9 @@ fn main() {
                 }
                 if let Some(st) = &store {
                     let r = if heard {
-                        st.record_play(o.passage_id, o.mbid.as_deref(), o.furthest_ms, o.span_ms)
+                        // See mpd_backend.rs: no provenance tracking on
+                        // this path yet `[REQ-VIS-300]`.
+                        st.record_play(o.passage_id, o.mbid.as_deref(), o.furthest_ms, o.span_ms, None)
                             .map(|_| ())
                     } else {
                         // A skip is not a play, and earns the longer window

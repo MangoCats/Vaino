@@ -293,6 +293,7 @@ mod tests {
             gain_db: 0.0,
             mbid: None,
             naming: Default::default(),
+            selected_by: None,
         }
     }
 

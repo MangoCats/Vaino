@@ -528,7 +528,7 @@ impl Session {
                 // measured from it [SPEC-DIR-160]. On the very first pick of a
                 // session there is nothing queued and no flow order.
                 let tail = chosen.last().copied();
-                let Some(decision) = d.decide(now, &mut self.rng, &chosen, tail) else {
+                let Some(mut decision) = d.decide(now, &mut self.rng, &chosen, tail) else {
                     // Everything eligible is blocked. Falling back keeps the
                     // radio playing, which [REQ-PD-100] requires; silence would
                     // be a worse answer than a repeat.
@@ -539,6 +539,37 @@ impl Session {
                     self.notes.insert(entry.passage_id, note);
                 }
                 chosen.push(entry.passage_id);
+
+                // The Director's own bulk pool load never resolves a real
+                // artist name for every candidate -- the same reasoning
+                // `Library::describe()`'s doc comment gives for not running
+                // five correlated subqueries per row, eight thousand times
+                // over, to answer a question the selection weighting itself
+                // never asks. A runner-up in "It beat" is exactly the
+                // handful actually shown on screen once a decision is made
+                // `[REQ-VIS-285]`, so it gets the same enrichment a queued
+                // entry already does, just for a few rows instead of the
+                // whole pool -- before this is recorded or cached, so both
+                // sinks carry the same real names the queue would.
+                for r in &mut decision.why.runners_up {
+                    if let Some(mbid) = &r.mbid {
+                        let (title, artist, artist_mbid) = self.lib.recording_names(mbid);
+                        if let Some(t) = title {
+                            r.title = t;
+                        }
+                        r.artist = artist;
+                        r.artist_mbid = artist_mbid;
+                    }
+                }
+
+                // Captured before `decision.why` moves into the log below
+                // `[REQ-VIS-300]` -- the same field the runner-up
+                // enrichment above already reads. `"auto"` marks a genuine
+                // Director pick with no program in force, distinct from
+                // `None` on the entry itself, which means "no selection
+                // event to report at all" (a resumed or reconstructed
+                // entry, never this one).
+                let picked_by = decision.why.program.clone().unwrap_or_else(|| "auto".into());
 
                 // Recording the reasoning must never be able to stop the
                 // music, so both sinks are best-effort [SPEC-DIR-190].
@@ -558,6 +589,7 @@ impl Session {
                     log.insert(decision.why);
                 }
                 let mut entry = entry;
+                entry.selected_by = Some(picked_by);
                 Self::describe(&self.lib, &mut entry);
                 // A short human reading of the flavor, for clients that can
                 // show a string and nothing else `[SPEC-MPD-050]`.
@@ -594,6 +626,10 @@ impl Session {
         if still_short > 0 {
             match self.lib.random_radio(still_short) {
                 Ok(entries) => entries.into_iter().for_each(|mut e| {
+                    // Also an auto-selection, with no program steering it
+                    // `[REQ-VIS-300]` -- the same "auto" the main loop above
+                    // uses when no program is in force.
+                    e.selected_by = Some("auto".into());
                     Self::describe(&self.lib, &mut e);
                     engine.enqueue(e);
                 }),
