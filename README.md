@@ -45,6 +45,13 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 
 **Start here:**
 - 🚀 **[HOWTO.md](HOWTO.md)** — build and run Vaino and Sampo locally, today.
+- 📖 **In-app user's guide** — once Vaino is running, click **Help** in any
+  skin (or open `/guide`) for a multi-tiered, listener-facing guide: quick
+  start, preference tuning, importing/refining music, bringing up an empty
+  system, an advanced-features sweep, and an appendix on how the Program
+  Director actually decides. Not a file in this repo — it is served by
+  Vaino itself, from `player/src/web/guide/`, and is the one document here
+  written for a listener rather than a developer.
 - 🧭 **[GUIDE001: Project Lineage & Lessons Learned](docs/GUIDE001-lineage-and-lessons.md)** — Measured state of MuLibPlay, McRhythm/wkmp and Vaino v1; the benchmark to beat, the selection algorithm to preserve, and the failures to never repeat.
 - 🗺️ **[GUIDE002: Re-Architecture Plan](docs/GUIDE002-rearchitecture-plan.md)** — Design charter, architectural decisions, phased plan, forbidden patterns, and the predecessor disposal register. **This is the current plan** — it supersedes the phased Python-first roadmap this README used to link.
 
@@ -55,7 +62,7 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - 📜 **[LICENSING.md](LICENSING.md)** — **two licences in this one repository**, not one. See [§ License](#-license) below before assuming the root `LICENSE` file covers everything.
 
 **Design guidance:**
-- 🔬 **[GUIDE003: Feature Extraction Strategy](docs/GUIDE003-feature-extraction-strategy.md)** — **P0 critical path.** Replacing AcousticBrainz: harvest the archived dumps, reproduce the pipeline, two-stage validation.
+- 🔬 **[GUIDE003: Feature Extraction Strategy](docs/GUIDE003-feature-extraction-strategy.md)** — Replacing AcousticBrainz: harvest the archived dumps, reproduce the pipeline, two-stage validation. **Done** — Tier 0/1 complete and in production since 2026-08-13; only Tier 2 (approximation) remains open.
 - 📱 **[GUIDE004: Phone Port Strategy](docs/GUIDE004-phone-port-strategy.md)** · 🌐 **[GUIDE005: Flavor Without Sampo](docs/GUIDE005-flavor-service.md)** · 🔌 **[GUIDE006: The Director as a Guest](docs/GUIDE006-director-as-a-guest.md)** · 📊 **[GUIDE007: External Backends](docs/GUIDE007-external-backends-investigation.md)**
 - 📊 **[LOG001: Feature Extraction Iteration Log](docs/LOG001-extraction-iterations.md)** — dated record of every extraction attempt, its measured result, and why it plateaued.
 

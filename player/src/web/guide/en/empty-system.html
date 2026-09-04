@@ -1,0 +1,70 @@
+<h2>Starting From Nothing</h2>
+
+<p>This tier walks through bringing up a Vaino/Sampo system that has
+<em>no</em> library yet — no database, no music in it, nothing scheduled.
+If you already have a working library and just want to add more music to
+it, see <strong>Importing &amp; Refining Music</strong> instead; this page
+is specifically the very first time.</p>
+
+<h3>Before this page: getting the software itself</h3>
+<p>Getting the Vaino player and Sampo tools built and runnable on your own
+machine is a one-time, fairly technical step (it involves a compiler and a
+command line) that's already documented precisely — this guide won't
+repeat it, since a running Vaino is what serves this very page. See
+<code>HOWTO.md</code> in the project for that: how to build the player,
+and how to run Sampo's console once you have it. Come back here once you
+can run both.</p>
+
+<h3>1. Create an empty library</h3>
+<p>A library is a single database file. An empty one is valid — Sampo and
+Vaino will both open it and run fine, there's simply nothing in it yet to
+play. <code>HOWTO.md</code> has the exact one-line command that builds this
+empty file from the project's own schema; run it once to get a
+<code>vaino.db</code> to work with.</p>
+
+<h3>2. Point Sampo at your music folder</h3>
+<p>Start Sampo's console against that new, empty database, telling it
+where your actual music files live. Sampo won't touch anything yet — this
+just lets its <strong>Folder</strong> page compare what's on disk against
+what the (currently empty) library knows about, and lets the
+<strong>Jobs</strong> page's "propose" step find real files to work with.</p>
+
+<h3>3. Bring in your first folder of music</h3>
+<p>Follow the steps in <strong>Importing &amp; Refining Music</strong>'s
+"Adding a folder of music" section: propose, review what it found, then
+confirm. Start with one small, ordinary folder of tagged song files the
+first time through, rather than a huge collection or an unusual case like
+a whole-album capture — it's the fastest way to see the whole pipeline
+work end to end before doing it at scale.</p>
+
+<h3>4. Start Vaino pointed at the same library</h3>
+<p>Once at least one folder has been inducted, start the Vaino player
+against that same database file. Open its web page and you should see
+your inducted music available to browse and queue.</p>
+
+<h3>What a brand-new system actually looks like</h3>
+<p>A few things are worth expecting rather than being surprised by, the
+first time:</p>
+<ul>
+  <li><strong>The queue may start empty</strong>, and <strong>Play
+    History</strong> (if you're on the Vaino skin) will be completely
+    empty too — there's nothing to show yet.</li>
+  <li><strong>Automatic selection has very little to go on at first.</strong>
+    The Program Director (see the Appendix) leans on your actual listening
+    history and each track's own flavor to make good choices — with a
+    freshly-inducted library it will play essentially at random for a
+    while, and get more deliberate the more you listen.</li>
+  <li><strong>Nothing is scheduled yet.</strong> Named "programs" that
+    change what plays at different times of day (see <strong>Advanced
+    Features</strong>) aren't something you define in the web UI today —
+    if this matters to you before you have any set up, that's worth
+    knowing going in rather than discovering later.</li>
+  <li><strong>Preference tuning starts at the defaults</strong> for
+    everything, until you use the preference panel described in
+    <strong>Preference Tuning</strong> to change anything.</li>
+</ul>
+
+<p class="note">From here, everything else in this guide applies normally —
+Quick Start for day-to-day listening, Preference Tuning to start shaping
+what plays, and Importing &amp; Refining Music again whenever you add more
+to the library.</p>

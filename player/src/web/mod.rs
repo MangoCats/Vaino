@@ -35,6 +35,7 @@ mod bluetooth;
 mod browse;
 mod control;
 mod edit;
+mod guide;
 mod media;
 mod musicbrainz;
 mod preference;
@@ -46,6 +47,7 @@ mod skins;
 use bluetooth::*;
 use browse::*;
 use control::*;
+use guide::*;
 #[cfg(feature = "sampo-support")]
 use edit::*;
 use media::*;
@@ -379,7 +381,11 @@ pub fn router(ui: Ui) -> Router {
         .route("/history", get(history))
         .route("/history/flag/:kind/:id", post(set_flag))
         .route("/preference/:kind/:id", get(get_preference).post(set_preference))
-        .route("/play-frequency/:kind/:id", get(play_frequency));
+        .route("/play-frequency/:kind/:id", get(play_frequency))
+        .route("/guide", get(guide_page))
+        .route("/guide.js", get(guide_js_route))
+        .route("/guide/langs", get(guide_langs))
+        .route("/guide/content/:lang", get(guide_content));
 
     // The identification-review page, and everything reached from it: desktop
     // induct tooling with no reason to occupy an appliance image that never
@@ -814,6 +820,37 @@ mod tests {
         for name in ["vaino", "mulibplay"] {
             let skin = SKINS.iter().find(|s| s.name == name).expect("skin exists");
             assert!(skin.html.contains(r#"id="freq-panel""#), "{name} has no #freq-panel slot");
+        }
+    }
+
+    /// The guide's own Help link reaches a route the router actually serves,
+    /// in every skin -- not just the two that get a preference panel
+    /// `[REQ-VIS-310]`. Unlike the preference/play-frequency panels, the
+    /// guide is a full page reached by a plain link, so WinAmp gets one too.
+    #[test]
+    fn every_skin_carries_a_help_link_to_the_guide() {
+        for skin in SKINS {
+            assert!(
+                skin.html.contains(r#"href="/guide""#),
+                "{} has no link to /guide",
+                skin.name
+            );
+        }
+    }
+
+    /// `guide.js` only ever asks for routes the router serves, and only ever
+    /// reads tier keys the router's own `guide_content` actually emits --
+    /// the same drift `the_snapshot_keeps_the_field_names_the_skins_read`
+    /// guards against for the player snapshot.
+    #[test]
+    fn the_guide_page_reaches_the_routes_the_router_serves() {
+        const GUIDE_JS: &str = include_str!("guide.js");
+        assert!(GUIDE_JS.contains("/guide/langs"));
+        assert!(GUIDE_JS.contains("/guide/content/"));
+        for tier in
+            ["quickstart", "preferences", "importing", "empty_system", "advanced", "appendix"]
+        {
+            assert!(GUIDE_JS.contains(tier), "guide.js never mentions the {tier} tier");
         }
     }
 
