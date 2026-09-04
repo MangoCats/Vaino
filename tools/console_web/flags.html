@@ -33,12 +33,18 @@
     push, and clears the flags they answer — batched, on request only:
     it briefly stops and restarts vainopi's own player, so it never runs on
     its own, and it still fetches a full comparison copy first.
+    Sync preferences reconciles each side's own hand-tuned artist/recording
+    rotation, recovery and restraint — whichever side edited a given one
+    more recently wins, and only the ones that actually differ move, in
+    either direction; an artist or recording either side's library doesn't
+    have at all is left alone rather than guessed at.
   </p>
   <div class="controls">
     <input type="search" id="remote" placeholder="user@host:/path/to/vaino.db" style="min-width:24rem">
     <button class="chip" id="save-remote">save</button>
     <button class="chip" id="pull">pull flags from remote</button>
     <button class="chip" id="push">push edits to remote</button>
+    <button class="chip" id="sync-prefs">sync preferences</button>
   </div>
   <p style="font-size:.8rem;color:var(--dim);margin:.3rem 0 0">
     e.g. <code style="font:12px var(--mono)">pi@vainopi:/srv/library/vaino.db</code>
@@ -136,4 +142,5 @@ async function runSync(path) {
 
 document.getElementById('pull').onclick = () => runSync('/api/remote/pull');
 document.getElementById('push').onclick = () => runSync('/api/remote/push');
+document.getElementById('sync-prefs').onclick = () => runSync('/api/remote/sync-preferences');
 </script>

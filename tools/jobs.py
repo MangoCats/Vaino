@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'suggest-release' | 'accept-release'
                                         -- | 'analyze-amplitude' | 'analyze-flavor'
                                         -- | 'segment-dao' | 'cd-rip'
+                                        -- | 'sync-preferences'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -317,6 +318,9 @@ class Runner:
         if kind == "remote-push":
             return self._remote_push(job_id, target)
 
+        if kind == "sync-preferences":
+            return self._sync_preferences(job_id, target)
+
         if kind == "accept-remote":
             return self._accept_remote(job_id, target)
 
@@ -401,6 +405,20 @@ class Runner:
         db.commit()
         db.close()
         return self._finish(job_id, "done" if code == 0 else "failed")
+
+    def _sync_preferences(self, job_id: int, target: str):
+        """`[SPEC030]` -- `target` is `user@host:/path/to/vaino.db`, the
+        same `remote_config` value `remote-pull`/`remote-push` already use.
+        A single subprocess invocation, unlike `_remote_pull`'s two stages
+        or `_remote_push`'s four: `sync_preferences.py` does its own
+        manifest read, existence checks, and (when `--commit` lands
+        something) both the local write and the remote patch/restart
+        internally, so there is nothing this method needs to sequence.
+        """
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "sync_preferences.py"),
+                self.library, target, "--commit", "--json"]
+        self._run_single_stage(job_id, "sync", argv)
 
     def _remote_push(self, job_id: int, target: str):
         """A GUI over `export_changes.py`/`apply_changes.py --emit-sql`

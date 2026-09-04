@@ -906,6 +906,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not remote:
                     return self.send_json({"error": "no remote configured yet"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("remote-push", remote)})
+            if p == "/api/remote/sync-preferences":
+                # `[SPEC030]`: both directions in one job, last-write-wins by
+                # `updated_at`, not a pull/push pair -- `listener_preferences`
+                # has no baseline to fast-forward against, only a current
+                # value and a timestamp.
+                remote = STATE["jobs"].get_remote()
+                if not remote:
+                    return self.send_json({"error": "no remote configured yet"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("sync-preferences", remote)})
             if p == "/api/export/bundle":
                 # A GUI over `export_bundle.py` `[IMPL007 Stage 4]`. `q`
                 # becomes a `LIKE` pattern the same way `library()`'s own

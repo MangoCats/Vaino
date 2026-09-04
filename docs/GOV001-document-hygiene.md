@@ -84,7 +84,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `BK` — Switching playback backends without stopping, see [SPEC018](spec/SPEC018-switching-backends.md) for the seam and [SPEC020](spec/SPEC020-the-handoff.md) for the handoff
 - `VOC` — Domain vocabulary: what file/passage/recording/release/album/artist/track mean and do not mean, see [SPEC023](spec/SPEC023-domain-vocabulary.md)
 - `RIP` — CD ripping via a disc's own table of contents, see [SPEC025](spec/SPEC025-cd-ripping.md) (mechanics), [SPEC026](spec/SPEC026-cd-ripping-passages.md) (hidden-audio and multi-disc passage representation), [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) (driving a GUI-only Windows tool — open), and [SPEC028](spec/SPEC028-cd-ripping-identification.md) (Disc ID/CD-TEXT/MusicBrainz)
-- `PREF` — Editing an artist's or a recording's own rotation/recovery/restraint, see [SPEC029](spec/SPEC029-listener-preference-editing.md)
+- `PREF` — Editing an artist's or a recording's own rotation/recovery/restraint, see [SPEC029](spec/SPEC029-listener-preference-editing.md) (the panel) and [SPEC030](spec/SPEC030-preference-sync.md) (syncing it between installations)
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -167,6 +167,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-RIP-082..089]` | CD ripping: how Sampo drives a GUI-only Windows ripper — decided (person-assisted), built | [SPEC027-cd-ripping-windows-automation.md](spec/SPEC027-cd-ripping-windows-automation.md) |
 | `[SPEC-RIP-090..106]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — designed, not yet built | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
 | `[SPEC-PREF-010..070]` | Editing an artist's or a recording's own rotation/recovery/restraint — built | [SPEC029-listener-preference-editing.md](spec/SPEC029-listener-preference-editing.md) |
+| `[SPEC-PREF-100..130]` | Syncing listener preferences between installations, last-write-wins — built | [SPEC030-preference-sync.md](spec/SPEC030-preference-sync.md) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |
