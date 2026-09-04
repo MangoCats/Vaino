@@ -26,6 +26,10 @@
       controls: false,
       selected: () => picked,
       onPick: (qid, item) => { pick(qid, item.passage_id); },
+      // Title/artist become their own clickable spans, reaching the
+      // preference panel `[REQ-VIS-285]` -- they stop the click from also
+      // firing `onPick` above, so the two features never compete.
+      linkable: true,
     });
 
   // `qid` identifies the QUEUE ENTRY; `passageId` the recording it plays. The
@@ -334,15 +338,24 @@
   function showByline(s) {
     const el = $('byline');
     el.textContent = '';
-    const part = (text, source, what) => {
+    // `link` is only set for the artist -- an album has no mbid to open a
+    // preference panel on `[REQ-VIS-285]`.
+    const part = (text, source, what, link) => {
       if (!text) return;
       if (el.firstChild) el.appendChild(document.createTextNode(' — '));
       const span = document.createElement('span');
       Vaino.named(span, text, source, what);
+      if (link) {
+        span.classList.add('pref-link');
+        span.onclick = e => {
+          e.stopPropagation();
+          Vaino.editPreference('artist', link, text);
+        };
+      }
       el.appendChild(span);
     };
-    part(s.artist, s.artist_source, 'artist');
-    part(s.album, s.album_source, 'album');
+    part(s.artist, s.artist_source, 'artist', s.artist_mbid);
+    part(s.album, s.album_source, 'album', null);
   }
 
   // Each message is a complete snapshot, so rendering is a pure function of
@@ -360,6 +373,14 @@
 
   function render(s) {
     Vaino.named($('title'), s.title ?? '—', s.title_source, 'title');
+    // The title reaches a recording preference panel when a recording is
+    // actually behind it `[REQ-VIS-285]` -- `stopPropagation` so this does
+    // not also fire `#nowrow`'s own click (the "explain this pick" panel,
+    // below): the two features coexist rather than compete for one click.
+    $('title').classList.toggle('pref-link', !!s.mbid);
+    $('title').onclick = s.mbid
+      ? e => { e.stopPropagation(); Vaino.editPreference('recording', s.mbid, s.title); }
+      : null;
     showByline(s);
     $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
     Vaino.showArt($('art'), s.passage_id);
@@ -706,12 +727,28 @@
 
   function histRow(cells) {
     const tr = document.createElement('tr');
-    for (const text of cells) {
+    for (const cell of cells) {
       const td = document.createElement('td');
-      td.textContent = text;
+      // A cell is plain text, or a node this function no longer has to
+      // understand -- `histCell` below builds the clickable ones.
+      if (cell instanceof Node) td.appendChild(cell);
+      else td.textContent = cell;
       tr.appendChild(td);
     }
     return tr;
+  }
+
+  // One history cell's content: clickable when a mbid is known, reaching
+  // the same preference panel every other skin and view does
+  // `[REQ-VIS-285]`, plain text otherwise (unidentified audio, an
+  // uncredited artist, or nothing played at all).
+  function histCell(text, kind, id) {
+    if (!id) return document.createTextNode(text || (kind === 'recording' ? '(unknown)' : ''));
+    const span = document.createElement('span');
+    span.className = 'pref-link';
+    span.textContent = text;
+    span.onclick = () => Vaino.editPreference(kind, id, text);
+    return span;
   }
 
   // "Flag this for review" `[REQ-VIS-265]`. Keyed by recording when the row
@@ -782,8 +819,8 @@
       const pct = row.played_pct == null ? '—' : `${Math.round(row.played_pct)}%`;
       const tr = histRow([
         Vaino.since(row.at),
-        row.title || '(unknown)',
-        row.artist || '',
+        histCell(row.title || '(unknown)', 'recording', row.mbid),
+        histCell(row.artist || '', 'artist', row.artist_mbid),
         row.album || '',
         pct,
         row.kind === 'play' ? 'Played' : 'Skipped',

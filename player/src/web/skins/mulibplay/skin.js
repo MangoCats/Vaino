@@ -20,7 +20,11 @@
   // pixel of travel.
   const showVolume = Vaino.bindVolume($('volume'), $('volnum'));
   const showQueue = Vaino.bindQueue(
-    $('queue'), q => (q.artist ? `${q.title} by ${q.artist}` : q.title), 'p');
+    $('queue'), q => (q.artist ? `${q.title} by ${q.artist}` : q.title), 'p',
+    'nothing queued',
+    // Title/artist become their own clickable spans, reaching the
+    // preference panel `[REQ-VIS-285]`.
+    { linkable: true, artistJoin: ' by ' });
 
   // Checked means the clock is choosing, which is Vaino's "no manual override".
   // Unchecking has to name something to switch TO -- "manual" is a programme
@@ -84,6 +88,15 @@
     $(wordId).hidden = !text;
   };
 
+  // Title/artist reach the preference panel when their own mbid is known
+  // `[REQ-VIS-285]`, plain text otherwise -- unidentified audio, or an
+  // uncredited artist, the same case that already leaves `artist` unset.
+  const prefLink = (el, kind, id, text) => {
+    if (!el) return;
+    el.classList.toggle('pref-link', !!id);
+    el.onclick = id ? () => Vaino.editPreference(kind, id, text) : null;
+  };
+
   // Reads the same snapshot the display does, so a click can only act on
   // the track actually shown [REQ-VIS-225].
   let latest = null;
@@ -92,7 +105,9 @@
   Vaino.subscribe(s => {
     latest = s;
     plain($('title'), s.title ?? '—');
+    prefLink($('title'), 'recording', s.mbid, s.title);
     pair('byword', 'artist', s.artist);
+    prefLink($('artist'), 'artist', s.artist_mbid, s.artist);
     pair('fromword', 'album', s.album);
     $('plays').textContent = Vaino.fmt.plays(s.plays, s.last_played);
     Vaino.showArt($('art'), s.passage_id);

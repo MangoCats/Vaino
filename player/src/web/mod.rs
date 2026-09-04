@@ -37,6 +37,7 @@ mod control;
 mod edit;
 mod media;
 mod musicbrainz;
+mod preference;
 mod review;
 mod segment;
 mod settings;
@@ -48,6 +49,7 @@ use control::*;
 #[cfg(feature = "sampo-support")]
 use edit::*;
 use media::*;
+use preference::*;
 #[cfg(feature = "sampo-support")]
 use musicbrainz::*;
 #[cfg(feature = "sampo-support")]
@@ -121,6 +123,12 @@ pub struct QueueItem {
     pub passage_id: i64,
     pub title: String,
     pub artist: Option<String>,
+    /// The recording's own mbid, and the credited artist's, so a click on
+    /// either displayed name has somewhere to point a preference edit at
+    /// `[REQ-VIS-285]`. Absent for unidentified audio or an uncredited
+    /// artist -- the same case that already leaves `artist` `None`.
+    pub mbid: Option<String>,
+    pub artist_mbid: Option<String>,
     pub duration_ms: u64,
     /// Whether it can still be moved or dropped `[REQ-VIS-185]`. False once
     /// the mixer has it: its audio is already partly in the ring, so removing
@@ -148,6 +156,10 @@ pub struct Snapshot {
     /// then the filename `[REQ-VIS-170]`.
     pub title: Option<String>,
     pub artist: Option<String>,
+    /// The recording's own mbid, and the credited artist's -- same reason
+    /// `QueueItem` carries them `[REQ-VIS-285]`.
+    pub mbid: Option<String>,
+    pub artist_mbid: Option<String>,
     /// The **Release** title. `None` until the release tables are populated
     /// and the file carries no album tag either.
     pub album: Option<String>,
@@ -256,6 +268,8 @@ impl From<&PlayerState> for Snapshot {
             passage_id: s.current.as_ref().map(|e| e.passage_id),
             title: s.current.as_ref().map(|e| e.title()),
             artist: s.current.as_ref().and_then(|e| e.artist()),
+            mbid: s.current.as_ref().and_then(|e| e.mbid.clone()),
+            artist_mbid: s.current.as_ref().and_then(|e| e.naming.artist_mbid.clone()),
             album: s.current.as_ref().and_then(|e| e.album()),
             title_source: s.current.as_ref().map_or("unknown", |e| e.title_source().as_str()),
             artist_source: s.current.as_ref().map_or("unknown", |e| e.artist_source().as_str()),
@@ -274,6 +288,8 @@ impl From<&PlayerState> for Snapshot {
                     passage_id: e.passage_id,
                     title: e.title(),
                     artist: e.artist(),
+                    mbid: e.mbid.clone(),
+                    artist_mbid: e.naming.artist_mbid.clone(),
                     duration_ms: e.duration_ms(),
                     editable: i >= s.mixing_ahead,
                 })
@@ -361,7 +377,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/passage.js", get(|| async { js(PASSAGE_JS) }))
         .route("/passage/:passage_id/info", get(passage_info))
         .route("/history", get(history))
-        .route("/history/flag/:kind/:id", post(set_flag));
+        .route("/history/flag/:kind/:id", post(set_flag))
+        .route("/preference/:kind/:id", get(get_preference).post(set_preference));
 
     // The identification-review page, and everything reached from it: desktop
     // induct tooling with no reason to occupy an appliance image that never
@@ -764,6 +781,25 @@ mod tests {
         assert!(json.contains("\"volume_db\""));
     }
 
+    /// `core.js`'s shared preference panel has to agree with the router
+    /// about this route `[REQ-VIS-285]` -- the same seam every other
+    /// page-to-route check here guards -- and Vaino/MuLibPlay's own skins
+    /// actually have to call the panel it opens, or the route is dead code
+    /// nothing reaches. WinAmp is deliberately not asked for either: out of
+    /// scope for this feature (its marquee has no separate artist node to
+    /// link).
+    #[test]
+    fn the_preference_panel_reaches_the_route_the_router_serves() {
+        assert!(CORE.contains("/preference/"), "core.js never asks for /preference/");
+        for name in ["vaino", "mulibplay"] {
+            let skin = SKINS.iter().find(|s| s.name == name).expect("skin exists");
+            assert!(
+                skin.js.contains("Vaino.editPreference") || skin.js.contains("editPreference("),
+                "{name} never opens the preference panel"
+            );
+        }
+    }
+
     /// The wire shape the skins are written against. Renaming a field here
     /// silently blanks part of every skin, which no Rust test would otherwise
     /// catch `[REQ-VIS-160]`.
@@ -771,7 +807,7 @@ mod tests {
     fn the_snapshot_keeps_the_field_names_the_skins_read() {
         let json = serde_json::to_string(&Snapshot::from(&state())).unwrap();
         for field in [
-            "playing", "passage_id", "title", "artist", "album", "plays",
+            "playing", "passage_id", "title", "artist", "mbid", "artist_mbid", "album", "plays",
             "last_played", "position_ms", "duration_ms", "queue_len", "queue",
             "volume_db", "fader_min_db", "skip", "program", "program_manual",
             "programs", "underrun_samples", "branch", "commit_date",
@@ -779,7 +815,7 @@ mod tests {
         ] {
             assert!(json.contains(&format!("\"{field}\"")), "snapshot lost {field}");
         }
-        for field in ["passage_id", "title", "artist", "duration_ms", "editable"] {
+        for field in ["passage_id", "title", "artist", "mbid", "artist_mbid", "duration_ms", "editable"] {
             assert!(json.contains(&format!("\"{field}\"")), "queue item lost {field}");
         }
     }

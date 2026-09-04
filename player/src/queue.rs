@@ -92,6 +92,12 @@ pub struct Naming {
     pub mb_title: Option<String>,
     /// MusicBrainz Artist name, by artist credit.
     pub mb_artist: Option<String>,
+    /// The credited artist's own mbid, same row `mb_artist` was named from
+    /// `[REQ-VIS-285]` -- so a click on the displayed artist name has
+    /// somewhere real to point a preference edit at. `None` whenever
+    /// `mb_artist` is (no MusicBrainz credit at all), never guessed from
+    /// the file's own tags -- a tag has no id to offer.
+    pub artist_mbid: Option<String>,
     /// MusicBrainz **Release** title, which is what an album name is. Distinct
     /// from the Recording: one recording appears on many releases, so this is
     /// a join away rather than a column, and it stays `None` until those

@@ -28,7 +28,20 @@ pub struct Library {
 /// weighting that names have nothing to do with. Display metadata is fetched
 /// for the dozen passages actually on screen, where it costs under a
 /// millisecond each.
-const DESCRIBE: &str = "    SELECT (SELECT r.title FROM recordings r WHERE r.mbid = m.mbid),            (SELECT a.name FROM recording_artists ra               JOIN artists a ON a.mbid = ra.artist_mbid              WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1),            (SELECT rel.title FROM release_recordings rr               JOIN releases rel ON rel.mbid = rr.release_mbid              WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1),            (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid),            (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid)       FROM (SELECT ?1 AS mbid) m";
+const DESCRIBE: &str = "\
+    SELECT (SELECT r.title FROM recordings r WHERE r.mbid = m.mbid), \
+           (SELECT a.name FROM recording_artists ra \
+              JOIN artists a ON a.mbid = ra.artist_mbid \
+             WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), \
+           (SELECT rel.title FROM release_recordings rr \
+              JOIN releases rel ON rel.mbid = rr.release_mbid \
+             WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1), \
+           (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid), \
+           (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid), \
+           (SELECT ra.artist_mbid FROM recording_artists ra \
+              JOIN artists a ON a.mbid = ra.artist_mbid \
+             WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1) \
+      FROM (SELECT ?1 AS mbid) m";
 
 /// The one place the passage/file join is written. Every loader below selects
 /// these columns in this order, so `row_to_entry` can stay a single function.
@@ -180,14 +193,16 @@ impl Library {
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, i64>(3)?,
                 r.get::<_, Option<i64>>(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         });
-        if let Ok((title, artist, album, plays, last)) = got {
+        if let Ok((title, artist, album, plays, last, artist_mbid)) = got {
             e.naming.mb_title = title;
             e.naming.mb_artist = artist;
             e.naming.mb_album = album;
             e.naming.plays = plays;
             e.naming.last_played = last;
+            e.naming.artist_mbid = artist_mbid;
         }
     }
 
@@ -367,6 +382,12 @@ const HIST_TITLE_EXPR: &str = "(SELECT r.title FROM recordings r WHERE r.mbid = 
 const HIST_ARTIST_EXPR: &str = "(SELECT a.name FROM recording_artists ra \
     JOIN artists a ON a.mbid = ra.artist_mbid \
     WHERE ra.mbid = u.mbid ORDER BY ra.weight DESC, a.name LIMIT 1)";
+/// The same winning row `HIST_ARTIST_EXPR` names, but its own mbid rather
+/// than its name -- so a history row's artist can be clicked through to a
+/// preference panel the same way the name is shown `[REQ-VIS-285]`.
+const HIST_ARTIST_MBID_EXPR: &str = "(SELECT ra.artist_mbid FROM recording_artists ra \
+    JOIN artists a ON a.mbid = ra.artist_mbid \
+    WHERE ra.mbid = u.mbid ORDER BY ra.weight DESC, a.name LIMIT 1)";
 const HIST_ALBUM_EXPR: &str = "(SELECT rel.title FROM release_recordings rr \
     JOIN releases rel ON rel.mbid = rr.release_mbid \
     WHERE rr.mbid = u.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
@@ -475,6 +496,15 @@ pub struct HistoryEntry {
     pub flag_kind: Option<&'static str>,
     pub flag_id: Option<String>,
     pub flagged: bool,
+    /// The recording's own mbid, kept separate from `flag_id` -- that
+    /// field is `passage_id` instead whenever no recording survives, and
+    /// treating it as a recording id in that case would be wrong. This
+    /// field exists so a row's title can be clicked through to a
+    /// preference panel `[REQ-VIS-285]`; `None` when the row has no
+    /// recording at all (unidentified audio, flagged by passage).
+    pub mbid: Option<String>,
+    /// The credited artist's own mbid, same row `HIST_ARTIST_EXPR` names.
+    pub artist_mbid: Option<String>,
 }
 
 /// One candidate identity for a passage, as AcoustID reports it.
@@ -1484,7 +1514,8 @@ impl Library {
                     EXISTS (SELECT 1 FROM listener_flags f \
                              WHERE f.subject_kind = CASE WHEN u.mbid IS NOT NULL THEN 'recording' \
                                                           ELSE 'passage' END \
-                               AND f.subject_id = COALESCE(u.mbid, CAST(u.passage_id AS TEXT))) AS flagged \
+                               AND f.subject_id = COALESCE(u.mbid, CAST(u.passage_id AS TEXT))) AS flagged, \
+                    u.mbid, {HIST_ARTIST_MBID_EXPR} AS artist_mbid \
                FROM (SELECT played_at AS at, 'play' AS kind, mbid, passage_id, heard_ms, span_ms \
                        FROM listener_play_history \
                      UNION ALL \
@@ -1518,6 +1549,8 @@ impl Library {
                     },
                     flag_id: r.get(8)?,
                     flagged: r.get(9)?,
+                    mbid: r.get(10)?,
+                    artist_mbid: r.get(11)?,
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -2109,6 +2142,13 @@ mod tests {
         assert_eq!(rows[1].flag_kind, rows[0].flag_kind);
         assert_eq!(rows[1].flag_id, rows[0].flag_id);
         assert!(!rows[0].flagged, "nothing has been flagged yet");
+
+        // Both rows carry their own recording and artist mbids too, distinct
+        // from `flag_id`'s narrower meaning `[REQ-VIS-285]`.
+        assert_eq!(rows[0].mbid.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000001"));
+        assert_eq!(rows[0].artist_mbid.as_deref(), Some("bbbbbbbb-0000-0000-0000-000000000001"));
+        assert_eq!(rows[1].mbid, rows[0].mbid);
+        assert_eq!(rows[1].artist_mbid, rows[0].artist_mbid);
 
         // Paging: asking past the end returns nothing, not an error.
         assert_eq!(lib.play_history(10, 2).unwrap().len(), 0);

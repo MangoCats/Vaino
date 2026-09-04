@@ -85,6 +85,34 @@ pub(crate) const FLAGS_TABLE: &str = "
         origin       TEXT,
         PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID;";
 
+/// MuLibPlay's own `rotation`/`recovery`/`restraint`, migrated forward
+/// unchanged `[SPEC-DIR-115]`, `[REQ-VIS-290]` -- already in `sql/schema.sql`'s
+/// base bootstrap, but ensured here too, the same defensive posture
+/// `FLAGS_TABLE` above already takes toward every table this handle
+/// touches: created because this is the player's only writable handle, so
+/// the read path never meets a missing table regardless of how the
+/// database was first created.
+/// `listener_preferences.rotation`/`recovery`/`restraint`, `None` per field
+/// meaning "not tuned, use the default" -- [`PlayerStore::get_preference`]'s
+/// own return shape, named rather than a bare tuple so a caller reads
+/// `.rotation` instead of `.0`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+pub struct PreferenceRow {
+    pub rotation: Option<f64>,
+    pub recovery: Option<f64>,
+    pub restraint: Option<f64>,
+}
+
+pub(crate) const PREFERENCES_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS listener_preferences (
+        subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','artist')),
+        subject_id   TEXT NOT NULL,
+        rotation     REAL,
+        recovery     REAL,
+        restraint    REAL,
+        updated_at   TEXT NOT NULL,
+        PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID;";
+
 /// Bring a `listener_flags` predating `origin` up to date `[SPEC-DF-107]`,
 /// the same reason `ensure_history_columns` exists for the two tables beside
 /// it: `CREATE TABLE IF NOT EXISTS` above is a no-op on a library that
@@ -523,6 +551,7 @@ impl PlayerStore {
         conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(PREFERENCES_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_history_columns(&conn);
         ensure_flags_columns(&conn);
         #[cfg(feature = "sampo-support")]
@@ -1132,6 +1161,81 @@ impl PlayerStore {
                 .map(|_| ())
         }
         .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// A subject's own hand-tuned `rotation`/`recovery`/`restraint`
+    /// `[SPEC-DIR-115]`, `[REQ-VIS-290]` -- `None` per field means "not
+    /// tuned, use the Program Director's own default", never a fabricated
+    /// zero. Absence of the row itself (never edited) reads the same as a
+    /// row present with every column NULL, so a caller need not special-case
+    /// "no row yet".
+    pub fn get_preference(&self, subject_kind: &str, subject_id: &str) -> Result<PreferenceRow, DbError> {
+        self.conn
+            .query_row(
+                "SELECT rotation, recovery, restraint FROM listener_preferences \
+                 WHERE subject_kind = ?1 AND subject_id = ?2",
+                rusqlite::params![subject_kind, subject_id],
+                |r| Ok(PreferenceRow { rotation: r.get(0)?, recovery: r.get(1)?, restraint: r.get(2)? }),
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(PreferenceRow::default()),
+                other => Err(DbError::Query(other.to_string())),
+            })
+    }
+
+    /// Write a subject's tuning, upserting the same way `set_flag` does
+    /// `[SPEC-DIR-115]`, `[REQ-VIS-290]`. Each field is independent: a
+    /// caller passing `None` for one leaves that column exactly as stored
+    /// (does **not** clear it) -- `reset_preference` below is the explicit,
+    /// separate act of clearing one back to "use the default", so a save
+    /// that only touched the rotation slider can never silently blank
+    /// restraint it never looked at.
+    pub fn set_preference(
+        &self,
+        subject_kind: &str,
+        subject_id: &str,
+        rotation: Option<f64>,
+        recovery: Option<f64>,
+        restraint: Option<f64>,
+    ) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO listener_preferences \
+                     (subject_kind, subject_id, rotation, recovery, restraint, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now')) \
+                 ON CONFLICT(subject_kind, subject_id) DO UPDATE SET \
+                     rotation   = COALESCE(?3, listener_preferences.rotation), \
+                     recovery   = COALESCE(?4, listener_preferences.recovery), \
+                     restraint  = COALESCE(?5, listener_preferences.restraint), \
+                     updated_at = excluded.updated_at",
+                rusqlite::params![subject_kind, subject_id, rotation, recovery, restraint],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Clear one field back to "use the default" -- the one operation
+    /// `set_preference`'s own `COALESCE` deliberately cannot perform, since
+    /// passing `None` there means "unchanged", not "cleared" `[REQ-VIS-290]`.
+    /// A no-op, not an error, against a subject with no row yet: there is
+    /// nothing to clear, and the default already applies.
+    pub fn reset_preference(&self, subject_kind: &str, subject_id: &str, field: &str) -> Result<(), DbError> {
+        let column = match field {
+            "rotation" => "rotation",
+            "recovery" => "recovery",
+            "restraint" => "restraint",
+            other => return Err(DbError::Query(format!("unknown preference field {other:?}"))),
+        };
+        self.conn
+            .execute(
+                &format!(
+                    "UPDATE listener_preferences SET {column} = NULL, updated_at = datetime('now') \
+                     WHERE subject_kind = ?1 AND subject_id = ?2"
+                ),
+                rusqlite::params![subject_kind, subject_id],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
     }
 
     /// Bring settings over from the columns they used to live in.
@@ -2226,6 +2330,78 @@ mod tests {
         let c = historyable();
         let store = PlayerStore { conn: c };
         assert!(store.set_flag("album", "x", true).is_err());
+    }
+
+    /// A subject nobody has ever tuned reads as three `None`s -- not an
+    /// error, not a fabricated default. The Program Director's own default
+    /// applies without this table needing to know what it is
+    /// `[REQ-VIS-290]`.
+    #[test]
+    fn get_preference_on_an_untouched_subject_is_three_nones() {
+        let store = PlayerStore { conn: historyable() };
+        assert_eq!(
+            store.get_preference("artist", "bbbbbbbb-0000-0000-0000-000000000001").unwrap(),
+            PreferenceRow::default()
+        );
+    }
+
+    /// Setting one field leaves the others exactly as stored -- `None`
+    /// means "unchanged", never "clear this too".
+    #[test]
+    fn set_preference_only_touches_the_fields_given() {
+        let store = PlayerStore { conn: historyable() };
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        store.set_preference("recording", id, Some(1.5), Some(2.0), None).unwrap();
+        assert_eq!(
+            store.get_preference("recording", id).unwrap(),
+            PreferenceRow { rotation: Some(1.5), recovery: Some(2.0), restraint: None }
+        );
+
+        // A second save touching only restraint must not blank rotation/recovery.
+        store.set_preference("recording", id, None, None, Some(-0.5)).unwrap();
+        assert_eq!(
+            store.get_preference("recording", id).unwrap(),
+            PreferenceRow { rotation: Some(1.5), recovery: Some(2.0), restraint: Some(-0.5) },
+            "an untouched field in this save must keep its prior value"
+        );
+    }
+
+    /// `reset_preference` is the one operation that actually clears a
+    /// field back to NULL -- `set_preference(None)` deliberately cannot,
+    /// per its own doc comment.
+    #[test]
+    fn reset_preference_clears_exactly_one_field() {
+        let store = PlayerStore { conn: historyable() };
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        store.set_preference("recording", id, Some(1.5), Some(2.0), Some(-0.5)).unwrap();
+        store.reset_preference("recording", id, "recovery").unwrap();
+        assert_eq!(
+            store.get_preference("recording", id).unwrap(),
+            PreferenceRow { rotation: Some(1.5), recovery: None, restraint: Some(-0.5) },
+            "only recovery must clear"
+        );
+    }
+
+    /// Resetting a subject with no row yet is a no-op, not an error -- there
+    /// is nothing to clear, and the default already applies.
+    #[test]
+    fn reset_preference_on_an_untouched_subject_is_a_harmless_no_op() {
+        let store = PlayerStore { conn: historyable() };
+        assert!(store.reset_preference("artist", "no-such-id", "rotation").is_ok());
+    }
+
+    /// The vocabulary is enforced by the table itself, same as `set_flag`'s
+    /// own equivalent test.
+    #[test]
+    fn set_preference_rejects_an_unknown_subject_kind() {
+        let store = PlayerStore { conn: historyable() };
+        assert!(store.set_preference("album", "x", Some(1.0), None, None).is_err());
+    }
+
+    #[test]
+    fn reset_preference_rejects_an_unknown_field() {
+        let store = PlayerStore { conn: historyable() };
+        assert!(store.reset_preference("recording", "x", "loudness").is_err());
     }
 
 }
