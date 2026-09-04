@@ -10,7 +10,11 @@ body { background-color: black; color: #ccc; }
 
 .mulib { max-width: 46rem; margin: 0 auto; padding: 1rem; text-align: center; }
 
-.button, .buttonOn {
+/* `.pref-reset`/`.pref-cancel`/`.pref-save` are core.js's own semantic hook
+   names for the listener-preference panel's buttons [REQ-VIS-285] -- given
+   the identical shape here, not a `class="button"` this shared markup has
+   no skin-specific reason to carry. */
+.button, .buttonOn, .pref-reset, .pref-cancel, .pref-save {
   border: 2px solid #402080;
   padding: 12px 24px;
   text-align: center;
@@ -21,8 +25,26 @@ body { background-color: black; color: #ccc; }
   cursor: pointer;
   font-family: inherit;
 }
-.button   { background-color: #2010a0; color: #cccccc; }
+.button, .pref-reset, .pref-cancel, .pref-save { background-color: #2010a0; color: #cccccc; }
 .buttonOn { background-color: #d0a000; color: #111111; }
+
+/* The listener-preference panel itself [REQ-VIS-290] -- an in-page block,
+   not a dialog, in the original's own palette: the same border as every
+   other framed block on this page. `.mulib input[type=range]`'s existing
+   rules already style the sliders here -- the panel lives inside `.mulib`,
+   so nothing extra is needed for those. */
+.pref-panel:not([hidden]) { border: 2px solid #402080; border-radius: 12px;
+    padding: .75rem 1rem; margin: .6rem auto; text-align: left; max-width: 30rem; }
+.pref-heading { font-weight: bold; margin: 0 0 .5rem; text-align: center; }
+.pref-error { color: #ff8080; margin: 0 0 .5rem; }
+.pref-field { display: grid; grid-template-columns: 6rem 1fr auto auto;
+    align-items: center; gap: .3rem .5rem; padding: .4rem 0; }
+.pref-field label { font-weight: bold; }
+.pref-field input[type=range] { width: 100%; }
+.pref-readout { color: #888; white-space: nowrap; font-size: .85rem; }
+.pref-reset, .pref-cancel, .pref-save { font-size: 16px; padding: 6px 14px; }
+.pref-actions { margin-top: .5rem; text-align: right; }
+.pref-actions button { margin-left: .4rem; }
 
 /* Doubled, as the original does, so the touch target is a target. */
 .mulib input[type=checkbox] { transform: scale(2); padding: 15px; margin-right: .6rem; }
@@ -138,6 +160,18 @@ hr { border: none; border-top: 1px solid #333; margin: 1.2rem 0; }
        white-space: nowrap; }
 .src[data-src="musicbrainz"] { color: #d0a000; border-color: #d0a000; }
 .src[data-src="filename"], .src[data-src="unknown"] { border-style: dashed; }
+
+/* A title/artist reaching the preference panel [REQ-VIS-285] in the queue
+   is a real `<a>` (core.js's `linkableTrack`), which would otherwise take
+   the browser's own default link-blue and visited-purple -- never any of
+   this skin's own palette. The underline alone says it is clickable; the
+   text stays exactly the color it would have been unlinked, visited or
+   not, the same "names are shown bare" posture `[REQ-VIS-122]` already
+   states for this skin. */
+.pref-link { text-decoration: underline dotted; text-underline-offset: 2px;
+    cursor: pointer; color: inherit; }
+.pref-link:visited { color: inherit; }
+.pref-link:hover, .pref-link:active { color: inherit; }
 
 /* Words `[SPEC-LYR-045]`. Pre-wrapped: the line breaks are the song's, and
    re-flowing them would run the verses together. Scrolls rather than stretching

@@ -120,6 +120,35 @@
                   border-radius: 4px; opacity: .55; }
   .qedit button:hover { opacity: 1; }
 
+/* The listener-preference panel [REQ-VIS-285], [REQ-VIS-290] -- an in-page
+   block, not a dialog, styled the same way `.setting`'s own rows already
+   are: a border, the same label/dim/line palette, and no bespoke button
+   look at all -- the bare `button{}` rule above already gives Save/Cancel/
+   Reset the exact shape every other button on this page has. */
+.pref-panel:not([hidden]) { border: 1px solid var(--line); border-radius: 6px;
+    padding: .8rem 1rem; margin: .75rem 0; }
+.pref-heading { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); font-weight: 600; margin: 0 0 .8rem; }
+.pref-error { color: #c0392b; font-size: .875rem; margin: 0 0 .6rem; }
+.pref-field { display: grid; grid-template-columns: 6rem 1fr auto auto;
+    align-items: center; gap: .3rem .6rem; padding: .5rem 0;
+    border-bottom: 1px solid var(--line); font-size: .875rem; }
+.pref-field:last-of-type { border-bottom: none; }
+.pref-field label { font-weight: 600; }
+.pref-field input[type=range] { width: 100%; accent-color: currentColor; }
+.pref-readout { color: var(--dim); font-variant-numeric: tabular-nums;
+    white-space: nowrap; font-size: .8125rem; }
+.pref-reset { font-size: .75rem; padding: .2rem .5rem; }
+.pref-actions { margin-top: .8rem; text-align: right; }
+.pref-actions button { margin-left: .5rem; }
+
+/* Title/artist reaching the preference panel [REQ-VIS-285]: an underline
+   is the only signal, no color of its own -- it is still the same text it
+   was, just clickable. */
+.pref-link { cursor: pointer; text-decoration: underline dotted;
+    text-underline-offset: 2px; color: inherit; }
+.pref-link:visited, .pref-link:hover, .pref-link:active { color: inherit; }
+
 /* The picker every skin carries. Kept out of the way; it is a preference,
    not a control. */
 .skinbar { display: flex; justify-content: flex-end; gap: .4rem;
