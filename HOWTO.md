@@ -139,6 +139,11 @@ to work, and keep it at `player/target/release/vaino[.exe]` (or on `PATH`)
 
 ## Where to go next
 
+- Once Vaino is running (§4), it serves its own in-app user's guide at
+  `/guide`, also reachable from a **Help** link in every skin — a
+  multi-tiered, listener-facing document (quick start through advanced
+  features and an algorithm appendix), distinct from this file and from
+  `README.md`, both of which stay developer-facing.
 - `README.md` — what Vaino is and why.
 - `docs/GUIDE001-lineage-and-lessons.md` — start here for the project's
   own history and design lessons.

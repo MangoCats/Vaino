@@ -1,6 +1,8 @@
 # GUIDE003: Feature Extraction Strategy
 
-**Development Guidance — Tier 0 · P0 Critical Path**
+**Development Guidance — Tier 0 & Tier 1 complete, promoted to production
+2026-08-13; Tier 2 (approximation, for a recipient with neither the dumps
+nor local compute) is the only tier still open.**
 
 Strategy for replacing AcousticBrainz with local analysis — the work that becomes **Sampo**, the separately-licensed x86 library builder `[GDE-ARC-010]`. This is the **first implementation target** `[GDE-PHS-000]` and the highest-risk unknown in the project. Derived from [GUIDE001](GUIDE001-lineage-and-lessons.md); phase context in [GUIDE002](GUIDE002-rearchitecture-plan.md).
 
@@ -17,7 +19,7 @@ Strategy for replacing AcousticBrainz with local analysis — the work that beco
 
 The union is the work; the *unreachable* set is the part no amount of harvesting can fix.
 
-**`[GDE-FEX-020]` It gates the project's actual purpose.** A segmenter that finds passages it cannot characterize has not solved new-music induction `[GDE-CHT-020]`. Every subsequent phase either depends on flavor data or is less valuable without it.
+**`[GDE-FEX-020]` It gates the project's actual purpose.** A segmenter that finds passages it cannot characterize has not solved new-music induction `[GDE-CHT-020]`. Every subsequent phase either depends on flavor data or is less valuable without it — the reason this was tackled first, and, per `[GDE-FEX-060]` below, why Tier 0/1 being done since 2026-08-13 is what actually unblocked everything downstream of it.
 
 **`[GDE-FEX-025]` Dump coverage does not reduce this priority — high coverage would be a *reprieve*, not a solution.** AcousticBrainz stopped accepting submissions in 2022 and its API is now dead `[GDE-MCR-045]`. Every future acquisition is permanently outside the dump. However well `[GDE-OPN-010]` turns out, local extraction is the only path that does not expire, so it is investigated on its merits and to its limit — not sized to whatever gap the dump happens to leave.
 
