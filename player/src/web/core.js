@@ -374,7 +374,16 @@ const Vaino = (() => {
     }
     const title = document.createElement('span');
     title.className = 'qtitle';
-    title.textContent = label(item) + ' ';
+    // `opts.linkable`: title/artist become their own clickable spans,
+    // reaching the preference panel `[REQ-VIS-285]`, instead of one plain
+    // text node -- a skin opts in because its own `label()` string is no
+    // longer what gets shown. Skins that don't ask stay byte-for-byte
+    // unchanged (WinAmp's marquee has no separate artist node to link).
+    if (opts.linkable) {
+      linkableTrack(title, item);
+    } else {
+      title.appendChild(document.createTextNode(label(item) + ' '));
+    }
     const dur = document.createElement('span');
     dur.className = 'dur';
     dur.textContent = fmt.clock(item.duration_ms);
@@ -412,6 +421,215 @@ const Vaino = (() => {
         if (opts.onPick) row.onclick = () => opts.onPick(q.qid, q);
         if (sel != null && sel === q.qid) row.classList.add('picked');
         container.appendChild(row);
+      }
+    };
+  }
+
+  // ---- preference panel [REQ-VIS-285], [REQ-VIS-290] ---------------------
+  // MuLibPlay let a listener hand-tune an artist's or a recording's own
+  // rotation/recovery/restraint directly. Vaino's schema carries those
+  // exact values forward (`listener_preferences`) but nothing reached them
+  // until this -- one shared panel, built once and reused, rather than a
+  // bespoke editor per skin: there is no modal/dialog convention anywhere
+  // in this codebase, and MuLibPlay's own skin has no panel-switching
+  // machinery to piggyback on the way Vaino's skin does.
+
+  // Builds `<title-span>[ — <artist-span>]`, each a clickable link when its
+  // own mbid is known, plain text otherwise (unidentified audio, or a
+  // recording with no linked artist -- the same case that already leaves
+  // `artist` unset). Shared by every skin that opts into `queueRow`'s
+  // `linkable` mode and by each skin's own now-playing render.
+  function linkableTrack(container, item, opts = {}) {
+    const open = (kind, id, label, e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      Vaino.editPreference(kind, id, label);
+    };
+    const titleEl = document.createElement(item.mbid ? 'a' : 'span');
+    titleEl.className = 'pref-link pref-link-title';
+    titleEl.textContent = item.title ?? '';
+    if (item.mbid) {
+      titleEl.href = '#';
+      titleEl.onclick = e => open('recording', item.mbid, item.title, e);
+    }
+    container.appendChild(titleEl);
+    if (item.artist) {
+      container.appendChild(document.createTextNode(opts.artistJoin ?? ' — '));
+      const artistEl = document.createElement(item.artist_mbid ? 'a' : 'span');
+      artistEl.className = 'pref-link pref-link-artist';
+      artistEl.textContent = item.artist;
+      if (item.artist_mbid) {
+        artistEl.href = '#';
+        artistEl.onclick = e => open('artist', item.artist_mbid, item.artist, e);
+      }
+      container.appendChild(artistEl);
+    }
+    container.appendChild(document.createTextNode(' '));
+  }
+
+  // Base styling, injected once, so the panel is usable the moment a skin
+  // adopts it -- a skin's own CSS may still restyle `.pref-panel`/`.pref-box`
+  // to match its look, the same "each skin's own CSS can restyle it" note
+  // this whole panel was built under.
+  const PREF_CSS = `
+    .pref-link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+    .pref-panel { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.5);
+      display: flex; align-items: center; justify-content: center; }
+    .pref-box { background: #fff; color: #111; border-radius: 8px; padding: 1.25em 1.5em;
+      min-width: 20em; max-width: 90vw; box-shadow: 0 4px 24px rgba(0,0,0,.4); }
+    .pref-heading { margin: 0 0 .75em; font-size: 1.1em; }
+    .pref-field { display: grid; grid-template-columns: 5.5em 1fr auto auto; align-items: center;
+      gap: .5em; margin: .5em 0; }
+    .pref-field input[type=range] { width: 12em; }
+    .pref-readout { font-size: .9em; opacity: .8; min-width: 8em; }
+    .pref-error { color: #b00020; }
+    .pref-actions { margin-top: 1em; text-align: right; }
+    .pref-actions button { margin-left: .5em; }
+  `;
+
+  // The panel itself: built once, lazily, appended to `document.body` --
+  // reused by every call, across every skin that uses it, so there is
+  // exactly one implementation to style and to get right.
+  let prefPanel = null;
+  function ensurePrefPanel() {
+    if (prefPanel) return prefPanel;
+    const style = document.createElement('style');
+    style.id = 'pref-panel-base-style';
+    style.textContent = PREF_CSS;
+    document.head.appendChild(style);
+    const div = document.createElement('div');
+    div.id = 'pref-panel';
+    div.className = 'pref-panel';
+    div.hidden = true;
+    div.innerHTML = `
+      <div class="pref-box" role="dialog" aria-modal="true">
+        <h2 class="pref-heading"></h2>
+        <p class="pref-error" hidden></p>
+        <div class="pref-field" data-field="rotation">
+          <label>Cooldown</label>
+          <input type="range" min="-1" max="2" step="0.01">
+          <span class="pref-readout"></span>
+          <button type="button" class="pref-reset" title="use the default">Reset</button>
+        </div>
+        <div class="pref-field" data-field="recovery">
+          <label>Recovery</label>
+          <input type="range" min="-1" max="2" step="0.01">
+          <span class="pref-readout"></span>
+          <button type="button" class="pref-reset" title="use the default">Reset</button>
+        </div>
+        <div class="pref-field" data-field="restraint">
+          <label>Preference</label>
+          <input type="range" min="-2" max="5" step="0.01">
+          <span class="pref-readout"></span>
+          <button type="button" class="pref-reset" title="use the default">Reset</button>
+        </div>
+        <div class="pref-actions">
+          <button type="button" class="pref-cancel">Cancel</button>
+          <button type="button" class="pref-save">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(div);
+    // A click on the backdrop closes it; a click inside the box must not
+    // bubble to that same handler.
+    div.addEventListener('click', e => { if (e.target === div) closePrefPanel(); });
+    div.querySelector('.pref-box').addEventListener('click', e => e.stopPropagation());
+    div.querySelector('.pref-cancel').onclick = closePrefPanel;
+    prefPanel = div;
+    return div;
+  }
+
+  function closePrefPanel() {
+    if (prefPanel) prefPanel.hidden = true;
+  }
+
+  // Rotation/recovery are log-scale hours `[SPEC-DIR-110]`: `10^v` hours.
+  // Restraint is a log-scale multiplier: `10^-v`. Both formulas are
+  // `frequency.rs`'s own -- this is a *readout*, not a second definition;
+  // the server is still the one place a value actually takes effect.
+  function prefDuration(v) {
+    const hours = 10 ** v;
+    if (hours < 1) return `≈ ${Math.round(hours * 60)} min`;
+    if (hours < 48) return `≈ ${hours.toFixed(1)} hrs`;
+    return `≈ ${(hours / 24).toFixed(1)} days`;
+  }
+  function prefMultiplier(v) {
+    const m = 10 ** -v;
+    return m >= 1 ? `≈ ${m.toFixed(1)}× as often` : `≈ ${m.toFixed(2)}× as often`;
+  }
+  const READOUT = { rotation: prefDuration, recovery: prefDuration, restraint: prefMultiplier };
+
+  // Opens the panel for one subject, fetches its current tuning, and wires
+  // Save/Reset. `kind` is `'recording'` or `'artist'`; `id` its mbid.
+  // A subject with no mbid (unidentified audio, an uncredited artist) has
+  // nothing to open -- callers only invoke this when an id is present.
+  async function editPreference(kind, id, label) {
+    const panel = ensurePrefPanel();
+    const err = panel.querySelector('.pref-error');
+    err.hidden = true;
+    panel.querySelector('.pref-heading').textContent =
+      `${kind === 'artist' ? 'Artist' : 'Recording'} preferences — ${label ?? id}`;
+    panel.hidden = false;
+
+    let current = {};
+    let defaults = {};
+    try {
+      const r = await fetch(`/preference/${kind}/${encodeURIComponent(id)}`);
+      if (!r.ok) throw new Error(`the server answered ${r.status}`);
+      const doc = await r.json();
+      current = doc;
+      defaults = doc.defaults;
+    } catch (e) {
+      err.textContent = `could not load current preferences: ${e.message}`;
+      err.hidden = false;
+      return;
+    }
+
+    // Per-field state: `null` means "at the default", a number means
+    // "explicitly set to this" -- the same three-way shape the server
+    // itself keeps, so Save only ever sends what actually changed.
+    const state = {};
+    const cleared = new Set();
+    for (const field of ['rotation', 'recovery', 'restraint']) {
+      state[field] = current[field] ?? defaults[field];
+      const box = panel.querySelector(`.pref-field[data-field="${field}"]`);
+      const input = box.querySelector('input');
+      const readout = box.querySelector('.pref-readout');
+      const resetBtn = box.querySelector('.pref-reset');
+      const refresh = () => {
+        readout.textContent = READOUT[field](state[field])
+          + (current[field] == null ? ' (default)' : '');
+      };
+      input.value = state[field];
+      refresh();
+      input.oninput = () => {
+        state[field] = Number(input.value);
+        cleared.delete(field);
+        current[field] = state[field]; // no longer "at the default" once dragged
+        refresh();
+      };
+      resetBtn.onclick = () => {
+        state[field] = defaults[field];
+        current[field] = null;
+        cleared.add(field);
+        input.value = state[field];
+        refresh();
+      };
+    }
+
+    panel.querySelector('.pref-save').onclick = async () => {
+      const q = new URLSearchParams();
+      for (const field of ['rotation', 'recovery', 'restraint']) {
+        if (cleared.has(field)) q.set(field, '');
+        else if (current[field] != null) q.set(field, String(state[field]));
+      }
+      try {
+        const r = await fetch(`/preference/${kind}/${encodeURIComponent(id)}?${q}`,
+          { method: 'POST' });
+        if (!r.ok) throw new Error(`the server answered ${r.status}`);
+        closePrefPanel();
+      } catch (e) {
+        err.textContent = `could not save: ${e.message}`;
+        err.hidden = false;
       }
     };
   }
@@ -649,5 +867,6 @@ const Vaino = (() => {
     named,
     badge,
     showBackArt,
+    editPreference,
   };
 })();
