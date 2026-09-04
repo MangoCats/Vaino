@@ -5,11 +5,12 @@
 Two cases where a rip is not simply one passage per TOC track: real audio
 hidden in a pregap or at `INDEX 00`, and a box set ripped disc-by-disc.
 Both build directly on [SPEC025](SPEC025-cd-ripping.md)'s TOC read (§3)
-and Disc ID lookup (§6) — split into its own document once the two
-together pushed SPEC025 past `[GOV-DOC-010]`'s 300-line hard limit, not
-because the subject is unrelated. Read SPEC025 first; §1 and most of §2
-cover what happens to the audio once §3/§6 have already run for a given
-disc — §2 also covers the multi-disc session itself, since that is
+and [SPEC028](SPEC028-cd-ripping-identification.md)'s Disc ID lookup —
+split into its own document (alongside SPEC028) once together they pushed
+SPEC025 past `[GOV-DOC-010]`'s 300-line hard limit, not because the
+subject is unrelated. Read SPEC025 first, then SPEC028; §1 and most of §2
+below cover what happens to the audio once those have already run for a
+given disc — §2 also covers the multi-disc session itself, since that is
 squarely part of what a box set is, not a separate topic.
 
 > **Status.** Requirements and specification only, per `[REQ-LIB-255..275]`.
@@ -18,8 +19,10 @@ squarely part of what a box set is, not a separate topic.
 > the other.
 
 > **Related:** [SPEC025](SPEC025-cd-ripping.md) for the ripping mechanics
-> this extends · [SPEC023](SPEC023-domain-vocabulary.md) for what a
-> passage is and is not · [SPEC008 §3](SPEC008-database-schema.md#3-passages--the-albumradio-duality)
+> this extends · [SPEC028](SPEC028-cd-ripping-identification.md) for the
+> Disc ID lookup this depends on · [SPEC023](SPEC023-domain-vocabulary.md)
+> for what a passage is and is not ·
+> [SPEC008 §3](SPEC008-database-schema.md#3-passages--the-albumradio-duality)
 > for the passages schema, §3b for `release_recordings.disc`
 
 ---
@@ -73,7 +76,8 @@ sense `[ENT-FILE-010]` already describes.
 
 **`[SPEC-RIP-096]` All of a set's discs resolve to one MusicBrainz
 Release — a multi-medium release, not N unrelated ones.** Each disc's own
-Disc ID lookup (SPEC025 §6) is still performed per disc, but where it
+Disc ID lookup ([SPEC028 §1](SPEC028-cd-ripping-identification.md#1-disc-id-resolves-the-exact-pressing))
+is still performed per disc, but where it
 resolves, every disc lands on the same `releases` row;
 `release_recordings.disc` `[SPEC-SC-048]` — already present in the schema
 for exactly this — carries which medium each track belongs to. No new
@@ -113,7 +117,8 @@ what a session plan assumed would be — a set missing disc 3, or ripped
 through.
 
 **`[SPEC-RIP-106]` Which disc a physical disc actually is comes from its
-own Disc ID lookup (SPEC025 §6), not from session sequence.** Every disc's
+own Disc ID lookup ([SPEC028 §1](SPEC028-cd-ripping-identification.md#1-disc-id-resolves-the-exact-pressing)),
+not from session sequence.** Every disc's
 TOC is independently resolved against the shared Release's per-medium
 track list regardless of when in the session it was ripped, so an
 operator who inserts the wrong disc — a duplicate of one already ripped,
@@ -135,8 +140,10 @@ checkbox at review time, a prompt during the rip itself, something else)
 is first-build UI detail, not a design question this document exists to
 settle.
 
-[SPEC025 §8](SPEC025-cd-ripping.md#8-open) confirms nothing else remains
-open in the ripping mechanics this document does not touch either —
+[SPEC025 §8](SPEC025-cd-ripping.md#8-open) — updated 2026-09-03 after
+real-hardware testing found one genuine open item of its own, how Sampo
+drives a GUI-only ripping tool — confirms nothing *else* remains open in
+the ripping mechanics this document does not touch either —
 drive/hardware failure modes, the last item there, is now decided too.
 
 ---
