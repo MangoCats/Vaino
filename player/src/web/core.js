@@ -429,10 +429,11 @@ const Vaino = (() => {
   // MuLibPlay let a listener hand-tune an artist's or a recording's own
   // rotation/recovery/restraint directly. Vaino's schema carries those
   // exact values forward (`listener_preferences`) but nothing reached them
-  // until this -- one shared panel, built once and reused, rather than a
-  // bespoke editor per skin: there is no modal/dialog convention anywhere
-  // in this codebase, and MuLibPlay's own skin has no panel-switching
-  // machinery to piggyback on the way Vaino's skin does.
+  // until this. An in-page panel, not a dialog: each skin carries its own
+  // `<div id="pref-panel" hidden>` at a spot in its own markup, filled in
+  // and toggled from here -- no overlay, no injected stylesheet, so the
+  // panel is simply styled by whichever skin's CSS it lives in rather than
+  // needing to fake that skin's colors from JS.
 
   // Builds `<title-span>[ — <artist-span>]`, each a clickable link when its
   // own mbid is known, plain text otherwise (unidentified audio, or a
@@ -467,79 +468,58 @@ const Vaino = (() => {
     container.appendChild(document.createTextNode(' '));
   }
 
-  // Base styling, injected once, so the panel is usable the moment a skin
-  // adopts it -- a skin's own CSS may still restyle `.pref-panel`/`.pref-box`
-  // to match its look, the same "each skin's own CSS can restyle it" note
-  // this whole panel was built under.
-  const PREF_CSS = `
-    .pref-link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
-    .pref-panel { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.5);
-      display: flex; align-items: center; justify-content: center; }
-    .pref-box { background: #fff; color: #111; border-radius: 8px; padding: 1.25em 1.5em;
-      min-width: 20em; max-width: 90vw; box-shadow: 0 4px 24px rgba(0,0,0,.4); }
-    .pref-heading { margin: 0 0 .75em; font-size: 1.1em; }
-    .pref-field { display: grid; grid-template-columns: 5.5em 1fr auto auto; align-items: center;
-      gap: .5em; margin: .5em 0; }
-    .pref-field input[type=range] { width: 12em; }
-    .pref-readout { font-size: .9em; opacity: .8; min-width: 8em; }
-    .pref-error { color: #b00020; }
-    .pref-actions { margin-top: 1em; text-align: right; }
-    .pref-actions button { margin-left: .5em; }
-  `;
+  // No injected stylesheet, no backdrop, no `position: fixed` -- found live
+  // to be the actual cause of "Cancel and Save do nothing": a full-viewport
+  // overlay this codebase's own convention never uses anywhere else, whose
+  // click-to-close-on-backdrop listener and z-index stacking were exactly
+  // the kind of thing this project's own "no modal convention" note in
+  // `SPEC029` already flagged as a risk worth avoiding. Each skin instead
+  // carries its own empty `<div id="pref-panel" class="pref-panel" hidden>`
+  // at a spot in its own markup, styled entirely by that skin's own CSS --
+  // "the same color and control shape scheme as the parent interface" is
+  // then simply true, not something this file has to fake with inline
+  // colors. A skin that doesn't provide the slot (WinAmp) silently gets no
+  // preference panel, the same posture every other opt-in skin feature here
+  // already takes.
 
-  // The panel itself: built once, lazily, appended to `document.body` --
-  // reused by every call, across every skin that uses it, so there is
-  // exactly one implementation to style and to get right.
-  let prefPanel = null;
-  function ensurePrefPanel() {
-    if (prefPanel) return prefPanel;
-    const style = document.createElement('style');
-    style.id = 'pref-panel-base-style';
-    style.textContent = PREF_CSS;
-    document.head.appendChild(style);
-    const div = document.createElement('div');
-    div.id = 'pref-panel';
-    div.className = 'pref-panel';
-    div.hidden = true;
-    div.innerHTML = `
-      <div class="pref-box" role="dialog" aria-modal="true">
-        <h2 class="pref-heading"></h2>
-        <p class="pref-error" hidden></p>
-        <div class="pref-field" data-field="rotation">
-          <label>Cooldown</label>
-          <input type="range" min="-1" max="2" step="0.01">
-          <span class="pref-readout"></span>
-          <button type="button" class="pref-reset" title="use the default">Reset</button>
-        </div>
-        <div class="pref-field" data-field="recovery">
-          <label>Recovery</label>
-          <input type="range" min="-1" max="2" step="0.01">
-          <span class="pref-readout"></span>
-          <button type="button" class="pref-reset" title="use the default">Reset</button>
-        </div>
-        <div class="pref-field" data-field="restraint">
-          <label>Preference</label>
-          <input type="range" min="-2" max="5" step="0.01">
-          <span class="pref-readout"></span>
-          <button type="button" class="pref-reset" title="use the default">Reset</button>
-        </div>
-        <div class="pref-actions">
-          <button type="button" class="pref-cancel">Cancel</button>
-          <button type="button" class="pref-save">Save</button>
-        </div>
+  // Fills the skin-provided slot with the field markup, once per skin load
+  // -- `loadSkin()` replaces `#app`'s entire subtree on every skin (re)load,
+  // so a cached reference from a previous load would be a detached node;
+  // this always looks the slot up fresh and only builds into it if it is
+  // still empty.
+  function prefPanelSlot() {
+    const panel = document.getElementById('pref-panel');
+    if (!panel || panel.dataset.built) return panel;
+    panel.innerHTML = `
+      <h2 class="pref-heading"></h2>
+      <p class="pref-error" hidden></p>
+      <div class="pref-field" data-field="rotation">
+        <label>Cooldown</label>
+        <input type="range" min="-1" max="2" step="0.01">
+        <span class="pref-readout"></span>
+        <button type="button" class="pref-reset" title="use the default">Reset</button>
+      </div>
+      <div class="pref-field" data-field="recovery">
+        <label>Recovery</label>
+        <input type="range" min="-1" max="2" step="0.01">
+        <span class="pref-readout"></span>
+        <button type="button" class="pref-reset" title="use the default">Reset</button>
+      </div>
+      <div class="pref-field" data-field="restraint">
+        <label>Preference</label>
+        <input type="range" min="-2" max="5" step="0.01">
+        <span class="pref-readout"></span>
+        <button type="button" class="pref-reset" title="use the default">Reset</button>
+      </div>
+      <div class="pref-actions">
+        <button type="button" class="pref-cancel">Cancel</button>
+        <button type="button" class="pref-save">Save</button>
       </div>`;
-    document.body.appendChild(div);
-    // A click on the backdrop closes it; a click inside the box must not
-    // bubble to that same handler.
-    div.addEventListener('click', e => { if (e.target === div) closePrefPanel(); });
-    div.querySelector('.pref-box').addEventListener('click', e => e.stopPropagation());
-    div.querySelector('.pref-cancel').onclick = closePrefPanel;
-    prefPanel = div;
-    return div;
-  }
-
-  function closePrefPanel() {
-    if (prefPanel) prefPanel.hidden = true;
+    // Wired once, here, unconditionally -- Cancel must work even if a later
+    // `editPreference` call fails before reaching its own wiring below.
+    panel.querySelector('.pref-cancel').onclick = () => { panel.hidden = true; };
+    panel.dataset.built = '1';
+    return panel;
   }
 
   // Rotation/recovery are log-scale hours `[SPEC-DIR-110]`: `10^v` hours.
@@ -563,11 +543,20 @@ const Vaino = (() => {
   // A subject with no mbid (unidentified audio, an uncredited artist) has
   // nothing to open -- callers only invoke this when an id is present.
   async function editPreference(kind, id, label) {
-    const panel = ensurePrefPanel();
+    const panel = prefPanelSlot();
+    if (!panel) return; // this skin carries no #pref-panel slot (WinAmp)
     const err = panel.querySelector('.pref-error');
+    const save = panel.querySelector('.pref-save');
     err.hidden = true;
     panel.querySelector('.pref-heading').textContent =
       `${kind === 'artist' ? 'Artist' : 'Recording'} preferences — ${label ?? id}`;
+    // Disabled until the fetch below actually succeeds -- there is nothing
+    // to save before then, and this is what stayed a dead button in the
+    // earlier version whenever that fetch failed: Save was only ever wired
+    // *after* it, so a failure left it silently inert. Cancel needs none of
+    // this -- wired once, unconditionally, in `prefPanelSlot()`.
+    save.disabled = true;
+    save.onclick = null;
     panel.hidden = false;
 
     let current = {};
@@ -616,7 +605,8 @@ const Vaino = (() => {
       };
     }
 
-    panel.querySelector('.pref-save').onclick = async () => {
+    save.disabled = false;
+    save.onclick = async () => {
       const q = new URLSearchParams();
       for (const field of ['rotation', 'recovery', 'restraint']) {
         if (cleared.has(field)) q.set(field, '');
@@ -626,7 +616,7 @@ const Vaino = (() => {
         const r = await fetch(`/preference/${kind}/${encodeURIComponent(id)}?${q}`,
           { method: 'POST' });
         if (!r.ok) throw new Error(`the server answered ${r.status}`);
-        closePrefPanel();
+        panel.hidden = true;
       } catch (e) {
         err.textContent = `could not save: ${e.message}`;
         err.hidden = false;
