@@ -17,6 +17,13 @@ use std::time::{Duration, Instant};
 
 use super::{Engine, PendingFinish};
 
+/// The head entry's own identity and provenance, snapshotted once at the
+/// top of `record_play` before any bookkeeping needs `&mut self` -- id,
+/// mbid, audible position, span, and who selected it `[REQ-VIS-300]`.
+/// Named so clippy's own `type_complexity` lint has nothing to flag and a
+/// reader has a label for what would otherwise be five bare fields in a row.
+type HeadNow = (i64, Option<String>, u64, u64, Option<String>);
+
 impl Engine {
     /// Write the settings down, now rather than on a timer.
     ///
@@ -136,14 +143,19 @@ impl Engine {
         // judged nothing at all — the passage was abandoned and suppressed
         // nothing, and the Director could offer it straight back
         // `[SPEC-PLAY-050]`.
-        let head_now: Option<(i64, Option<String>, u64, u64)> = self.live.first().map(|live| {
-            (
-                live.entry.passage_id,
-                live.entry.mbid.clone(),
-                self.audible_ms(live),
-                live.entry.duration_ms(),
-            )
-        });
+        let head_now: Option<HeadNow> =
+            self.live.first().map(|live| {
+                (
+                    live.entry.passage_id,
+                    live.entry.mbid.clone(),
+                    self.audible_ms(live),
+                    live.entry.duration_ms(),
+                    // Rides along for the eventual `record_play` below
+                    // `[REQ-VIS-300]` -- the entry's own provenance, set
+                    // when it was queued, never computed here.
+                    live.entry.selected_by.clone(),
+                )
+            });
         let id_now = head_now.as_ref().map(|(id, ..)| *id);
 
         // The guard has to follow the head, not just remember the last write.
@@ -204,7 +216,7 @@ impl Engine {
             }
             self.head = id_now;
             self.head_mbid = head_now.as_ref().and_then(|(_, m, ..)| m.clone());
-            self.head_span_ms = head_now.as_ref().map(|(.., span)| *span).unwrap_or(0);
+            self.head_span_ms = head_now.as_ref().map(|(_, _, _, span, _)| *span).unwrap_or(0);
             self.pending_play_id = None;
             // A passage that arrives already counted starts its life here as
             // recorded, which is what stops it being counted twice.
@@ -221,7 +233,7 @@ impl Engine {
             self.heard_from = None;
         }
 
-        let Some((id, mbid, position_ms, span_ms)) = head_now else { return };
+        let Some((id, mbid, position_ms, span_ms, selected_by)) = head_now else { return };
 
         // **Credited from the gap between samples, never from the position.**
         // Only forward movement counts, and only movement this sample saw:
@@ -244,7 +256,7 @@ impl Engine {
             // half the passage, or four minutes -- not what will finally have
             // been heard. `finish_play` corrects it once the passage actually
             // departs `[REQ-VIS-250]`.
-            match store.record_play(id, mbid.as_deref(), self.heard_ms, span_ms) {
+            match store.record_play(id, mbid.as_deref(), self.heard_ms, span_ms, selected_by.as_deref()) {
                 Ok(play_id) => self.pending_play_id = Some(play_id),
                 Err(e) => eprintln!("record play: {e}"),
             }

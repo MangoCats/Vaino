@@ -320,7 +320,10 @@
     ol.textContent = '';
     for (const r of w.runners_up ?? []) {
       const li = document.createElement('li');
-      li.textContent = r.title + ' ';
+      // Title and artist, clickable through to the preference panel the
+      // same way a queue row already is [REQ-VIS-285] -- one function,
+      // not a second rendering of the same link.
+      Vaino.linkableTrack(li, r);
       const span = document.createElement('span');
       span.className = 'w';
       span.textContent = `(${r.weight.toFixed(3)})`;

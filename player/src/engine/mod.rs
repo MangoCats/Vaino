@@ -1352,6 +1352,7 @@ mod tests {
             gain_db: 0.0,
             mbid: None,
             naming: Default::default(),
+            selected_by: None,
         }
     }
 
@@ -1534,7 +1535,7 @@ mod tests {
             .store
             .as_ref()
             .unwrap()
-            .record_play(90, Some("aaaaaaaa-0000-0000-0000-000000000090"), 400, 500)
+            .record_play(90, Some("aaaaaaaa-0000-0000-0000-000000000090"), 400, 500, None)
             .unwrap();
         e.pending_finish =
             Some(PendingFinish { play_id, span_ms: 500, at_ms: 400, since: Instant::now() });

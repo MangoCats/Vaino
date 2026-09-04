@@ -91,6 +91,9 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         // return that passage twice. Highest weight wins, mbid breaks ties.
         mbid: row.get::<_, Option<String>>(12)?,
         naming: Naming::default(),
+        // Reconstructed from a stored passage, not a fresh selection -- no
+        // real provenance event to report `[REQ-VIS-300]`.
+        selected_by: None,
     })
 }
 
@@ -182,6 +185,30 @@ impl Library {
                 },
             )
             .ok()
+    }
+
+    /// The same `DESCRIBE` lookup as `describe()`, for a caller that has
+    /// only an mbid and not a full `QueueEntry` -- a runner-up in "It
+    /// beat" `[REQ-VIS-285]`, which the Program Director's own bulk pool
+    /// load deliberately never resolves a real artist for (the same
+    /// "eight thousand rows, not five subqueries each" reasoning
+    /// `describe()`'s own doc comment gives), but which is exactly the
+    /// handful actually shown on screen once a decision is made. No file-
+    /// tag fallback here, unlike `describe()`'s own caller in `session.rs`
+    /// -- a runner-up already has a readable, if plain, filename-derived
+    /// title from `QueueEntry::title()`; probing the file on disk for
+    /// five candidates nobody may ever look at is not worth the cost
+    /// `describe()`'s tag fallback already exists to avoid where it can.
+    pub fn recording_names(&self, mbid: &str) -> (Option<String>, Option<String>, Option<String>) {
+        self.conn
+            .query_row(DESCRIBE, [mbid], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .unwrap_or((None, None, None))
     }
 
     pub fn describe(&self, e: &mut QueueEntry) {

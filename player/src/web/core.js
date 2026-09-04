@@ -439,7 +439,9 @@ const Vaino = (() => {
   // own mbid is known, plain text otherwise (unidentified audio, or a
   // recording with no linked artist -- the same case that already leaves
   // `artist` unset). Shared by every skin that opts into `queueRow`'s
-  // `linkable` mode and by each skin's own now-playing render.
+  // `linkable` mode, each skin's own now-playing render, and (exported as
+  // `Vaino.linkableTrack`) the Vaino skin's own "It beat" runner-up list --
+  // the same link, wherever a track is named.
   function linkableTrack(container, item, opts = {}) {
     const open = (kind, id, label, e) => {
       e.stopPropagation();
@@ -490,36 +492,107 @@ const Vaino = (() => {
   function prefPanelSlot() {
     const panel = document.getElementById('pref-panel');
     if (!panel || panel.dataset.built) return panel;
+    // Each field's own label/readout/reset share a row; the slider itself
+    // gets a row of its own, full width -- the range of a control read at
+    // a glance, not squeezed beside three other things fighting it for
+    // space.
+    const field = (name, label) => `
+      <div class="pref-field" data-field="${name}">
+        <div class="pref-field-head">
+          <label>${label}</label>
+          <span class="pref-readout"></span>
+          <button type="button" class="pref-reset" title="use the default">Reset</button>
+        </div>
+        <input type="range" min="-0.998" max="0.998" step="0.001">
+      </div>`;
     panel.innerHTML = `
       <h2 class="pref-heading"></h2>
       <p class="pref-error" hidden></p>
-      <div class="pref-field" data-field="rotation">
-        <label>Cooldown</label>
-        <input type="range" min="-1" max="2" step="0.01">
-        <span class="pref-readout"></span>
-        <button type="button" class="pref-reset" title="use the default">Reset</button>
-      </div>
-      <div class="pref-field" data-field="recovery">
-        <label>Recovery</label>
-        <input type="range" min="-1" max="2" step="0.01">
-        <span class="pref-readout"></span>
-        <button type="button" class="pref-reset" title="use the default">Reset</button>
-      </div>
-      <div class="pref-field" data-field="restraint">
-        <label>Preference</label>
-        <input type="range" min="-2" max="5" step="0.01">
-        <span class="pref-readout"></span>
-        <button type="button" class="pref-reset" title="use the default">Reset</button>
-      </div>
+      ${field('rotation', 'Cooldown')}
+      ${field('recovery', 'Recovery')}
+      ${field('restraint', 'Preference')}
       <div class="pref-actions">
         <button type="button" class="pref-cancel">Cancel</button>
         <button type="button" class="pref-save">Save</button>
       </div>`;
     // Wired once, here, unconditionally -- Cancel must work even if a later
     // `editPreference` call fails before reaching its own wiring below.
-    panel.querySelector('.pref-cancel').onclick = () => { panel.hidden = true; };
+    // Closes the play-frequency panel along with the preference panel
+    // itself `[REQ-VIS-300]`: "close the history when the preference
+    // closes" -- there is no reading of frequency data for a subject
+    // whose preference panel is no longer open.
+    panel.querySelector('.pref-cancel').onclick = () => {
+      panel.hidden = true;
+      closeFreqPanel();
+    };
     panel.dataset.built = '1';
     return panel;
+  }
+
+  // The play-frequency panel is its own slot, `#freq-panel`, built once the
+  // same way `prefPanelSlot()` builds `#pref-panel` -- a skin that carries
+  // no slot (WinAmp) silently gets no frequency table, same posture as the
+  // preference panel it sits under. Table, not a list: five windows are
+  // columns, "All"/"User"/each program are rows, so a grid reads far more
+  // directly than repeating five labelled numbers per row.
+  function freqPanelSlot() {
+    const panel = document.getElementById('freq-panel');
+    if (!panel || panel.dataset.built) return panel;
+    panel.innerHTML = `
+      <h3 class="freq-heading"></h3>
+      <table class="freq-table">
+        <thead><tr><th></th><th>24h</th><th>7d</th><th>30d</th><th>365d</th><th>All time</th></tr></thead>
+        <tbody></tbody>
+      </table>`;
+    panel.dataset.built = '1';
+    return panel;
+  }
+
+  function closeFreqPanel() {
+    const panel = document.getElementById('freq-panel');
+    if (panel) panel.hidden = true;
+  }
+
+  // Guards a slow `/play-frequency` response against landing after the
+  // subject has changed, or the preference panel (and this one with it)
+  // has already closed -- the same problem a fast double-click on two
+  // different links already risks. Each call to `loadFreqPanel` bumps this
+  // and captures its own value; the response is applied only if it is
+  // still current when it arrives.
+  let freqToken = 0;
+
+  // Fetched and shown independently of the preference panel's own fetch
+  // above -- "do not delay opening of the preference panel while play
+  // frequency is prepared, open play frequency panel when it is ready"
+  // `[REQ-VIS-300]`. Never awaited by its caller.
+  async function loadFreqPanel(kind, id) {
+    const panel = freqPanelSlot();
+    if (!panel) return; // this skin carries no #freq-panel slot
+    const token = ++freqToken;
+    panel.hidden = true; // clear whatever the last subject showed
+    let rows;
+    try {
+      const r = await fetch(`/play-frequency/${kind}/${encodeURIComponent(id)}`);
+      if (!r.ok) throw new Error(`the server answered ${r.status}`);
+      rows = await r.json();
+    } catch {
+      return; // silent, like a failed preference fetch leaving Save inert
+    }
+    if (token !== freqToken) return; // subject changed, or panel closed, meanwhile
+    panel.querySelector('.freq-heading').textContent =
+      `Play frequency — ${kind === 'artist' ? 'artist' : 'recording'}`;
+    const body = panel.querySelector('tbody');
+    body.innerHTML = '';
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      [row.label, ...row.counts.map(String)].forEach((text, i) => {
+        const cell = document.createElement(i === 0 ? 'th' : 'td');
+        cell.textContent = text;
+        tr.appendChild(cell);
+      });
+      body.appendChild(tr);
+    }
+    panel.hidden = false;
   }
 
   // Rotation/recovery are log-scale hours `[SPEC-DIR-110]`: `10^v` hours.
@@ -537,6 +610,48 @@ const Vaino = (() => {
     return m >= 1 ? `≈ ${m.toFixed(1)}× as often` : `≈ ${m.toFixed(2)}× as often`;
   }
   const READOUT = { rotation: prefDuration, recovery: prefDuration, restraint: prefMultiplier };
+
+  // None of the three sliders move linearly against their own stored
+  // value -- a plain `10^v`/`10^-v` range read as "0 through most of the
+  // right hand side," found live: everywhere near the useful, commonly-
+  // wanted values was squeezed into a sliver next to "no change at all,"
+  // and everywhere else read as indistinguishable from the extreme. `t`
+  // (each slider's own raw value, `-1..1`, never quite reaching either
+  // end) is a *position*, not a preference; each step toward an edge
+  // halves the remaining distance to it while doubling (or halving) the
+  // duration/multiplier it represents, *centered on that field's own
+  // default* -- 1× the default at the center (`t=0`), 2× a quarter of the
+  // way toward "more" (`t=-0.5`), 0.5× a quarter toward "less" (`t=0.5`),
+  // 4× an eighth of the way (`t=-0.75`), 0.25× an eighth the other way,
+  // 8× a sixteenth, and so on -- exactly the geometric spacing asked for,
+  // verified by hand against each of those points before this was
+  // trusted. Centering on the default rather than a fixed number matters
+  // here specifically because rotation/recovery's own default is not the
+  // same number for an artist as for a recording (`Tuning::artist_defaults`/
+  // `recording_defaults`, `[SPEC-DIR-120]`) -- the slider has to center on
+  // whichever one actually applies to what is open, not a value baked in
+  // once. `LOG2_10` converts the doubling scale (`u`) to and from the
+  // stored value itself, which is decade-scaled either way (hours = `10^v`,
+  // multiplier = `10^-restraint`, `[SPEC-DIR-115]`) -- the transform
+  // changes what a slider *feels* like, never what gets sent to or stored
+  // by the server, which still only ever sees the real `rotation`/
+  // `recovery`/`restraint` value. One formula for all three fields, `center`
+  // the only thing that differs (restraint's own default is always 0, so
+  // this reduces to exactly the multiplier transform restraint already
+  // had): "lower `v` is left" is what every field's own slider already
+  // meant before this (shorter cooldown/recovery, or a bigger boost, both
+  // sat left of center), so nothing about the left/right sense changes.
+  const LOG2_10 = Math.log2(10);
+  function tToV(t, center) {
+    if (t === 0) return center;
+    const u = Math.sign(t) * Math.log2(1 - Math.abs(t));
+    return center - u / LOG2_10;
+  }
+  function vToT(v, center) {
+    const u = -(v - center) * LOG2_10;
+    if (u === 0) return 0;
+    return -Math.sign(u) * (1 - 2 ** -Math.abs(u));
+  }
 
   // Opens the panel for one subject, fetches its current tuning, and wires
   // Save/Reset. `kind` is `'recording'` or `'artist'`; `id` its mbid.
@@ -558,6 +673,10 @@ const Vaino = (() => {
     save.disabled = true;
     save.onclick = null;
     panel.hidden = false;
+    // Its own independent fetch, deliberately not awaited -- the
+    // preference panel above is already open and must not wait on this
+    // `[REQ-VIS-300]`.
+    loadFreqPanel(kind, id);
 
     let current = {};
     let defaults = {};
@@ -575,11 +694,14 @@ const Vaino = (() => {
 
     // Per-field state: `null` means "at the default", a number means
     // "explicitly set to this" -- the same three-way shape the server
-    // itself keeps, so Save only ever sends what actually changed.
+    // itself keeps, so Save only ever sends what actually changed. Every
+    // field's slider is read through the same position transform, each
+    // centered on that field's own default -- see `tToV`/`vToT` above.
     const state = {};
     const cleared = new Set();
     for (const field of ['rotation', 'recovery', 'restraint']) {
-      state[field] = current[field] ?? defaults[field];
+      const center = defaults[field];
+      state[field] = current[field] ?? center;
       const box = panel.querySelector(`.pref-field[data-field="${field}"]`);
       const input = box.querySelector('input');
       const readout = box.querySelector('.pref-readout');
@@ -588,19 +710,19 @@ const Vaino = (() => {
         readout.textContent = READOUT[field](state[field])
           + (current[field] == null ? ' (default)' : '');
       };
-      input.value = state[field];
+      input.value = vToT(state[field], center);
       refresh();
       input.oninput = () => {
-        state[field] = Number(input.value);
+        state[field] = tToV(Number(input.value), center);
         cleared.delete(field);
         current[field] = state[field]; // no longer "at the default" once dragged
         refresh();
       };
       resetBtn.onclick = () => {
-        state[field] = defaults[field];
+        state[field] = center;
         current[field] = null;
         cleared.add(field);
-        input.value = state[field];
+        input.value = vToT(state[field], center);
         refresh();
       };
     }
@@ -617,6 +739,7 @@ const Vaino = (() => {
           { method: 'POST' });
         if (!r.ok) throw new Error(`the server answered ${r.status}`);
         panel.hidden = true;
+        closeFreqPanel();
       } catch (e) {
         err.textContent = `could not save: ${e.message}`;
         err.hidden = false;
@@ -858,5 +981,6 @@ const Vaino = (() => {
     badge,
     showBackArt,
     editPreference,
+    linkableTrack,
   };
 })();

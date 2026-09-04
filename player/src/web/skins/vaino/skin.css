@@ -125,22 +125,46 @@
    are: a border, the same label/dim/line palette, and no bespoke button
    look at all -- the bare `button{}` rule above already gives Save/Cancel/
    Reset the exact shape every other button on this page has. */
+/* No horizontal padding on the panel itself -- `#bar`/`.controls` reach
+   `main`'s own edges with none of their own, and the slider is what has to
+   match that width exactly. Padding instead lives on the text rows
+   (`.pref-heading`, `.pref-error`, `.pref-field-head`, `.pref-actions`),
+   which still want to sit clear of the border. */
 .pref-panel:not([hidden]) { border: 1px solid var(--line); border-radius: 6px;
-    padding: .8rem 1rem; margin: .75rem 0; }
+    padding: .8rem 0; margin: .75rem 0; }
 .pref-heading { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
-    color: var(--dim); font-weight: 600; margin: 0 0 .8rem; }
-.pref-error { color: #c0392b; font-size: .875rem; margin: 0 0 .6rem; }
-.pref-field { display: grid; grid-template-columns: 6rem 1fr auto auto;
-    align-items: center; gap: .3rem .6rem; padding: .5rem 0;
-    border-bottom: 1px solid var(--line); font-size: .875rem; }
+    color: var(--dim); font-weight: 600; margin: 0 0 .8rem; padding: 0 1rem; }
+.pref-error { color: #c0392b; font-size: .875rem; margin: 0 0 .6rem; padding: 0 1rem; }
+/* Label, readout and Reset share a row; the slider itself gets a full-width
+   row of its own underneath, flush with the panel's own edges -- the same
+   width `#bar` and the volume row already span [REQ-VIS-290]. */
+.pref-field { padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .875rem; }
 .pref-field:last-of-type { border-bottom: none; }
-.pref-field label { font-weight: 600; }
-.pref-field input[type=range] { width: 100%; accent-color: currentColor; }
+.pref-field-head { display: flex; align-items: center; gap: .5rem; padding: 0 1rem; }
+.pref-field label { font-weight: 600; margin-right: auto; }
+.pref-field input[type=range] { width: 100%; display: block; margin: .4rem 0 0;
+    accent-color: currentColor; }
 .pref-readout { color: var(--dim); font-variant-numeric: tabular-nums;
     white-space: nowrap; font-size: .8125rem; }
 .pref-reset { font-size: .75rem; padding: .2rem .5rem; }
-.pref-actions { margin-top: .8rem; text-align: right; }
+.pref-actions { margin-top: .8rem; padding: 0 1rem; text-align: right; }
 .pref-actions button { margin-left: .5rem; }
+
+/* Play frequency [REQ-VIS-300] -- underneath the preference panel, same
+   border/radius/margin as `.pref-panel` itself so the two read as one
+   family; the table inside borrows `#histtable`'s own look rather than
+   inventing a second one. */
+.freq-panel:not([hidden]) { border: 1px solid var(--line); border-radius: 6px;
+    padding: .8rem 1rem; margin: .75rem 0; }
+.freq-heading { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); font-weight: 600; margin: 0 0 .8rem; }
+.freq-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+.freq-table th, .freq-table td { padding: .35rem .5rem; border-bottom: 1px solid var(--line);
+    text-align: right; font-variant-numeric: tabular-nums; }
+.freq-table th:first-child, .freq-table td:first-child { text-align: left;
+    font-variant-numeric: normal; }
+.freq-table thead th { color: var(--dim); font-weight: 600; }
+.freq-table tbody tr:last-child th, .freq-table tbody tr:last-child td { border-bottom: none; }
 
 /* Title/artist reaching the preference panel [REQ-VIS-285]: an underline
    is the only signal, no color of its own -- it is still the same text it

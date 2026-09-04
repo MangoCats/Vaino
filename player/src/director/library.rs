@@ -125,6 +125,14 @@ pub struct Explanation {
 pub struct RunnerUp {
     pub passage_id: i64,
     pub title: String,
+    /// The recording's own mbid, and the credited artist's, so a runner-up
+    /// in "It beat" reaches a preference panel the same way a queue row
+    /// does `[REQ-VIS-285]`. Absent for unidentified audio or an
+    /// uncredited artist -- the same case that already leaves `artist`
+    /// `None`.
+    pub mbid: Option<String>,
+    pub artist: Option<String>,
+    pub artist_mbid: Option<String>,
     pub weight: f64,
 }
 
@@ -707,6 +715,9 @@ impl Director {
                     .map(|x| RunnerUp {
                         passage_id: x.0.passage_id,
                         title: x.0.title(),
+                        mbid: x.0.mbid.clone(),
+                        artist: x.0.artist(),
+                        artist_mbid: x.0.naming.artist_mbid.clone(),
                         weight: x.3,
                     })
                     .collect(),

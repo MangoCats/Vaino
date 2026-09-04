@@ -103,6 +103,16 @@ pub struct PreferenceRow {
     pub restraint: Option<f64>,
 }
 
+/// One row of the play-frequency table `[REQ-VIS-300]`: a label ("All",
+/// "User", or a Program Director program's own name) and a play count for
+/// each of the five windows [`PlayerStore::play_frequency`] reports,
+/// narrowest-first: past 24h, past 7d, past 30d, past 365d, all time.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct FrequencyRow {
+    pub label: String,
+    pub counts: [i64; 5],
+}
+
 pub(crate) const PREFERENCES_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS listener_preferences (
         subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','artist')),
@@ -138,6 +148,12 @@ fn ensure_history_columns(conn: &Connection) {
         ("listener_play_history", "span_ms INTEGER"),
         ("listener_rejections", "heard_ms INTEGER"),
         ("listener_rejections", "span_ms INTEGER"),
+        // Who or what selected this play `[REQ-VIS-300]` -- `NULL` for
+        // every row recorded before this existed, which is the honest
+        // answer and stays that way: no back-annotation. Deliberately a
+        // different column name than `listener_flags.origin`, which means
+        // something unrelated (which remote wrote the row).
+        ("listener_play_history", "selected_by TEXT"),
     ] {
         let _ = conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column}"), []);
     }
@@ -1238,6 +1254,84 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// How often a subject has played, broken out by who selected it
+    /// `[REQ-VIS-300]`.
+    ///
+    /// One fetch of every matching `(selected_by, played_at)` pair, then
+    /// aggregated here rather than in a cross-tab SQL query that would need
+    /// to already know the distinct program names -- the same "a handful
+    /// of rows even on a well-used appliance" scale `remote_flags.py`
+    /// reasons about for `listener_flags`.
+    ///
+    /// **All** counts every play in the window, `selected_by` or not --
+    /// including the `NULL` rows a library predating this feature is full
+    /// of, which is what makes All's count the true ceiling: never less
+    /// than any other row, often more. **User** is always present, even at
+    /// all-zero, since "never manually played" is itself the answer.
+    /// Program rows -- including the `"auto"` sentinel for a genuine
+    /// Director pick with no program in force -- appear only if this
+    /// subject has at least one such play, sorted by their own all-time
+    /// count so the most relevant shows first.
+    pub fn play_frequency(&self, kind: &str, id: &str) -> Result<Vec<FrequencyRow>, DbError> {
+        let sql = if kind == "artist" {
+            "SELECT h.selected_by, h.played_at FROM listener_play_history h \
+             JOIN recording_artists ra ON ra.mbid = h.mbid WHERE ra.artist_mbid = ?1"
+        } else {
+            "SELECT selected_by, played_at FROM listener_play_history WHERE mbid = ?1"
+        };
+        let mut st = self.conn.prepare(sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows: Vec<(Option<String>, i64)> = st
+            .query_map(rusqlite::params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| DbError::Query(e.to_string()))?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        // Rolling windows, not calendar-aligned -- "the past 24 hours",
+        // not "today". `i64::MIN` gives all-time no real lower bound.
+        const WINDOWS: [i64; 5] = [86_400, 604_800, 2_592_000, 31_536_000, i64::MIN];
+
+        let mut all = [0i64; 5];
+        let mut user = [0i64; 5];
+        let mut programs: Vec<(String, [i64; 5])> = Vec::new();
+        for (selected_by, played_at) in &rows {
+            for (i, window) in WINDOWS.iter().enumerate() {
+                if *window != i64::MIN && played_at < &(now - window) {
+                    continue;
+                }
+                all[i] += 1;
+                match selected_by.as_deref() {
+                    Some("user") => user[i] += 1,
+                    Some(program) => {
+                        let entry = match programs.iter_mut().find(|(label, _)| label.as_str() == program) {
+                            Some(entry) => entry,
+                            None => {
+                                programs.push((program.to_string(), [0; 5]));
+                                programs.last_mut().unwrap()
+                            }
+                        };
+                        entry.1[i] += 1;
+                    }
+                    None => {}
+                }
+            }
+        }
+        programs.sort_by(|a, b| b.1[4].cmp(&a.1[4]));
+
+        let mut out = vec![
+            FrequencyRow { label: "All".into(), counts: all },
+            FrequencyRow { label: "User".into(), counts: user },
+        ];
+        out.extend(programs.into_iter().map(|(label, counts)| FrequencyRow {
+            label: if label == "auto" { "Auto".into() } else { label },
+            counts,
+        }));
+        Ok(out)
+    }
+
     /// Bring settings over from the columns they used to live in.
     ///
     /// Runs once: after the first save every key is present and the copy is
@@ -1331,18 +1425,25 @@ impl PlayerStore {
     /// caller corrects it with [`finish_play`](Self::finish_play) once the
     /// passage actually departs `[REQ-VIS-250]`. Returns the row's id so the
     /// caller can do that.
+    ///
+    /// `selected_by` is the entry's own `QueueEntry::selected_by`
+    /// `[REQ-VIS-300]` -- `None` where the caller has nothing to report
+    /// (an alternate backend that does not yet track this), `Some("user")`
+    /// or a program name where it does. Stored, never inferred here.
     pub fn record_play(
         &self,
         passage_id: i64,
         mbid: Option<&str>,
         heard_ms: u64,
         span_ms: u64,
+        selected_by: Option<&str>,
     ) -> Result<i64, DbError> {
         self.conn
             .execute(
-                "INSERT INTO listener_play_history (played_at, passage_id, mbid, heard_ms, span_ms) \
-                 VALUES (strftime('%s','now'), ?1, ?2, ?3, ?4)",
-                rusqlite::params![passage_id, mbid, heard_ms, span_ms],
+                "INSERT INTO listener_play_history \
+                     (played_at, passage_id, mbid, heard_ms, span_ms, selected_by) \
+                 VALUES (strftime('%s','now'), ?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![passage_id, mbid, heard_ms, span_ms, selected_by],
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
         Ok(self.conn.last_insert_rowid())
@@ -2059,18 +2160,26 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let st = PlayerStore::open(&p).unwrap();
         // The table is PlayerStore::open's now.
-        st.record_play(7, Some("aaaaaaaa-0000-0000-0000-000000000001"), 90_000, 180_000).unwrap();
-        st.record_play(8, None, 90_000, 180_000).unwrap();
-        let rows: Vec<(i64, Option<String>)> = st
+        st.record_play(7, Some("aaaaaaaa-0000-0000-0000-000000000001"), 90_000, 180_000, Some("user"))
+            .unwrap();
+        st.record_play(8, None, 90_000, 180_000, None).unwrap();
+        let rows: Vec<(i64, Option<String>, Option<String>)> = st
             .conn
-            .prepare("SELECT passage_id, mbid FROM listener_play_history ORDER BY play_id")
+            .prepare("SELECT passage_id, mbid, selected_by FROM listener_play_history ORDER BY play_id")
             .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
             .map(|r| r.unwrap())
             .collect();
-        assert_eq!(rows, vec![(7, Some("aaaaaaaa-0000-0000-0000-000000000001".into())), (8, None)],
-                   "an unidentified passage still records a play");
+        assert_eq!(
+            rows,
+            vec![
+                (7, Some("aaaaaaaa-0000-0000-0000-000000000001".into()), Some("user".into())),
+                (8, None, None),
+            ],
+            "an unidentified passage still records a play, and selected_by round-trips \
+             (or is absent) independently of mbid"
+        );
         let _ = std::fs::remove_file(&p);
     }
 
@@ -2173,7 +2282,7 @@ mod tests {
         assert_eq!(old, (7, None, None), "an old row keeps its data and gains absent new columns");
 
         // And a fresh write goes in with the new columns filled.
-        let id = store.record_play(8, Some("n"), 90_000, 180_000).unwrap();
+        let id = store.record_play(8, Some("n"), 90_000, 180_000, Some("auto")).unwrap();
         store.finish_play(id, 150_000).unwrap();
         let heard: i64 = store
             .conn
@@ -2404,4 +2513,118 @@ mod tests {
         assert!(store.reset_preference("recording", "x", "loudness").is_err());
     }
 
+    /// `historyable()` builds `listener_play_history` from the base
+    /// `PLAY_TABLE` schema, which predates `selected_by` -- the same gap
+    /// `ensure_history_columns` exists to close on a real `open()`. Run it
+    /// here too, so a play-frequency test can write the column without
+    /// going through a real file.
+    fn frequency_store() -> PlayerStore {
+        let conn = historyable();
+        ensure_history_columns(&conn);
+        PlayerStore { conn }
+    }
+
+    fn now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    /// One row per window/`selected_by` combination this test cares about,
+    /// planted at an exact age so it lands inside or outside each window
+    /// on purpose `[REQ-VIS-300]`.
+    fn plant(conn: &Connection, mbid: &str, age_secs: i64, selected_by: Option<&str>) {
+        conn.execute(
+            "INSERT INTO listener_play_history (played_at, passage_id, mbid, selected_by) \
+             VALUES (?1, 1, ?2, ?3)",
+            rusqlite::params![now() - age_secs, mbid, selected_by],
+        )
+        .unwrap();
+    }
+
+    /// All ≥ every other row in every window, User and program rows are
+    /// dynamic/fixed as specified, and windows are rolling (an entry just
+    /// past a boundary drops out of that window but stays in wider ones
+    /// and in all-time `[REQ-VIS-300]`.
+    #[test]
+    fn play_frequency_buckets_by_window_and_selector() {
+        let store = frequency_store();
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        // Inside every window: counts everywhere.
+        plant(&store.conn, id, 60, Some("user"));
+        // Inside 7d/30d/365d/all, outside 24h.
+        plant(&store.conn, id, 2 * 86_400, Some("Soft"));
+        // Inside 30d/365d/all only.
+        plant(&store.conn, id, 10 * 86_400, Some("Soft"));
+        // Inside 365d/all only.
+        plant(&store.conn, id, 100 * 86_400, Some("auto"));
+        // All-time only.
+        plant(&store.conn, id, 1_000 * 86_400, Some("auto"));
+        // Historical, no provenance recorded -- All only, forever.
+        plant(&store.conn, id, 30, None);
+
+        let rows = store.play_frequency("recording", id).unwrap();
+        let row = |label: &str| rows.iter().find(|r| r.label == label).unwrap().clone();
+
+        assert_eq!(row("All").counts, [2, 3, 4, 5, 6], "every row, its own window and wider");
+        assert_eq!(row("User").counts, [1, 1, 1, 1, 1]);
+        assert_eq!(row("Soft").counts, [0, 1, 2, 2, 2]);
+        assert_eq!(row("Auto").counts, [0, 0, 0, 1, 2]);
+        for i in 0..5 {
+            assert!(
+                row("All").counts[i]
+                    >= row("User").counts[i] + row("Soft").counts[i] + row("Auto").counts[i],
+                "All must never be less than the other rows combined, window {i}"
+            );
+        }
+    }
+
+    /// A subject with no play in a given selector's history gets no row for
+    /// it at all -- not a row of zeroes. All and User are the two fixed
+    /// exceptions, present even when empty.
+    #[test]
+    fn play_frequency_omits_program_rows_that_never_happened() {
+        let store = frequency_store();
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        plant(&store.conn, id, 60, Some("user"));
+
+        let rows = store.play_frequency("recording", id).unwrap();
+        assert_eq!(rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), vec!["All", "User"]);
+    }
+
+    /// Artist mode joins through `recording_artists` -- a play recorded
+    /// against the recording's own mbid still counts toward the artist it
+    /// is credited to `[REQ-VIS-300]`, the same join `HIST_ARTIST_MBID_EXPR`
+    /// uses in `library.rs`.
+    #[test]
+    fn play_frequency_artist_mode_counts_plays_of_its_recordings() {
+        let store = frequency_store();
+        let recording = "aaaaaaaa-0000-0000-0000-000000000001";
+        let artist = "bbbbbbbb-0000-0000-0000-000000000001";
+        plant(&store.conn, recording, 60, Some("user"));
+        plant(&store.conn, recording, 60, Some("Soft"));
+
+        let rows = store.play_frequency("artist", artist).unwrap();
+        let row = |label: &str| rows.iter().find(|r| r.label == label).unwrap().clone();
+        assert_eq!(row("All").counts[4], 2);
+        assert_eq!(row("User").counts[4], 1);
+        assert_eq!(row("Soft").counts[4], 1);
+    }
+
+    /// Program rows sort by their own all-time count, most-played first --
+    /// the same "most relevant first" instinct behind runner-up ordering.
+    #[test]
+    fn play_frequency_program_rows_sort_by_all_time_count_descending() {
+        let store = frequency_store();
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        plant(&store.conn, id, 60, Some("Quiet"));
+        plant(&store.conn, id, 60, Some("Soft"));
+        plant(&store.conn, id, 61, Some("Soft"));
+        plant(&store.conn, id, 62, Some("Soft"));
+
+        let rows = store.play_frequency("recording", id).unwrap();
+        let labels: Vec<&str> = rows.iter().skip(2).map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["Soft", "Quiet"], "Soft has three plays, Quiet has one");
+    }
 }

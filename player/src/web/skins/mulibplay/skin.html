@@ -23,11 +23,6 @@
     <i id="byword" hidden> by </i><span id="artist"></span>
     <i id="fromword" hidden> from </i><span id="album"></span>
   </div>
-  <!-- Filled in and toggled by core.js's Vaino.editPreference -- an in-page
-       panel, not a dialog, so it opens right under the title/artist that
-       was clicked and closes back into this same flow on Cancel or Save
-       [REQ-VIS-285]. -->
-  <div id="pref-panel" class="pref-panel" hidden></div>
   <div class="elapsed"><span id="plays"></span> &nbsp; <span id="time">0:00 / 0:00</span></div>
 
   <!-- Front then back, side by side, both 200px tall and centred -- which
@@ -62,6 +57,14 @@
   </div>
 
   <hr/>
+  <!-- Filled in and toggled by core.js's Vaino.editPreference -- an in-page
+       panel, not a dialog, so it closes straight back into this same flow
+       on Cancel or Save [REQ-VIS-285]. -->
+  <div id="pref-panel" class="pref-panel" hidden></div>
+  <!-- Filled in and toggled by core.js's Vaino.loadFreqPanel, opened from
+       inside editPreference above once its own fetch resolves -- never
+       delaying the preference panel itself [REQ-VIS-300]. -->
+  <div id="freq-panel" class="freq-panel" hidden></div>
   <div class="why" id="why"></div>
 
   <div class="skinbar">

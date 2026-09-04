@@ -11,10 +11,6 @@
       <div id="plays"></div>
     </div>
   </div>
-  <!-- Filled in and toggled by core.js's Vaino.editPreference -- an in-page
-       panel, not a dialog, so it opens right where the click happened and
-       closes back into this same flow on Cancel or Save [REQ-VIS-285]. -->
-  <div id="pref-panel" class="pref-panel" hidden></div>
   <div id="bar" title="Click to move within the track"><div id="fill"></div></div>
   <div id="time">0:00 / 0:00</div>
 
@@ -52,6 +48,15 @@
     </div>
     <ol id="queue"><li class="empty">nothing queued</li></ol>
   </section>
+
+  <!-- Filled in and toggled by core.js's Vaino.editPreference -- an in-page
+       panel, not a dialog, so it closes straight back into this same flow
+       on Cancel or Save [REQ-VIS-285]. -->
+  <div id="pref-panel" class="pref-panel" hidden></div>
+  <!-- Filled in and toggled by core.js's Vaino.loadFreqPanel, opened from
+       inside editPreference above once its own fetch resolves -- never
+       delaying the preference panel itself [REQ-VIS-300]. -->
+  <div id="freq-panel" class="freq-panel" hidden></div>
 
   <section>
     <h2>Why <span id="whotitle">this passage</span>?</h2>

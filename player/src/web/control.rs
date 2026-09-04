@@ -135,6 +135,10 @@ pub(super) async fn queue_passage(
                 if let Some(t) = lib.stored_tags(id) {
                     e.naming.apply_tags(t);
                 }
+                // The listener chose this one directly, not the Program
+                // Director `[REQ-VIS-300]` -- the play-frequency panel's
+                // own "User" row.
+                e.selected_by = Some("user".into());
                 out.push(e);
             }
         }
