@@ -86,6 +86,22 @@ What that costs, beyond what is already built:
 - **`[PI3-AIM-030]` Play must be willing to go and get the speaker.** The timer
   covers "off at boot." Still open: pressing play in the narrow window before
   its next tick still finds a dummy and correctly reports silence.
+- **`[PI3-AIM-040]` Done, 2026-09-04.** `[PI3-AIM-020]`'s fault recurred for a
+  new reason: not a hard-coded address this time, but a *stored* one gone
+  stale -- `speaker_address` still named MIDDLETON while the appliance was
+  actually connected to and playing through a different speaker (OontZ,
+  paired straight through `bluetoothctl` rather than the settings panel's own
+  `use`, the one path that keeps this row honest). Same symptom exactly:
+  `vaino-speaker` paged the stored-but-wrong address every 30 s, stalling the
+  speaker that *was* playing. Reading the correct value is not enough on its
+  own -- the value can still drift out from under it. `vaino-speaker` now
+  checks what BlueZ actually has connected *before* trusting what it
+  remembers: if a real, audio-capable device is already connected, that
+  settles it, whether or not it matches `SPEAKER` -- paging the stored
+  address on top of a working connection was the disruption, not a fix for
+  one. A mismatch is corrected silently (the database row alone, no reopen,
+  since audio is already flowing correctly); nothing is paged unless BlueZ
+  reports nothing connected at all.
 - **Failure has to stay legible.** A speaker that is off, flat, or in pairing
   mode cannot be reached by any amount of retrying, and the panel should say
   which of those it looks like rather than spinning `[PI3-UI-010]`.
