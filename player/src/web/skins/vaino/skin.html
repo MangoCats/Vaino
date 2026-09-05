@@ -232,6 +232,26 @@
       <span id="radio-controls"></span>
       <p id="radio-hint">Whether the aerials are switched on at all.</p>
     </div>
+    <div class="setting" id="led-row">
+      <label for="led-mode">Status LED</label>
+      <span>
+        <select id="led-mode">
+          <option value="on">Always on</option>
+          <option value="wifi">Live Wi-Fi indicator</option>
+          <option value="off">Always off</option>
+          <option value="default">Leave to the system</option>
+        </select>
+        <input type="range" id="led-brightness" min="1" max="100" value="100" hidden>
+        <small id="led-brightness-label" hidden></small>
+      </span>
+      <p>The small light on the appliance itself. "Live Wi-Fi indicator"
+         shows whether Wi-Fi is switched on, same as it always has.
+         "Always on" lets you set a brightness &mdash; below full, this LED
+         has no true dimmer of its own, so it blinks very fast to look
+         dimmer rather than glowing steadily at reduced power. Has no
+         effect on playback either way. The choice is remembered and
+         reapplied on every restart, including a full power cycle.</p>
+    </div>
     <div class="setting" id="speakers">
       <label>Speaker</label>
       <span>

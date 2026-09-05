@@ -6,6 +6,47 @@ If you already have a working library and just want to add more music to
 it, see <strong>Importing &amp; Refining Music</strong> instead; this page
 is specifically the very first time.</p>
 
+<h3>If Vaino runs on a Raspberry Pi appliance, not your desktop</h3>
+<p>Skip this section entirely if you're running Vaino on the same computer
+you're reading this on — go straight to the next section. This one is
+specifically for a dedicated Raspberry Pi appliance, and covers the two
+things that are different about it: getting it onto your Wi-Fi, and
+finding it once it's there.</p>
+<ol>
+  <li><strong>Put your Wi-Fi details on the SD card before the first
+    boot.</strong> A Raspberry Pi appliance has no screen and no keyboard,
+    so its network has to be set up before it ever powers on. When writing
+    the memory card with Raspberry Pi Imager, open its advanced options
+    (the gear icon) before writing and fill in: a hostname (so it's
+    recognizable later), SSH access if you'll ever need it, and — the
+    important part — your Wi-Fi network's name, password, and country.
+    There is currently no way to enter Wi-Fi details after the fact
+    through Vaino's own web page; it has to happen at this step.</li>
+  <li><strong>Give it music.</strong> Sampo (the library-building side)
+    only ever runs on an ordinary desktop, never on the appliance itself —
+    so building or adding to a library still means following the rest of
+    this guide (or <strong>Importing &amp; Refining Music</strong>) on a
+    desktop first, then getting the resulting library onto the appliance.
+    Whoever set up the appliance's software has the details of exactly how
+    that library gets copied over for your setup.</li>
+  <li><strong>Find it on your network.</strong> Once it's powered on and
+    joined your Wi-Fi, you need its address to open it in a browser. The
+    most reliable way: open your Wi-Fi router's own admin page (often
+    something like <code>192.168.1.1</code> or <code>192.168.0.1</code> —
+    check the router itself if you're not sure) and look at its list of
+    connected devices for the hostname you chose. Occasionally, right
+    after the very first boot, <code>http://&lt;hostname&gt;.local:5720/</code>
+    will also work directly — worth a try first — but appliances are
+    commonly hardened shortly after first boot in a way that stops this
+    from working reliably afterward, so the router's device list is the
+    method to fall back on, not a last resort.</li>
+  <li><strong>Open it in a browser.</strong> Whatever address you found,
+    the page is at that address followed by <code>:5720</code> — for
+    example <code>http://192.168.1.42:5720/</code>. Bookmark it; the
+    appliance keeps the same address as long as your router keeps giving
+    it the same one, which is the ordinary case on a home network.</li>
+</ol>
+
 <h3>Before this page: getting the software itself</h3>
 <p>Getting the Vaino player and Sampo tools built and runnable on your own
 machine is a one-time, fairly technical step (it involves a compiler and a

@@ -143,6 +143,36 @@ pub fn set_radio(kind: &str, on: bool) -> Result<serde_json::Value, String> {
                              String::from_utf8_lossy(&out.stderr).trim()))
 }
 
+/// Switch the appliance's status LED `[PI3-LED-010]`. Not a `Verb` -- it
+/// names no device, and takes a mode the same shape `set_radio` already
+/// takes a radio kind, so it gets the same small wrapper rather than
+/// forcing itself into `run`'s device-address shape.
+///
+/// `mode` is one of `on`/`wifi`/`off`/`default` -- checked here, again in
+/// the helper, and again in the web route before that, the same
+/// check-it-more-than-once posture `is_address` explains for a device
+/// address. `pct` is only meaningful (and only sent) for `on`.
+///
+/// Applies immediately, live. Persisting the choice so it survives a
+/// reboot is a separate concern, done by the caller writing
+/// `player_settings` and by a boot-time script re-reading it -- this
+/// function only ever touches the hardware.
+pub fn set_led(mode: &str, pct: Option<u8>) -> Result<serde_json::Value, String> {
+    if !matches!(mode, "on" | "wifi" | "off" | "default") {
+        return Err("not a valid led mode".into());
+    }
+    let mut cmd = Command::new("sudo");
+    cmd.arg("-n").arg(HELPER).arg("led").arg(mode);
+    if mode == "on" {
+        cmd.arg(pct.unwrap_or(100).clamp(1, 100).to_string());
+    }
+    let out = cmd.output().map_err(|e| format!("helper not available: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim())
+        .map_err(|_| format!("helper gave no usable answer: {}",
+                             String::from_utf8_lossy(&out.stderr).trim()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

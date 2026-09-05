@@ -1,5 +1,8 @@
 #!/bin/bash
-# The privileged helper for Bluetooth speaker selection [PI-SET-030].
+# The privileged helper for Bluetooth speaker selection [PI-SET-030] --
+# and, since it is already the one thing the web process may run as root,
+# every other small privileged appliance action too (radio power, the
+# status LED), rather than one helper and one sudoers rule per action.
 #
 # The web process must not hold the privilege to run arbitrary BlueZ commands,
 # and it must not be able to smuggle one through an argument. So this is a
@@ -47,7 +50,16 @@ need_addr() {
 }
 
 # bluetoothctl wants a login session's bus; sudo does not bring one.
-RUN_UID="$(id -u "${SUDO_USER:-$USER}")"
+#
+# `$USER` is the fallback for a caller that already IS root without going
+# through `sudo` -- `vaino-led-boot`'s own systemd service, since it needs
+# no bluetoothd session at all. A systemd service's environment carries
+# neither `$SUDO_USER` nor `$USER` `[PI3-LED-010]`: found live, once this
+# script's own output stopped being silently discarded -- `set -u` turned
+# a plain empty fallback into "unbound variable" on every single boot,
+# harmless only because the `led` verb never reads `$XDG_RUNTIME_DIR`.
+# `root` is the correct answer in exactly that case, not a guess.
+RUN_UID="$(id -u "${SUDO_USER:-${USER:-root}}")"
 export XDG_RUNTIME_DIR="/run/user/$RUN_UID"
 
 # Pairing needs a registered agent for the duration [PI3-WHY-060], and the
@@ -246,6 +258,65 @@ case "$VERB" in
         done
         $found || die "no such radio"
         printf '{"ok":true,"kind":"%s","state":"%s"}\n' "$kind" "$want"
+        ;;
+    led)
+        # `led <on|wifi|off|default> [pct]`. Not a Bluetooth verb at all --
+        # it lives here because this is the one helper the web process
+        # already has standing permission to run, and adding a second
+        # privileged binary (and a second sudoers rule) for a few sysfs
+        # writes would be more moving parts, not fewer.
+        #
+        # Four modes, because the ACT LED already had a real, deliberate
+        # job before this existed: `setup-vainopi.sh`'s own "act led"
+        # section binds it to the Wi-Fi radio's rfkill state
+        # (`[PI3-LED-010]`), and that has to stay reachable as `wifi`, not
+        # be silently replaced by a plain on/off toggle.
+        mode="${2:-}"
+        [[ "$mode" =~ ^(on|wifi|off|default)$ ]] || die "not a valid led mode"
+        LED=/sys/class/leds/ACT
+        [ -d "$LED" ] || die "no ACT LED on this device"
+        case "$mode" in
+            default)
+                # Hand it back. Touching nothing here is the point -- the
+                # kernel's own unmanaged trigger applies, whatever that is.
+                ;;
+            wifi)
+                echo rfkill1 > "$LED/trigger" 2>/dev/null
+                ;;
+            off)
+                echo none > "$LED/trigger" 2>/dev/null
+                echo 0 > "$LED/brightness"
+                ;;
+            on)
+                pct="${3:-100}"
+                [[ "$pct" =~ ^([1-9][0-9]?|100)$ ]] || die "brightness must be 1-100"
+                if [ "$pct" -ge 100 ]; then
+                    # No blinking needed at full brightness -- and skipping
+                    # it means "on" at 100% behaves exactly like the
+                    # original plain on/off design, the simplest and most
+                    # reliable case.
+                    echo none > "$LED/trigger" 2>/dev/null
+                    echo 1 > "$LED/brightness"
+                else
+                    # This LED has no real dimmer (`max_brightness` is 1,
+                    # no `/sys/class/pwm` device exists on this board) --
+                    # checked live before this was written, not assumed.
+                    # The kernel's own `timer` trigger, blinked fast enough
+                    # to sit above flicker-fusion, is a faithful software
+                    # PWM: physically, real PWM dims an LED the same way,
+                    # by varying only the fraction of time spent fully on.
+                    # A 20ms period (~50Hz) split proportionally to the
+                    # requested percentage; each half floored at 1ms, the
+                    # finest granularity confirmed live on this board.
+                    echo timer > "$LED/trigger" 2>/dev/null
+                    on_ms=$(( 20 * pct / 100 )); [ "$on_ms" -lt 1 ] && on_ms=1
+                    off_ms=$(( 20 - on_ms ));    [ "$off_ms" -lt 1 ] && off_ms=1
+                    echo "$on_ms"  > "$LED/delay_on"
+                    echo "$off_ms" > "$LED/delay_off"
+                fi
+                ;;
+        esac
+        printf '{"ok":true,"mode":"%s"}\n' "$mode"
         ;;
     *)
         die "unknown verb"

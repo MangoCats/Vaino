@@ -254,7 +254,7 @@ fi
 # these verbs, with the device address validated before it reaches BlueZ.
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in vaino-btctl vaino-wait-sink; do
+for f in vaino-btctl vaino-wait-sink vaino-led-boot; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -286,54 +286,43 @@ else
 fi
 
 # ---------------------------------------------------------------- act led
-# The green ACT LED tracks the Wi-Fi radio [PI3-LED-010].
+# The green ACT LED, under listener control [PI3-LED-010].
 #
-# The kernel does the whole job: rfkill1 is phy0, so binding the trigger makes
-# the LED follow the radio itself rather than our intention about it. Nothing
-# polls, nothing can drift, and it stays right when something other than Vaino
-# switches the radio -- which matters, since [PI3-ROCKER-020] has playback take
-# Wi-Fi down deliberately and an unreachable appliance otherwise just looks
-# broken.
+# This used to hard-code the LED to track the Wi-Fi radio (rfkill1 is
+# phy0) -- a real, deliberate, still-available choice ([PI3-ROCKER-020] has
+# playback take Wi-Fi down deliberately, and an unreachable appliance
+# otherwise just looks broken), but a hard-coded one, unreachable from the
+# settings panel. It is now one of four modes a listener picks
+# (`on`/`wifi`/`off`/`default`), stored in `player_settings` the same way
+# the chosen speaker is, and reapplied at every boot by `vaino-led-boot`
+# (staged and installed above, "bluetooth helper") -- /sys does not survive
+# a reboot on its own, hence a unit rather than a one-off write.
 #
-# The cost is the card-activity indication, which shares this one LED. On an
-# appliance that is a fair trade: radio state is something a listener can act
-# on, card access is not.
-#
-# /sys does not survive a reboot, hence a unit rather than a one-off write.
+# This section only ever ensures the *mechanism* exists and is enabled. It
+# never forces a mode: the stored setting is the source of truth, and
+# `vaino-led-boot` already defaults sensibly (solid on) when nothing has
+# been chosen yet, including on a brand-new appliance with no library yet.
 echo "act led"
-LED_WANT=rfkill1
 if [ ! -d /sys/class/leds/ACT ]; then
     note "ACT led" "absent on this board"
-elif ! grep -q "$LED_WANT" /sys/class/leds/ACT/trigger 2>/dev/null; then
-    note "ACT led" "kernel has no $LED_WANT trigger"
 else
-    cat > /etc/systemd/system/vaino-led.service <<UNIT
+    cat > /etc/systemd/system/vaino-led.service <<'UNIT'
 [Unit]
-Description=Point the ACT LED at the Wi-Fi radio
-After=sysinit.target
+Description=Apply the stored Vaino LED preference at boot
+After=local-fs.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/sh -c 'echo $LED_WANT > /sys/class/leds/ACT/trigger'
-# Hand the LED back on the way out, so a machine that stops using Vaino does
-# not keep a light that means nothing to whatever runs next.
-ExecStop=/bin/sh -c 'echo actpwr > /sys/class/leds/ACT/trigger 2>/dev/null || true'
+ExecStart=/usr/local/bin/vaino-led-boot
 
 [Install]
 WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload
     if [ "$(systemctl is-enabled vaino-led 2>/dev/null)" != "enabled" ]; then
-        systemctl enable vaino-led >/dev/null 2>&1 && did "led unit enabled"
+        systemctl enable --now vaino-led >/dev/null 2>&1 && did "led unit enabled"
     else
         ok "led unit enabled"
-    fi
-    CURRENT="$(grep -o "\[$LED_WANT\]" /sys/class/leds/ACT/trigger 2>/dev/null || true)"
-    if [ -z "$CURRENT" ]; then
-        systemctl start vaino-led >/dev/null 2>&1 && did "ACT led -> wifi"
-    else
-        ok "ACT led -> wifi"
     fi
 fi
 
