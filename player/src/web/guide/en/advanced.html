@@ -27,6 +27,17 @@ playback behavior:</p>
   <li><strong>Playing through</strong> — which backend is actually driving
     audio right now, if more than one is available; hidden entirely when
     there's only the one.</li>
+  <li><strong>Status LED</strong> — on a Raspberry Pi appliance, controls
+    the small light on the device itself. Four choices: <em>Always
+    on</em> (the default, with its own brightness slider), <em>Live
+    Wi-Fi indicator</em> (the light reflects whether Wi-Fi is currently
+    switched on — useful on an appliance, since it's the only sign of
+    life if the network drops), <em>Always off</em>, or <em>Leave to the
+    system</em> (Vaino doesn't manage it at all). Below full brightness,
+    "Always on" blinks very fast to look dimmer rather than glowing at
+    reduced power — this LED has no true hardware dimmer. Has no effect
+    on playback either way, and the choice is remembered and reapplied
+    automatically at every restart, including a full power cycle.</li>
   <li>Four file-writing toggles, each with its own on-screen explanation:
     naming capture tracks for other clients (cue sheets), saving album art
     for captures, keeping per-song lyrics for a local client, and keeping

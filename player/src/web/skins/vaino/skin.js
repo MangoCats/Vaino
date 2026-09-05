@@ -714,10 +714,61 @@
   }
 
   $('bt-scan').onclick = () => refresh(true);
+
+  // ------------------------------------------------------------------- led
+  // Four modes, not a checkbox `[PI3-LED-010]`: solid on (with a
+  // brightness), the appliance's existing live Wi-Fi indicator, solid off,
+  // or hands-off. Fetched when the panel opens, the same reason `radios()`
+  // is: it costs a round trip to the database, and most sessions never
+  // open Settings.
+  const ledMode = $('led-mode');
+  const ledBrightness = $('led-brightness');
+  const ledBrightnessLabel = $('led-brightness-label');
+
+  function showBrightness(show) {
+    ledBrightness.hidden = !show;
+    ledBrightnessLabel.hidden = !show;
+  }
+
+  async function led() {
+    try {
+      const body = await (await fetch('/led')).json();
+      ledMode.value = body.mode ?? 'on';
+      ledBrightness.value = body.brightness ?? 100;
+      ledBrightnessLabel.textContent = `${ledBrightness.value}%`;
+      showBrightness(ledMode.value === 'on');
+    } catch { /* leave whatever it last showed */ }
+  }
+
+  async function postLed(mode, pct) {
+    const q = mode === 'on' ? `?pct=${pct}` : '';
+    await fetch(`/led/${mode}${q}`, { method: 'POST' });
+  }
+
+  ledMode.onchange = async () => {
+    showBrightness(ledMode.value === 'on');
+    ledMode.disabled = true;
+    try {
+      await postLed(ledMode.value, ledBrightness.value);
+    } finally {
+      ledMode.disabled = false;
+    }
+  };
+  // Only posted on release, the same reasoning `Vaino.bindVolume` already
+  // gives for the volume slider -- dragging must not spam the appliance
+  // with a request (and a subprocess) per pixel.
+  ledBrightness.onchange = () => {
+    ledBrightnessLabel.textContent = `${ledBrightness.value}%`;
+    postLed('on', ledBrightness.value);
+  };
+  ledBrightness.oninput = () => {
+    ledBrightnessLabel.textContent = `${ledBrightness.value}%`;
+  };
+
   // Populated when the panel is opened rather than at load: it costs a
   // subprocess on the appliance, and most sessions never open the settings.
   gear.addEventListener('click', () => {
-    if (!$('panel-settings').hidden) { radios(); refresh(); }
+    if (!$('panel-settings').hidden) { radios(); refresh(); led(); }
   });
 
   // --------------------------------------------------------------- history

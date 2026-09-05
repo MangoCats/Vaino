@@ -1152,6 +1152,79 @@ impl PlayerStore {
             .ok()
     }
 
+    /// The appliance's status LED `[PI3-LED-010]` -- one of four modes
+    /// (`on`, `wifi`, `off`, `default`; see `player/src/bluetooth.rs`'s
+    /// `set_led` for what each actually does to the hardware). Same table,
+    /// same reasoning as `save_speaker_address` for living outside
+    /// `Settings`: this has nothing to do with playback, and every reader
+    /// of it (a boot-time script, one settings-panel control) reads it
+    /// directly rather than through a live snapshot.
+    ///
+    /// Rejects anything outside the closed set **before** it reaches the
+    /// database -- the same discipline `set_preference`'s `subject_kind`
+    /// enforces, so a bad value cannot sit in storage waiting to confuse
+    /// the boot-time script that reads it back with no one watching.
+    pub fn save_led_mode(&self, mode: &str) -> Result<(), DbError> {
+        if !matches!(mode, "on" | "wifi" | "off" | "default") {
+            return Err(DbError::Query(format!("not a valid led mode: {mode:?}")));
+        }
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('led_mode', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![mode],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Defaults **on** -- the original request, honored directly. A library
+    /// that has never touched this setting shows a solid light, not
+    /// today's Wi-Fi indicator; switching to `wifi` is one settings-panel
+    /// choice away `[PI3-LED-010]`.
+    pub fn load_led_mode(&self) -> String {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'led_mode'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap_or_else(|_| "on".into())
+    }
+
+    /// The brightness `led_mode = "on"` shows, 1-100 `[PI3-LED-010]`.
+    /// Meaningless for the other three modes, but always stored and always
+    /// readable regardless of the current mode -- switching back to `on`
+    /// later should not have forgotten what it was set to.
+    pub fn save_led_brightness(&self, pct: u8) -> Result<(), DbError> {
+        let pct = pct.clamp(1, 100);
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('led_brightness_pct', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![pct.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Defaults to 100 -- full brightness, matching `load_led_mode`'s own
+    /// default `[PI3-LED-010]`.
+    pub fn load_led_brightness(&self) -> u8 {
+        self.conn
+            .query_row(
+                "SELECT value FROM player_settings WHERE key = 'led_brightness_pct'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|v| v.parse::<u8>().ok())
+            .map(|v| v.clamp(1, 100))
+            .unwrap_or(100)
+    }
+
     /// Set or clear "flag this for review" on a recording or a passage
     /// `[REQ-VIS-265]`. A plain toggle, not a decision: unlike `id_reviews`
     /// and its siblings, there is nothing here to apply and nothing to
@@ -2428,6 +2501,70 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1, "a later choice replaces the row rather than adding to it");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// Defaults on, at full brightness `[PI3-LED-010]` -- a library nobody
+    /// has ever touched this setting on reads exactly the same as one
+    /// explicitly set to solid-on-at-100.
+    #[test]
+    fn the_led_defaults_on_at_full_brightness_until_set() {
+        let dir = std::env::temp_dir().join(format!("vaino_led_none_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+        assert_eq!(st.load_led_mode(), "on");
+        assert_eq!(st.load_led_brightness(), 100);
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// All four modes round-trip, and a later choice replaces the row
+    /// rather than accumulating rows -- same discipline as the speaker
+    /// address above, same table.
+    #[test]
+    fn the_led_mode_round_trips_through_all_four_values() {
+        let dir = std::env::temp_dir().join(format!("vaino_led_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+
+        for mode in ["wifi", "off", "default", "on"] {
+            st.save_led_mode(mode).unwrap();
+            assert_eq!(st.load_led_mode(), mode);
+        }
+        let n: i64 = st
+            .conn
+            .query_row("SELECT COUNT(*) FROM player_settings WHERE key = 'led_mode'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 1, "a later choice replaces the row rather than adding to it");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A value outside the closed set never reaches the database -- the
+    /// same enforcement `set_preference` gives `subject_kind`.
+    #[test]
+    fn save_led_mode_rejects_an_unknown_value() {
+        let store = PlayerStore { conn: historyable() };
+        assert!(store.save_led_mode("strobe").is_err());
+    }
+
+    /// Brightness round-trips and clamps to 1-100 on the way in, so a
+    /// caller cannot store a value the boot script would then have to
+    /// re-validate `[PI3-LED-010]`.
+    #[test]
+    fn led_brightness_round_trips_and_clamps() {
+        let dir = std::env::temp_dir().join(format!("vaino_ledpct_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+
+        st.save_led_brightness(42).unwrap();
+        assert_eq!(st.load_led_brightness(), 42);
+
+        st.save_led_brightness(0).unwrap();
+        assert_eq!(st.load_led_brightness(), 1, "clamped up to the minimum");
+
+        st.save_led_brightness(255).unwrap();
+        assert_eq!(st.load_led_brightness(), 100, "clamped down to the maximum");
         let _ = std::fs::remove_file(&dir);
     }
 

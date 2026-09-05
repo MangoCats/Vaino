@@ -419,6 +419,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/audio/speakers", get(speakers))
         .route("/audio/speakers/:verb", post(speaker_verb))
         .route("/audio/speakers/:verb/:address", post(speaker_verb_on))
+        .route("/led", get(led_state))
+        .route("/led/:state", post(set_led))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/seek/:ms", post(seek_to))
@@ -821,6 +823,25 @@ mod tests {
             let skin = SKINS.iter().find(|s| s.name == name).expect("skin exists");
             assert!(skin.html.contains(r#"id="freq-panel""#), "{name} has no #freq-panel slot");
         }
+    }
+
+    /// The status-LED control reaches routes the router actually serves
+    /// `[PI3-LED-010]` -- Vaino-skin only, the same posture every other
+    /// Settings-panel control already has (Bluetooth, radios, restart,
+    /// shutdown all live there and nowhere else). All four modes must be
+    /// real `<option>`s, or a listener would be offered a choice the page
+    /// cannot actually send.
+    #[test]
+    fn the_led_control_reaches_the_routes_the_router_serves() {
+        let skin = SKINS.iter().find(|s| s.name == "vaino").expect("skin exists");
+        assert!(skin.html.contains(r#"id="led-mode""#), "vaino has no #led-mode select");
+        for mode in ["on", "wifi", "off", "default"] {
+            assert!(
+                skin.html.contains(&format!(r#"value="{mode}""#)),
+                "vaino's led-mode select is missing the {mode} option"
+            );
+        }
+        assert!(skin.js.contains("/led"), "vaino's skin.js never asks for /led");
     }
 
     /// The guide's own Help link reaches a route the router actually serves,

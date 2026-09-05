@@ -78,12 +78,17 @@ pub(super) async fn speaker_verb_on(
         // best-effort, since a listener whose speaker just started working
         // should not be told it failed over a bookkeeping write.
         let db = ui.db.clone();
+        let addr2 = address.clone();
         let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
-            Ok(store) => {
-                if let Err(e) = store.save_speaker_address(&address) {
-                    eprintln!("save speaker address: {e}");
-                }
-            }
+            Ok(store) => match store.save_speaker_address(&addr2) {
+                // A listener-visible action deserves a journal line saying
+                // so, not just silence on success -- otherwise a later
+                // change from a different path (or a bug) looks identical
+                // to this one, and there is nothing to tell them apart by
+                // `[PI3-LED-010]`'s own lesson.
+                Ok(()) => println!("speaker address set to {addr2} via web request"),
+                Err(e) => eprintln!("save speaker address: {e}"),
+            },
             Err(e) => eprintln!("save speaker address: {e}"),
         })
         .await;
@@ -95,6 +100,84 @@ pub(super) async fn speaker_verb_on(
         tokio::time::sleep(Duration::from_millis(1_500)).await;
     }
     bt_reply(result, reopen)
+}
+
+/// The appliance's status LED: which of the four modes, and the brightness
+/// `on` would use `[PI3-LED-010]`. Fetched once when the settings panel
+/// opens, the same way the speaker list is -- there is nothing here that
+/// changes on its own, so unlike playback state it has no reason to ride
+/// the live snapshot.
+pub(super) async fn led_state(State(ui): State<Ui>) -> Response {
+    let db = ui.db.clone();
+    let (mode, brightness) = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open(&db)
+            .map(|s| (s.load_led_mode(), s.load_led_brightness()))
+            .unwrap_or_else(|_| ("on".into(), 100))
+    })
+    .await
+    .unwrap_or_else(|_| ("on".into(), 100));
+    axum::Json(serde_json::json!({ "mode": mode, "brightness": brightness })).into_response()
+}
+
+/// Switch the LED, and remember the choice `[PI3-LED-010]`. The write to
+/// `player_settings` happens first: a listener who changes this wants it
+/// to survive the next reboot at least as much as they want it to change
+/// right now, and a hardware failure below must not silently lose that
+/// half of the request. Brightness (`?pct=`) is only required, and only
+/// stored, for `mode=on` -- the other three modes leave whatever
+/// brightness was last set untouched, so switching back to `on` later
+/// remembers it.
+pub(super) async fn set_led(
+    State(ui): State<Ui>,
+    axum::extract::Path(mode): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !matches!(mode.as_str(), "on" | "wifi" | "off" | "default") {
+        return (StatusCode::BAD_REQUEST, "mode is on, wifi, off, or default").into_response();
+    }
+    let pct: Option<u8> = if mode == "on" {
+        match q.get("pct").map(|p| p.parse::<u8>()) {
+            Some(Ok(v)) => Some(v.clamp(1, 100)),
+            Some(Err(_)) => {
+                return (StatusCode::BAD_REQUEST, "pct must be a number 1-100").into_response();
+            }
+            None => None, // caller left it alone -- keep whatever was stored
+        }
+    } else {
+        None
+    };
+    let db = ui.db.clone();
+    let mode2 = mode.clone();
+    let saved = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        store.save_led_mode(&mode2).map_err(|e| e.message().to_string())?;
+        if let Some(pct) = pct {
+            store.save_led_brightness(pct).map_err(|e| e.message().to_string())?;
+        }
+        // The effective brightness to apply below: whatever was just set,
+        // or -- a bare `POST /led/on` with no `?pct=` -- whatever was
+        // remembered from before. Switching back to `on` must not silently
+        // reset a previously-chosen brightness to full `[PI3-LED-010]`.
+        Ok::<u8, String>(pct.unwrap_or_else(|| store.load_led_brightness()))
+    })
+    .await;
+    let effective_pct = match saved.unwrap_or_else(|_| Err("could not reach the database".into())) {
+        Ok(p) => p,
+        Err(why) => return (StatusCode::INTERNAL_SERVER_ERROR, why).into_response(),
+    };
+    // A deliberate, listener-visible change -- worth its own journal line
+    // distinct from `vaino-led-boot`'s own (also now logged), so "who set
+    // this" is a fact one `journalctl` away rather than a guess the next
+    // time it looks surprising.
+    println!("led set to {mode} ({effective_pct}%) via web request");
+    // The choice is already durable at this point -- a hardware failure
+    // from here down is real and worth reporting, but it must not read as
+    // "your choice was not saved" `[PI3-LED-010]`.
+    match bluetooth::set_led(&mode, Some(effective_pct)) {
+        Ok(_) => axum::Json(serde_json::json!({ "ok": true, "mode": mode, "brightness": effective_pct }))
+            .into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
 }
 
 /// One shape for every speaker reply, so the panel has one thing to read.
