@@ -73,6 +73,23 @@ needed at all. Requires `dnsmasq` installed — added to `setup-vainopi.sh`'s
 package list (alongside `iw`, used to confirm AP-mode support), so a
 future fresh appliance build acquires it automatically.
 
+**Found live on the first real phone test, not assumed:** joining "Vaino"
+successfully (DHCP lease granted, confirmed in `journalctl`) was not enough
+for a phone's browser to reach `10.42.0.1:5720` at all — not a DNS
+failure, since the raw IP failed identically to the hostname. The AP
+segment has no uplink by design (`wlan0` *is* the AP; there is nothing to
+share it with), and Android detects that and, unless told otherwise,
+keeps routing actual app/browser traffic over mobile data instead of a
+Wi-Fi it still shows as "connected" — confirmed live: turning mobile data
+off made the same phone, on the same network, reach the page immediately.
+The fix is entirely phone-side (turn off mobile data during setup, or use
+the Wi-Fi network's own "connect without internet" toggle if Android
+offers one instead) — nothing on the appliance can fix a client choosing
+not to route through it. Worth knowing before troubleshooting the
+appliance over this: if the phone associates and gets an address but
+still can't load the page, this is the first thing to check, not a
+regression in the dnsmasq setup above.
+
 **Found live installing it, not assumed:** the `dnsmasq` *package* ships
 its own system-wide service, enabled by default, bound to `0.0.0.0:53` —
 a different job than the one it's wanted for here, and one that would
