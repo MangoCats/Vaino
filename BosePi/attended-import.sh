@@ -22,13 +22,13 @@
 # and closes. A trap restores B's mount state on any exit, success, failure,
 # or interruption, so a misbehaving command cannot leave B open indefinitely.
 #
-# Status: run for real against bose 2026-09-06, three ways -- a dry run, a
+# Status: run for real against bose 2026-09-06, four ways -- a dry run, a
 # successful command (wrote and removed a real file inside the window,
-# confirmed the MPD reindex trick works with no mpc installed), and a
-# failing command (confirmed B still closes and nothing after it runs).
-# Each was run once; not yet exercised over a long-running or interrupted
-# command, or against a fresh --lock-in rather than a hand-simulated ro
-# state. See BosePi/README.md's table.
+# confirmed the MPD reindex trick works with no mpc installed), a failing
+# command (confirmed B still closes and nothing after it runs), and a
+# fourth run against bose's own real --lock-in'd ro once it existed, not
+# only the earlier hand-simulated one. Not yet exercised over a
+# long-running or interrupted command. See BosePi/README.md's table.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 . BosePi/lib.sh

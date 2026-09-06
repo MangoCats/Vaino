@@ -4,17 +4,23 @@
 # Phase 5: bring vaino and mpd up, then -- only when explicitly told the
 # machine has been heard playing -- lock the card down [IMPL-BOS-120].
 #
-# **Status: not yet run.** Nothing in this file has executed against real
-# hardware. --lock-in's `raspi-config nonint do_overlayfs 0` call was checked
-# by reading bose's own raspi-config source on 2026-09-06 to confirm it both
-# enables the overlay and offers to write-protect /boot/firmware in one call
-# -- that is real, but the *call itself* has not been made. `nonint` is
-# raspi-config's stable public interface, not an internal it's expected to
-# change casually, but a future Raspberry Pi OS release restructuring it is
-# exactly the kind of drift this file cannot see coming. Read this script's
-# output, especially --lock-in's, rather than trusting its exit code alone --
-# the point of no easy return [IMPL-BOS-120] is not a good place to discover
-# a step silently did nothing.
+# **Status: --start and --lock-in both run for real against bose, 2026-09-06.**
+# --lock-in found the header note below wrong in a way worth keeping visible:
+# reading do_overlayfs()'s *wrapper* logic is not the same as reading what
+# enable_overlayfs() actually does, and on this trixie-era image it turned
+# out to be Debian's own `overlayroot` package, not the historic Pi-specific
+# initramfs hook -- installed live, on the spot (cryptsetup pulled in as a
+# dependency). It worked, but its default (`recurse=1`) overlays *every*
+# mount, not only `/` -- B and C both got wrapped in their own writable RAM
+# layer, silently discarding every write to listener.db on the next reboot,
+# exactly the failure this whole design exists to prevent. Found within
+# minutes by checking `findmnt` rather than trusting the reboot's success,
+# fixed live (`overlayroot=tmpfs:recurse=0` in cmdline.txt), and folded into
+# this script below so it can't recur. `nonint` is raspi-config's stable
+# public interface; what it delegates to underneath is not, and this is the
+# second time this file has learned that the hard way rather than the first.
+# Read this script's output, especially --lock-in's, rather than trusting
+# its exit code alone.
 #
 #     bash BosePi/finalize-bose.sh --start
 #     bash BosePi/finalize-bose.sh --lock-in --confirm-heard-it-play
@@ -97,6 +103,23 @@ step "Enable overlay on A + write-protect /boot/firmware [do_overlayfs]"
 run "raspi-config nonint do_overlayfs 0" ssh "$HOST" sudo raspi-config nonint do_overlayfs 0
 say "Read the output above: raspi-config prints what it actually did."
 
+caveat \
+    "do_overlayfs's own default overlays every mount, not only A -- found" \
+    "live, the hard way. Scoping it to A alone before this ever reboots."
+step "Scope the overlay to A only [IMPL-BOS-165, found live 2026-09-06]"
+# overlayroot's default is recurse=1: B and C would both get wrapped in
+# their own writable RAM layer too, discarding every write to listener.db
+# on the next reboot -- exactly the failure this whole design exists to
+# prevent. /boot/firmware is a plain vfat mount, not itself overlaid, so a
+# direct remount reaches it even though do_overlayfs just made it ro.
+run "add recurse=0 to overlayroot's cmdline.txt parameter" ssh "$HOST" \
+    "sudo mount -o remount,rw /boot/firmware && \
+     (grep -q 'overlayroot=tmpfs:recurse=' /boot/firmware/cmdline.txt || \
+      sudo sed -i 's/overlayroot=tmpfs\\([: ]\\)/overlayroot=tmpfs:recurse=0\\1/' /boot/firmware/cmdline.txt); \
+     sudo mount -o remount,ro /boot/firmware"
+say "verify this actually says recurse=0, not just that the command exited 0:"
+say "$(ssh "$HOST" "grep -o 'overlayroot=[^ ]*' /boot/firmware/cmdline.txt")"
+
 step "Enable vaino and mpd at boot (not done until now, deliberately)"
 # Found live: `systemctl enable mpd` re-enables mpd.socket too, via Debian's
 # sysv-install compat shim -- undoing provision-bose.sh's own
@@ -110,5 +133,8 @@ step "Reboot into the locked-down card"
 say "This is the point of no easy return [IMPL-BOS-120]. Rebooting now."
 ssh "$HOST" "sudo reboot" || true
 say "bose is rebooting. Give it a minute, then verify:"
-say "  ssh $HOST 'findmnt -no FSTYPE /; findmnt -no OPTIONS /srv/library; systemctl is-active vaino mpd'"
+say "  ssh $HOST 'findmnt -no FSTYPE,OPTIONS /; findmnt -no FSTYPE,OPTIONS /srv/library; findmnt -no FSTYPE,OPTIONS /var/vaino; systemctl is-active vaino mpd'"
+say "/ should say overlay. /srv/library and /var/vaino should NOT -- if either"
+say "shows fstype overlay with a lowerdir=/upperdir= in its options, B or C got"
+say "wrapped in overlayroot's own writable RAM layer too [IMPL-BOS-165]."
 say "Log: $LOG_FILE"

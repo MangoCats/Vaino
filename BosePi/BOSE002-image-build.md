@@ -157,11 +157,12 @@ phase script has) closes it:
    B's own index changed if the audio did, and every caller adding audio
    needs this, so it is default-on rather than one more step to remember.
 
-**Run for real against `bose` 2026-09-06, three ways**: a dry run, a
-successful command (wrote and removed a real file inside the actual `rw`
-window), and a failing one (confirmed B still closes and nothing after it
-runs) — the ro side simulated by hand, since `--lock-in` itself had not run
-yet at the time. MPD's reindex trick needed no `mpc` client
+**Run for real against `bose` 2026-09-06, four ways**: a dry run, a
+successful command, and a failing one (confirmed B still closes and nothing
+after it runs) against a hand-simulated `ro`, before `--lock-in` had ever
+run — then a fourth run against `bose`'s own real `--lock-in`'d `ro` once
+it existed, confirming the hand-simulated tests generalized correctly.
+MPD's reindex trick needed no `mpc` client
 (`provision-bose.sh` never installs one) — bash's own `/dev/tcp` speaks the
 control port directly.
 
@@ -191,17 +192,13 @@ A marker file in either of two places, checked by a systemd unit
 | `/var/vaino/unlock/request` | C (`f2fs`) | SSH still works — no card needed at all |
 | `/boot/firmware/unlock-request` | boot (`vfat`) | SSH is broken, any reader can still write plain FAT |
 
-Finding either, `vaino-unlock-check.sh` runs `raspi-config nonint
-do_overlayfs 1` — the exact inverse of `--lock-in`'s own call, re-enabling
-`/boot/firmware` writes and disabling the overlay together — puts B's
-`fstab` line back to `defaults` too (a full unlock restores the whole
-pre-lock-in state, not only A), and reboots. Two reboots to actually land
-in a writable system: this one notices the marker and flips the config; the
-next one boots into the result. The marker is deleted only if
-`do_overlayfs` reported success — a failure retries on the next boot
-instead of silently giving up, an accepted risk rather than one engineered
-around, since the command is the identical one `--lock-in` itself already
-trusts.
+Finding either, `vaino-unlock-check.sh` edits `/boot/firmware/cmdline.txt`
+directly, removing the whole `overlayroot=...` token, and reboots. Two
+reboots to actually land in a writable system: this one notices the marker
+and flips the config; the next one boots into the result. The marker is
+deleted only if the token is actually gone afterward — checked directly,
+not assumed from a command's exit status — a failure retries on the next
+boot instead of silently giving up.
 
 **Must exist on A before `--lock-in` ever runs, not after — the whole
 reason this is worth saying plainly.** Once A is the overlay's read-only
@@ -216,6 +213,37 @@ that never gets that far, which still needs a card and a reader, the same
 as today. It does not touch B's temporary-reopen case at all; that is
 `attended-import.sh`'s job, needs no reboot, and was already solved before
 this existed.
+
+**`[IMPL-BOS-166]` The first version called `raspi-config nonint
+do_overlayfs 1` instead, and it silently did nothing — found on the first
+real test of the actual enabled-to-disabled transition, 2026-09-06.**
+`disable_overlayfs()`'s own implementation runs `sed -e
+"s/\(.*\)overlayroot=tmpfs \(.*\)/\1\2/"` — a literal match against
+`overlayroot=tmpfs ` with nothing between `tmpfs` and the next space.
+`[IMPL-BOS-165]`'s own fix, `overlayroot=tmpfs:recurse=0`, means that
+literal string never appears again, so `raspi-config`'s sed matches
+nothing, changes nothing, and still reports success. One correction's own
+fix broke the mechanism the next correction depended on — found only
+because the actual file was checked afterward rather than the exit code
+trusted, the identical discipline `[IMPL-BOS-165]` had just demonstrated
+was necessary, applied a second time the same evening. Rewritten to edit
+`cmdline.txt` directly (removing `overlayroot=` plus whatever follows it,
+regardless of parameters, so it cannot go stale the same way again) rather
+than route through `raspi-config` for this one step. Confirmed against a
+real enabled-to-disabled transition, not only the already-disabled no-op
+case the first version was tested against — twice, since the first fix
+attempt had to be applied by hand (A was still locked, and the broken
+escape hatch could not yet unlock itself) before the corrected script
+could even be deployed durably.
+
+**Scope was also narrowed in the same pass.** The original version also
+tried to restore B's `fstab` line to `rw`. Dropped: any edit to a file
+living on A — `/etc/fstab` included — made while A is *still* overlaid
+lands in the RAM upper layer and is lost on the very reboot the script
+itself triggers, the same transient-write trap this whole design exists to
+avoid, self-inflicted. Restoring A alone is real and durable because
+`cmdline.txt` lives on the boot partition, which is never overlaid;
+reopening B was always `attended-import.sh`'s job and is unaffected.
 
 `BosePi/request-unlock.sh` is the human-facing half: writes the C-side
 marker over SSH and reboots, asked twice like every other script here that

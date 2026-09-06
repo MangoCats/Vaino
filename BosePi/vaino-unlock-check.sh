@@ -3,25 +3,43 @@
 #
 # The lock-in escape hatch [IMPL-BOS-160], [REQ-HW-155]. Runs at every boot,
 # very early, via vaino-unlock-check.service -- does nothing unless a marker
-# exists, in which case it undoes --lock-in and reboots.
+# exists, in which case it undoes A's overlay and reboots.
 #
 # Installed on A. Must be in place *before* --lock-in ever runs: once A is
 # the overlay's read-only lower layer, adding anything to it needs the
 # overlay disabled first -- exactly what this script exists to do, so it
 # cannot be its own bootstrap.
 #
-# Status: run for real against bose 2026-09-06, marker-to-reboot-to-cleared
-# all confirmed -- but only the already-disabled-stays-disabled path,
-# since bose was not yet locked in. do_overlayfs 1 returned exit 0 in that
-# case (raspi-config treats "already in the target state" as success, not
-# failure). The actual enabled-to-disabled transition is not yet proven;
-# verifying it is the natural first thing to do right after --lock-in.
+# Status: found broken on its first real test against an actual lock-in
+# (2026-09-06). Originally called `raspi-config nonint do_overlayfs 1`;
+# that function's own disable_overlayfs() does `sed
+# 's/overlayroot=tmpfs \(.*\)/.../'` -- a literal match with nothing after
+# "tmpfs ". [IMPL-BOS-165]'s own recurse=0 fix (needed so B and C don't
+# also get overlaid) means cmdline.txt never looks like that again, so
+# raspi-config's own sed silently substitutes zero times and reports
+# success anyway. Found by checking cmdline.txt directly rather than
+# trusting the exit code -- the same lesson [IMPL-BOS-165] had just
+# taught, applied a second time in the same evening. Rewritten to edit
+# cmdline.txt directly instead of going through raspi-config for this
+# specific step, and to verify the actual file afterward. Confirmed
+# working against a real enabled-to-disabled transition, not only the
+# already-disabled no-op case the first version was tested against.
+#
+# Deliberately narrow, scoped down from an earlier draft that also tried
+# to restore B's fstab to rw: any edit to a file that lives on A (fstab
+# included) made while A is *still* overlaid lands in the RAM upper layer
+# and is lost on the very reboot this script itself triggers -- the same
+# transient-write trap this whole design exists to avoid, self-inflicted.
+# Restoring A alone is real and durable, because cmdline.txt lives on the
+# boot partition, which is never overlaid. Reopening B is
+# attended-import.sh's job, unaffected by any of this.
 set -uo pipefail
 
 STATE_DIR=/var/vaino/unlock
 MARK_C="$STATE_DIR/request"
 MARK_BOOT=/boot/firmware/unlock-request
 LOG="$STATE_DIR/log"
+CMDLINE=/boot/firmware/cmdline.txt
 
 mkdir -p "$STATE_DIR"
 
@@ -35,30 +53,24 @@ fi
 {
     echo "$(date -Is) unlock requested (C:$([ -e "$MARK_C" ] && echo yes || echo no) boot:$([ -e "$MARK_BOOT" ] && echo yes || echo no))"
 
-    # The exact inverse of --lock-in's own call: re-enables /boot/firmware
-    # writes and disables the overlay, together, effective next boot.
-    raspi-config nonint do_overlayfs 1
-    rc=$?
-    echo "do_overlayfs 1 exit $rc"
-
-    # B back to rw too -- a full unlock restores the whole pre-lock-in
-    # state, not only A. attended-import.sh already handles a *temporary*
-    # reopen for one operation; this is "give it all back."
-    sed -i 's#\(LABEL=LIBRARY[[:space:]]\+/srv/library[[:space:]]\+ext4[[:space:]]\+\)ro#\1defaults#' /etc/fstab
-    echo "fstab: $(grep LIBRARY /etc/fstab)"
+    # Direct edit, not raspi-config -- see the header for why that no
+    # longer works once recurse=0 is present. Matches "overlayroot=" plus
+    # whatever follows up to the next space, regardless of what parameters
+    # it carries, so it does not go stale again the next time this file's
+    # own value changes.
+    mount -o remount,rw /boot/firmware
+    sed -i 's/overlayroot=[^ ]* //' "$CMDLINE"
+    mount -o remount,ro /boot/firmware
+    echo "cmdline.txt now: $(cat "$CMDLINE")"
 } >> "$LOG" 2>&1
 
-# Deleted only on success -- a failure retries on the next boot instead of
-# silently giving up. Accepted risk, not engineered around: do_overlayfs is
-# the identical command --lock-in itself already trusts, not a new one, so
-# a structural failure here would mean --lock-in was never trustworthy
-# either. A boot loop on that failure is a plausible but judged-acceptable
-# cost of not building retry-limit logic for a narrow convenience feature.
-if [ "$rc" = 0 ]; then
+# Checked directly, not assumed from sed's own exit status, which reports
+# success whether or not anything actually matched.
+if ! grep -q 'overlayroot=' "$CMDLINE"; then
     rm -f "$MARK_C" "$MARK_BOOT"
-    echo "$(date -Is) markers cleared, rebooting" >> "$LOG"
+    echo "$(date -Is) overlayroot removed, markers cleared, rebooting" >> "$LOG"
 else
-    echo "$(date -Is) do_overlayfs did not report success -- marker kept, will retry next boot" >> "$LOG"
+    echo "$(date -Is) overlayroot still present after the edit -- marker kept, will retry next boot" >> "$LOG"
 fi
 
 reboot
