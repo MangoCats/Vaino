@@ -711,6 +711,16 @@ heard before this could be built at all.
 > MuLibPlay skin gains one full width under the volume reading. The arithmetic
 > lives in `core.js`, so the two cannot drift.
 
+**`[REQ-VIS-213]` The MuLibPlay skin shows the words for whatever is
+currently playing, when the library has them.** A plain static text block,
+exactly as MuLibPlay itself showed them, fetched once per passage change
+rather than pushed on every tick `[SPEC-LYR-040]`, `[SPEC-LYR-045]`. Unlike
+the three settings below, this asks nothing of a folder or another client's
+cache and needs no opt-in — it is always on, and simply absent for a
+passage the library has none for, which is the ordinary case for about
+72% of them and not an error worth dressing up. The endpoint is
+skin-neutral; the other skins may adopt the same panel `[SPEC-LYR-045]`.
+
 **`[REQ-VIS-220]` Vaino may write lyrics beside the audio, and only if asked.**
 A persisted setting, **off by default**, the fourth of this kind and the
 companion to the one below.
