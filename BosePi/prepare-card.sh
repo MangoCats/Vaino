@@ -16,6 +16,18 @@
 #
 # `--check` prints what it would do and touches nothing. There is no default
 # action: a script that destroys a disk must be asked twice.
+#
+# **Status: the partition/format sequence ran successfully against bose on
+# 2026-09-06** (a 119 GB USB card, this exact firmware and e2fsprogs/f2fs-
+# tools versions) -- see [BOSE003](BOSE003-build-procedure.md)'s corrections
+# for what didn't match the plan on contact. The idempotent-rerun guard
+# below (`ALREADY`) was added afterward and has not itself been exercised --
+# it has never actually seen a card it should refuse to touch again. A
+# different card size, a different Raspberry Pi OS release's partition
+# layout, or different e2fsprogs/f2fs-tools versions on whatever machine
+# runs this next could all change what "worked" looks like; read the
+# `parted print` output this script shows before and after, not just its
+# exit code.
 
 set -euo pipefail
 
@@ -137,8 +149,33 @@ guard() {
     say "this machine runs from: $held_list -- and the target is not among them"
 }
 
+say "-----------------------------------------------------------------"
+say "This ran successfully once, on bose, 2026-09-06. The idempotent-rerun"
+say "check just below has not itself been exercised. Read this script's"
+say "own output at each step rather than only trusting its exit code."
+say "-----------------------------------------------------------------"
+
 step "Checking the target"
 guard
+
+step "Checking whether this card is already prepared"
+# Not idempotent past this point, and said so rather than pretended
+# otherwise: a second run would `parted rm 2` an already-grown A and then
+# `mkpart` C and B on top of partitions that already occupy that space.
+# Detecting "already labelled" and stopping is the honest version of
+# idempotent here -- fixing a *wrong* existing layout is not attempted.
+ALREADY=1
+for lbl in SYSTEM STATE LIBRARY; do
+    dev="$(blkid -L "$lbl" 2>/dev/null)" || { ALREADY=0; break; }
+    case "$dev" in "$DEVICE"*) ;; *) ALREADY=0; break ;; esac
+done
+if [ "$ALREADY" = "1" ]; then
+    say "SYSTEM, STATE and LIBRARY are already on $DEVICE -- nothing to do."
+    say "If the layout is actually wrong (wrong sizes, wrong filesystems),"
+    say "this script will not repair it: wipe the table by hand first"
+    say "(e.g. 'sgdisk --zap-all $DEVICE') and re-run."
+    exit 0
+fi
 
 step "Plan"
 say "1. stream $IMAGE_URL onto $DEVICE"
@@ -205,13 +242,29 @@ step "3. Filesystems"
 P="$DEVICE"; case "$DEVICE" in *[0-9]) P="${DEVICE}p" ;; esac
 
 # A is the image's own root, resized in place -- never re-made, or the OS goes.
-e2fsck -fp "${P}2" || true
-resize2fs "${P}2"  || die "could not grow A's filesystem"
-e2label   "${P}2" SYSTEM
+# Labelling first: it just writes a superblock field and works regardless of
+# what comes next, so it is not left stranded if the resize below is skipped.
+e2label "${P}2" SYSTEM
+# [IMPL-BOS-072] Found building this on bose: its own e2fsprogs is bullseye-
+# era and cannot even *check* a filesystem a newer mkfs.ext4 wrote (refuses
+# with "unsupported feature(s)"), let alone resize it -- and that is a reason
+# to skip, not to force. This host's tools are not the ones to trust with a
+# filesystem newer than they are.
+if e2fsck -fp "${P}2" && resize2fs "${P}2"; then
+    say "A's filesystem grown in place to fill its partition"
+else
+    say "WARNING: could not grow A here -- this host's e2fsprogs is older than"
+    say "  the tool that built this image and cannot check or resize it safely."
+    say "  A stays at its original (small) size for now. Growing a *mounted* root"
+    say "  filesystem is an ordinary, safe operation, so this is deferred rather"
+    say "  than forced: run 'sudo resize2fs ${P}2' once the new card is booted on"
+    say "  its own hardware -- provision-bose.sh does this first, before installing"
+    say "  any package, since there is no room for one until A is grown."
+fi
 # C and B are new and empty, so these are the only mkfs calls in this script.
 mkfs.f2fs -f -l STATE   "${P}3" >/dev/null || die "mkfs.f2fs failed"
 mkfs.ext4 -qF -L LIBRARY "${P}4"           || die "mkfs.ext4 failed"
-say "A ext4 grown in place, C f2fs, B ext4"
+say "C f2fs, B ext4"
 
 step "4. and 5. First-boot configuration"
 say "MOUNT ${P}1 and ${P}2 and apply, before the card is ever booted:"

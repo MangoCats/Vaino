@@ -1,17 +1,32 @@
 # BOSE003: Building the Card, Step by Step
 
-**Implementation plan — written 2026-08-23, not yet executed**
+**Implementation plan — written 2026-08-23. In progress since 2026-09-06 —
+phases 1–4 executed, by hand and partly by script; see the "Corrected" notes
+below and [BosePi/README.md](README.md)'s status table for exactly what has
+and hasn't been proven.**
 
 Where each phase runs, what runs it, and in what order. The design it carries
 out is [BOSE002](BOSE002-image-build.md); the machine it targets is described in
 [BOSE001](BOSE001-survey.md).
 
-**Nothing here has been executed.** The scripts exist and their guards have been
-tested; the destructive paths have not been run, because the card reader
-`[IMPL-BOS-130]` does not exist yet.
+**Updated 2026-09-06 — this plan is no longer purely hypothetical, but it is
+not proven either.** `[IMPL-BOS-130]`'s card reader turned out to be
+unnecessary in the form expected — a USB reader was already attached to the
+*development* host rather than `bose`, which changed where phase 1 ran (see
+the correction below) without changing what it accomplished. Phases 1–4 have
+each been carried out successfully once, by hand or by a script exercised for
+the first time; none of it has been repeated on a second card, so read this
+document as "here is what worked once, on this hardware, on this day" rather
+than as a settled procedure. [BosePi/README.md](README.md)'s table says
+precisely which of the *scripts* below have themselves been run versus which
+only encode a manual sequence that worked.
 
-> **Scripts:** [`prepare-card.sh`](prepare-card.sh) for phases 1–2 ·
+> **Scripts:** [`prepare-card.sh`](prepare-card.sh) for phase 2 ·
+> [`patch-boot-image.ps1`](patch-boot-image.ps1) for phase 1b ·
 > [`provision-bose.sh`](provision-bose.sh) for phase 3 ·
+> [`seed-library.sh`](seed-library.sh) for phase 4 ·
+> [`finalize-bose.sh`](finalize-bose.sh) for phase 5 ·
+> [`build-bose-card.sh`](build-bose-card.sh) orchestrates all of the above ·
 > [`mpd.conf`](mpd.conf) for the guest
 
 ---
@@ -91,6 +106,48 @@ against the new card in the reader:
    `/boot/firmware/config.txt` — the same two lines the current install runs
    `[PI-BOS-020]`, which are known to work on this hardware.
 
+> **Corrected 2026-09-06, mechanism only, first real run against `bose`:**
+>
+> - **Step 1 ran on the development host, not `bose`.** A USB reader turned
+>   out to be attached there already, so Raspberry Pi Imager wrote the image
+>   directly — no RAM-streaming `dd` needed, since that constraint was
+>   `bose`'s, not this host's. Steps 3–5 followed as direct edits to the
+>   written card's boot partition (plain FAT, host-readable) before it ever
+>   moved to `bose`.
+> - **Step 3's mechanism is stale.** This Bookworm image has no
+>   `init=…/firstboot` clause in `cmdline.txt` — auto-expand is instead a bare
+>   `resize` token in the kernel command line, removed the same way.
+> - **Step 4 is cloud-init now, not `userconf.txt`/`wpa_supplicant.conf`.**
+>   Raspberry Pi Imager v2 writes `user-data`/`network-config`/`meta-data`
+>   (the NoCloud datasource) to the boot partition instead. Same outcome —
+>   hostname, user, key-only SSH, Wi-Fi — different files.
+> - **`[IMPL-BOS-072]` Step 2's "grow p2" could not run on `bose`.** Its own
+>   e2fsprogs is bullseye-era and cannot check, let alone resize, a filesystem
+>   a newer `mkfs.ext4` wrote — see `prepare-card.sh`'s handling. Deferred to
+>   `provision-bose.sh`'s first step instead, run against the new card's own
+>   matching tools once it is what `bose` actually boots.
+> - **"Bookworm" itself is stale.** The image Raspberry Pi Imager actually
+>   fetched reports as Debian 13 "trixie" — Raspberry Pi OS has moved on since
+>   this document was written. Doesn't affect the aarch64 glibc toolchain;
+>   every "Bookworm" reference above should be read as "whatever Raspberry Pi
+>   OS's current 64-bit release is."
+> - **`[IMPL-BOS-090b]` `sudo` needed a manual, one-time fix.** Imager v2's
+>   cloud-init `user:` module sets `sudo: null` — it creates `pi` as an
+>   ordinary user, not with the `NOPASSWD` sudoers drop-in older
+>   `raspi-config`-driven images baked in by default. `provision-bose.sh` (like
+>   `deploy-player.sh` before it) assumes passwordless `sudo` over SSH
+>   throughout, with no path for an interactive password prompt. Fixed by hand
+>   this time: `ssh pi@bose 'echo "pi ALL=(ALL) NOPASSWD:ALL" | sudo tee
+>   /etc/sudoers.d/010-pi-nopasswd'`, typed interactively. **For next time**,
+>   this is avoidable at image-write time: set `user.sudo:` in Imager's
+>   generated `user-data` to `['ALL=(ALL) NOPASSWD:ALL']` instead of leaving it
+>   `null`, before the card ever reaches `bose` — no manual bridge step needed.
+>
+> None of this changes what the steps are *for* — only what carries them out.
+> Recorded here rather than silently fixed, per the same discipline
+> [PI001 §5b](../VainoPi/PI001-image-and-partitions.md#5b-appliance-settings)
+> already models.
+
 Then swap the cards and boot. From here **[`provision-bose.sh`](provision-bose.sh)** runs on
 the development host, over SSH, in the shape `deploy-player.sh` already has:
 
@@ -116,17 +173,62 @@ not a formality: play something, hear it, then close the door.
 
 ---
 
-## 3. Migrating the 44 GB
+## 3. Migrating the library
 
-**`[IMPL-BOS-080]` With the reader, this stops being the risky part.** After the
-swap, the **old** card goes into the same USB reader on `bose`, and the library
-is a local copy — SD to USB3 — rather than 44 GB over WiFi `[PI-BOS-050]`.
-`rsync -aH --info=progress2` from the old card's `/home/pi/Music` to `B`'s
+**`[IMPL-BOS-085]` Superseded 2026-09-06 — the local library was already
+Sampo-processed, so that is what got deployed, not the old card's raw files.**
+This section originally planned to copy MuLibPlay's raw audio off the old
+card and run Sampo's full ingest (segmentation, MusicBrainz identification,
+flavor extraction) on `bose` from scratch. That plan was never exercised,
+because a better source turned out to already exist: `data/vaino_new.db` —
+the canonical, live library `[data/README.md](../data/README.md)` — already
+carries 5,709 files, flavor for 99.93% of passages, and years of relinked
+listening history, sourced from `C:\Users\<dev host>\Music`. Deploying that
+instead skips the entire ingest pipeline.
+
+The procedure actually used, over WiFi from the dev host (no reader needed for
+this part — see the caveat below):
+
+1. `rsync` the local audio root to `pi@bose:/srv/library/audio/`, then
+   `data/vaino_new.db` to `pi@bose:/srv/library/vaino-new.db` — **staged, not
+   live**, same discipline `scratch/transfer.sh` already established for
+   `vainopi`: "the file it would replace holds this appliance's own play
+   history." For a brand-new `bose` there is no history yet to protect, but
+   the staging step stays, so the discipline does not depend on remembering
+   which cards need it.
+2. Cross-compile `relink` (`player/src/bin/relink.rs`, `[SPEC012]`) for
+   aarch64 and run it on `bose` against the staged db and `/srv/library/audio`
+   — it rebinds every row by content hash rather than the dev-host path baked
+   into the db, and needs `ffmpeg` on `PATH` to do it.
+3. Install the relinked db as `/var/vaino/vaino.db` — C, not B, per
+   `[IMPL-BOS-078]` — as the deliberate "swap it in" step.
+
+**This host has no `rsync`** — confirmed while building this card, the same
+absence `[IMPL-BOS-100]` §1 already found for a card reader. The transfer ran
+inside a throwaway Alpine container (`apk add rsync openssh-client`), mounting
+the local audio root, `data/`, and `.ssh` read-only — the exact pattern
+`scratch/transfer.sh` already used for `vainopi`, just pointed at `bose`.
+
+**`[IMPL-BOS-086]` Left undone: ~1,500 files on the old card never reached
+`vaino_new.db`.** The old card holds 7,238 files against the 5,745 in the
+local library — tracks that were apparently never carried into the canonical
+db. Deferred deliberately rather than blocking this build; reconciling them
+is an ordinary Sampo ingest pass, not a reason to hold up a working appliance.
+If it's ever done by copying straight off the old card instead, `[IMPL-BOS-080]`
+below still describes how.
+
+**`[IMPL-BOS-080]` The reader-based copy, kept as the alternative.** With a
+USB reader, the **old** card can go into it on `bose` (after the swap), and a
+copy off it is local — SD to USB3 — rather than over WiFi `[PI-BOS-050]`.
+`rsync -aH --info=progress2` from the old card's `/home/pi/Music` to B's
 `/srv/library/audio`, resumable, verifiable, and driven over SSH from here.
+This is the right tool specifically for reconciling `[IMPL-BOS-086]`'s
+leftover files, or for a future second appliance with no pre-existing local
+library to draw on.
 
 Without a reader the alternative is two WiFi transfers — off `bose` to this host
 before the swap, and back afterwards — which is hours each way and has no
-resumable middle. That is the comparison that justifies buying the reader.
+resumable middle. That is the comparison that justifies buying one.
 
 > **The old card is the backup**, and remains one until the new image has played
 > for a week. Do not reformat it to make anything easier. `bose` is somebody's
