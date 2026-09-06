@@ -291,7 +291,7 @@ whichever peer was selected last. `sync_peers` is where names live;
 | :--- | :--- | :--- |
 | `/api/peers` | GET | list `sync_peers` |
 | `/api/peers` | POST | upsert one (`{name, remote}`) |
-| `/api/peers/<name>` | DELETE | remove one |
+| `/api/peers/<name>/delete` | POST | remove one — `POST`, not `DELETE`: `console.py`'s `BaseHTTPRequestHandler` only ever implements `do_GET`/`do_POST` |
 | `/api/peers/<name>/activate` | POST | `set_remote(peer.remote)` — makes it the target for the three existing sync jobs |
 | `/api/mesh/diff` | POST | `{peer}` → submits a `mesh-diff` job against that peer's `remote` |
 | `/api/mesh/resolve` | POST | `{peer, table, key, choice}` → submits a `mesh-resolve` job, `choice` one of `"local"`/`"peer"` |
@@ -320,8 +320,11 @@ job kind (`_mesh_resolve`) is a `_run_single_stage` wrapper exactly like
 `/flags`.** `/flags`'s "Sync with a remote" section is unchanged. `/mesh`
 carries: the peer list (add/remove/activate), a "diff against" selector plus
 button, and — once a diff has run — three panels per table: counts for
-`local_only`/`peer_only` (each with an `export_bundle.py --md5-file`
-command line, printed rather than automated further here — `[SPEC-SUI-110]`
+`local_only`/`peer_only` always, and for `files` specifically (the one
+table whose key is directly a `--md5-file`-shaped list) an `export_bundle.py`
+command line naming them, printed rather than automated further here —
+`recordings`/`passages` keys aren't themselves bundleable selections, so
+their counts stand alone. `[SPEC-SUI-110]`
 already decided a bundle target is "an ssh host and a directory, never a
 Vaino endpoint," and this document does not relitigate that), and a list of
 `conflict` rows, each with the two values side by side and "use local"/"use
@@ -339,6 +342,7 @@ peer" buttons wired to `/api/mesh/resolve`.
 
 **What this pass did *not* build, deliberately:** `--value` (a third value neither side has yet) has a CLI and job-kind path but no UI — `/mesh` only ever offers "use local"/"use peer". A person wanting a genuinely new value still runs `resolve_mesh_conflict.py --value` by hand. The `local_only`/`peer_only` buckets print an `export_bundle.py` command rather than running one — `[SPEC-SUI-110]`'s "an ssh host and a directory, never a Vaino endpoint" stance, applied to the UI too.
 6. **Storage-tier policy — must every peer hold every file? — is explicitly out of scope here.** Asked and not answered: nothing in this document decides whether `vainopi` (464 MB RAM, a small card) is expected to eventually hold the full union library. `[SPEC-MESH-040]`'s human review gate is the mitigation available today — a person can simply decline to approve a bundle a small node shouldn't receive — but "catalog knows about this recording, audio absent here" is not a state the schema represents, and a mesh that grows past hand-curated approval may need it to be. Deferred, not resolved.
+7. ~~**Landing a `local_only`/`peer_only` bundle's audio on a `bose`-shaped target (B locked outside an attended import) is unaddressed.**~~ **Built 2026-09-06, in [BOSE002](../../BosePi/BOSE002-image-build.md) `[IMPL-BOS-150]`, not in this document** — `attended-import.sh` is what makes item 5's printed `export_bundle.py` command line actually able to write to B once it's `[BOSE003]`-locked, wrapping it in the remount-rw/sync/remount-ro bracket `[PI-B-030]` always specified. Mesh-general, not `bose`-specific, despite where it was built.
 
 ---
 
