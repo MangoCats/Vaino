@@ -1001,7 +1001,7 @@ This is deliberately **not** an absolute target, because the audio output channe
 
 **`[REQ-HW-150]` Where the library lives on its own partition, it stays read-only outside a deliberate, bounded import — never open the rest of the time.** Adding content is an attended operation with a clear start and end, not a standing state; the window a mistake or a power loss could land in should be exactly as long as the import itself, not the appliance's whole service life. Built for `bose` as `BosePi/attended-import.sh` `[IMPL-BOS-150]`.
 
-**`[REQ-HW-155]` Where the system partition is made read-only, a way back that doesn't require re-imaging exists for the case that still boots.** A card swap is an acceptable answer to "the system will not boot at all"; it is not an acceptable *only* answer to "the system boots fine and a person wants to write to it again." Built for `bose` as the flag-file escape hatch `[IMPL-BOS-160]`, checked at boot on a partition that stays writable through lock-in.
+**`[REQ-HW-155]` Where the system partition is made read-only, a way back that doesn't require re-imaging exists for the case that still boots.** A card swap is an acceptable answer to "the system will not boot at all"; it is not an acceptable *only* answer to "the system boots fine and a person wants to write to it again." Built for `bose` as the flag-file escape hatch `[IMPL-BOS-160]`, checked at boot on either of two markers: one on the partition that stays writable *from the running system* through lock-in, one on the partition that stays writable *from an external reader* even though the running system itself can no longer write it.
 
 ## 7. Non-Requirements
 
