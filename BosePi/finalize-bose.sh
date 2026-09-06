@@ -98,7 +98,13 @@ run "raspi-config nonint do_overlayfs 0" ssh "$HOST" sudo raspi-config nonint do
 say "Read the output above: raspi-config prints what it actually did."
 
 step "Enable vaino and mpd at boot (not done until now, deliberately)"
+# Found live: `systemctl enable mpd` re-enables mpd.socket too, via Debian's
+# sysv-install compat shim -- undoing provision-bose.sh's own
+# `systemctl mask mpd.socket` (the shared-sink arrangement [IMPL-BOS-030]
+# needs mpd bound directly, not socket-activated). Re-masked immediately
+# after, not left to whatever the next boot would have raced.
 run "systemctl enable mpd vaino" ssh "$HOST" "sudo systemctl enable mpd vaino"
+run "re-mask mpd.socket" ssh "$HOST" "sudo systemctl mask mpd.socket"
 
 step "Reboot into the locked-down card"
 say "This is the point of no easy return [IMPL-BOS-120]. Rebooting now."
