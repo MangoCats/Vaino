@@ -286,7 +286,7 @@ Rejection is whole and it is loud: one transaction, the target unchanged, and a 
 ## 6. Open
 
 1. **`[SPEC-SUI-175]` Nothing re-reads a retained payload.** `[SPEC-SUI-165]` keeps fields the receiver cannot yet use, and that only pays off if something notices, after an upgrade, that it now can. What triggers the re-parse — and on what signal a Vaino concludes its own understanding has widened — is unspecified. Retention with nothing to re-read it is storage that merely looks like foresight.
-2. ~~**`[SPEC-SUI-180]` Re-importing the same bundle is unspecified.**~~ **Resolved 2026-09-06**, designed not yet built: [SPEC035](SPEC035-mesh-library-sync.md) `[SPEC-MESH-080]` has the bundle importer classify each incoming row the way `apply_changes.py::classify()` already does (fast-forward / already-applied / conflict) instead of writing unconditionally — a mesh where the same content can arrive by two paths made this a correctness requirement rather than an edge case.
+2. ~~**`[SPEC-SUI-180]` Re-importing the same bundle is unspecified.**~~ **Resolved and built 2026-09-06**: [SPEC035](SPEC035-mesh-library-sync.md) `[SPEC-MESH-080]`. Turned out narrower than expected — the importer was already idempotent at the file level; the actual gap was an already-held encoding silently dropping a *later* bundle's improved recording-scope data, now fixed and covered by two tests.
 3. **The per-file identity vocabulary and per-row offers `[SPEC-SUI-055]` describes (`unknown`/`here`/`elsewhere`/`corrupt`, induct/relink) are not built.** `/folder` today shows only aggregate counts; see the status note at `[SPEC-SUI-055]` in §3.2.
 
 ---

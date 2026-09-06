@@ -260,6 +260,25 @@ pub fn import(
             .query_row("SELECT file_id FROM files WHERE audio_md5 = ?1", params![md5], |r| r.get(0))
             .ok();
         if held.is_some() {
+            // `[SPEC-MESH-080]` The file needs no write, but a later bundle's
+            // recording-scope data (flavor, most often) may still be an
+            // improvement over what this library already has for the same
+            // mbid -- provenance-checked by `upsert_recording` exactly as it
+            // is on a fresh import, never a blind overwrite. Passages and
+            // `passage_recordings` are untouched here: the file already has
+            // them, and re-deriving which existing passage a credit belongs
+            // to is a real question `[SPEC-SC-045]` leaves to a future pass,
+            // not one this fix answers by guessing.
+            if apply {
+                for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
+                    for c in p.get("recordings").and_then(|v| v.as_array()).unwrap_or(&empty) {
+                        let mbid = str_of(c, "mbid");
+                        if let Some(r) = recordings.get(&mbid) {
+                            upsert_recording(&tx, r, &mut rep)?;
+                        }
+                    }
+                }
+            }
             rep.outcomes.push((md5, Landed::Already));
             continue;
         }
@@ -370,14 +389,21 @@ pub fn import(
     }
 
     if apply {
-        tx.execute(
-            "INSERT INTO imported_payloads (payload_version,generator,encodings,body,imported_at)\
-             VALUES (?1,?2,?3,?4,?5)",
-            params![num(doc, "payload_version").unwrap_or(0), str_of(doc, "generator"),
-                    doc.get("encodings").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as i64,
-                    body, now],
-        )
-        .map_err(|e| e.to_string())?;
+        // Only when something actually landed `[SPEC-MESH-080]`: a full
+        // resend where every encoding comes back `Already` and no recording
+        // needed updating would otherwise still append an identical audit
+        // row every time, growing `imported_payloads` from a record of what
+        // arrived into a record of how often it was resent.
+        if rep.rows_written > 0 {
+            tx.execute(
+                "INSERT INTO imported_payloads (payload_version,generator,encodings,body,imported_at)\
+                 VALUES (?1,?2,?3,?4,?5)",
+                params![num(doc, "payload_version").unwrap_or(0), str_of(doc, "generator"),
+                        doc.get("encodings").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as i64,
+                        body, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(rep)
@@ -547,6 +573,178 @@ mod tests {
         assert_eq!(fade_ms(&p, "fade_out_ms"), 20);
         assert_eq!(fade_curve(&p, "fade_in_curve"), "exponential");
         assert_eq!(fade_curve(&p, "fade_out_curve"), "exponential");
+    }
+
+    /// The minimum of SPEC008 `import()` actually touches -- files, passages,
+    /// passage_recordings, recordings, flavor -- built fresh rather than
+    /// reused from `db::test_support`, which is scoped to `library.rs`'s own
+    /// review-queue fixtures and carries tables (`id_checks`, `artists`,
+    /// `listener_play_history`) this file has no reason to depend on.
+    fn empty_library() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE,
+                 path TEXT NOT NULL, size_bytes INTEGER NOT NULL, mtime REAL NOT NULL,
+                 format TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+                 first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
+             CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY REFERENCES files(file_id),
+                 title TEXT, artist TEXT, album TEXT, track_no INTEGER, disc_no INTEGER,
+                 has_art INTEGER NOT NULL DEFAULT 0, scanned_at INTEGER NOT NULL);
+             CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
+                 length_ms INTEGER, source TEXT NOT NULL);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,
+                 kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+                 lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
+                 boundary_src TEXT NOT NULL, fade_in_ms INTEGER NOT NULL DEFAULT 20,
+                 fade_out_ms INTEGER NOT NULL DEFAULT 20,
+                 fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
+                 fade_out_curve TEXT NOT NULL DEFAULT 'exponential');
+             CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
+             CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL, mbid TEXT NOT NULL,
+                 weight REAL NOT NULL DEFAULT 1.0, source TEXT NOT NULL,
+                 PRIMARY KEY (passage_id, mbid));
+             CREATE TABLE flavor (subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL,
+                 characteristic TEXT NOT NULL, class TEXT NOT NULL, value REAL NOT NULL,
+                 source TEXT NOT NULL, accuracy REAL,
+                 PRIMARY KEY (subject_kind, subject_id, characteristic, class));",
+        )
+        .unwrap();
+        c
+    }
+
+    fn one_encoding_bundle(md5: &str, mbid: &str, flavor_value: f64, flavor_source: &str) -> Value {
+        doc(&format!(
+            r#"{{"payload_version":1,"encodings":[
+                {{"audio_md5":"{md5}","bundle_path":"a.wav","format":"wav","duration_ms":1000,
+                 "passages":[{{"kind":"radio","start_ms":0,"end_ms":1000,"boundary_src":"x",
+                              "recordings":[{{"mbid":"{mbid}","weight":1.0,"source":"s"}}]}}]}}],
+                "recordings":[{{"mbid":"{mbid}","title":"t","source":"s",
+                    "flavor":[{{"characteristic":"mood_happy","class":"happy",
+                                "value":{flavor_value},"source":"{flavor_source}"}}]}}]}}"#
+        ))
+    }
+
+    /// A minimal, real, ffmpeg-decodable audio file -- `hash_encoded` shells
+    /// out to ffmpeg `[SPEC-RLK-080]`, so nothing shorter than an actual
+    /// container it can open will do. WAV rather than a hand-rolled MP3
+    /// frame: no encoder needed, just a 44-byte header ffmpeg reads directly.
+    fn write_tiny_wav(path: &std::path::Path) {
+        let (sample_rate, num_samples, bits_per_sample, num_channels): (u32, u32, u16, u16) =
+            (8000, 100, 16, 1);
+        let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample as u32 / 8);
+        let block_align = num_channels * (bits_per_sample / 8);
+        let data_size = num_samples * block_align as u32;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + data_size).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&num_channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        for i in 0..num_samples {
+            buf.extend_from_slice(&(((i % 100) as i16) * 100).to_le_bytes());
+        }
+        std::fs::write(path, &buf).unwrap();
+    }
+
+    /// `[SPEC-MESH-080]` The gap `[SPEC-SUI-180]` named, made concrete: a
+    /// second bundle arriving for an *already-held* encoding must still let
+    /// improved recording-scope data (flavor, here) land -- today's `held`
+    /// check `continue`s past the whole encoding, including its credits'
+    /// flavor, the moment the file itself is no longer new. A resend of the
+    /// *identical* bundle must change nothing (the `flavor_value_updates`
+    /// test below covers that side); this is the other direction: a
+    /// *different*, newer bundle for audio already on disk.
+    #[test]
+    fn a_later_bundle_still_updates_flavor_for_an_already_held_file() {
+        let mut c = empty_library();
+        let audio_dir = std::env::temp_dir().join(format!("vaino-bundle-test-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        // `import()` verifies the payload's claimed audio_md5 against the
+        // real file `[SPEC-DF-070]` -- hash it for real rather than asserting
+        // against a value that would only ever agree with itself.
+        let md5 = crate::relink::hash_encoded(&audio_path).unwrap();
+
+        let first = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+        let rep1 = import(&mut c, &first, "body1", &audio_dir, true).unwrap();
+        assert!(rep1.refused.is_empty(), "{:?}", rep1.refused);
+        assert_eq!(rep1.outcomes, vec![(md5.clone(), Landed::Imported)]);
+        let v1: f64 = c
+            .query_row(
+                "SELECT value FROM flavor WHERE subject_id='m1' AND characteristic='mood_happy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v1, 0.5);
+
+        // Same encoding, a later Sampo run with an improved (still
+        // non-manual) flavor value for the same recording.
+        let second = one_encoding_bundle(&md5, "m1", 0.9, "computed:x@2");
+        let rep2 = import(&mut c, &second, "body2", &audio_dir, true).unwrap();
+        assert!(rep2.refused.is_empty(), "{:?}", rep2.refused);
+        assert_eq!(rep2.outcomes, vec![(md5, Landed::Already)],
+            "the file itself is unchanged -- Already is correct");
+
+        let v2: f64 = c
+            .query_row(
+                "SELECT value FROM flavor WHERE subject_id='m1' AND characteristic='mood_happy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v2, 0.9, "an already-held encoding must not gate updates to its recording's data");
+
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// The other side of the same gap: a `manual` flavor value must survive
+    /// a later bundle's computed one, exactly as it already does on a fresh
+    /// import (`upsert_recording`'s own check) -- proven here for the
+    /// already-held-encoding path specifically, since that is the path the
+    /// fix above adds a second call site to.
+    #[test]
+    fn a_manual_flavor_value_survives_a_later_computed_bundle_even_when_the_file_is_already_held() {
+        let mut c = empty_library();
+        let audio_dir = std::env::temp_dir().join(format!("vaino-bundle-test2-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = crate::relink::hash_encoded(&audio_path).unwrap();
+
+        let first = one_encoding_bundle(&md5, "m2", 0.5, "computed:x@1");
+        import(&mut c, &first, "body1", &audio_dir, true).unwrap();
+        // A listener corrects it locally, same as `upsert_recording`'s own
+        // fresh-import test would exercise on the first pass.
+        c.execute(
+            "UPDATE flavor SET value=1.0, source='manual' \
+             WHERE subject_id='m2' AND characteristic='mood_happy'",
+            [],
+        )
+        .unwrap();
+
+        let second = one_encoding_bundle(&md5, "m2", 0.1, "computed:x@2");
+        import(&mut c, &second, "body2", &audio_dir, true).unwrap();
+
+        let (v, src): (f64, String) = c
+            .query_row(
+                "SELECT value, source FROM flavor WHERE subject_id='m2' AND characteristic='mood_happy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((v, src.as_str()), (1.0, "manual"), "manual outranks a later computed value here too");
+
+        std::fs::remove_dir_all(&audio_dir).ok();
     }
 
     /// `[SPEC-PL-032]` The cross-language conformance fixture: Sampo's
