@@ -249,12 +249,14 @@ reopening B was always `attended-import.sh`'s job and is unaffected.
 marker over SSH and reboots, asked twice like every other script here that
 undoes something deliberate.
 
-**Run for real against `bose` 2026-09-06**: marker written, one reboot,
-log confirmed `do_overlayfs 1 exit 0` and the marker cleared. Only the
-already-unlocked case, since `bose` was not `--lock-in`'d yet at the time
-— `raspi-config` treats "already in the target state" as success. The real
-enabled-to-disabled transition is unproven; verifying it is the natural
-first thing to do right after `--lock-in`.
+**First run, before `bose` was ever `--lock-in`'d**: marker written, one
+reboot, log confirmed `do_overlayfs 1 exit 0` and the marker cleared — but
+only the already-unlocked no-op case, since there was nothing yet to
+disable. The real enabled-to-disabled transition came later, against a
+genuinely `--lock-in`'d `bose`, and is what `[IMPL-BOS-166]` above is
+about: that first version turned out not to work at all once there was
+something real to undo, and the fix proven afterward is what's actually
+running now.
 
 **C — state, read-write, the only continuously written partition.**
 
