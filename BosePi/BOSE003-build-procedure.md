@@ -185,6 +185,24 @@ step that makes the appliance an appliance. Everything before it is recoverable
 over SSH; after it, a mistake in `/etc` means another card swap. So step 9 is
 not a formality: play something, hear it, then close the door.
 
+**`[IMPL-BOS-165]` Step 10 nearly created the exact failure it exists to
+prevent, and would have gone unnoticed without checking `findmnt` rather
+than trusting the reboot.** Run for real 2026-09-06: `raspi-config nonint
+do_overlayfs 0` on this trixie-era image installs Debian's own `overlayroot`
+package (`enable_overlayfs()`'s actual body, not the wrapper logic
+`[IMPL-BOS-120]`'s earlier text had read — reading a function's caller is
+not reading the function). Its default, `recurse=1`, overlays **every**
+mount, not only A — B and C both came back wrapped in their own writable
+RAM layer, `/var/vaino/vaino.db` included. Every write to it would have
+been silently discarded on the next reboot: `[REQ-HW-120]`'s own
+requirement, violated by the mechanism meant to protect it, within one
+reboot of being enabled. Found in minutes, not months, because the
+post-reboot check was `findmnt`'s actual options, not just "did it
+reboot." Fixed live (`overlayroot=tmpfs:recurse=0` in `cmdline.txt`) and
+folded into `finalize-bose.sh` so it happens automatically, before the
+reboot, every time — see the script's own updated header for the full
+account.
+
 ---
 
 ## 3. Migrating the library
