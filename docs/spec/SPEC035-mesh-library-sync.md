@@ -260,13 +260,84 @@ proceed. Tracked at `[SPEC013 §6]`, unchanged by this document.
 
 ---
 
+## 7a. Concrete design: the peer registry and the conflict review UI
+
+**`[SPEC-MESH-090]` `sync_peers` lives in the console's own sidecar, beside
+`jobs`/`remote_config` — never a table Vaino reads `[SPEC-SC-015]`, same
+reasoning `[jobs.py]`'s own schema comment already gives for everything
+else there.**
+
+```sql
+CREATE TABLE IF NOT EXISTS sync_peers (
+    name    TEXT PRIMARY KEY,
+    remote  TEXT NOT NULL,           -- user@host:/path/to/vaino.db
+    enabled INTEGER NOT NULL DEFAULT 1
+);
+```
+
+**`[SPEC-MESH-092]` Additive, not a replacement — `remote_config` keeps
+working exactly as it does today.** `[SPEC022]`'s three sync jobs
+(`remote-pull`/`remote-push`/`sync-preferences`) already read one address via
+`get_remote()`, tested and live-verified; rewriting that to read `sync_peers`
+directly would risk exactly the regression this design has no reason to
+invite. Instead: **selecting a peer calls `set_remote(peer.remote)`**, so the
+three existing jobs keep calling `get_remote()` unchanged and simply act on
+whichever peer was selected last. `sync_peers` is where names live;
+`remote_config` stays what those three jobs actually read.
+
+**`[SPEC-MESH-094]` The API, mirroring `/api/remote`'s existing shape:**
+
+| Route | Method | Does |
+| :--- | :--- | :--- |
+| `/api/peers` | GET | list `sync_peers` |
+| `/api/peers` | POST | upsert one (`{name, remote}`) |
+| `/api/peers/<name>` | DELETE | remove one |
+| `/api/peers/<name>/activate` | POST | `set_remote(peer.remote)` — makes it the target for the three existing sync jobs |
+| `/api/mesh/diff` | POST | `{peer}` → submits a `mesh-diff` job against that peer's `remote` |
+| `/api/mesh/resolve` | POST | `{peer, table, key, choice}` → submits a `mesh-resolve` job, `choice` one of `"local"`/`"peer"` |
+
+**`[SPEC-MESH-096]` `mesh-diff` is a job like any other** — `_mesh_diff(job_id,
+target)` runs `mesh_diff.py <library> <target> --json` as one stage
+(`_run_single_stage`, the same shape `sync-preferences` already uses), and
+the diff's full report becomes the job's `result`. `mesh_diff.py` gained
+`--json`: a final line `{"ok": true, ...report}` — found-a-conflict is data
+in the result, never a job failure, since nothing was asked to act yet
+`[SPEC-MESH-038]`.
+
+**`[SPEC-MESH-098]` `mesh-resolve` performs `[SPEC-MESH-070]`'s write, to
+whichever side(s) disagree with the chosen value.** `tools/resolve_mesh_conflict.py`
+(new): given a table, an identity key, and a chosen side, it writes that
+side's current value to the *other* side with `source`/`boundary_src`
+forced to `manual` — locally through a direct connection, remotely through
+the identical `sudo systemctl stop vaino && sqlite3 ... && sudo systemctl
+start vaino` recipe `[push_file_tags.py]`/`[sync_preferences.py]` already
+use, quoted with `remote_peek.literal()`. A person typing a third value
+neither side has yet is `--value`, applied to both sides the same way. The
+job kind (`_mesh_resolve`) is a `_run_single_stage` wrapper exactly like
+`sync-preferences`'s.
+
+**`[SPEC-MESH-100]` One new console page, `/mesh`, not a section bolted onto
+`/flags`.** `/flags`'s "Sync with a remote" section is unchanged. `/mesh`
+carries: the peer list (add/remove/activate), a "diff against" selector plus
+button, and — once a diff has run — three panels per table: counts for
+`local_only`/`peer_only` (each with an `export_bundle.py --md5-file`
+command line, printed rather than automated further here — `[SPEC-SUI-110]`
+already decided a bundle target is "an ssh host and a directory, never a
+Vaino endpoint," and this document does not relitigate that), and a list of
+`conflict` rows, each with the two values side by side and "use local"/"use
+peer" buttons wired to `/api/mesh/resolve`.
+
+---
+
 ## 8. What remains open after this document
 
-1. **`sync_peers` and the console's peer selector are designed, not built** — §2, §4.
+1. ~~**`sync_peers` and the console's peer selector are designed, not built.**~~ **Built 2026-09-06** — §7a: `sync_peers` (additive, `remote_config` untouched), `Runner.list_peers/upsert_peer/delete_peer/activate_peer`, the `/api/peers*` routes, and a new `/mesh` console page with the peer list and a diff-and-resolve UI. Four test files (`test_jobs_peers.py`, `test_jobs_mesh_diff.py`, `test_jobs_mesh_resolve.py`, plus `resolve_mesh_conflict.py`'s own).
 2. ~~**The diff tool is designed, not built.**~~ **Built 2026-09-06**: `tools/mesh_diff.py`, covering `files`/`recordings`/`passages` (the three tables §3 named), the four-bucket classification, and the manual-vs-manual conflict rule — five tests, `tools/test_mesh_diff.py`, the remote side faked the same way `test_remote_flags.py` already established, the local side a real temporary sqlite file. `artists`/`releases` are not yet added to `TABLES`, mechanically the same shape as `recordings` when they are.
 3. ~~**`export_bundle.py` reading a file of hashes is a small addition, not built.**~~ **Built 2026-09-06**: `--md5-file`, two tests in `tools/test_export_bundle.py` (the tool's first test coverage of any kind — the new flag, not the pre-existing pipeline, is what's actually verified).
 4. ~~**`import_bundle.rs`'s classify-before-write is not built.**~~ **Built 2026-09-06** — narrower than first written here; see `[SPEC-MESH-080]`'s own updated text for what the gap actually was.
-5. **The conflict review UI (`[SPEC-MESH-075]`) is not built.** The diff tool *finds* conflicts (§3's `conflict` bucket); nothing yet presents one for a person to resolve, and nothing yet performs `[SPEC-MESH-070]`'s "write the resolution to both sides" step. This is the next slice, and the highest-value one left: everything upstream of it (diff, review-gate export, idempotent import) now works end to end for the non-conflicting case.
+5. ~~**The conflict review UI is not built.**~~ **Built 2026-09-06**: `tools/resolve_mesh_conflict.py` (the write, tested per `[SPEC-MESH-070]`'s decision logic the same way `test_sync_preferences.py` established — the actual `ssh`/`scp` leg verified live, not by unit test), the `mesh-resolve` job kind, and `/mesh`'s conflict table with "use local"/"use peer" buttons. Every table with a `manual_field` (`recordings`, `passages`) is covered; `files` carries no provenance and can never produce a conflict to resolve.
+
+**What this pass did *not* build, deliberately:** `--value` (a third value neither side has yet) has a CLI and job-kind path but no UI — `/mesh` only ever offers "use local"/"use peer". A person wanting a genuinely new value still runs `resolve_mesh_conflict.py --value` by hand. The `local_only`/`peer_only` buckets print an `export_bundle.py` command rather than running one — `[SPEC-SUI-110]`'s "an ssh host and a directory, never a Vaino endpoint" stance, applied to the UI too.
 6. **Storage-tier policy — must every peer hold every file? — is explicitly out of scope here.** Asked and not answered: nothing in this document decides whether `vainopi` (464 MB RAM, a small card) is expected to eventually hold the full union library. `[SPEC-MESH-040]`'s human review gate is the mitigation available today — a person can simply decline to approve a bundle a small node shouldn't receive — but "catalog knows about this recording, audio absent here" is not a state the schema represents, and a mesh that grows past hand-curated approval may need it to be. Deferred, not resolved.
 
 ---
