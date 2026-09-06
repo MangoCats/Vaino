@@ -968,6 +968,16 @@ What makes this possible was already true and merely tangled: **the server's con
 
 **`[REQ-PORT-150]`** Listener state is exported automatically on a schedule, integrity-checked before rotation, retained generationally `[SPEC-DF-094]`. It is the only irreplaceable data in the system.
 
+**`[REQ-PORT-160]`** Two or more Sampo-capable installations can reconcile their catalogs — class A/B/C content and flags — against each other, not only against one hub. Designed in [SPEC035](SPEC035-mesh-library-sync.md) §2.
+
+**`[REQ-PORT-170]`** What differs between two installations is discovered automatically, without a full database copy. Designed in [SPEC035](SPEC035-mesh-library-sync.md) §3.
+
+**`[REQ-PORT-180]`** Nothing found by that discovery moves without a person approving it first. Designed in [SPEC035](SPEC035-mesh-library-sync.md) §4.
+
+**`[REQ-PORT-190]`** Segmentation is computed only where Sampo runs; two installations that independently ingest the same audio under different encodings each pay that cost, and neither's result is inferred onto the other. Designed in [SPEC035](SPEC035-mesh-library-sync.md) §5.
+
+**`[REQ-PORT-200]`** A manual correction on one installation that disagrees with a manual correction on another is resolved by a person, once, and the resolution leaves both installations in agreement — indistinguishable afterward from data that never conflicted. Designed in [SPEC035](SPEC035-mesh-library-sync.md) §6.
+
 ## 6. Appliance — `HW`
 
 **`[REQ-HW-100]`** Run continuously on a Raspberry Pi Zero 2W (512 MB) — **≤150 MB RSS** `[GDE-MCR-020]`. MuLibPlay uses 171 MB on a 1.8 GB Pi 4 `[GDE-BMK-010]`; Vaino must fit a third of the memory.
