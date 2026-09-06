@@ -854,6 +854,22 @@ mod tests {
         }
     }
 
+    /// The MuLibPlay skin's lyrics panel actually scrolls itself, not just
+    /// fetches -- a rough guess from `position_ms`/`duration_ms` rather than
+    /// real synchronisation, since no timed data exists for these words.
+    /// Checked here rather than left to notice by eye, the same way the
+    /// panel's own existence would be if this file never asserted `#lyrics`.
+    #[test]
+    fn the_mulibplay_lyrics_panel_scrolls_itself() {
+        let skin = SKINS.iter().find(|s| s.name == "mulibplay").expect("skin exists");
+        assert!(skin.html.contains(r#"id="lyrics""#), "mulibplay has no #lyrics panel");
+        assert!(skin.js.contains("autoScrollLyrics"), "mulibplay never defines the auto-scroll");
+        assert!(
+            skin.js.contains("autoScrollLyrics(s)"),
+            "mulibplay defines auto-scroll but never calls it from the snapshot tick"
+        );
+    }
+
     /// The status-LED control reaches routes the router actually serves
     /// `[PI3-LED-010]` -- Vaino-skin only, the same posture every other
     /// Settings-panel control already has (Bluetooth, radios, restart,

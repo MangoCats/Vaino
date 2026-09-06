@@ -186,7 +186,32 @@ the files**, and the settings page says so rather than implying otherwise.
 
 ---
 
-## 5. What this proposal does not do
+## 5. Auto-scroll: a guess, not a return to timed lyrics
+
+**`[SPEC-LYR-090]` The MuLibPlay panel scrolls itself between the 20% and
+80% marks of the passage, reaching the last line a little before the song
+ends rather than exactly when it's sung.** This does not reopen the
+`.lrc` question `[SPEC-LYR-060]` — it needs no timestamp data at all, only
+`position_ms`/`duration_ms`, which every snapshot tick already carries.
+Driven from that tick rather than a separate timer, so it freezes on
+pause and jumps on seek for free, with no extra handling needed for
+either.
+
+**Wrong by construction for a repeated chorus, and that is tolerable.**
+Lyrics text usually writes a chorus once; most songs sing it two or three
+times. A linear line-to-time mapping is therefore structurally early for
+the back half of most pop/rock songs, not merely noisy — but the text the
+window shows late in that case is still the *right words*, since a
+chorus repeats verbatim. The failure mode is usually self-cancelling.
+
+**The scrollbar remains a full manual override**, compared against the
+position this code itself last wrote rather than a browser `scroll`
+event, so there is no race with the event's own timing to get wrong.
+Once a listener's own scroll disagrees with that, auto-scroll stops
+touching the box until the passage changes — never fighting a correction
+mid-song.
+
+## 6. What this proposal does not do
 
 - **No online lookup.** A missing lyric stays missing; nothing here reaches the
   network `[SPEC-MPD-100]`.
@@ -198,5 +223,6 @@ the files**, and the settings page says so rather than implying otherwise.
 
 ---
 
-**Traceability:** `[SPEC-LYR-010..060]` · transported under `[SPEC-DF-030]` ·
-guest limits from `[SPEC-MPD-052]` · settings pattern from `[REQ-VIS-205]`
+**Traceability:** `[SPEC-LYR-010..090]` · transported under `[SPEC-DF-030]` ·
+guest limits from `[SPEC-MPD-052]` · settings pattern from `[REQ-VIS-205]` ·
+display requirement `[REQ-VIS-213]`

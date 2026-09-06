@@ -102,6 +102,49 @@
   let latest = null;
   Vaino.seekable($('bar'), () => latest);
 
+  // Auto-scroll the lyrics window across the passage's run time -- a rough
+  // guess, not real synchronisation. No timed data exists for these words
+  // and none is fetched `[SPEC-LYR-060]`; this only assumes the text's
+  // lines land roughly evenly between the 20% and 80% marks of the
+  // passage -- most songs are still on their first verse a fifth of the
+  // way in, and the window reaches its last line a little before the song
+  // ends rather than exactly when the last line is sung. Driven by
+  // `position_ms`/`duration_ms`, which every tick already carries, rather
+  // than a separate timer -- so it freezes correctly on pause and jumps
+  // correctly on seek for free. A repeated chorus is the usual reason the
+  // guess drifts, and it is also why drifting there costs little: the text
+  // the window shows late is still the right words.
+  //
+  // The scrollbar handle remains a full manual override, not just while
+  // held: compared against the position this code itself last wrote rather
+  // than a 'scroll' event, so there is no race with the browser's own event
+  // timing to get wrong. Once the listener's own scroll disagrees with that,
+  // this stops touching the box until the passage changes.
+  const LYRICS_START_FRACTION = 0.2;
+  const LYRICS_FINISH_FRACTION = 0.8;
+  let lyricsPassage = null;
+  let lyricsUserScrolled = false;
+  let lyricsAutoTop = null;
+  function autoScrollLyrics(s) {
+    const box = $('lyrics');
+    if (!box || box.hidden) return;
+    if (s.passage_id !== lyricsPassage) {
+      lyricsPassage = s.passage_id;
+      lyricsUserScrolled = false;
+      lyricsAutoTop = null;
+    }
+    if (lyricsAutoTop !== null && Math.abs(box.scrollTop - lyricsAutoTop) > 2) {
+      lyricsUserScrolled = true;
+    }
+    if (lyricsUserScrolled || !s.duration_ms) return;
+    const played = s.position_ms / s.duration_ms;
+    const fraction = Math.min(1, Math.max(0,
+      (played - LYRICS_START_FRACTION) / (LYRICS_FINISH_FRACTION - LYRICS_START_FRACTION)));
+    const target = Math.max(0, Math.round((box.scrollHeight - box.clientHeight) * fraction));
+    box.scrollTop = target;
+    lyricsAutoTop = target;
+  }
+
   Vaino.subscribe(s => {
     latest = s;
     plain($('title'), s.title ?? '—');
@@ -115,6 +158,7 @@
     // had one -- 559 of its 675 albums did. Hidden by itself when absent.
     Vaino.showBackArt($('artback'), s.passage_id);
     Vaino.showLyrics($('lyrics'), s.passage_id);
+    autoScrollLyrics(s);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
