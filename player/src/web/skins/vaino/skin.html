@@ -251,6 +251,8 @@
         <label for="wifi-connect-password">Password for <b id="wifi-connect-ssid"></b></label>
         <span>
           <input type="password" id="wifi-connect-password" placeholder="leave blank if open">
+          <button type="button" class="copy" id="wifi-connect-password-toggle"
+                  title="Show password" aria-pressed="false">👁</button>
           <button type="button" id="wifi-connect-go">Connect</button>
           <button type="button" id="wifi-connect-cancel">Cancel</button>
         </span>
@@ -260,6 +262,8 @@
       <span id="ap-controls">
         <input type="text" id="ap-ssid" placeholder="Vaino" size="12">
         <input type="password" id="ap-password" placeholder="Vaino321 (default)" size="14">
+        <button type="button" class="copy" id="ap-password-toggle"
+                title="Show password" aria-pressed="false">👁</button>
         <button type="button" id="ap-start-btn">Start</button>
         <button type="button" id="ap-stop-btn" hidden>Stop, return to Wi-Fi</button>
       </span>
