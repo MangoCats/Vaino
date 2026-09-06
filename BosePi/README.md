@@ -34,7 +34,7 @@ state.
 | [`prepare-card.sh`](prepare-card.sh) | 2: partition and format | **on `bose`**, card in a USB reader | Yes, 2026-09-06 |
 | [`provision-bose.sh`](provision-bose.sh) | 3: packages, mounts, `vaino`/`mpd` binaries | dev host, over SSH | Yes, run 3 times total, current |
 | [`seed-library.sh`](seed-library.sh) | 4: deploy the local library via `relink` | dev host | **Yes** — 5,709 paths bound, swap-in landed |
-| [`attended-import.sh`](attended-import.sh) | reopen B for a later import, close it again | dev host, over SSH | Yes, 3 ways (dry run, success, failure) — not yet against a real `--lock-in`'s own `ro` |
+| [`attended-import.sh`](attended-import.sh) | reopen B for a later import, close it again | dev host, over SSH | **Yes, fully** — dry run, success, and failure against a hand-simulated `ro`, then re-verified against `bose`'s own real `--lock-in`'d `ro` |
 | [`finalize-bose.sh`](finalize-bose.sh) | 5: start, then (only when told) lock down | dev host, over SSH | **Yes, fully** — `--start` cold-booted twice; `--lock-in` run twice: once found a real bug (`[IMPL-BOS-165]`), once clean after the fix |
 | [`build-bose-card.sh`](build-bose-card.sh) | orchestrates 2–5 | dev host | Yes — drove phases 3 through 5's `--start` to completion in one real run (found and fixed a `findmnt -q` bug along the way) |
 | [`lib.sh`](lib.sh) | shared logging/precondition helpers | sourced, not run | Exercised via every script above |
@@ -68,9 +68,9 @@ an existing `/var/vaino/vaino.db` without `--force-swap`. `finalize-bose.sh
 
 ## State of this work
 
-**In progress, first real build, started 2026-09-06 — playing audibly as of
-the same day, not yet locked in.** Phases 1 through 5's `--start` have all
-run for real, most of them as the scripts above rather than by hand. See
+**First real build, started and finished the same day, 2026-09-06 — playing
+audibly, fully `--lock-in`'d.** All five phases have run for real, most of
+them as the scripts above rather than by hand. See
 [BOSE003](BOSE003-build-procedure.md)'s "Corrected" notes and
 `[IMPL-BOS-140]` for what didn't match the plan on contact: cloud-init
 instead of `userconf.txt`, a `resize` token instead of `firstboot`, `bose`'s
@@ -82,11 +82,13 @@ so `vaino` opened the Pi's own onboard jack instead of the DAC. Each was
 found by actually running the thing, fixed, and re-verified, not assumed
 fixed from reading the fix.
 
-**What's left:** `--lock-in` (`[IMPL-BOS-120]`, deliberately not automatic)
-and a real hard power-loss test — `[PI-FS-050]`'s own open question,
-unresolved project-wide, not special to `bose`. `attended-import.sh`
-(`[IMPL-BOS-150]`) is ready for whenever `bose`'s library needs to grow,
-including via `[SPEC035]`'s mesh sync.
+**What's left:** a real hard power-loss test — `[PI-FS-050]`'s own open
+question, unresolved project-wide, not special to `bose`, and genuinely
+untouched by anything in this build (everything here has been graceful
+reboots, never a yanked cord). `attended-import.sh` (`[IMPL-BOS-150]`) and
+the escape hatch (`[IMPL-BOS-160]`) are both proven and ready for whenever
+`bose`'s library needs to grow or its own `/etc` needs a fix, including via
+`[SPEC035]`'s mesh sync.
 
 Two decisions from the original plan remain open, unaffected by the above:
 

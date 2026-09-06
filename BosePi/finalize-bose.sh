@@ -5,8 +5,9 @@
 # machine has been heard playing -- lock the card down [IMPL-BOS-120].
 #
 # **Status: --start and --lock-in both run for real against bose, 2026-09-06.**
-# --lock-in found the header note below wrong in a way worth keeping visible:
-# reading do_overlayfs()'s *wrapper* logic is not the same as reading what
+# --lock-in found this header's own earlier claim wrong, worth keeping
+# visible rather than quietly rewritten away: reading do_overlayfs()'s
+# *wrapper* logic is not the same as reading what
 # enable_overlayfs() actually does, and on this trixie-era image it turned
 # out to be Debian's own `overlayroot` package, not the historic Pi-specific
 # initramfs hook -- installed live, on the spot (cryptsetup pulled in as a

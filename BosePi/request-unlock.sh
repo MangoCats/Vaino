@@ -13,10 +13,18 @@
 # something deliberate: this requests undoing --lock-in, on the next two
 # reboots, not immediately.
 #
-# Status: run for real against bose 2026-09-06 -- wrote the marker,
-# rebooted, confirmed the log showed do_overlayfs 1 exit 0 and the marker
-# cleared. Only exercised the already-unlocked case (bose was not yet
-# --lock-in'd); the real enabled-to-disabled transition is still unproven.
+# Status: run for real against bose three times, 2026-09-06. The first two
+# (before bose was --lock-in'd) only proved the already-unlocked no-op
+# case, and did so against a version of vaino-unlock-check.sh that called
+# `raspi-config nonint do_overlayfs 1` -- which turned out to silently do
+# nothing once locked for real (see that script's own header for why). The
+# third run, after the fix, proved the actual enabled-to-disabled
+# transition: bose was genuinely --lock-in'd, this wrote the marker, and
+# two real reboots later A was genuinely writable again. That third run
+# needed recovering by hand first, since the still-broken escape hatch on
+# bose at the time could not yet unlock itself -- the fixed script had to
+# be deployed while A was briefly writable through a manual equivalent of
+# what it now does automatically.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 . BosePi/lib.sh
@@ -26,8 +34,8 @@ MODE="${1:-}"
 [ "$MODE" = "--check" ] || [ "$MODE" = "--go" ] || die "usage: request-unlock.sh --check|--go"
 
 caveat \
-    "Run once for real already, but only the already-unlocked case -- see" \
-    "the header. The real enabled-to-disabled transition is still unproven."
+    "Proven for real, including the actual enabled-to-disabled transition" \
+    "-- see the header for the bug that first two attempts found and fixed."
 
 step "Preconditions"
 check "bose reachable"      ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" true
@@ -36,7 +44,8 @@ check "the escape hatch is actually installed" ssh "$HOST" test -x /usr/local/sb
 
 step "Plan"
 say "1. write /var/vaino/unlock/request on $HOST"
-say "2. reboot -- this boot notices the marker, flips do_overlayfs off, reboots again"
+say "2. reboot -- this boot notices the marker, removes overlayroot= from"
+say "   cmdline.txt, reboots again"
 say "3. a second reboot lands in a writable A and B"
 say "bose will be briefly unreachable through both reboots."
 
