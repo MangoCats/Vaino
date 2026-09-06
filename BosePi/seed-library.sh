@@ -5,13 +5,12 @@
 # library, instead of copying raw files off the old card and re-ingesting
 # from scratch [IMPL-BOS-085].
 #
-# **Status: not yet run as a script.** Every step below was done once, by
-# hand, successfully, against bose on 2026-09-06 -- this file re-expresses
-# that sequence so it can be repeated, but the sequence itself has not been
-# re-verified through this exact script. Treat its output as something to
-# read, not a black box: `docker`/Alpine package names, this dev host's own
-# `$HOME/Music` layout, and relink's `ffmpeg` dependency are all things that
-# can drift out from under it on a different machine or a later date.
+# **Status: run for real against bose 2026-09-06** -- 5,709 paths bound by
+# relink, the relinked db swapped in as /var/vaino/vaino.db. Run once, so
+# treat its output as something to read, not a black box: `docker`/Alpine
+# package names, this dev host's own `$HOME/Music` layout, and relink's
+# `ffmpeg` dependency are all things that can drift out from under it on a
+# different machine or a later date, unexercised until they are.
 #
 # Runs on the development host. Idempotent in every step except the last,
 # which is deliberately not: swapping the relinked database in as the live
@@ -35,8 +34,9 @@ FORCE_SWAP=0
 [ "${1:-}" = "--force-swap" ] && FORCE_SWAP=1
 
 caveat \
-    "This script has not itself been run before -- see the header." \
-    "Watch each step below rather than trusting a clean exit at the end."
+    "Run once for real already -- see the header for what that proved and" \
+    "what it didn't. Watch each step below rather than trusting a clean" \
+    "exit at the end."
 
 step "Preconditions"
 check "bose reachable"         ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" true

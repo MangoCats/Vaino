@@ -49,8 +49,9 @@ case "$MODE" in
 esac
 
 caveat \
-    "This script has not itself been run before -- see the header." \
-    "Watch each step below rather than trusting a clean exit at the end."
+    "Both --start and --lock-in have run for real -- see the header for" \
+    "the two bugs that run found and fixed. Watch each step below anyway;" \
+    "a different Raspberry Pi OS release can still change what runs here."
 
 step "Preconditions"
 check "bose reachable"       ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" true

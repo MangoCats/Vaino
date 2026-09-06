@@ -8,14 +8,16 @@
 # (a running system cannot repartition the card it booted from), not a
 # limitation of this script.
 #
-# **Status: this file, as a whole, has not been run end to end.** Its
-# individual phases (prepare-card.sh, provision-bose.sh) have succeeded
-# against real hardware; the *detection logic* that decides which phase to
-# run next -- the blkid/lsblk parsing below -- has not itself been exercised
-# through a full build. It is reasoned from what today's one build looked
-# like at each stage, not proven across a second one. If its guess about
-# what comes next looks wrong, trust your own read of the state over this
-# script's, and fix the detection rather than working around it quietly.
+# **Status: run for real, 2026-09-06** -- drove phases 3 through 5's
+# `--start` to completion in one pass (found and fixed a `findmnt -q` bug
+# along the way, since fixed here too). Only run once, from one specific
+# starting state (bose mid-build, not yet provisioned); the *detection
+# logic* for other starting states -- a fresh card not yet attached, a USB
+# disk already labelled, more than one USB disk present -- is still
+# reasoned from what that one build looked like, not exercised. If its
+# guess about what comes next looks wrong for a state this hasn't seen yet,
+# trust your own read of the state over this script's, and fix the
+# detection rather than working around it quietly.
 #
 #     bash BosePi/build-bose-card.sh
 #
@@ -34,9 +36,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 HOST="${HOST:-pi@bose}"
 
 caveat \
-    "This orchestrator's phase-detection logic has not itself been run" \
-    "end to end -- see the header. Read what it says it found below;" \
-    "don't just watch for it to finish."
+    "Run for real once, from one specific starting state -- see the header" \
+    "for which state that was. Read what it says it found below, don't" \
+    "just watch for it to finish."
 
 step "Where things stand"
 
