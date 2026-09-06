@@ -175,6 +175,59 @@ somewhere to land, and B was the half nothing wrote yet.
 (`[IMPL-BOS-085]`) did before B was ever locked: `rsync` the bundle's
 `audio/` into `/srv/library/audio/` inside the window it opens.
 
+**`[IMPL-BOS-160]` The lock-in escape hatch — a flag file, checked at boot,
+that undoes `--lock-in` without a card pull.** `[IMPL-BOS-120]` calls
+`--lock-in` "the point of no easy return" honestly: after it, a mistake in
+`/etc` means another card swap, because `raspi-config`'s own internals are
+not something to reverse-engineer under pressure. This narrows that to two
+reboots, for the case that actually matters most — the system boots fine,
+and someone just wants A writable again.
+
+A marker file in either of two places, checked by a systemd unit
+(`vaino-unlock-check.service`) ordered right after both mount:
+
+| Marker | Partition | Reachable when |
+| :--- | :--- | :--- |
+| `/var/vaino/unlock/request` | C (`f2fs`) | SSH still works — no card needed at all |
+| `/boot/firmware/unlock-request` | boot (`vfat`) | SSH is broken, any reader can still write plain FAT |
+
+Finding either, `vaino-unlock-check.sh` runs `raspi-config nonint
+do_overlayfs 1` — the exact inverse of `--lock-in`'s own call, re-enabling
+`/boot/firmware` writes and disabling the overlay together — puts B's
+`fstab` line back to `defaults` too (a full unlock restores the whole
+pre-lock-in state, not only A), and reboots. Two reboots to actually land
+in a writable system: this one notices the marker and flips the config; the
+next one boots into the result. The marker is deleted only if
+`do_overlayfs` reported success — a failure retries on the next boot
+instead of silently giving up, an accepted risk rather than one engineered
+around, since the command is the identical one `--lock-in` itself already
+trusts.
+
+**Must exist on A before `--lock-in` ever runs, not after — the whole
+reason this is worth saying plainly.** Once A is the overlay's read-only
+lower layer, adding anything to it needs the overlay disabled first, which
+is exactly what this script exists to do. `provision-bose.sh` installs it
+alongside `vaino`/`mpd`, so every card built from here on has the escape
+hatch before it is ever locked.
+
+**Deliberately narrow, restated so it is not oversold.** Rescues "A boots,
+and I want it writable" — nothing running under systemd can rescue a boot
+that never gets that far, which still needs a card and a reader, the same
+as today. It does not touch B's temporary-reopen case at all; that is
+`attended-import.sh`'s job, needs no reboot, and was already solved before
+this existed.
+
+`BosePi/request-unlock.sh` is the human-facing half: writes the C-side
+marker over SSH and reboots, asked twice like every other script here that
+undoes something deliberate.
+
+**Run for real against `bose` 2026-09-06**: marker written, one reboot,
+log confirmed `do_overlayfs 1 exit 0` and the marker cleared. Only the
+already-unlocked case, since `bose` was not `--lock-in`'d yet at the time
+— `raspi-config` treats "already in the target state" as success. The real
+enabled-to-disabled transition is unproven; verifying it is the natural
+first thing to do right after `--lock-in`.
+
 **C — state, read-write, the only continuously written partition.**
 
 | Path | What |

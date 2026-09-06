@@ -40,8 +40,10 @@ state.
 | [`lib.sh`](lib.sh) | shared logging/precondition helpers | sourced, not run | Exercised via every script above |
 | [`mpd.conf`](mpd.conf) | the guest's configuration, paths split across two partitions | deployed by phase 3 | Yes |
 | [`vaino-bose.service`](vaino-bose.service) | vaino's unit | deployed by phase 5 | Yes — needed `--device hifiberry` (missing entirely at first; without it, `vaino` opened the Pi's own silent onboard jack, played, reported healthy, produced nothing audible). Confirmed audible after that fix, and again after a real cold boot. |
+| [`vaino-unlock-check.sh`](vaino-unlock-check.sh) + [`.service`](vaino-unlock-check.service) | the lock-in escape hatch, checked every boot | deployed by phase 3 | Marker-to-reboot-to-cleared confirmed live — but only the already-unlocked no-op case; the real enabled-to-disabled transition is unproven until `--lock-in` runs |
+| [`request-unlock.sh`](request-unlock.sh) | writes the C-side marker, asks twice | dev host, over SSH | Same as above — run once, real, no-op case only |
 
-**`bose` is playing, audibly, on a clean traceable build (`358c5b176833`), through two full cold-boot cycles, as of 2026-09-06.** Not yet `--lock-in`'d — B and A's overlay stay exactly as `--start` left them until that's a deliberate decision, per `[IMPL-BOS-120]`.
+**`bose` is playing, audibly, on a clean traceable build (`358c5b176833`), through two full cold-boot cycles, as of 2026-09-06.** Not yet `--lock-in`'d — B and A's overlay stay exactly as `--start` left them until that's a deliberate decision, per `[IMPL-BOS-120]`. The escape hatch (`[IMPL-BOS-160]`) is installed and enabled, ahead of that decision, since it can't be added afterward without the very card access it exists to avoid.
 
 **Every "Proven? No" above means exactly that, not "probably fine."** Each of
 those scripts encodes a sequence that was worked out and, where noted, done
