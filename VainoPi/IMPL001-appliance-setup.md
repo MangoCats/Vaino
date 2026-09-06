@@ -168,9 +168,10 @@ Wants=sound.target
 
 [Service]
 Type=simple
-# --output selects the profile: "bluealsa" (A), "hifiberry" (B), a USB DAC
-# name (C), or omitted for the system default (D).
-ExecStart=/usr/local/bin/vaino --db /var/lib/vaino/vaino.db --music /srv/music           --output ${VAINO_OUTPUT}
+# <vaino.db> is positional, not a --db flag [player/src/bin/vaino.rs]. Output
+# selection is --device NAME (a substring match against the audio device),
+# omitted for the system default -- there is no --output flag or profile enum.
+ExecStart=/usr/local/bin/vaino /var/lib/vaino/vaino.db --device ${VAINO_DEVICE}
 EnvironmentFile=/etc/vaino.conf
 Restart=always
 RestartSec=2
@@ -183,6 +184,19 @@ MemoryMax=200M
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **Corrected 2026-09-06, found building `bose`:** the `ExecStart` above no
+> longer matches the binary — `--db`, `--music` and `--output` do not exist
+> as flags. The actual, currently-deployed form, confirmed against `vainopi`'s
+> real unit (`[PI002](PI002-test-image-setup.md)`, `[PI005](PI005-appliance-library.md)`):
+> `ExecStart=/usr/local/bin/vaino /srv/library/vaino.db --port 5720` — one
+> positional path, no `--music`/`--output` at all. The MPD guest path (used on
+> `bose`, not here) adds `--mpd HOST:PORT --mpd-root DIR`
+> `[BosePi/BOSE003](../BosePi/BOSE003-build-procedure.md)`. This document's
+> `--device` framing above is corrected to match the real flag name, but the
+> `--db`/`--music`/`--output` shape was never real for this binary — recorded
+> per this project's own discipline of not silently overwriting a decision
+> once something built on it.
 
 **`[IMPL-SVC-030]`** `MemoryMax=200M` turns the `[REQ-HW-100]` budget into an enforced limit rather than an aspiration: exceeding it kills the service and `Restart=always` recovers, which is loud and diagnosable instead of the machine silently thrashing into swap.
 

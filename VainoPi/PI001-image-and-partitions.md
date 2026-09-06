@@ -52,16 +52,56 @@ calls Overlay File System. Writes land in a RAM overlay and are discarded at
 reboot; the SD card is never written during normal running.
 
 **`[PI-A-020]` The overlay is RAM, and RAM is the scarce resource.** A Pi Zero
-2W has 512 MB, and `[REQ-HW-010A]` budgets the player under 30 MB. An overlay
-that accumulates writes competes directly with the audio buffers. Everything
-that writes routinely must therefore be moved *off* the overlay rather than
-allowed to fill it:
+2W has 512 MB, and `[REQ-HW-100]` budgets the player under 150 MB RSS.
+*(Corrected 2026-09-06: this previously cited `[REQ-HW-010A]`'s 30 MB figure,
+a tag that no longer exists in `REQ002` — renumbered, and loosened 5x, when
+`REQ001` was retired. The argument below is unaffected; the number was
+wrong.)* An overlay that accumulates writes competes directly with the audio
+buffers. Everything that writes routinely must therefore be moved *off* the
+overlay rather than allowed to fill it:
 
 - `/var/log` → bind-mounted to partition C. Left alone this is the single
   largest consumer, and it grows without bound on a machine that never reboots.
 - `/tmp` → `tmpfs` with an explicit `size=` cap, so a runaway cannot take the
   memory the mixer needs.
 - systemd journal → `Storage=volatile`, `RuntimeMaxUse=8M`.
+
+**`[PI-A-025]` Host identity and credentials are a different class of write
+from logs and temp files, and the overlay destroys them the same way.**
+Everything in `[PI-A-020]`'s list is routine noise the machine can afford to
+lose. This is not: it is the material that lets the appliance be reached and
+trusted at all, and losing it on every power cycle does not degrade the
+appliance — it locks it out, a strictly worse failure than anything C is
+designed to absorb.
+
+Found in practice, not in design, during the `bose` build: `/home/pi/.ssh`
+sat on the overlay, so an `authorized_keys` line added for that build vanished
+on the very next power cycle. An appliance switched off at the wall lost its
+own means of being reached the same way it would have lost anything else
+written there.
+
+What belongs on C instead, bind-mounted before the first thing that depends on
+it runs:
+
+- **`/etc/ssh`**, host keys included. Left on the overlay, the machine's SSH
+  identity changes every boot — worse than losing `authorized_keys`, because
+  it makes every client that has ever connected actively distrust the host
+  rather than merely fail to log in.
+- **`/home/pi`**, the whole home directory rather than only `.ssh` —
+  bind-mounted before the user is created at first boot, so `authorized_keys`
+  and anything else cloud-init or the listener writes there persists by
+  construction instead of by remembering to special-case one subdirectory.
+- **NetworkManager's connection profiles**
+  (`/etc/NetworkManager/system-connections`) — `[SPEC034]`'s confirm-or-revert
+  flow lets a listener join the appliance to a house network from the web UI.
+  Left on the overlay, the appliance forgets that network the moment it is
+  switched off at the wall, which is the exact event this whole design exists
+  to survive.
+
+The mechanism is the one `[PI-SET-040]` already uses for Bluetooth's pairing
+keys: an empty directory pre-created on C, an `fstab` bind mount ordered ahead
+of whatever first populates it, and nothing about the service or package
+needs to know its state moved.
 
 **`[PI-A-030]` Nothing about the library lives here.** The binary, the unit
 file and the OS. A software update is a new image or an `rw` remount performed
@@ -125,6 +165,17 @@ of exactly the data nothing can rebuild, so this partition pays the fsync.
 ---
 
 ## 5. The database split
+
+**Still design, not code, confirmed 2026-09-06.** Building `bose`'s image was
+the first real attempt to apply this section, and it found no `ATTACH`, no
+second file, no schema split — `vaino.db` is still one file, exactly as
+`[SPEC-SC-010]` describes it today. `bose`'s image was built around that
+reality rather than this one: the whole file lives on C, not split across B
+and C — see [BOSE002 `[IMPL-BOS-078]`](../BosePi/BOSE002-image-build.md) for
+why that specific substitution is safe for `bose` (its B genuinely becomes
+read-only) in a way it happens not to be for `vainopi` (whose data partition
+never actually does). This section's design is unchanged by that; it simply
+has not been built yet.
 
 **`[PI-DB-010]` One file becomes two, along a line the schema already draws.**
 `[SPEC-SC-020]` segregates listener state by the `listener_` prefix precisely
@@ -423,11 +474,12 @@ Two things keep it that way:
   to hold the boot. If C is not there promptly, boot proceeds on A's default
   and the access point comes up with the published credentials — which is the
   same recovery path as a factory reset.
-- **Audio does not wait for any of this.** `[REQ-HW-010B]`'s one-second budget
+- **Audio does not wait for any of this.** `[REQ-HW-110]`'s best-effort budget
   is the audio path's, and it depends on partition B and the sound device, not
   on the network. The web interface is explicitly allowed to arrive later
-  `[REQ-HW-010B]`; a listener hears music before a browser could have
-  connected either way.
+  `[REQ-HW-110]`; a listener hears music before a browser could have
+  connected either way. *(`REQ-HW-010B` renumbered/renamed — see the
+  correction at `[PI-A-020]`.)*
 
 **`[PI-SET-040]` Bluetooth pairing is stateful and belongs on partition C.**
 BlueZ keeps its keys under `/var/lib/bluetooth`, which must therefore be
@@ -461,7 +513,7 @@ script exists in the tree yet):
 5. seed B with `library.db` and the audio; seed C with an empty `listener.db`;
 6. enable the overlay on A **last** — every step above needs a writable root;
 7. first-boot service: verify C, recreate it if absent `[PI-C-040]`, start
-   playing before the network is up `[REQ-HW-010B]`.
+   playing before the network is up `[REQ-HW-110]`.
 
 **`[PI-IMG-020]` Order matters at step 6.** Enabling the overlay before the
 seeding is done leaves an image that boots, appears correct, and has silently

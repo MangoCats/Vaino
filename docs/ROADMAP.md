@@ -44,6 +44,7 @@ folded into one spec.
 | Image & partitions | [VainoPi/PI001](../VainoPi/PI001-image-and-partitions.md) | [§7 What is not yet decided](../VainoPi/PI001-image-and-partitions.md#7-what-is-not-yet-decided) |
 | Appliance characterisation | [VainoPi/PI006](../VainoPi/PI006-appliance-characterisation.md) | [§9 What was not measured](../VainoPi/PI006-appliance-characterisation.md#9-what-was-not-measured) |
 | MPD on the appliance | [VainoPi/PI007](../VainoPi/PI007-mpd-on-the-appliance.md) | [§4 What was not measured](../VainoPi/PI007-mpd-on-the-appliance.md#4-what-was-not-measured) |
+| The second appliance, `bose` (build started 2026-09-06, in progress) | [BosePi/](../BosePi/) | [BOSE003 §4 Open](../BosePi/BOSE003-build-procedure.md#4-open-and-to-be-measured-before-it-is-claimed) |
 
 ## 2. Sendspin — a whole directory of "watch, don't build yet"
 

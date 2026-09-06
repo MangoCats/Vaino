@@ -15,6 +15,18 @@
 # **It stops before making anything read-only.** Step 10 of [BOSE002 §6] --
 # `fstab` ro and the overlay -- is not here, because after it a mistake costs a
 # card swap and the machine should have been listened to first [IMPL-BOS-120].
+# (That step now lives in `finalize-bose.sh`.)
+#
+# **Status: ran successfully against bose twice on 2026-09-06** -- once that
+# found the `blkid` PATH bug and the broken `findmnt` verification lines
+# (both fixed, both re-verified on the second run), and once clean. The
+# `chown $LIB_MOUNT` and `mkdir $LIB_MOUNT/mpd` lines were added *after* that
+# second run, to close gaps `seed-library.sh` hit by hand -- they have not
+# themselves been exercised through this script yet, only as the equivalent
+# manual commands. A different Raspberry Pi OS release's package set,
+# default permissions, or `mpd` version could all change what these steps
+# actually need to do; read what each step reports rather than only its
+# aggregate exit code.
 set -uo pipefail
 
 HOST="${1:-pi@bose}"
@@ -26,6 +38,12 @@ say()  { printf '  %s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
 die()  { printf 'provision: %s\n' "$*" >&2; exit 1; }
 on()   { ssh "$HOST" "$@"; }
+
+say "-----------------------------------------------------------------"
+say "The chown/mkdir lines added after this script's last real run have not"
+say "themselves been exercised through it -- see the header. Read each"
+say "step's own output below."
+say "-----------------------------------------------------------------"
 
 step "Reaching $HOST"
 ssh -o ConnectTimeout=10 "$HOST" true 2>/dev/null || die "$HOST is not reachable"
@@ -43,7 +61,10 @@ step "Partitions"
 # provisioning script that writes to the wrong partition is [IMPL-BOS-110]
 # again, one phase later.
 for label in SYSTEM STATE LIBRARY; do
-    dev=$(on "blkid -L $label 2>/dev/null")
+    # sudo, not a bare call: blkid lives in /sbin, off a non-root PATH by
+    # default -- the same gotcha [BOSE003 §1] already found once for bose's
+    # own shell, missed here until this script's first real run.
+    dev=$(on "sudo blkid -L $label 2>/dev/null")
     [ -n "$dev" ] || die "no partition labelled $label -- was prepare-card.sh run?"
     say "$(printf '%-8s %s' "$label" "$dev")"
 done
@@ -52,8 +73,23 @@ step "Mounts"
 on "sudo mkdir -p $LIB_MOUNT $STATE_MOUNT
     grep -q 'LABEL=LIBRARY' /etc/fstab || echo 'LABEL=LIBRARY $LIB_MOUNT ext4 defaults,noatime 0 2' | sudo tee -a /etc/fstab >/dev/null
     grep -q 'LABEL=STATE'   /etc/fstab || echo 'LABEL=STATE   $STATE_MOUNT f2fs defaults,noatime 0 2' | sudo tee -a /etc/fstab >/dev/null
-    sudo mount -a" || die "mount failed"
-say "$(on "findmnt -no TARGET,FSTYPE,OPTIONS $LIB_MOUNT $STATE_MOUNT" | sed 's/^/  /')"
+    sudo mount -a
+    # pi-writable now, while B is still meant to accept an import -- found
+    # missing when seed-library.sh's rsync hit Permission denied creating
+    # $LIB_MOUNT/audio. B still goes ro at finalize-bose.sh's --lock-in.
+    sudo chown pi:pi $LIB_MOUNT" || die "mount failed"
+for t in "$LIB_MOUNT" "$STATE_MOUNT"; do
+    say "$(on "findmnt -no TARGET,FSTYPE,OPTIONS $t" 2>/dev/null || echo "$t: not mounted")"
+done
+
+step "Grow A if prepare-card.sh couldn't  [IMPL-BOS-072]"
+# bose's own bullseye e2fsprogs can't check a filesystem Bookworm's newer
+# mkfs.ext4 wrote, so prepare-card.sh may have left A at its pre-grown size.
+# This host IS the matching OS now, so its e2fsprogs can do it -- and growing
+# a mounted root filesystem online is an ordinary, safe operation.
+ROOT_DEV=$(on "findmnt -no SOURCE /" )
+on "sudo resize2fs $ROOT_DEV" || die "could not grow A -- check with 'df -h /' on $HOST"
+say "$(on "df -h / | tail -1")"
 
 step "Packages"
 on "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -86,6 +122,30 @@ on "sudo mkdir -p $STATE_MOUNT/log $STATE_MOUNT/mpd/playlists $STATE_MOUNT/backu
       || echo '$STATE_MOUNT/log /var/log none bind 0 0' | sudo tee -a /etc/fstab >/dev/null"
 say "listener.db, logs, mpd state and backups all under $STATE_MOUNT"
 
+step "SSH identity and known networks, off the overlay  [PI-A-025]"
+# Found by building this very card: authorized_keys added while /home/pi sat
+# on the overlay vanished on the next power cycle. Host keys and NM's
+# connection profiles are the same class of loss -- credentials, not noise --
+# so all three move to C, bind-mounted, seeded once from whatever this boot
+# already generated. Idempotent: a mounted target means a prior run finished.
+on "sudo mkdir -p $STATE_MOUNT/etc-ssh $STATE_MOUNT/home-pi $STATE_MOUNT/nm-connections
+    mountpoint -q /etc/ssh || sudo cp -a /etc/ssh/. $STATE_MOUNT/etc-ssh/
+    mountpoint -q /home/pi || sudo cp -a /home/pi/. $STATE_MOUNT/home-pi/
+    mountpoint -q /etc/NetworkManager/system-connections \
+      || sudo cp -a /etc/NetworkManager/system-connections/. $STATE_MOUNT/nm-connections/ 2>/dev/null
+    sudo chown -R pi:pi $STATE_MOUNT/home-pi
+    sudo chmod 700 $STATE_MOUNT/nm-connections
+    grep -q '$STATE_MOUNT/etc-ssh' /etc/fstab \
+      || echo '$STATE_MOUNT/etc-ssh /etc/ssh none bind 0 0' | sudo tee -a /etc/fstab >/dev/null
+    grep -q '$STATE_MOUNT/home-pi' /etc/fstab \
+      || echo '$STATE_MOUNT/home-pi /home/pi none bind 0 0' | sudo tee -a /etc/fstab >/dev/null
+    grep -q '$STATE_MOUNT/nm-connections' /etc/fstab \
+      || echo '$STATE_MOUNT/nm-connections /etc/NetworkManager/system-connections none bind 0 0' | sudo tee -a /etc/fstab >/dev/null
+    sudo mount -a" || die "SSH/NM persistence setup failed"
+for t in /etc/ssh /home/pi /etc/NetworkManager/system-connections; do
+    say "$(on "findmnt -no TARGET,FSTYPE $t" 2>/dev/null || echo "$t: not mounted")"
+done
+
 step "Journal  [supersedes PI-A-020]"
 # Persistent on C, capped -- not Storage=volatile, because volatile is RAM and
 # RAM is the resource this whole layout is defending.
@@ -99,6 +159,9 @@ step "MPD"
 scp -q BosePi/mpd.conf "$HOST:/tmp/mpd.conf" || die "upload failed"
 on "sudo cp /tmp/mpd.conf /etc/mpd.conf
     sudo mkdir -p /etc/systemd/system/mpd.service.d
+    # mpd.conf's own db_file lives here [BOSE002 §3] -- mpd fails to start
+    # without it, found missing on this build's first --start.
+    mkdir -p $LIB_MOUNT/mpd
     sudo systemctl mask mpd.socket >/dev/null 2>&1
     sudo systemctl daemon-reload"
 say "installed; db_file on B, state on C  [BOSE002 §3]"

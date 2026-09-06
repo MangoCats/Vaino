@@ -22,21 +22,54 @@ every reader working out which machine each paragraph was about.
 
 ## What is here to run
 
-| | |
-| :--- | :--- |
-| [`prepare-card.sh`](prepare-card.sh) | Phases 1–2. Runs **on `bose`**, against a card in a USB reader |
-| [`provision-bose.sh`](provision-bose.sh) | Phase 3. Runs **on the development host**, over SSH |
-| [`mpd.conf`](mpd.conf) | The guest's configuration, with its paths split across two partitions |
+The build is a five-phase pipeline across two machines with a physical card
+swap in the middle — no single script can run start to finish unattended, so
+[`build-bose-card.sh`](build-bose-card.sh) detects which phase is next and
+either runs it or tells you the one physical action needed to reach the next
+state.
+
+| | Phase | Runs on | Proven? |
+| :--- | :--- | :--- | :--- |
+| [`patch-boot-image.ps1`](patch-boot-image.ps1) | 1b: patch a freshly-imaged card's boot partition | dev host (Windows) | Manually, yes; **this exact script, no** |
+| [`prepare-card.sh`](prepare-card.sh) | 2: partition and format | **on `bose`**, card in a USB reader | Yes, once, 2026-09-06 |
+| [`provision-bose.sh`](provision-bose.sh) | 3: packages, mounts, `vaino`/`mpd` binaries | dev host, over SSH | Yes, twice — but 2 lines added since, **unexercised** |
+| [`seed-library.sh`](seed-library.sh) | 4: deploy the local library via `relink` | dev host | Manually, yes; **this exact script, no** |
+| [`finalize-bose.sh`](finalize-bose.sh) | 5: start, then (only when told) lock down | dev host, over SSH | **No — phase 5 hasn't happened yet** |
+| [`build-bose-card.sh`](build-bose-card.sh) | orchestrates 2–5 | dev host | **No — its detection logic is reasoned, not run** |
+| [`lib.sh`](lib.sh) | shared logging/precondition helpers | sourced, not run | (only as exercised via the above) |
+| [`mpd.conf`](mpd.conf) | the guest's configuration, paths split across two partitions | deployed by phase 3 | Yes |
+| [`vaino-bose.service`](vaino-bose.service) | vaino's unit | deployed by phase 5 | **No** |
+
+**Every "Proven? No" above means exactly that, not "probably fine."** Each of
+those scripts encodes a sequence that was worked out and, where noted, done
+successfully *by hand* — but the script itself, with its own exact commands,
+regexes, and assumptions, has not been watched succeed. Different tool
+versions, a different Raspberry Pi OS release, or bose-specific quirks not
+yet hit could all change what "correct" looks like without the script
+knowing. Each one says so in its own header and prints a reminder when run —
+read their output, don't just wait for a clean exit.
+
+Every phase script is idempotent except two steps that say so explicitly and
+refuse instead of guessing: `prepare-card.sh` won't repair an existing but
+wrong partition table, and `seed-library.sh`'s final swap-in won't overwrite
+an existing `/var/vaino/vaino.db` without `--force-swap`. `finalize-bose.sh
+--lock-in` never runs without a human typing `--confirm-heard-it-play` —
+[`build-bose-card.sh`](build-bose-card.sh) stops one step short of it, always.
 
 ## State of this work
 
-**Nothing has been executed.** The surveys are measurements; everything else is
-a plan. `prepare-card.sh`'s refusal paths have been tested on `bose` — it
-declines `/dev/mmcblk0`, a partition, a non-existent device, and a missing
-argument — but its destructive path has not been run, because
-`[IMPL-BOS-130]`'s card reader does not exist yet.
+**In progress, first real build, started 2026-09-06.** The *procedure* for
+phases 1–4 has been carried out successfully by hand against real hardware —
+see [BOSE003](BOSE003-build-procedure.md)'s "Corrected" notes for what didn't
+match the plan on contact (cloud-init instead of `userconf.txt`, a `resize`
+token instead of `firstboot`, `bose`'s own e2fsprogs unable to grow the new
+filesystem, a missing `NOPASSWD` sudoers entry, `blkid` off-PATH, `/srv/library`
+ownership, MPD's missing `db_file` directory). The *scripts* that now encode
+that procedure are newer than the hands that did it — see the table above for
+which ones have actually been run as scripts versus written from what worked
+manually. Phase 5 has not happened at all yet, by hand or otherwise.
 
-Two decisions are deliberately left open rather than guessed:
+Two decisions from the original plan remain open, unaffected by the above:
 
 - **`[IMPL-BOS-090]`** — whether MPD should share a sink with the player
   (software mixer, crossfade works) or take the DAC directly (hardware mixer,
@@ -47,5 +80,7 @@ Two decisions are deliberately left open rather than guessed:
   not have the fault.
 
 > **`bose` is somebody's working music player**, with MuLibPlay running on it
-> now `[PI-BOS-040]`. Everything here builds a *new* card. The old one stays
-> intact and is the way back.
+> until this build. Everything here builds a *new* card. The old one stays
+> intact and is the way back — see [IMPL-BOS-085](BOSE003-build-procedure.md)
+> for how it's being kept that way even as the new one is seeded from a
+> different source.
