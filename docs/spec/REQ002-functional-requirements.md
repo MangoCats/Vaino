@@ -999,6 +999,8 @@ This is deliberately **not** an absolute target, because the audio output channe
 
 **`[REQ-HW-147]` At least one verification must use a real audio device.** A null sink reports no device rate and therefore cannot detect a sample-rate fault. This is not hypothetical: playback ran **8.8% fast — about 1.5 semitones sharp** — because a 48 kHz device met a 44.1 kHz library with the resampler unwired, and every prior test had used a null sink.
 
+**`[REQ-HW-150]` Where the library lives on its own partition, it stays read-only outside a deliberate, bounded import — never open the rest of the time.** Adding content is an attended operation with a clear start and end, not a standing state; the window a mistake or a power loss could land in should be exactly as long as the import itself, not the appliance's whole service life. Built for `bose` as `BosePi/attended-import.sh` `[IMPL-BOS-150]`.
+
 ## 7. Non-Requirements
 
 **`[REQ-NEG-100]`** Vaino does **not** stream audio to remote devices `[REQ-AUD-150]`, require any live external service at playback time, or modify audio data `[REQ-AUD-100]`.
