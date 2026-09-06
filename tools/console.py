@@ -723,6 +723,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file("flags.html", "text/html; charset=utf-8")
             if p == "/api/flags":
                 return self.send_json(flags(conn))
+            if p == "/mesh":
+                return self.send_file("mesh.html", "text/html; charset=utf-8")
+            if p == "/api/peers":
+                return self.send_json(STATE["jobs"].list_peers())
             if p == "/system":
                 return self.send_file("system.html", "text/html; charset=utf-8")
             if p == "/api/system":
@@ -932,6 +936,62 @@ class Handler(BaseHTTPRequestHandler):
                 if not remote:
                     return self.send_json({"error": "no remote configured yet"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("remote-push", remote)})
+            if p == "/api/peers":
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                name = (payload.get("name") or "").strip()
+                remote = (payload.get("remote") or "").strip()
+                if not name or not remote or ":" not in remote:
+                    return self.send_json(
+                        {"error": "expected {name, remote: user@host:/path/to/vaino.db}"}, code=400)
+                STATE["jobs"].upsert_peer(name, remote)
+                return self.send_json({"name": name, "remote": remote})
+            if p.startswith("/api/peers/") and p.endswith("/delete"):
+                name = p.split("/")[3]
+                STATE["jobs"].delete_peer(name)
+                return self.send_json({"deleted": name})
+            if p.startswith("/api/peers/") and p.endswith("/activate"):
+                # [SPEC-MESH-092]: this is the only thing that changes what
+                # remote-pull/remote-push/sync-preferences act on -- those
+                # three jobs are untouched, still reading remote_config.
+                name = p.split("/")[3]
+                remote = STATE["jobs"].activate_peer(name)
+                if remote is None:
+                    return self.send_json({"error": f"no such peer: {name}"}, code=404)
+                return self.send_json({"remote": remote})
+            if p == "/api/mesh/diff":
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                peer = next((pr for pr in STATE["jobs"].list_peers()
+                             if pr["name"] == payload.get("peer")), None)
+                if peer is None:
+                    return self.send_json({"error": f"no such peer: {payload.get('peer')}"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("mesh-diff", peer["remote"])})
+            if p == "/api/mesh/resolve":
+                # `key`/`choice`/`value` are resolved server-side into one
+                # `target` for the job [SPEC-MESH-098] -- the client sends a
+                # peer *name*, resolved to its remote here rather than
+                # trusted, the same posture accept-remote already takes
+                # toward its own anchor.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                peer = next((pr for pr in STATE["jobs"].list_peers()
+                             if pr["name"] == payload.get("peer")), None)
+                if peer is None:
+                    return self.send_json({"error": f"no such peer: {payload.get('peer')}"}, code=400)
+                if payload.get("table") not in ("recordings", "passages") or not payload.get("key"):
+                    return self.send_json({"error": "expected {peer, table, key, choice|value}"}, code=400)
+                if "choice" in payload:
+                    if payload["choice"] not in ("local", "peer"):
+                        return self.send_json({"error": "choice must be 'local' or 'peer'"}, code=400)
+                    target = json.dumps({"peer": peer["remote"], "table": payload["table"],
+                                          "key": payload["key"], "choice": payload["choice"]})
+                elif "value" in payload and isinstance(payload["value"], dict):
+                    target = json.dumps({"peer": peer["remote"], "table": payload["table"],
+                                          "key": payload["key"], "value": payload["value"]})
+                else:
+                    return self.send_json({"error": "expected choice: local|peer, or value: {...}"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("mesh-resolve", target)})
             if p == "/api/remote/sync-preferences":
                 # `[SPEC030]`: both directions in one job, last-write-wins by
                 # `updated_at`, not a pull/push pair -- `listener_preferences`

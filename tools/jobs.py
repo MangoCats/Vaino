@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'analyze-amplitude' | 'analyze-flavor'
                                         -- | 'segment-dao' | 'cd-rip'
                                         -- | 'sync-preferences'
+                                        -- | 'mesh-diff' | 'mesh-resolve'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -67,6 +68,15 @@ CREATE INDEX IF NOT EXISTS job_events_job ON job_events(job_id, event_id);
 CREATE TABLE IF NOT EXISTS remote_config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+-- Named peers for mesh sync `[SPEC-MESH-090]`. Additive, not a replacement
+-- for `remote_config` above: the three existing sync jobs keep reading
+-- `remote_config` unchanged, and activating a peer (`activate_peer()`) is
+-- exactly `set_remote(peer.remote)` -- this table is only where names live.
+CREATE TABLE IF NOT EXISTS sync_peers (
+    name    TEXT PRIMARY KEY,
+    remote  TEXT NOT NULL,             -- user@host:/path/to/vaino.db
+    enabled INTEGER NOT NULL DEFAULT 1
 );
 """
 
@@ -223,6 +233,40 @@ class Runner:
         db.commit()
         db.close()
 
+    def list_peers(self) -> list:
+        db = self._db()
+        rows = [dict(r) for r in db.execute(
+            "SELECT name, remote, enabled FROM sync_peers ORDER BY name")]
+        db.close()
+        return rows
+
+    def upsert_peer(self, name: str, remote: str) -> None:
+        db = self._db()
+        db.execute(
+            "INSERT INTO sync_peers (name, remote) VALUES (?1, ?2) "
+            "ON CONFLICT(name) DO UPDATE SET remote=excluded.remote", (name, remote))
+        db.commit()
+        db.close()
+
+    def delete_peer(self, name: str) -> None:
+        db = self._db()
+        db.execute("DELETE FROM sync_peers WHERE name=?1", (name,))
+        db.commit()
+        db.close()
+
+    def activate_peer(self, name: str) -> str | None:
+        """`[SPEC-MESH-092]`: makes `name` the target `remote-pull`/
+        `remote-push`/`sync-preferences` act on, without those jobs
+        changing at all -- they still just call `get_remote()`.
+        """
+        db = self._db()
+        r = db.execute("SELECT remote FROM sync_peers WHERE name=?1", (name,)).fetchone()
+        db.close()
+        if r is None:
+            return None
+        self.set_remote(r["remote"])
+        return r["remote"]
+
     def recent(self, limit: int = 25) -> list:
         db = self._db()
         rows = db.execute("SELECT job_id,kind,target,state,created_at,started_at,ended_at "
@@ -324,6 +368,18 @@ class Runner:
         if kind == "accept-remote":
             return self._accept_remote(job_id, target)
 
+        if kind == "mesh-diff":
+            # `target` is plain `user@host:/path` -- the same shape as
+            # `remote-pull`/`remote-push`, not the JSON-packed target
+            # `accept-release`-style jobs use, since a diff needs nothing
+            # beyond which peer to compare against `[SPEC-MESH-096]`.
+            return self._run_single_stage(job_id, "diff", [
+                sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "mesh_diff.py"), self.library, target, "--json"])
+
+        if kind == "mesh-resolve":
+            return self._mesh_resolve(job_id, target)
+
         if kind == "suggest-release":
             return self._suggest_release(job_id, target)
 
@@ -419,6 +475,26 @@ class Runner:
         argv = [sys.executable, os.path.join(tools, "sync_preferences.py"),
                 self.library, target, "--commit", "--json"]
         self._run_single_stage(job_id, "sync", argv)
+
+    def _mesh_resolve(self, job_id: int, target: str):
+        """`[SPEC-MESH-098]` -- `target` is JSON: `{peer, table, key, choice}`
+        or `{peer, table, key, value}`, built by `/api/mesh/resolve` from
+        what a person picked in the conflict review UI `[SPEC-MESH-100]`.
+        `key` travels as a JSON array (`resolve_mesh_conflict.py`'s own
+        `--key` argument), matching `mesh_diff.py`'s own identity tuples --
+        never a local row id, which is exactly the non-portable key
+        `[SPEC-DF-035]` already rules out for anything crossing a machine.
+        """
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "resolve_mesh_conflict.py"),
+                self.library, payload["peer"], "--table", payload["table"],
+                "--key", json.dumps(payload["key"]), "--commit", "--json"]
+        if "choice" in payload:
+            argv += ["--choice", payload["choice"]]
+        else:
+            argv += ["--value", json.dumps(payload["value"])]
+        self._run_single_stage(job_id, "resolve", argv)
 
     def _remote_push(self, job_id: int, target: str):
         """A GUI over `export_changes.py`/`apply_changes.py --emit-sql`

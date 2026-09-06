@@ -155,12 +155,17 @@ def main() -> int:
     ap.add_argument("--table", action="append", dest="tables",
                      choices=list(TABLES), help="limit to one table (repeatable)")
     ap.add_argument("-o", "--out", help="write the full report as JSON")
+    ap.add_argument("--json", action="store_true",
+                     help="print {\"ok\": true, ...report} as the final line "
+                          "[jobs.py's parse_json_tail convention]")
     args = ap.parse_args()
 
     try:
         report = run(args.local_db, args.remote, args.tables)
     except RuntimeError as e:
         say(f"mesh_diff: {e}")
+        if args.json:
+            say(json.dumps({"ok": False, "error": str(e)}))
         return 1
 
     say(summarize(report))
@@ -168,6 +173,12 @@ def main() -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         say(f"full report: {args.out}")
+    if args.json:
+        # A conflict is data to look at, not a failure of the diff itself
+        # [SPEC-MESH-038] -- "ok" here means "the comparison completed",
+        # independent of the exit code below, which still signals "something
+        # needs a person" to a caller running this by hand.
+        say(json.dumps({"ok": True, **report}))
     any_conflicts = any(d["conflict"] for d in report["tables"].values())
     return 1 if any_conflicts else 0
 
