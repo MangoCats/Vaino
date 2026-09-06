@@ -40,6 +40,8 @@ mod media;
 mod musicbrainz;
 mod preference;
 mod review;
+#[cfg(feature = "sampo-support")]
+mod sampo;
 mod segment;
 mod settings;
 mod skins;
@@ -56,6 +58,8 @@ use preference::*;
 use musicbrainz::*;
 #[cfg(feature = "sampo-support")]
 use review::*;
+#[cfg(feature = "sampo-support")]
+use sampo::*;
 #[cfg(feature = "sampo-support")]
 use segment::*;
 use settings::*;
@@ -410,7 +414,9 @@ pub fn router(ui: Ui) -> Router {
         .route("/edit/:passage_id/audio", get(edit_audio))
         .route("/edit/:passage_id/review", post(edit_review))
         .route(SEGMENT_QUEUE_ROUTE, get(segment_queue))
-        .route("/segment/:passage_id/accept", post(accept_segment));
+        .route("/segment/:passage_id/accept", post(accept_segment))
+        .route("/sampo/available", get(sampo_available))
+        .route("/sampo/ensure", post(sampo_ensure));
 
     router
         .route("/queue/:passages/:action", post(queue_passage))
@@ -694,6 +700,19 @@ mod tests {
         // this assertion holds either way; the route's own existence is
         // `sampo-support`'s to check.
         assert!(BROWSE_HTML.contains("/review"), "no way to reach the review page");
+    }
+
+    /// The Sampo link `[REQ-VIS-320]` and the routes it asks for -- present
+    /// in `BROWSE_HTML`/`BROWSE_JS` regardless of `sampo-support`, the same
+    /// reasoning `the_pages_load_the_runtime` already gives for `/review`
+    /// above: the literal markup/JS is compiled in either way, and whether
+    /// the routes themselves exist to answer it is `sampo-support`'s own
+    /// question, checked separately below.
+    #[test]
+    fn the_sampo_link_reaches_the_routes_it_asks_for() {
+        assert!(BROWSE_HTML.contains(r#"id="sampo-link""#), "browse has no Sampo link");
+        assert!(BROWSE_JS.contains("/sampo/available"), "browse.js never probes availability");
+        assert!(BROWSE_JS.contains("/sampo/ensure"), "browse.js never asks to launch Sampo");
     }
 
     /// The review page loads core the same way the others do -- gated with
