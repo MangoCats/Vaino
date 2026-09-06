@@ -141,18 +141,39 @@
     const text = $('buildtext').textContent;
     const said = t => { buildCopy.textContent = t;
                         setTimeout(() => { buildCopy.textContent = '⧉'; }, 1200); };
+    // The async Clipboard API is restricted to secure contexts (https, or
+    // localhost) -- this page reached over plain http on the appliance's
+    // own LAN or AP address is neither, so this throws *every* time there,
+    // not just when a user denies it. Confirmed live: on Windows/Chrome
+    // against a plain http:// address, this always falls through below.
     try {
       await navigator.clipboard.writeText(text);
       said('✓');
-    } catch {
-      // Denied, or an insecure origin. Select it instead so a manual copy is
-      // one keystroke rather than a careful drag.
-      const r = document.createRange();
-      r.selectNodeContents($('buildtext'));
-      const sel = window.getSelection();
-      sel.removeAllRanges(); sel.addRange(r);
-      said('✗');
-    }
+      return;
+    } catch { /* fall through */ }
+    // `execCommand('copy')` is not gated by secure-context the way the
+    // async API is above -- confirmed live to actually place text on the
+    // clipboard over plain http on Windows/Chrome, which is exactly the
+    // case the try above always hits there. A detached, off-screen textarea
+    // avoids disturbing anything the user already had selected on the page.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    let copied = false;
+    try { copied = document.execCommand('copy'); } catch { /* unsupported */ }
+    document.body.removeChild(ta);
+    if (copied) { said('✓'); return; }
+    // Both copy paths failed outright -- select the visible text in place
+    // so a manual copy is one keystroke (Ctrl/Cmd-C) rather than a careful
+    // drag across a small monospace hash.
+    const r = document.createRange();
+    r.selectNodeContents($('buildtext'));
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(r);
+    said('✗');
   };
 
   // Each term is shown separately, never just the product: a single number
