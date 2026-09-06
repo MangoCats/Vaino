@@ -49,6 +49,20 @@ need_addr() {
         || die "not a device address"
 }
 
+# How long a Wi-Fi/AP change waits for `wifi-confirm` before
+# `vaino-wifi-revert` fires unconditionally `[SPEC034]` -- PI001's own
+# "five minutes is generous" figure, `[PI-SET-014]`.
+REVERT_MIN="${VAINO_WIFI_REVERT_MIN:-5}"
+
+# The connection NetworkManager currently has active on wlan0, however
+# many colons its own name happens to contain -- matched by the fixed
+# `wlan0:` prefix `nmcli`'s terse mode always puts first, never by
+# position from the end, so a name is never mis-split on its own content
+# the way `awk -F: '{print $NF}'` would risk `[SPEC034]`.
+active_wifi_conn() {
+    nmcli -t -f DEVICE,NAME connection show --active 2>/dev/null | sed -n 's/^wlan0://p'
+}
+
 # bluetoothctl wants a login session's bus; sudo does not bring one.
 #
 # `$USER` is the fallback for a caller that already IS root without going
@@ -318,6 +332,151 @@ case "$VERB" in
         esac
         printf '{"ok":true,"mode":"%s"}\n' "$mode"
         ;;
+
+    # ---------------------------------------------------------------- wifi
+    # Moving the appliance into a new Wi-Fi network, or serving its own,
+    # entirely on NetworkManager `[SPEC034]` -- checked live before this was
+    # written: this device runs NetworkManager, not the hand-written
+    # `hostapd.conf`/`wpa_supplicant.conf` files `PI001` originally
+    # designed against. `nmcli`'s own connection profiles ARE the "known
+    # networks, remembered, autoconnect or not" list this needs; nothing
+    # here tracks that state a second time.
+    #
+    # Every verb below that can disconnect the very session asking for it
+    # (`wifi-connect`, `ap-start`, `ap-stop`) schedules
+    # `vaino-wifi-revert` via `systemd-run --on-active=` BEFORE touching
+    # anything, and only cancels that schedule on a *fast, certain*
+    # failure -- an apparent success still waits for `wifi-confirm`, since
+    # the command succeeding locally says nothing about whether the
+    # browser that asked for it can still reach this device at all.
+    #
+    # `wifi-scan`/`wifi-known` deliberately do NOT emit this file's usual
+    # JSON: an SSID is arbitrary bytes chosen by whoever ran the network,
+    # not this project, and hand-escaping arbitrary content into JSON in
+    # `awk`/`printf` is a correctness risk not worth taking when the
+    # caller (Rust) already has a real JSON encoder. They relay `nmcli`'s
+    # own `-m multiline` output verbatim on success (unambiguous framing
+    # by field name, no delimiter that could collide with content) and
+    # fall through to the ordinary `{"ok":false,...}` shape on failure --
+    # the caller tells the two apart by this process's own exit status,
+    # not by guessing at the first byte of stdout.
+    wifi-scan)
+        nmcli -m multiline -f SSID,SIGNAL,SECURITY device wifi list --rescan yes 2>/dev/null \
+            || die "could not scan -- is the Wi-Fi radio on?"
+        ;;
+    wifi-known)
+        nmcli -m multiline -f NAME,TYPE,AUTOCONNECT,ACTIVE connection show 2>/dev/null \
+            || die "could not list connections"
+        ;;
+    wifi-connect)
+        ssid="${2:-}"; password="${3:-}"
+        [ -n "$ssid" ] || die "ssid required"
+        conn="wifi-$ssid"
+        prev="$(active_wifi_conn)"
+        change_id="wc$(date +%s)$$"
+        nmcli connection delete "$conn" >/dev/null 2>&1
+        if [ -n "$password" ]; then
+            nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
+                wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" autoconnect yes \
+                >/dev/null 2>&1 || die "could not create the connection profile"
+        else
+            nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
+                autoconnect yes >/dev/null 2>&1 || die "could not create the connection profile"
+        fi
+        systemd-run --unit="vaino-revert-$change_id" --on-active="${REVERT_MIN}min" \
+            /usr/local/bin/vaino-wifi-revert "$prev" "$conn" >/dev/null 2>&1
+        if nmcli connection up "$conn" >/dev/null 2>&1; then
+            printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
+        else
+            systemctl stop "vaino-revert-$change_id.timer" >/dev/null 2>&1
+            nmcli connection modify "$conn" autoconnect no >/dev/null 2>&1
+            [ -n "$prev" ] && nmcli connection up "$prev" >/dev/null 2>&1
+            die "could not connect -- reverted immediately, nothing was left waiting"
+        fi
+        ;;
+    wifi-forget)
+        name="${2:-}"
+        [ -n "$name" ] || die "connection name required"
+        [ "$name" != "$(active_wifi_conn)" ] || die "cannot forget the connection currently in use"
+        nmcli connection delete "$name" >/dev/null 2>&1 || die "no such connection"
+        printf '{"ok":true}\n'
+        ;;
+    wifi-autoconnect)
+        name="${2:-}"; want="${3:-}"
+        [ -n "$name" ] || die "connection name required"
+        [[ "$want" =~ ^(on|off)$ ]] || die "not on or off"
+        val=$([ "$want" = on ] && echo yes || echo no)
+        nmcli connection modify "$name" autoconnect "$val" >/dev/null 2>&1 || die "no such connection"
+        printf '{"ok":true,"autoconnect":"%s"}\n' "$want"
+        ;;
+    wifi-confirm)
+        change_id="${2:-}"
+        [[ "$change_id" =~ ^[a-zA-Z0-9_-]+$ ]] || die "not a valid change id"
+        # Idempotent by construction: stopping a timer that already fired,
+        # or never existed, is a harmless no-op in systemd, not an error --
+        # confirming twice, or confirming late, must never itself fail.
+        systemctl stop "vaino-revert-$change_id.timer" >/dev/null 2>&1
+        printf '{"ok":true}\n'
+        ;;
+    ap-start)
+        ssid="${2:-Vaino}"; password="${3:-Vaino321}"
+        # Published, not secret -- `[PI-SET-030]`'s own reasoning, carried
+        # over unchanged: a default any listener can look up is honest
+        # about what it is, where a silently-blank password would not be.
+        # The one thing still enforced is that it not be empty: an open
+        # access point into a device with no login of its own is a
+        # different order of exposure than a known one.
+        [ ${#password} -ge 8 ] || die "the access point password must be at least 8 characters"
+        prev="$(active_wifi_conn)"
+        change_id="ap$(date +%s)$$"
+        nmcli connection delete vaino-ap >/dev/null 2>&1
+        nmcli connection add type wifi ifname wlan0 con-name vaino-ap autoconnect no ssid "$ssid" \
+            802-11-wireless.mode ap 802-11-wireless.band bg \
+            ipv4.method shared ipv4.addresses 10.42.0.1/24 \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" \
+            >/dev/null 2>&1 || die "could not create the access point profile"
+        # The dnsmasq instance NetworkManager spawns for THIS shared
+        # connection reads every file here automatically -- its own
+        # extension point, not a guess `[SPEC034]`. `10.42.0.1` is not
+        # discovered after the fact: it is the address just assigned
+        # above, so the two can never disagree.
+        mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+        printf 'address=/vaino/10.42.0.1\naddress=/vaino.lan/10.42.0.1\n' \
+            > /etc/NetworkManager/dnsmasq-shared.d/vaino.conf
+        systemd-run --unit="vaino-revert-$change_id" --on-active="${REVERT_MIN}min" \
+            /usr/local/bin/vaino-wifi-revert "$prev" vaino-ap >/dev/null 2>&1
+        if nmcli connection up vaino-ap >/dev/null 2>&1; then
+            printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
+        else
+            systemctl stop "vaino-revert-$change_id.timer" >/dev/null 2>&1
+            [ -n "$prev" ] && nmcli connection up "$prev" >/dev/null 2>&1
+            die "could not start the access point -- reverted immediately"
+        fi
+        ;;
+    ap-stop)
+        [ "$(active_wifi_conn)" = "vaino-ap" ] || die "the access point is not currently active"
+        # What to return to: whichever known Wi-Fi profile is marked to
+        # autoconnect -- the same thing a reboot would choose, and the
+        # only sensible default when "what was active before AP mode
+        # started" was never recorded for this specific call.
+        fallback="$(nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null \
+            | awk -F: '$2=="wifi" && $1!="vaino-ap" && $3=="yes"{print $1; exit}')"
+        [ -n "$fallback" ] || die "no known network is set to connect automatically"
+        change_id="as$(date +%s)$$"
+        # Reverting from a failed ap-stop means going BACK to the access
+        # point, not to some third state -- passing no previous connection
+        # is exactly what tells `vaino-wifi-revert` to do that.
+        systemd-run --unit="vaino-revert-$change_id" --on-active="${REVERT_MIN}min" \
+            /usr/local/bin/vaino-wifi-revert "" vaino-ap >/dev/null 2>&1
+        if nmcli connection up "$fallback" >/dev/null 2>&1; then
+            printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
+        else
+            systemctl stop "vaino-revert-$change_id.timer" >/dev/null 2>&1
+            nmcli connection up vaino-ap >/dev/null 2>&1
+            die "could not reach that network -- the access point is still running"
+        fi
+        ;;
+
     *)
         die "unknown verb"
         ;;

@@ -132,6 +132,7 @@ async fn main() {
         }
     };
     let ui = web::Ui { handle, why, controls, db: art_db };
+    let app = web::router(ui);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port as u16));
     let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -142,7 +143,37 @@ async fn main() {
         }
     };
     println!("web UI on http://localhost:{port}/");
-    if let Err(e) = axum::serve(listener, web::router(ui)).await {
+
+    // Also on :80, best-effort `[SPEC034]` -- reachable as plain
+    // `http://vaino/` with no port, once `setcap cap_net_bind_service`
+    // lets this otherwise-unprivileged process bind it at all (applied by
+    // `deploy-player.sh` after every deploy; a fresh binary has no
+    // capability of its own, since `setcap` is a file attribute a new
+    // inode does not inherit). Expected to fail wherever that has not
+    // been done -- a desktop build, an appliance before its first
+    // capability-aware deploy -- and that failure is one log line, never
+    // fatal: the port above is what everything else depends on, and it
+    // must never wait on, or be brought down by, this one being merely a
+    // convenience for a phone that would rather not type a port number.
+    if port != 80 {
+        let addr80 = std::net::SocketAddr::from(([0, 0, 0, 0], 80));
+        match tokio::net::TcpListener::bind(addr80).await {
+            Ok(listener80) => {
+                let app80 = app.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(listener80, app80).await {
+                        eprintln!("port 80 server: {e}");
+                    }
+                });
+                println!("also on http://localhost/ (port 80)");
+            }
+            Err(e) => {
+                eprintln!("not also listening on :80 ({e}) -- port {port} still works");
+            }
+        }
+    }
+
+    if let Err(e) = axum::serve(listener, app).await {
         eprintln!("server: {e}");
     }
 }

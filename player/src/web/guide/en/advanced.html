@@ -58,6 +58,31 @@ forgets a Bluetooth speaker. After connecting, a "can you hear it?" check
 gives you thirty seconds to confirm before automatically reverting if you
 don't — so a bad connection can't strand you silently.</p>
 
+<h3>Moving to a new Wi-Fi network, or the appliance's own (Vaino skin
+only, Raspberry Pi appliance only)</h3>
+<p>The same settings panel's <strong>Wi-Fi</strong> section is for moving
+a Pi appliance into a new home. It shows every network it already knows
+(each with a toggle for whether it should connect automatically, and a
+button to forget it), a <strong>scan</strong> button to find nearby
+networks and connect to a new one by name and password, and a toggle to
+have the appliance broadcast its <em>own</em> network instead — useful the
+moment it arrives somewhere with no Wi-Fi of its own yet, since you can
+join its network directly from a phone and configure the real one from
+there. While that's on, reach this same page from anywhere joined to it at
+plain <code>http://vaino/</code> — no IP address, and no port number to
+remember either; <code>http://vaino:5720/</code> still works too, the
+same address the appliance answers to on any other network.</p>
+<p class="note">Both of these can disconnect the very page you're looking
+at — switching networks, or turning the appliance's own network on or
+off, are both real interruptions of whatever is currently connecting you
+to it. That's why every one of these actions shows a <strong>"Keep this
+network?"</strong> banner with a countdown afterward: if you don't
+confirm within five minutes (because, for instance, the new network
+didn't actually work, or you haven't reconnected your own device yet),
+the appliance automatically reverts to whatever was working before —
+never silently choosing to strand itself on a network nobody can reach it
+on.</p>
+
 <h3>Play History (Vaino skin only)</h3>
 <p>The clock icon opens a page of everything that's actually played or
 been skipped, most recent first, with a page-size choice (10 / 100 / 1000
@@ -67,7 +92,11 @@ a play or a skip. A checkbox per row lets you <strong>flag it for
 review</strong> — this doesn't change anything about playback; it puts the
 track on a worklist inside Sampo's own console (the "Flags" page) so you
 or whoever curates the library later knows something about it seemed
-worth a second look.</p>
+worth a second look. Once whatever needed a look has been dealt with,
+that same Flags page has its own <strong>unflag</strong> button on every
+row — no need to open the track's own profile page first — which clears
+it there and, if a remote is configured, on the remote too, in one
+click.</p>
 
 <h3>"Why this passage?" and program schedules</h3>
 <p>Every skin shows at least a one-line summary of why the current track

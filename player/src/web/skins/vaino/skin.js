@@ -765,10 +765,184 @@
     ledBrightnessLabel.textContent = `${ledBrightness.value}%`;
   };
 
+  // ------------------------------------------------------------------ wifi
+  // Moving the appliance to a new Wi-Fi network, or serving its own
+  // `[SPEC034]`. Every action that can disconnect this very page has
+  // already scheduled a hard, server-side revert before it ever touches
+  // anything -- this banner and its countdown are the confirm half of
+  // that, a convenience for cancelling it early, never the safety net
+  // itself. If this page is closed or this browser never gets back here
+  // at all, the revert still fires on its own.
+  const wifiKnownList = $('wifi-known-list');
+  const wifiScanList = $('wifi-scan-list');
+  const wifiScanBtn = $('wifi-scan-btn');
+  const wifiConnectForm = $('wifi-connect-form');
+  const wifiConnectSsid = $('wifi-connect-ssid');
+  const wifiConnectPassword = $('wifi-connect-password');
+  const apSsid = $('ap-ssid');
+  const apPassword = $('ap-password');
+  const apStartBtn = $('ap-start-btn');
+  const apStopBtn = $('ap-stop-btn');
+  const wifiConfirmBox = $('wifi-confirm');
+  const wifiConfirmYes = $('wifi-confirm-yes');
+  const wifiConfirmCountdown = $('wifi-confirm-countdown');
+
+  let confirmTimer = null;
+
+  function showWifiConfirm(changeId, minutes) {
+    clearInterval(confirmTimer);
+    let remaining = minutes * 60;
+    wifiConfirmBox.hidden = false;
+    const tick = () => {
+      const m = Math.floor(remaining / 60), s = remaining % 60;
+      wifiConfirmCountdown.textContent =
+        `Reverts automatically in ${m}:${String(s).padStart(2, '0')} unless confirmed.`;
+      if (remaining <= 0) { clearInterval(confirmTimer); wifiConfirmBox.hidden = true; }
+      remaining--;
+    };
+    tick();
+    confirmTimer = setInterval(tick, 1000);
+    wifiConfirmYes.onclick = async () => {
+      wifiConfirmYes.disabled = true;
+      try {
+        await fetch(`/wifi/confirm/${changeId}`, { method: 'POST' });
+      } finally {
+        clearInterval(confirmTimer);
+        wifiConfirmBox.hidden = true;
+        wifiConfirmYes.disabled = false;
+      }
+    };
+  }
+
+  // One fetch feeds both the known-networks list and "what's active right
+  // now" -- there is nothing about NetworkManager's own connection state
+  // that changes between reading it twice a moment apart.
+  async function wifiKnown() {
+    let rows = [];
+    try {
+      rows = await (await fetch('/wifi/known')).json();
+    } catch { /* leave whatever it last showed */ return; }
+
+    wifiKnownList.textContent = '';
+    for (const r of rows) {
+      const li = document.createElement('li');
+      const active = r.active === 'yes';
+      li.append(`${r.name}${active ? ' (active)' : ''} `);
+      const auto = document.createElement('button');
+      auto.type = 'button';
+      auto.textContent = r.autoconnect === 'yes' ? 'auto: on' : 'auto: off';
+      auto.onclick = async () => {
+        auto.disabled = true;
+        const want = r.autoconnect === 'yes' ? 'off' : 'on';
+        await fetch(`/wifi/autoconnect/${encodeURIComponent(r.name)}/${want}`, { method: 'POST' });
+        wifiKnown();
+      };
+      li.appendChild(auto);
+      if (!active) {
+        const forget = document.createElement('button');
+        forget.type = 'button';
+        forget.textContent = 'forget';
+        forget.onclick = async () => {
+          forget.disabled = true;
+          await fetch(`/wifi/forget/${encodeURIComponent(r.name)}`, { method: 'POST' });
+          wifiKnown();
+        };
+        li.appendChild(forget);
+      }
+      wifiKnownList.appendChild(li);
+    }
+
+    const activeRow = rows.find(r => r.active === 'yes');
+    $('wifi-current').textContent = activeRow ? activeRow.name : 'not connected';
+    const onOwnAp = activeRow && activeRow.name === 'vaino-ap';
+    apStartBtn.hidden = !!onOwnAp;
+    apStopBtn.hidden = !onOwnAp;
+  }
+
+  async function wifiScan() {
+    wifiScanList.textContent = '';
+    let rows = [];
+    try {
+      rows = await (await fetch('/wifi/scan')).json();
+    } catch { return; }
+    const seen = new Set(); // the same network answers on more than one channel
+    for (const r of rows) {
+      if (seen.has(r.ssid) || !r.ssid) continue;
+      seen.add(r.ssid);
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = `${r.ssid} (${r.security || 'open'}, ${r.signal}%)`;
+      btn.onclick = () => {
+        wifiConnectSsid.textContent = r.ssid;
+        wifiConnectForm.dataset.ssid = r.ssid;
+        wifiConnectForm.hidden = false;
+        wifiConnectPassword.value = '';
+        wifiConnectPassword.focus();
+      };
+      li.appendChild(btn);
+      wifiScanList.appendChild(li);
+    }
+  }
+
+  wifiScanBtn.onclick = () => {
+    wifiScanBtn.disabled = true;
+    wifiScanBtn.textContent = 'scanning…';
+    wifiScan().finally(() => {
+      wifiScanBtn.disabled = false;
+      wifiScanBtn.textContent = 'Scan for networks';
+    });
+  };
+  $('wifi-connect-cancel').onclick = () => { wifiConnectForm.hidden = true; };
+  $('wifi-connect-go').onclick = async () => {
+    const ssid = wifiConnectForm.dataset.ssid;
+    const btn = $('wifi-connect-go');
+    btn.disabled = true;
+    try {
+      const q = new URLSearchParams({ ssid, password: wifiConnectPassword.value });
+      const body = await (await fetch(`/wifi/connect?${q}`, { method: 'POST' })).json();
+      if (body.error) throw new Error(body.error);
+      wifiConnectForm.hidden = true;
+      showWifiConfirm(body.change_id, body.minutes);
+    } catch (e) {
+      alert(`Could not connect: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  apStartBtn.onclick = async () => {
+    apStartBtn.disabled = true;
+    try {
+      const q = new URLSearchParams();
+      if (apSsid.value) q.set('ssid', apSsid.value);
+      if (apPassword.value) q.set('password', apPassword.value);
+      const body = await (await fetch(`/wifi/ap/start?${q}`, { method: 'POST' })).json();
+      if (body.error) throw new Error(body.error);
+      showWifiConfirm(body.change_id, body.minutes);
+    } catch (e) {
+      alert(`Could not start the access point: ${e.message}`);
+    } finally {
+      apStartBtn.disabled = false;
+    }
+  };
+  apStopBtn.onclick = async () => {
+    apStopBtn.disabled = true;
+    try {
+      const body = await (await fetch('/wifi/ap/stop', { method: 'POST' })).json();
+      if (body.error) throw new Error(body.error);
+      showWifiConfirm(body.change_id, body.minutes);
+    } catch (e) {
+      alert(`Could not stop the access point: ${e.message}`);
+    } finally {
+      apStopBtn.disabled = false;
+    }
+  };
+
   // Populated when the panel is opened rather than at load: it costs a
   // subprocess on the appliance, and most sessions never open the settings.
   gear.addEventListener('click', () => {
-    if (!$('panel-settings').hidden) { radios(); refresh(); led(); }
+    if (!$('panel-settings').hidden) { radios(); refresh(); led(); wifiKnown(); }
   });
 
   // --------------------------------------------------------------- history

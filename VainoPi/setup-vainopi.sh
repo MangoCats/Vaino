@@ -61,8 +61,15 @@ NEED=""
 # endpoint -- roughly every two and a half minutes, with the radio idle. A2DP
 # does not survive its endpoints being withdrawn, so the speaker drops, and it
 # sounds exactly like interference `[PI3-FOUND-030]`.
+# dnsmasq and iw are for the Wi-Fi settings page `[SPEC034]`: dnsmasq is
+# what NetworkManager spawns, scoped to its own interface, to answer
+# `http://vaino:5720/` for anything joined to this appliance's own access
+# point; iw is what confirmed live that this board's driver supports AP
+# mode in the first place, and is worth keeping installed for the same
+# diagnostic reason on every appliance, not just the one it was checked on.
 for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
-         bluez libasound2 alsa-utils sqlite3 upower evtest ffmpeg; do
+         bluez libasound2 alsa-utils sqlite3 upower evtest ffmpeg \
+         dnsmasq iw; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then
@@ -83,6 +90,24 @@ if [ "$(systemctl is-enabled upower 2>/dev/null)" != "enabled" ] \
     did "enable upower"
 else
     ok "upower running"
+fi
+
+# The mirror image of upower above: the `dnsmasq` PACKAGE ships its own
+# system-wide service, enabled by default, bound to `0.0.0.0:53` --
+# harmless in isolation, but it collides with the entirely different job
+# `dnsmasq` is wanted for here `[SPEC034]`: NetworkManager's own
+# per-connection instances, spawned and scoped to the access point's own
+# interface alone, one of which needs port 53 free on that interface to
+# answer `http://vaino:5720/` at all. Found live: installing the package
+# silently left the system-wide service running and listening globally.
+# `mask`, not just `disable`, so nothing -- another package, a future
+# `apt upgrade` -- can silently re-enable it later.
+if [ "$(systemctl is-enabled dnsmasq 2>/dev/null)" != "masked" ]; then
+    systemctl disable --now dnsmasq >/dev/null 2>&1
+    systemctl mask dnsmasq >/dev/null 2>&1
+    did "masked the system-wide dnsmasq service"
+else
+    ok "dnsmasq service already masked"
 fi
 
 # ------------------------------------------------------------ audio session
@@ -195,6 +220,21 @@ else
     note "binary" "ABSENT — stage ./vaino beside this script"
 fi
 
+# A capability is a file attribute tied to the specific inode `[SPEC-WIFI-050]`
+# -- it does not survive the `install` above replacing the file, so this is
+# re-checked and re-applied every run, not just the first. Lets the
+# otherwise-unprivileged player process also bind :80, for a plain
+# `http://vaino/` alongside its usual :5720.
+if [ -x /usr/local/bin/vaino ]; then
+    case "$(/usr/sbin/getcap /usr/local/bin/vaino 2>/dev/null)" in
+        *cap_net_bind_service*) ok "binary already has cap_net_bind_service" ;;
+        *)
+            /usr/sbin/setcap 'cap_net_bind_service=+ep' /usr/local/bin/vaino
+            did "granted cap_net_bind_service to the binary (for :80)"
+            ;;
+    esac
+fi
+
 # ----------------------------------------------------------------- service
 echo "service"
 UNIT=/etc/systemd/system/vaino.service
@@ -254,7 +294,7 @@ fi
 # these verbs, with the device address validated before it reaches BlueZ.
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in vaino-btctl vaino-wait-sink vaino-led-boot; do
+for f in vaino-btctl vaino-wait-sink vaino-led-boot vaino-wifi-revert; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
