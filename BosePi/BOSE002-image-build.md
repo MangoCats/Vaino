@@ -125,6 +125,56 @@ data partition just stays `rw` forever. `bose` is not that: step 10 of
 until the split is built, `vaino.db` lives at **`/var/vaino/vaino.db`** — C,
 not B — and B holds only audio, cover art, and MPD's own derived index.
 
+**`[IMPL-BOS-150]` The attended-import operation, finally built.**
+`[PI-B-030]` said what this should be — "remount rw, run the ingest, sync,
+remount ro" — from this project's earliest design pass; nothing carried it
+out until now. Asked directly, checking the actual scripts rather than the
+design doc, found the gap: B isn't even set `ro` by default
+(`provision-bose.sh`'s own `fstab` line is plain `defaults,noatime`, `rw`
+until `[BOSE003]` step 10's `--lock-in` flips it once), and nothing
+performed the reopen-import-reclose cycle, because `seed-library.sh` never
+needed to — it always ran before B was ever `ro` in the first place.
+`BosePi/attended-import.sh` (dev host, over SSH, the same home every other
+phase script has) closes it:
+
+1. Reads B's *current* mount options and remembers them, whatever they are
+   — `rw` pre-lock-in, `ro` after. This is what makes "restore afterward"
+   correct in both worlds, rather than assuming lock-in has already
+   happened.
+2. Remounts `rw` only if it was not already — an asked-twice `--check`/
+   `--go` decision, the same discipline `[IMPL-BOS-110]`'s destructive
+   scripts already use: a wrapped command that misbehaves can corrupt
+   exactly the partition this whole design protects, so nothing here
+   defaults to acting.
+3. Runs the caller's command verbatim inside the window — new audio via
+   `rsync`, a mesh-approved bundle's `audio/` directory, whatever is
+   needed. The script has no opinion on what belongs in the window, only
+   that the window exists and closes.
+4. `sync`s, then restores exactly the options step 1 captured — via a
+   trap, so a wrapped command that fails or is interrupted still closes
+   the window rather than leaving B open indefinitely.
+5. Best-effort MPD reindex afterward (skippable with `--no-mpd-update`) —
+   B's own index changed if the audio did, and every caller adding audio
+   needs this, so it is default-on rather than one more step to remember.
+
+**Run for real against `bose` 2026-09-06, three ways**: a dry run, a
+successful command (wrote and removed a real file inside the actual `rw`
+window), and a failing one (confirmed B still closes and nothing after it
+runs) — the ro side simulated by hand, since `--lock-in` itself had not run
+yet at the time. MPD's reindex trick needed no `mpc` client
+(`provision-bose.sh` never installs one) — bash's own `/dev/tcp` speaks the
+control port directly.
+
+**`[IMPL-BOS-155]` This is the missing half of a mesh-approved import, not a
+separate feature.** `[SPEC035](../docs/spec/SPEC035-mesh-library-sync.md)`'s
+`mesh_diff.py`/`resolve_mesh_conflict.py` only ever touch
+`/var/vaino/vaino.db` — correct, since C is what stays writable regardless
+of lock-in — but a `local_only`/`peer_only` bundle's audio bytes still need
+somewhere to land, and B was the half nothing wrote yet.
+`attended-import.sh` is that half, run the same way the original seed
+(`[IMPL-BOS-085]`) did before B was ever locked: `rsync` the bundle's
+`audio/` into `/srv/library/audio/` inside the window it opens.
+
 **C — state, read-write, the only continuously written partition.**
 
 | Path | What |
