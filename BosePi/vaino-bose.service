@@ -17,7 +17,16 @@ Type=simple
 # Positional <vaino.db>, not --db: the actual CLI [player/src/bin/vaino.rs],
 # not the --db/--music/--output form an earlier IMPL001 template showed --
 # corrected there 2026-09-06.
-ExecStart=/usr/local/bin/vaino /var/vaino/vaino.db --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
+#
+# --device hifiberry is load-bearing, found missing the first time this
+# actually ran: with no --device, vaino opened ALSA's first enumerated
+# device, which on this image's card order is `card 0: bcm2835 Headphones`
+# (the Pi's own onboard jack, nothing connected) -- not
+# `card 2: sndrpihifiberry`, the real DAC. BOSE001's survey found the
+# HiFiBerry as card 1 on the old 32-bit install; this Bookworm/trixie image
+# orders it differently. Played perfectly, reported healthy, silent --
+# [IMPL-AUD-010]'s dummy-output hazard, in a different shape.
+ExecStart=/usr/local/bin/vaino /var/vaino/vaino.db --device hifiberry --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
 Restart=always
 RestartSec=2
 User=pi
