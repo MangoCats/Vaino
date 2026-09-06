@@ -6,7 +6,7 @@ MuLibPlay accumulated lyrics for a quarter of the library. This is how they
 reach Vaino, its own skins, and — as far as the protocol allows — a guest's
 clients.
 
-> **Related:** [SPEC016](SPEC016-mpd-protocol-findings.md) for what MPD will and will not carry · [REQ-VIS-205](../spec/REQ002-functional-requirements.md), [REQ-VIS-210] for the two settings this follows
+> **Related:** [SPEC016](SPEC016-mpd-protocol-findings.md) for what MPD will and will not carry · [REQ-VIS-213](../spec/REQ002-functional-requirements.md) for the display itself, [REQ-VIS-205], [REQ-VIS-210] for the two settings this follows
 
 ---
 
