@@ -881,6 +881,14 @@ mod tests {
         let skin = SKINS.iter().find(|s| s.name == "vaino").expect("skin exists");
         assert!(skin.html.contains(r#"id="wifi-known-list""#), "vaino has no known-networks list");
         assert!(skin.html.contains(r#"id="wifi-confirm""#), "vaino has no confirm-or-revert banner");
+        // Both password fields (an existing network's, and this appliance's
+        // own AP's) get a visibility toggle -- typed once, from a router
+        // label, with no server-side check to catch a mistake before the
+        // radio switches out from under this very page.
+        for id in ["wifi-connect-password-toggle", "ap-password-toggle"] {
+            assert!(skin.html.contains(&format!(r#"id="{id}""#)), "vaino has no #{id} button");
+            assert!(skin.js.contains(id), "vaino's skin.js never wires up #{id}");
+        }
         for route in [
             "/wifi/known",
             "/wifi/scan",

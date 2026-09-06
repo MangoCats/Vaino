@@ -804,6 +804,24 @@
   const apPassword = $('ap-password');
   const apStartBtn = $('ap-start-btn');
   const apStopBtn = $('ap-stop-btn');
+
+  // A password field with no way to check what you actually typed means the
+  // only way to catch a mistake is to retype it and hope -- worse than usual
+  // here, since a wrong Wi-Fi password is exactly the kind of mistake that
+  // can only be found out once the radio has already switched away from
+  // whatever was reachable a moment ago.
+  function wirePasswordToggle(input, button) {
+    button.onclick = () => {
+      const shown = input.type === 'text';
+      input.type = shown ? 'password' : 'text';
+      button.textContent = shown ? '👁' : '🙈';
+      button.title = shown ? 'Show password' : 'Hide password';
+      button.setAttribute('aria-pressed', String(!shown));
+    };
+  }
+  wirePasswordToggle(wifiConnectPassword, $('wifi-connect-password-toggle'));
+  wirePasswordToggle(apPassword, $('ap-password-toggle'));
+
   const wifiConfirmBox = $('wifi-confirm');
   const wifiConfirmYes = $('wifi-confirm-yes');
   const wifiConfirmCountdown = $('wifi-confirm-countdown');
