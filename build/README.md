@@ -59,6 +59,27 @@ playback through a real audio device. A null sink reports no device rate, so it
 cannot detect a sample-rate fault -- which is exactly how unresampled playback
 survived until a real device was used `[REQ-HW-147]`.
 
+## Commit before deploying
+
+The Settings page's build stamp (`player/build.rs`, `[REQ-VIS-200]`) exists
+so a running instance can say which source it actually came from — a
+control that looks missing, a fix that seems not to have landed, an
+appliance deployed to twice. That answer is only useful if the commit it
+names is one that can still be found and read later: a build made from an
+uncommitted working tree stamps `<hash>+dirty` against whatever commit
+happened to be checked out, which is not the same claim as "this is commit
+`<hash>`" and reads that way to nobody but the person who happened to have
+that tree in front of them at the time.
+
+So: **commit before running a deploy** (`build/deploy-local.sh`,
+`build/deploy-vainopi.sh`, `build/deploy-everywhere.sh`), even to a feature
+branch nowhere near ready to merge to `main`. The commit doesn't need to be
+merged, or even good enough to survive review — it only needs to exist, so
+that six weeks from now "what was actually running when this was tested"
+has a real answer instead of a shrug and `+dirty`. Merge to `main` on its
+own schedule, same as always; this is only about there being *some* commit
+checked out at build time.
+
 ## Before testing on hardware, build the binaries
 
 ```
