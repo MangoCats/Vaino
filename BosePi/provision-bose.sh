@@ -176,6 +176,21 @@ scp -q "$BIN" "$HOST:/tmp/vaino.new" || die "upload failed"
 on "sudo install -m755 /tmp/vaino.new /usr/local/bin/vaino"
 say "$(on '/usr/local/bin/vaino --version 2>/dev/null')"
 
+step "Lock-in escape hatch  [IMPL-BOS-160]"
+# Must land on A before --lock-in ever runs -- once A is the overlay's
+# read-only lower layer, adding anything to it needs the overlay disabled
+# first, which is exactly what this script exists to do. Idempotent: a
+# later re-run just overwrites the same two files and re-enables an
+# already-enabled unit.
+scp -q BosePi/vaino-unlock-check.sh "$HOST:/tmp/vaino-unlock-check.sh" || die "upload failed"
+scp -q BosePi/vaino-unlock-check.service "$HOST:/tmp/vaino-unlock-check.service" || die "upload failed"
+on "sudo install -m755 /tmp/vaino-unlock-check.sh /usr/local/sbin/vaino-unlock-check.sh
+    sudo install -m644 /tmp/vaino-unlock-check.service /etc/systemd/system/vaino-unlock-check.service
+    sudo mkdir -p $STATE_MOUNT/unlock
+    sudo systemctl daemon-reload
+    sudo systemctl enable vaino-unlock-check.service"
+say "installed; checked on every boot, does nothing unless a marker exists"
+
 step "What is NOT done here"
 say "- the library copy: BOSE002 §7, from the old card in the USB reader"
 say "- the resume interval: [IMPL-BOS-070], set it once listener.db exists"
