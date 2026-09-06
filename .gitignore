@@ -98,3 +98,8 @@ scratch/
 # belonging in one" reasoning as scratch/ above -- and some of it can carry
 # real listener data (a flagged track's own title/artist), not just paths.
 /out/
+
+# Per-run logs from the BosePi build scripts (lib.sh's LOG_FILE) -- one file
+# per invocation, timestamped, never meant to be reproducible or reviewed
+# after the fact from git history.
+/BosePi/logs/

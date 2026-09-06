@@ -88,7 +88,7 @@ VAINO_DB_PRESENT=0
 ssh "$HOST" test -f /var/vaino/vaino.db && VAINO_DB_PRESENT=1
 
 MOUNTS_OK=0
-ssh "$HOST" "findmnt -q /srv/library && findmnt -q /var/vaino" && MOUNTS_OK=1
+ssh "$HOST" "findmnt /srv/library >/dev/null 2>&1 && findmnt /var/vaino >/dev/null 2>&1" && MOUNTS_OK=1
 
 if [ "$MOUNTS_OK" != "1" ]; then
     run "provision-bose.sh (phase 3)" bash BosePi/provision-bose.sh "$HOST"

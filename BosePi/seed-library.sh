@@ -42,8 +42,8 @@ step "Preconditions"
 check "bose reachable"         ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" true
 check "bose is aarch64"        bash -c "[ \"\$(ssh $HOST uname -m)\" = aarch64 ]"
 check "sudo works over SSH"    ssh "$HOST" sudo -n true
-check "/srv/library mounted"   ssh "$HOST" findmnt -q /srv/library
-check "/var/vaino mounted"     ssh "$HOST" findmnt -q /var/vaino
+check "/srv/library mounted"   ssh "$HOST" findmnt /srv/library
+check "/var/vaino mounted"     ssh "$HOST" findmnt /var/vaino
 check "local library exists"   test -d "$MUSIC_DIR"
 check "local db exists"        test -f "$DB"
 check "docker available"       docker version
