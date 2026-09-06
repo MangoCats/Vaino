@@ -177,6 +177,40 @@ def unflag_everywhere(subjects: list, remote: str | None, status: dict | None,
     return result
 
 
+def unflag_subject_everywhere(kind: str, subject_id: str, remote: str | None,
+                               port: int = VAINO_PORT) -> dict:
+    """Clear exactly this `(kind, subject_id)` flag, locally and on the
+    remote, with no passage to resolve through and no union to compute
+    `[REQ-VIS-265]` -- the direct sibling of `unflag_everywhere` above, for
+    a caller that already has the flag's own primary key in hand (the
+    Flags list's own rows, `console.py::flags()`) rather than a passage id
+    to resolve it from.
+
+    **Correct outright for a `recording`-kind flag.** An mbid is portable
+    by construction -- the identical subject clears the identical row on
+    both sides, with nothing to translate. This is the common case: a
+    listener flags a *recording*, not a specific passage of it, most of
+    the time `[REQ-VIS-265]`.
+
+    **Best-effort only for a `passage`-kind flag.** `subject_id` is a
+    *local* passage number, portable to the remote only by coincidence,
+    never guaranteed and never checked here -- `unflag_everywhere` exists
+    precisely because that translation needs the recording(s) a passage
+    currently links to, which this function has no passage to look up at
+    all. Call this for a `passage`-kind subject only once
+    `unflag_everywhere` is confirmed unusable (nothing local resolves it
+    any more), not as a routine substitute for it.
+    """
+    local_ok = _vaino_set_flag(port, kind, subject_id, False)
+    result = {"local": {"ok": local_ok}}
+    if not remote:
+        result["remote"] = {"configured": False}
+        return result
+    remote_ok = _remote_set_flag(remote, port, kind, subject_id, False)
+    result["remote"] = {"configured": True, "ok": remote_ok}
+    return result
+
+
 def _vaino_binary() -> str | None:
     """Where the co-resident player's binary is, if one can be found at all.
 

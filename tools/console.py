@@ -541,6 +541,18 @@ def unflag_everywhere(conn, pid: int) -> dict:
     return vaino_control.unflag_everywhere(subjects, remote, status)
 
 
+def unflag_subject_everywhere(kind: str, subject_id: str) -> dict:
+    """Clear exactly this `(kind, subject_id)` flag, with no passage to
+    resolve through at all `[REQ-VIS-265]` -- the Flags list's own row is
+    the primary key already, straight from `listener_flags`, including a
+    row `flags()` reports as "no longer resolvable" and which
+    `unflag_everywhere` above therefore has no passage to anchor through.
+    See `vaino_control.unflag_subject_everywhere` for how the clear itself
+    happens and what it cannot promise for a `passage`-kind flag.
+    """
+    return vaino_control.unflag_subject_everywhere(kind, subject_id, STATE["jobs"].get_remote())
+
+
 # -------------------------------------------------------------------- scan ---
 
 def scan(conn, roots: list) -> dict:
@@ -807,6 +819,20 @@ class Handler(BaseHTTPRequestHandler):
                 if conn.execute("SELECT 1 FROM passages WHERE passage_id=?1", (pid,)).fetchone() is None:
                     return self.send_json({"error": f"no such passage: {pid}"}, code=404)
                 return self.send_json(unflag_everywhere(conn, pid))
+            if p == "/api/flags/unflag":
+                # The Flags list's own "unflag" button `[REQ-VIS-265]` --
+                # given directly, not resolved through a passage, so a row
+                # `flags()` already reports as "no longer resolvable" can
+                # still be cleared. See `unflag_subject_everywhere`'s own
+                # doc for what it can and cannot promise for a
+                # `passage`-kind subject specifically.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                kind, subject_id = payload.get("kind"), payload.get("subject_id")
+                if kind not in ("recording", "passage") or not subject_id:
+                    return self.send_json(
+                        {"error": "expected {kind: recording|passage, subject_id: ...}"}, code=400)
+                return self.send_json(unflag_subject_everywhere(kind, str(subject_id)))
             if p == "/api/induct/propose":
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 folder = (json.loads(body or b"{}") or {}).get("folder", "")

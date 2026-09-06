@@ -69,22 +69,67 @@ async function load() {
     return;
   }
 
-  box.replaceChildren(S.el('table', {},
-    S.el('thead', {}, S.el('tr', {}, ...['flagged', 'title', 'artist', 'kind', '']
-      .map(h => S.el('th', { text: h })))),
-    S.el('tbody', {}, ...rows.map(r => S.el('tr', {},
+  const head = S.el('thead', {}, S.el('tr', {}, ...['flagged', 'title', 'artist', 'kind', '', '']
+    .map(h => S.el('th', { text: h }))));
+
+  const rowEl = r => {
+    const passageCell = r.resolved
+      ? r.passages.map((pid, i) => S.el('span', {},
+          i > 0 ? ', ' : null,
+          S.el('a', { href: `/profile/${pid}` }, `passage ${pid}`)))
+      : [S.el('span', { class: 'pill warn',
+            title: 'the library has changed since this was flagged, and nothing this specific survives to open',
+            text: 'no longer resolvable' })];
+    return S.el('tr', {},
       S.el('td', { class: 'num', text: r.flagged_at }),
       S.el('td', { text: r.title || (r.resolved ? '(untitled)' : '') }),
       S.el('td', { text: r.artist || '' }),
       S.el('td', {}, S.el('span', { class: 'pill', text: r.subject_kind })),
-      S.el('td', {}, ...(r.resolved
-        ? r.passages.map((pid, i) => S.el('span', {},
-            i > 0 ? ', ' : null,
-            S.el('a', { href: `/profile/${pid}` }, `passage ${pid}`)))
-        : [S.el('span', { class: 'pill warn',
-              title: 'the library has changed since this was flagged, and nothing this specific survives to open',
-              text: 'no longer resolvable' })]))))))
-  );
+      S.el('td', {}, ...passageCell),
+      S.el('td', {}, unflagButton(r)));
+  };
+
+  const body = S.el('tbody', {}, ...rows.map(rowEl));
+  box.replaceChildren(S.el('table', {}, head, body));
+}
+
+// Cleared directly from the list, no detour through a profile page
+// [REQ-VIS-265] -- found worth adding live: a recording flagged across
+// several files (the common shape -- the same recording on an album AND
+// a compilation) is finished with all at once, right where the flag was
+// seen, not by picking one of several linked passages to open first.
+// `/api/flags/unflag` clears the row's own (kind, subject_id) directly,
+// with no passage to resolve through -- correct outright for a
+// `recording`-kind row (an mbid needs no translation to reach a remote),
+// best-effort for a `passage`-kind one (see the route's own doc for why).
+function unflagButton(r) {
+  const btn = S.el('button', { class: 'chip' }, 'unflag');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = 'clearing…';
+    try {
+      const body = await (await fetch('/api/flags/unflag', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: r.subject_kind, subject_id: r.subject_id }),
+      })).json();
+      if (body.error) throw new Error(body.error);
+      if (body.local && body.local.ok === false) throw new Error('the local clear failed');
+      await load(); // the row is gone locally -- reload before the warning below,
+                     // so a remote failure is seen beside an already-updated list,
+                     // not mistaken for "nothing happened".
+      if (body.remote && body.remote.configured && body.remote.ok === false) {
+        alert('Cleared here, but the remote could not be reached or refused the '
+            + 'change -- it may still show this as flagged.');
+      }
+    } catch (e) {
+      // A per-row failure, not a reason to blank the whole list -- other
+      // rows' own buttons must stay usable.
+      btn.disabled = false;
+      btn.textContent = 'unflag';
+      alert(`Could not clear this flag: ${e.message}`);
+    }
+  };
+  return btn;
 }
 
 document.getElementById('refresh').onclick = load;

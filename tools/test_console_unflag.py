@@ -239,6 +239,51 @@ def test_unflag_everywhere_clears_a_stale_remote_recording_too() -> None:
     check(r["remote"]["of"] == 3, f"passage + both recordings, got {r}")
 
 
+def test_unflag_subject_everywhere_no_remote() -> None:
+    print("unflag_subject_everywhere(): local clear only, when no remote is configured")
+    console.STATE["jobs"] = FakeJobs(None)
+    calls = []
+    real_set = vaino_control._vaino_set_flag
+    vaino_control._vaino_set_flag = lambda port, kind, sid, flagged, timeout=2.0: calls.append(
+        (kind, sid, flagged)) or True
+    try:
+        r = console.unflag_subject_everywhere("recording", REC)
+    finally:
+        vaino_control._vaino_set_flag = real_set
+    check(calls == [("recording", REC, False)], f"got {calls}")
+    check(r == {"local": {"ok": True}, "remote": {"configured": False}}, f"got {r}")
+
+
+def test_unflag_subject_everywhere_sends_the_identical_subject_to_the_remote() -> None:
+    print("unflag_subject_everywhere(): no passage, no union, no translation -- the "
+          "identical (kind, subject_id) reaches the remote as given")
+    console.STATE["jobs"] = FakeJobs("pi@vainopi:/srv/library/vaino.db")
+    real_local, real_remote = vaino_control._vaino_set_flag, vaino_control._remote_set_flag
+    vaino_control._vaino_set_flag = lambda *a, **k: True
+    remote_calls = []
+    vaino_control._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
+        remote_calls.append((kind, sid, flagged)) or True)
+    try:
+        r = console.unflag_subject_everywhere("recording", REC)
+    finally:
+        vaino_control._vaino_set_flag, vaino_control._remote_set_flag = real_local, real_remote
+    check(remote_calls == [("recording", REC, False)], f"got {remote_calls}")
+    check(r == {"local": {"ok": True}, "remote": {"configured": True, "ok": True}}, f"got {r}")
+
+
+def test_unflag_subject_everywhere_reports_a_local_failure_honestly() -> None:
+    print("unflag_subject_everywhere(): a failed local clear is reported, not hidden "
+          "behind a remote success")
+    console.STATE["jobs"] = FakeJobs(None)
+    real_set = vaino_control._vaino_set_flag
+    vaino_control._vaino_set_flag = lambda *a, **k: False
+    try:
+        r = console.unflag_subject_everywhere("passage", "1")
+    finally:
+        vaino_control._vaino_set_flag = real_set
+    check(r["local"]["ok"] is False, f"got {r}")
+
+
 def main() -> int:
     test_passage_flag_subjects()
     test_local_flag_detection()
@@ -249,6 +294,9 @@ def main() -> int:
     test_unflag_everywhere_translates_passage_id_for_remote()
     test_unflag_everywhere_remote_missing_passage()
     test_unflag_everywhere_clears_a_stale_remote_recording_too()
+    test_unflag_subject_everywhere_no_remote()
+    test_unflag_subject_everywhere_sends_the_identical_subject_to_the_remote()
+    test_unflag_subject_everywhere_reports_a_local_failure_honestly()
 
     print()
     if FAILED:
