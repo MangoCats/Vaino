@@ -34,6 +34,7 @@ folded into one spec.
 | Library relink | [SPEC012](spec/SPEC012-library-relink.md) | [§7 Decided, and deferred](spec/SPEC012-library-relink.md#7-decided-and-deferred) |
 | Sampo console | [SPEC013](spec/SPEC013-sampo-console.md) | [§6 Open](spec/SPEC013-sampo-console.md#6-open) |
 | Payload schema | [SPEC014](spec/SPEC014-payload-schema.md) | [§6 Open](spec/SPEC014-payload-schema.md#6-open) |
+| Mesh library sync — N Sampo-capable peers (designed 2026-09-06, not yet built) | [SPEC035](spec/SPEC035-mesh-library-sync.md) | [§8 Open](spec/SPEC035-mesh-library-sync.md#8-what-remains-open-after-this-document) |
 | MPD Director | [SPEC015](spec/SPEC015-mpd-director.md) | [§8 Open](spec/SPEC015-mpd-director.md#8-open) |
 | Waveform boundary editor | [SPEC021](spec/SPEC021-waveform-boundary-editor.md) | [§6 Not yet measured](spec/SPEC021-waveform-boundary-editor.md#6-not-yet-measured) |
 | Phone ports | [GUIDE004](GUIDE004-phone-port-strategy.md) | [§7 Open](GUIDE004-phone-port-strategy.md#7-open) |

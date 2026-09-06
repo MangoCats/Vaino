@@ -111,7 +111,7 @@ Ship `vaino.db` itself and rebind by `audio_md5` `[SPEC-DF-040]`. This is MuLibP
 1. **Verify before trusting encoding-scope data.** Recompute `audio_md5`; if it disagrees with the embedded value, discard all class C data — it describes a different encode. Cheap and decisive.
 2. **Class A/B may be accepted on `recording_mbid` alone**, since it is encoding-independent by construction.
 3. **Provenance is mandatory** `[GDE-FBD-020]`. Every imported value records its origin — `sampo@<version>`, `acousticbrainz-dump-20220623`, `imported:<source>`, `manual`.
-4. **Conflict resolution by provenance rank, then recency.** `manual` outranks everything; a newer Sampo model version outranks an older one; local outranks imported at equal rank. Never silently overwrite a user's correction.
+4. **Conflict resolution by provenance rank, then recency.** `manual` outranks everything; a newer Sampo model version outranks an older one; local outranks imported at equal rank. Never silently overwrite a user's correction. *(Amended 2026-09-06 — [SPEC035](SPEC035-mesh-library-sync.md) §6: "local outranks imported at equal rank" presumed only one side could ever be `manual`, true for every topology except Mesh. When **both** sides are `manual` and disagree, this rule does not apply — that case is routed to a person, not decided by either side unilaterally.)*
 5. **Never execute or interpolate imported strings.** Text fields are display data.
 
 ---
@@ -126,8 +126,11 @@ Ship `vaino.db` itself and rebind by `audio_md5` `[SPEC-DF-040]`. This is MuLibP
 | **Appliance** (Pi + desktop Sampo) | Sampo builds on desktop → T3 migration → Vaino rebinds by `audio_md5`. The Pi never runs Sampo `[GDE-ARC-010]`. |
 | **Sharing** (foreign install) | Audio arrives with T1/T2 payload → Vaino imports class A/B/C after verification → advanced features work with **no Sampo present at all**. |
 | **Recovery** | `vaino.db` lost. If T1 was used, re-import from the files themselves; otherwise re-derive with Sampo. Class D is lost unless separately backed up — the one asymmetry worth warning users about. |
+| **Mesh** *(added 2026-09-06)* | Two or more Sampo-capable installations each ingest independently; an automatic diff proposes what each lacks, a person approves, bundles move in whichever direction closes the gap. Designed, not built — [SPEC035](SPEC035-mesh-library-sync.md). |
 
 The sharing row is the point of the whole design: it lets a Vaino-only installation benefit from segmentation and flavor work it could never perform itself, because Sampo is x86-only, AGPL, and heavyweight `[GDE-ARC-015]`.
+
+**The Mesh row breaks an assumption every other row shares — that only one side can ever hold a manual correction — which is why it needed its own document rather than a table row alone.** See [SPEC035](SPEC035-mesh-library-sync.md) §6 for the resulting amendment to §5's trust rule below.
 
 ---
 
