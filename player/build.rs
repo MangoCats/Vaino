@@ -65,13 +65,29 @@ fn main() {
     // **A diff, not a status, and line endings do not count as a difference.**
     // The appliance binary is cross-compiled in a Linux container against a
     // bind-mounted Windows checkout, where the worktree is CRLF and the
-    // container's git has no `autocrlf` to undo it: `status --porcelain` there
-    // reports 104 phantom modifications, so every appliance build stamped
-    // `+dirty` no matter how clean the tree was. A stamp that always says
-    // `+dirty` says nothing, and it said it on the one machine where nobody can
-    // check by looking.
+    // container's git has no `autocrlf` of its own to undo it: `status
+    // --porcelain` there reports 104 phantom modifications, so every
+    // appliance build stamped `+dirty` no matter how clean the tree was. A
+    // stamp that always says `+dirty` says nothing, and it said it on the one
+    // machine where nobody can check by looking.
     //
-    // `--ignore-cr-at-eol` agrees with the Windows host, which is the test.
+    // `--ignore-cr-at-eol` was the first fix tried here, and it is not
+    // enough: verified live in the actual cross-compile container (git
+    // 2.39.5, not the 2.51 on this Windows host, where the flag was first
+    // tried and looked like it worked) that the flag changes what `git diff`
+    // *prints* -- an all-CRLF file legitimately shows zero hunks -- without
+    // changing which paths `--name-only`/`--name-status` lists as changed at
+    // all: 275 files, unmoved, with or without it. Testing only on the
+    // machine that already had `core.autocrlf=true` set globally proved
+    // nothing about the one machine that doesn't -- the exact mistake this
+    // comment already warns about, made once fixing it.
+    //
+    // `-c core.autocrlf=true`, passed to this one invocation rather than set
+    // globally in either the container or the mounted repository's own
+    // config, fixes it for real: confirmed live back to 0 in the same
+    // container. This makes the invocation behave the same way regardless of
+    // whatever autocrlf this or any future build environment happens to
+    // have configured for itself, rather than depending on it.
     //
     // It answers for the **repository**, while what is watched above is this
     // package. An edit to something the player does not compile — a document,
@@ -84,7 +100,7 @@ fn main() {
     // *how many* files, the same figure Sampo's own `/system` page already
     // shows `[SPEC-SUI-211]`, one `git diff` rather than the two a count-then-
     // ask-again pair would cost.
-    let dirty_files = git(&["diff", "--name-only", "--ignore-cr-at-eol", "HEAD"])
+    let dirty_files = git(&["-c", "core.autocrlf=true", "diff", "--name-only", "HEAD"])
         .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
     let dirty = dirty_files > 0;
