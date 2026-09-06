@@ -1,9 +1,23 @@
 # BOSE003: Building the Card, Step by Step
 
 **Implementation plan — written 2026-08-23. In progress since 2026-09-06 —
-phases 1–4 executed, by hand and partly by script; see the "Corrected" notes
+phases 1–5 executed, by hand and partly by script; see the "Corrected" notes
 below and [BosePi/README.md](README.md)'s status table for exactly what has
 and hasn't been proven.**
+
+**`[IMPL-BOS-140]` Found the first time `vaino` actually ran here: card
+numbering on this Bookworm/trixie image is not what `[PI-BOS-020]`'s survey
+measured on the old 32-bit install.** There, HiFiBerry was card 1. Here it's
+**card 2** — `card 0` is the Pi's own onboard `bcm2835 Headphones`, present
+and enumerated first, nothing connected to it. `vaino-bose.service` had no
+`--device` flag at all, so it opened whatever ALSA offered first: played
+without error, reported healthy, resumed a passage, produced not one audible
+sample — `[IMPL-AUD-010]`'s dummy-output hazard, in a new shape (a real,
+present, working device that just isn't the one anyone can hear). Fixed with
+`--device hifiberry`, a substring match against the card name, robust to
+whatever number it enumerates as. Confirmed by device ownership
+(`sudo fuser -v /dev/snd/*`) moving to `pcmC2D0p`, not by trusting the log
+line alone.
 
 Where each phase runs, what runs it, and in what order. The design it carries
 out is [BOSE002](BOSE002-image-build.md); the machine it targets is described in
