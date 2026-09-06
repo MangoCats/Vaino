@@ -52,6 +52,7 @@ ssh "$HOST" "md5sum /tmp/vaino.new | grep -q $LOCAL_SUM" \
 ssh "$HOST" "sudo cp -f $REMOTE ${REMOTE}.prev 2>/dev/null;
              sudo systemctl stop vaino;
              sudo install -m 755 /tmp/vaino.new $REMOTE;
+             sudo /usr/sbin/setcap 'cap_net_bind_service=+ep' $REMOTE;
              sudo systemctl start vaino" || die "install failed"
 
 # Ask the RUNNING process what it is. A 404 here means an older binary is
@@ -83,5 +84,6 @@ fi
 echo "deploy: new build did not answer (reopen-output -> $CODE); rolling back" >&2
 ssh "$HOST" "sudo systemctl stop vaino;
              sudo install -m 755 ${REMOTE}.prev $REMOTE;
+             sudo /usr/sbin/setcap 'cap_net_bind_service=+ep' $REMOTE;
              sudo systemctl start vaino"
 die "rolled back to the previous binary"

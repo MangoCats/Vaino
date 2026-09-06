@@ -232,6 +232,47 @@
       <span id="radio-controls"></span>
       <p id="radio-hint">Whether the aerials are switched on at all.</p>
     </div>
+    <div class="setting" id="wifi-row">
+      <label>Wi-Fi</label>
+      <span id="wifi-current">&mdash;</span>
+      <p>Move this appliance onto a new Wi-Fi network, or have it serve
+         its own so a phone can reach it directly &mdash; useful moving it
+         into a new home before it has ever seen the network there.
+         <strong>Changing this can disconnect this very page.</strong> A
+         five-minute safety timer reverts automatically unless you confirm
+         you can still reach the appliance on whatever network it
+         switches to.</p>
+      <ul id="wifi-known-list" aria-live="polite"></ul>
+      <span>
+        <button type="button" id="wifi-scan-btn">Scan for networks</button>
+      </span>
+      <ul id="wifi-scan-list" aria-live="polite"></ul>
+      <div id="wifi-connect-form" hidden>
+        <label for="wifi-connect-password">Password for <b id="wifi-connect-ssid"></b></label>
+        <span>
+          <input type="password" id="wifi-connect-password" placeholder="leave blank if open">
+          <button type="button" id="wifi-connect-go">Connect</button>
+          <button type="button" id="wifi-connect-cancel">Cancel</button>
+        </span>
+      </div>
+      <hr>
+      <label for="ap-ssid">This appliance's own network</label>
+      <span id="ap-controls">
+        <input type="text" id="ap-ssid" placeholder="Vaino" size="12">
+        <input type="password" id="ap-password" placeholder="Vaino321 (default)" size="14">
+        <button type="button" id="ap-start-btn">Start</button>
+        <button type="button" id="ap-stop-btn" hidden>Stop, return to Wi-Fi</button>
+      </span>
+      <p id="ap-hint">Off by default. When on, reach this page from a phone
+         joined to that network at <code>http://vaino:5720/</code>.</p>
+    </div>
+    <div class="setting" id="wifi-confirm" hidden>
+      <label>Keep this network?</label>
+      <span>
+        <button type="button" id="wifi-confirm-yes">Yes, keep it</button>
+      </span>
+      <p id="wifi-confirm-countdown"></p>
+    </div>
     <div class="setting" id="led-row">
       <label for="led-mode">Status LED</label>
       <span>

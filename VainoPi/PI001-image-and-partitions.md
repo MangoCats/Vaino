@@ -261,6 +261,18 @@ not a finding.
 
 ## 5b. Appliance settings
 
+> **Superseded 2026-09-06, mechanism only — the principles held.** This
+> section's `hostapd.conf`/`wpa_supplicant.conf`-on-a-partition design
+> predates this exact device. Checked live before anything was built: the
+> real appliance runs NetworkManager, not hand-written network config
+> files, so `[SPEC034]` builds the confirm-or-revert safety mechanism,
+> the published default AP credential, and the "known networks" concept
+> below on `nmcli`'s own connection profiles instead — see `[SPEC034]`
+> for what was actually shipped. The table and `hostapd`/`wpa_supplicant`
+> mechanics below are kept for their reasoning, not as current
+> instructions — the same "correction filed, not silently overwritten"
+> discipline `IMPL001`'s own PipeWire note already models.
+
 **`[PI-SET-010]` Settings that only exist on the appliance.** The skip times
 and the resume interval `[REQ-VIS-155]` are player settings and belong in
 `player_state` on partition C. These are different: they configure the *host*,

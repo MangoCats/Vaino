@@ -168,6 +168,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-RIP-090..106]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — designed, not yet built | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
 | `[SPEC-PREF-010..070]` | Editing an artist's or a recording's own rotation/recovery/restraint — built | [SPEC029-listener-preference-editing.md](spec/SPEC029-listener-preference-editing.md) |
 | `[SPEC-PREF-100..130]` | Syncing listener preferences between installations, last-write-wins — built | [SPEC030-preference-sync.md](spec/SPEC030-preference-sync.md) |
+| `[SPEC-WIFI-010..050]` | Wi-Fi network switching and access-point mode on the Pi appliance, confirm-or-revert safety, on NetworkManager, plain `http://vaino/` on :80 — built | [SPEC034-wifi-configuration.md](spec/SPEC034-wifi-configuration.md) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |

@@ -45,6 +45,7 @@ mod sampo;
 mod segment;
 mod settings;
 mod skins;
+mod wifi;
 
 use bluetooth::*;
 use browse::*;
@@ -64,6 +65,7 @@ use sampo::*;
 use segment::*;
 use settings::*;
 use skins::*;
+use wifi::*;
 
 /// What the server needs to answer a request: the control surface, and why the
 /// current passage was chosen.
@@ -427,6 +429,14 @@ pub fn router(ui: Ui) -> Router {
         .route("/audio/speakers/:verb/:address", post(speaker_verb_on))
         .route("/led", get(led_state))
         .route("/led/:state", post(set_led))
+        .route("/wifi/scan", get(scan))
+        .route("/wifi/known", get(known))
+        .route("/wifi/connect", post(connect))
+        .route("/wifi/confirm/:change_id", post(confirm))
+        .route("/wifi/forget/:name", post(forget))
+        .route("/wifi/autoconnect/:name/:state", post(autoconnect))
+        .route("/wifi/ap/start", post(ap_start))
+        .route("/wifi/ap/stop", post(ap_stop))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/seek/:ms", post(seek_to))
@@ -861,6 +871,28 @@ mod tests {
             );
         }
         assert!(skin.js.contains("/led"), "vaino's skin.js never asks for /led");
+    }
+
+    /// The Wi-Fi settings section reaches every route the router actually
+    /// serves `[SPEC034]` -- Vaino-skin only, the same posture the other
+    /// appliance-hardware controls already have.
+    #[test]
+    fn the_wifi_controls_reach_the_routes_the_router_serves() {
+        let skin = SKINS.iter().find(|s| s.name == "vaino").expect("skin exists");
+        assert!(skin.html.contains(r#"id="wifi-known-list""#), "vaino has no known-networks list");
+        assert!(skin.html.contains(r#"id="wifi-confirm""#), "vaino has no confirm-or-revert banner");
+        for route in [
+            "/wifi/known",
+            "/wifi/scan",
+            "/wifi/connect",
+            "/wifi/confirm/",
+            "/wifi/forget/",
+            "/wifi/autoconnect/",
+            "/wifi/ap/start",
+            "/wifi/ap/stop",
+        ] {
+            assert!(skin.js.contains(route), "vaino's skin.js never asks for {route}");
+        }
     }
 
     /// The guide's own Help link reaches a route the router actually serves,

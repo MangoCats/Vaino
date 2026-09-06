@@ -173,9 +173,227 @@ pub fn set_led(mode: &str, pct: Option<u8>) -> Result<serde_json::Value, String>
                              String::from_utf8_lossy(&out.stderr).trim()))
 }
 
+// ------------------------------------------------------------------- wifi
+// Moving the appliance into a new Wi-Fi network, or serving its own
+// `[SPEC034]`. `wifi_scan`/`wifi_known` are the one place this module
+// does not simply relay the helper's own JSON: an SSID is arbitrary bytes
+// chosen by whoever runs a nearby network, not this project, and the
+// helper deliberately does not attempt to hand-escape that into JSON
+// itself (see `vaino-btctl`'s own `wifi-scan` comment) -- it relays
+// `nmcli -m multiline`'s framed-by-field-name output verbatim instead,
+// and `parse_multiline` below turns that into real, correctly-escaped
+// JSON using this process's own encoder, the one place that can actually
+// promise it.
+
+fn run_helper(args: &[&str]) -> Result<std::process::Output, String> {
+    Command::new("sudo")
+        .arg("-n")
+        .arg(HELPER)
+        .args(args)
+        .output()
+        .map_err(|e| format!("helper not available: {e}"))
+}
+
+/// The helper's own `{"ok":false,"error":"..."}` shape, read off `stdout`
+/// -- `die()` in `vaino-btctl` never writes to `stderr`, so a failure is
+/// always valid JSON on the same stream a success would have used.
+fn helper_error(out: &std::process::Output) -> String {
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str::<serde_json::Value>(text.trim())
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+        .unwrap_or_else(|| {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            format!("helper gave no usable answer: {}", stderr.trim())
+        })
+}
+
+/// Turn `nmcli -m multiline` output into one JSON object per record.
+/// Multiline mode frames by field name and by line, one requested field
+/// per line, cycling back to the first field at each new record -- unlike
+/// `-t` (terse) mode's single delimited line per record, there is no
+/// inline separator here that arbitrary content (an SSID with a literal
+/// `:` in it) could ever collide with, so this never needs an unescaping
+/// parser at all. `fields` must be given in the exact order they were
+/// requested from `nmcli`; a record left short at the very end (a
+/// truncated final read) is dropped rather than emitted half-filled.
+fn parse_multiline(text: &str, fields: &[&str]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    'records: loop {
+        let mut obj = serde_json::Map::new();
+        for &field in fields {
+            let Some(line) = lines.next() else { break 'records };
+            let value = line.split_once(':').map_or("", |(_, v)| v).trim();
+            obj.insert(field.to_lowercase(), serde_json::Value::String(value.to_string()));
+        }
+        out.push(serde_json::Value::Object(obj));
+    }
+    out
+}
+
+/// Networks currently in radio range `[SPEC034]`.
+pub fn wifi_scan() -> Result<Vec<serde_json::Value>, String> {
+    let out = run_helper(&["wifi-scan"])?;
+    if !out.status.success() {
+        return Err(helper_error(&out));
+    }
+    Ok(parse_multiline(&String::from_utf8_lossy(&out.stdout), &["SSID", "SIGNAL", "SECURITY"]))
+}
+
+/// Every Wi-Fi connection profile NetworkManager already remembers --
+/// this project's own "known networks" list is exactly this, not a
+/// second copy of it `[SPEC034]`.
+pub fn wifi_known() -> Result<Vec<serde_json::Value>, String> {
+    let out = run_helper(&["wifi-known"])?;
+    if !out.status.success() {
+        return Err(helper_error(&out));
+    }
+    let all = parse_multiline(
+        &String::from_utf8_lossy(&out.stdout),
+        &["NAME", "TYPE", "AUTOCONNECT", "ACTIVE"],
+    );
+    Ok(all
+        .into_iter()
+        .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("wifi"))
+        .collect())
+}
+
+/// Switch the client connection to `ssid`, schedule the hard revert, and
+/// return the pending change's id and its own timeout `[SPEC034]`. An
+/// apparent success here is not proof of reachability -- see
+/// `wifi_confirm`.
+pub fn wifi_connect(ssid: &str, password: &str) -> Result<serde_json::Value, String> {
+    if ssid.is_empty() {
+        return Err("ssid required".into());
+    }
+    let out = run_helper(&["wifi-connect", ssid, password])?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
+}
+
+/// Cancel the pending hard revert -- the browser's own proof that it can
+/// still reach this device on whatever network `wifi_connect`/`ap_start`/
+/// `ap_stop` just switched to `[SPEC034]`.
+pub fn wifi_confirm(change_id: &str) -> Result<serde_json::Value, String> {
+    if !change_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("not a valid change id".into());
+    }
+    let out = run_helper(&["wifi-confirm", change_id])?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
+}
+
+/// Delete a known-network profile -- refused by the helper for whichever
+/// one is currently active `[SPEC034]`.
+pub fn wifi_forget(name: &str) -> Result<serde_json::Value, String> {
+    if name.is_empty() {
+        return Err("connection name required".into());
+    }
+    let out = run_helper(&["wifi-forget", name])?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
+}
+
+/// Whether a known network is offered automatically at boot `[SPEC034]`.
+pub fn wifi_autoconnect(name: &str, on: bool) -> Result<serde_json::Value, String> {
+    if name.is_empty() {
+        return Err("connection name required".into());
+    }
+    let out = run_helper(&["wifi-autoconnect", name, if on { "on" } else { "off" }])?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
+}
+
+/// Start the appliance's own access point, schedule the hard revert, and
+/// return the pending change's id `[SPEC034]`. `ssid`/`password` default
+/// to the same published, not-a-secret credential `[PI-SET-030]` already
+/// named -- passing `None` for either asks the helper to use it.
+pub fn ap_start(ssid: Option<&str>, password: Option<&str>) -> Result<serde_json::Value, String> {
+    let mut args = vec!["ap-start"];
+    if let Some(s) = ssid {
+        args.push(s);
+        // The helper's own positional parsing needs a password argument
+        // once an ssid is given at all, even to fall back to its default.
+        args.push(password.unwrap_or("Vaino321"));
+    } else if let Some(p) = password {
+        args.push("Vaino");
+        args.push(p);
+    }
+    let out = run_helper(&args)?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
+}
+
+/// Leave access-point mode, returning to whichever known network is set
+/// to connect automatically, with the same schedule-then-confirm safety
+/// as every other verb here `[SPEC034]`.
+pub fn ap_stop() -> Result<serde_json::Value, String> {
+    let out = run_helper(&["ap-stop"])?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The case this parser exists for: a value containing the same `:`
+    /// `nmcli -t` (terse) mode would need to escape -- multiline mode
+    /// frames by field name and line instead, so it never needs to
+    /// `[SPEC034]`.
+    #[test]
+    fn parse_multiline_handles_a_colon_inside_a_value() {
+        let text = "SSID:                    My:Weird:Network\nSIGNAL:                  70\nSECURITY:                WPA2\n";
+        let rows = parse_multiline(text, &["SSID", "SIGNAL", "SECURITY"]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["ssid"], "My:Weird:Network");
+        assert_eq!(rows[0]["signal"], "70");
+    }
+
+    #[test]
+    fn parse_multiline_reads_several_records_in_order() {
+        let text = "SSID:  A\nSIGNAL:  10\nSECURITY:  WPA2\nSSID:  B\nSIGNAL:  20\nSECURITY:  none\n";
+        let rows = parse_multiline(text, &["SSID", "SIGNAL", "SECURITY"]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["ssid"], "A");
+        assert_eq!(rows[1]["ssid"], "B");
+        assert_eq!(rows[1]["security"], "none");
+    }
+
+    #[test]
+    fn parse_multiline_drops_a_truncated_trailing_record() {
+        let text = "SSID:  A\nSIGNAL:  10\nSECURITY:  WPA2\nSSID:  B\n";
+        let rows = parse_multiline(text, &["SSID", "SIGNAL", "SECURITY"]);
+        assert_eq!(rows.len(), 1, "a record left short at the end must not be emitted half-filled");
+    }
+
+    #[test]
+    fn parse_multiline_of_empty_text_is_no_records_not_one_empty_one() {
+        assert_eq!(parse_multiline("", &["SSID", "SIGNAL", "SECURITY"]), Vec::<serde_json::Value>::new());
+    }
+
+    #[test]
+    fn wifi_known_keeps_only_wifi_profiles() {
+        let text = "NAME:  preconfigured\nTYPE:  wifi\nAUTOCONNECT:  yes\nACTIVE:  yes\n\
+                     NAME:  lo\nTYPE:  loopback\nAUTOCONNECT:  no\nACTIVE:  yes\n";
+        let all = parse_multiline(text, &["NAME", "TYPE", "AUTOCONNECT", "ACTIVE"]);
+        let wifi: Vec<_> =
+            all.into_iter().filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("wifi")).collect();
+        assert_eq!(wifi.len(), 1);
+        assert_eq!(wifi[0]["name"], "preconfigured");
+    }
+
+    #[test]
+    fn wifi_connect_rejects_an_empty_ssid_before_spawning() {
+        assert!(wifi_connect("", "password").is_err());
+    }
+
+    #[test]
+    fn wifi_confirm_rejects_a_change_id_with_shell_metacharacters() {
+        assert!(wifi_confirm("bad;id").is_err());
+        assert!(wifi_confirm("bad id").is_err());
+    }
 
     #[test]
     fn accepts_the_speaker_we_use() {
