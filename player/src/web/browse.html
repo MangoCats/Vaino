@@ -90,6 +90,12 @@
          rather than off the player, where it would be clutter above the
          music. -->
     <a class="back" href="/review">review ids</a>
+    <!-- Hidden until `browse.js` confirms Sampo is actually reachable or
+         launchable from here [REQ-VIS-320] -- a build without
+         --features sampo-support has no route to ask, so this never
+         un-hides there; on one that does, it still means nothing until a
+         local console.py and a Python are actually found. -->
+    <a class="back" id="sampo-link" href="#" target="_blank" hidden>launch Sampo</a>
     <a class="back" href="/">← player</a>
   </header>
   <div class="tabs">

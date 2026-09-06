@@ -263,4 +263,35 @@
   Vaino.startBare()
     .then(() => Vaino.browse('limit').then(n => { browseLimit = n; }).catch(() => {}))
     .then(() => show(start));
+
+  // Sampo link [REQ-VIS-320]: hidden until the server confirms it is
+  // actually worth showing -- a plain 404 on a build without
+  // --features sampo-support (`/sampo/available` does not exist there at
+  // all) fails this fetch exactly the same as any other reason it might
+  // not be available, so no separate check for the feature is needed here.
+  const sampoLink = $('sampo-link');
+  fetch('/sampo/available')
+    .then(r => r.ok ? r.json() : { available: false })
+    .then(body => { sampoLink.hidden = !body.available; })
+    .catch(() => {}); // stays hidden
+  sampoLink.onclick = async e => {
+    e.preventDefault();
+    if (sampoLink.dataset.busy) return;
+    sampoLink.dataset.busy = '1';
+    const was = sampoLink.textContent;
+    sampoLink.textContent = 'starting Sampo…';
+    try {
+      const body = await (await fetch('/sampo/ensure', { method: 'POST' })).json();
+      if (body.ok) {
+        window.open(`http://127.0.0.1:${body.port}/`, '_blank');
+      } else {
+        alert(`Could not reach Sampo: ${body.error}`);
+      }
+    } catch {
+      alert('Could not reach Sampo.');
+    } finally {
+      sampoLink.textContent = was;
+      delete sampoLink.dataset.busy;
+    }
+  };
 })();
