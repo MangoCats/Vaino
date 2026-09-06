@@ -34,6 +34,10 @@ def main() -> int:
     ap.add_argument("db")
     ap.add_argument("--like", help="path LIKE pattern selecting encodings")
     ap.add_argument("--md5", action="append", default=[])
+    ap.add_argument("--md5-file",
+                     help="file of audio_md5 to include, one per line -- the human-reviewed "
+                          "output of a mesh_diff.py report `[SPEC-MESH-040]`, rather than "
+                          "each one typed on the command line")
     ap.add_argument("--root", action="append", default=[],
                     help="audio root to make bundle_path relative to; repeatable")
     ap.add_argument("-o", "--out", required=True, help="bundle directory to write")
@@ -43,6 +47,9 @@ def main() -> int:
 
     conn = payloadmod.sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     md5s = list(args.md5)
+    if args.md5_file:
+        with open(args.md5_file, encoding="utf-8") as fh:
+            md5s += [ln.strip() for ln in fh if ln.strip()]
     if args.like:
         md5s += [r[0] for r in conn.execute(
             "SELECT audio_md5 FROM files WHERE path LIKE ?", (args.like,))]

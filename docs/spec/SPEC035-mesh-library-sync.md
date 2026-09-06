@@ -221,18 +221,34 @@ row.
 ## 7. A prerequisite this design depends on, resolved here
 
 **`[SPEC-MESH-080]` Closes `[SPEC-SUI-180]` — "re-importing the same bundle is
-unspecified."** In a hub-and-spoke world a bundle arrives once, by hand, from
-the one node that could have produced it; re-import was a resend-after-drop
-edge case. In a mesh, the same content can plausibly reach a node by two
-paths (`TeachersLounge` → desktop → `bose` *and* `TeachersLounge` → `bose`
-directly), so idempotent import is no longer optional. **Resolution: the
-bundle importer classifies every incoming row exactly the way
-`apply_changes.py`'s `classify()` already does for a review decision** —
-fast-forward (key absent locally, write it), already-applied (key present,
-value matches, no-op), or conflict (key present, values differ, per
-`[SPEC-DF-070]`/`[SPEC-MESH-065]`) — instead of the unconditional write
-`import_bundle.rs` performs today. This is an extension of existing,
-proven logic to a second call site, not new merge logic.
+unspecified." Built 2026-09-06, and turned out narrower than first
+written here.** Reading `player/src/bundle.rs` before touching it found it
+already more idempotent than `[SPEC-SUI-180]` assumed: `files.audio_md5` is
+checked before any write, so a resent encoding already reports `Already` and
+writes nothing, and `upsert_recording()` already carries `[SPEC-DF-070]`'s
+provenance check for flavor. **The actual gap was narrower and sharper: an
+already-held encoding's whole block was skipped, including its recordings'
+credits — so a *later, different* bundle improving Class A/B data (a better
+flavor value, most concretely) for audio already on disk was silently
+dropped, not merged.** Fixed by running `upsert_recording()` for an
+already-held encoding's credits too, gated on `apply`, touching no
+`files`/`passages` rows. Proven by two tests added first and confirmed
+failing against the unfixed code:
+`a_later_bundle_still_updates_flavor_for_an_already_held_file` (the gap) and
+`a_manual_flavor_value_survives_a_later_computed_bundle_even_when_the_file_is_already_held`
+(provenance protection still holds on the new call site, not only the old
+one). A second, smaller fix landed alongside it: `imported_payloads` was
+appending an audit row on every resend even when nothing was written;
+now gated on `rows_written > 0`.
+
+**Left as found, out of scope for this fix specifically: `recordings.title`/
+`length_ms`/`source` never update once a recording row exists, on *any*
+call path, not only the one this fix touches.** `upsert_recording()`'s own
+`exists` check skips the whole row, always — a pre-existing behavior, not
+introduced or widened here. Worth its own pass (the same provenance check
+`flavor` already gets, applied per-recording instead of per-characteristic),
+but conflating it with `[SPEC-MESH-080]`'s narrower fix risked a larger,
+riskier change than the gap actually found required.
 
 **`[SPEC-MESH-085]` `[SPEC-SUI-175]`'s "nothing re-reads a retained payload"
 is real but not a blocker here, and is left open deliberately.** A mesh peer
@@ -247,10 +263,10 @@ proceed. Tracked at `[SPEC013 §6]`, unchanged by this document.
 ## 8. What remains open after this document
 
 1. **`sync_peers` and the console's peer selector are designed, not built** — §2, §4.
-2. **The diff tool (`tools/mesh_diff.py`, provisional name) is designed, not built** — §3. It is new code, not an extension of `remote_peek.py`, though it reuses `run_remote_sql()`/`literal()` from it rather than duplicating the ssh/sqlite3 round trip.
-3. **`export_bundle.py` reading a file of hashes, not just `--md5` appended by hand, is a small addition, not built.**
-4. **`import_bundle.rs`'s classify-before-write (`[SPEC-MESH-080]`) is not built** — the highest-priority piece, since without it a second bundle covering already-imported content can silently misbehave.
-5. **The conflict review UI (`[SPEC-MESH-075]`) is not built.**
+2. ~~**The diff tool is designed, not built.**~~ **Built 2026-09-06**: `tools/mesh_diff.py`, covering `files`/`recordings`/`passages` (the three tables §3 named), the four-bucket classification, and the manual-vs-manual conflict rule — five tests, `tools/test_mesh_diff.py`, the remote side faked the same way `test_remote_flags.py` already established, the local side a real temporary sqlite file. `artists`/`releases` are not yet added to `TABLES`, mechanically the same shape as `recordings` when they are.
+3. ~~**`export_bundle.py` reading a file of hashes is a small addition, not built.**~~ **Built 2026-09-06**: `--md5-file`, two tests in `tools/test_export_bundle.py` (the tool's first test coverage of any kind — the new flag, not the pre-existing pipeline, is what's actually verified).
+4. ~~**`import_bundle.rs`'s classify-before-write is not built.**~~ **Built 2026-09-06** — narrower than first written here; see `[SPEC-MESH-080]`'s own updated text for what the gap actually was.
+5. **The conflict review UI (`[SPEC-MESH-075]`) is not built.** The diff tool *finds* conflicts (§3's `conflict` bucket); nothing yet presents one for a person to resolve, and nothing yet performs `[SPEC-MESH-070]`'s "write the resolution to both sides" step. This is the next slice, and the highest-value one left: everything upstream of it (diff, review-gate export, idempotent import) now works end to end for the non-conflicting case.
 6. **Storage-tier policy — must every peer hold every file? — is explicitly out of scope here.** Asked and not answered: nothing in this document decides whether `vainopi` (464 MB RAM, a small card) is expected to eventually hold the full union library. `[SPEC-MESH-040]`'s human review gate is the mitigation available today — a person can simply decline to approve a bundle a small node shouldn't receive — but "catalog knows about this recording, audio absent here" is not a state the schema represents, and a mesh that grows past hand-curated approval may need it to be. Deferred, not resolved.
 
 ---
