@@ -259,7 +259,7 @@ resumable middle. That is the comparison that justifies buying one.
   or §3 happens without one, and no software substitute was found: this host
   has no card slot, and its WSL carries only `docker-desktop`.
 
-- **`[IMPL-BOS-090]` Does the seek fault exist here?** `[SPEC-MPD-135]` works
+- **`[IMPL-BOS-095]` Does the seek fault exist here?** `[SPEC-MPD-135]` works
   around an output wedged by `seekid`, measured against PipeWire on Bluetooth
   `[PI-CHR-100]`. `bose` has a local I²S card and may not need PipeWire at all.
   Measure it — with a silent baseline first — before deciding whether the
