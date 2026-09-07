@@ -41,16 +41,36 @@
 //! `main`, rather than sharing `fbui`'s single async worker thread with a
 //! blocking evdev read.
 //!
+//! Phase 5 fixes the reconnection gap `[SPEC036]` §7 named: every drop
+//! (not just the first-ever connect) now shows `render_disconnected` and
+//! resets the held snapshot, so an identical post-restart push can't be
+//! mistaken by `[SPEC-FBUI-020]`'s diff check for "nothing changed."
+//!
+//! Phase 6 replaces `embedded-graphics`'s bundled ASCII-only fonts with
+//! `u8g2-fonts`' `u8g2_font_9x15_t_symbols` -- chosen by measuring real
+//! titles/artists (queried from a production `vaino.db`, not invented):
+//! it covers the accented Latin that shows up constantly ("Bj\u{f6}rk",
+//! "Mendon\u{e7}a"), confirmed by actually calling `render()` against it
+//! rather than trusting the font name (`tests::font_coverage_matches_real_library_data`).
+//! It does *not* cover the curly quotes/apostrophes and Unicode hyphens
+//! that turn out to be the single most common non-ASCII character in this
+//! library ("Guns N\u{2019}Roses", "The Go\u{2010}Go\u{2019}s") -- no
+//! bitmap font checked carried both without jumping to `unifont`'s much
+//! larger, uglier glyphs for a whole library's worth of tracks that
+//! mostly don't need it. `normalize_for_display` maps that specific,
+//! measured set to its plain-ASCII look-alike instead: the semantic
+//! content of a title is unaffected by a curly apostrophe rendering as a
+//! straight one.
+//!
 //!     fbui [--calibrate] [ws://host:port/ws]   (default: ws://127.0.0.1:5720/ws)
 
-use embedded_graphics::mono_font::ascii::FONT_9X15;
-use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
-use embedded_graphics::text::Text;
 use framebuffer::Framebuffer;
 use futures_util::StreamExt;
+use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
+use u8g2_fonts::FontRenderer;
 
 /// Only the fields this phase draws. Unknown incoming fields are ignored by
 /// serde automatically -- the real `Snapshot` carries dozens more.
@@ -144,6 +164,47 @@ impl DrawTarget for FbDisplay {
 const LCD_BG: Rgb565 = Rgb565::new(1, 3, 1); // ~#0b0f0b at 5/6/5 bit depth
 const LCD_GREEN: Rgb565 = Rgb565::new(4, 59, 4); // ~#22dd22
 
+/// `[SPEC-FBUI-030]`, revised for Phase 6: `embedded-graphics`'s own
+/// bundled fonts are ASCII-only, which real library data (not a synthetic
+/// test string) shows is not enough. `u8g2_font_9x15_t_symbols` matches
+/// this file's original 9x15 glyph size and covers the accented Latin
+/// that appears constantly in real titles/artists -- checked by actually
+/// rendering, not by trusting the font's name
+/// (`tests::font_coverage_matches_real_library_data`).
+const TEXT_FONT: FontRenderer = FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_9x15_t_symbols>();
+
+/// Maps the specific, measured set of punctuation this library's titles
+/// use that `TEXT_FONT` does not carry a glyph for -- curly quotes and
+/// apostrophes, and every dash-like character in Unicode's General
+/// Punctuation block, plus the Hawaiian ʻokina (a modifier letter, not a
+/// quote mark, but visually and phonetically closest to one) -- to their
+/// plain-ASCII look-alikes. A title's meaning survives a curly apostrophe
+/// rendering as a straight one; a missing-glyph box or a render error
+/// would be the actually-wrong outcome here.
+fn normalize_for_display(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{2018}' | '\u{2019}' | '\u{02bb}' | '\u{02bc}' => '\'',
+            '\u{201c}' | '\u{201d}' => '"',
+            '\u{2010}'..='\u{2015}' => '-',
+            other => other,
+        })
+        .collect()
+}
+
+/// Renders one line of already-`normalize_for_display`-cleaned text at a
+/// given left/baseline anchor. Errors are logged, not propagated --
+/// `FbDisplay`'s own `DrawTarget::Error` is `Infallible`, so the only way
+/// this can fail is a glyph `TEXT_FONT` genuinely lacks; that should be
+/// caught by `normalize_for_display` and the coverage test before it ever
+/// reaches here, so surfacing it loudly if it somehow doesn't is more
+/// useful than a silent `.unwrap_or(())`.
+fn draw_text(display: &mut FbDisplay, text: &str, x: i32, y: i32) {
+    if let Err(e) = TEXT_FONT.render(text, Point::new(x, y), VerticalPosition::Baseline, FontColor::Transparent(LCD_GREEN), display) {
+        eprintln!("fbui: could not render {text:?}: {e:?}");
+    }
+}
+
 fn fmt_time(ms: u64) -> String {
     let s = ms / 1000;
     format!("{}:{:02}", s / 60, s % 60)
@@ -197,8 +258,17 @@ fn draw_button(display: &mut FbDisplay, x0: i32, x1: i32, label: &str) -> Result
     Rectangle::new(Point::new(x0, BUTTON_Y0), Size::new((x1 - x0) as u32, (BUTTON_Y1 - BUTTON_Y0) as u32))
         .into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 2))
         .draw(display)?;
-    let style = MonoTextStyle::new(&FONT_9X15, LCD_GREEN);
-    Text::new(label, Point::new(x0 + 8, (BUTTON_Y0 + BUTTON_Y1) / 2), style).draw(display)?;
+    let center = Point::new((x0 + x1) / 2, (BUTTON_Y0 + BUTTON_Y1) / 2);
+    if let Err(e) = TEXT_FONT.render_aligned(
+        label,
+        center,
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        FontColor::Transparent(LCD_GREEN),
+        display,
+    ) {
+        eprintln!("fbui: could not render button {label:?}: {e:?}");
+    }
     Ok(())
 }
 
@@ -213,11 +283,10 @@ fn render(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::con
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
         .draw(display)?;
 
-    let style = MonoTextStyle::new(&FONT_9X15, LCD_GREEN);
-    let title = snap.title.as_deref().unwrap_or("(nothing playing)");
-    let artist = snap.artist.as_deref().unwrap_or("");
-    Text::new(title, Point::new(8, 20), style).draw(display)?;
-    Text::new(artist, Point::new(8, 40), style).draw(display)?;
+    let title = snap.title.as_deref().map(normalize_for_display);
+    let artist = snap.artist.as_deref().map(normalize_for_display);
+    draw_text(display, title.as_deref().unwrap_or("(nothing playing)"), 8, 20);
+    draw_text(display, artist.as_deref().unwrap_or(""), 8, 40);
 
     let (bar_x0, bar_x1) = (8, w - 8);
     Rectangle::new(
@@ -246,7 +315,7 @@ fn render(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::con
         fmt_time(snap.duration_ms),
         snap.volume_db,
     );
-    Text::new(&pos, Point::new(8, POS_TEXT_Y), style).draw(display)?;
+    draw_text(display, &pos, 8, POS_TEXT_Y);
 
     draw_button(display, BUTTON_XS[0].0, BUTTON_XS[0].1, "VOL-")?;
     draw_button(display, BUTTON_XS[1].0, BUTTON_XS[1].1, if snap.playing { "PAUSE" } else { "PLAY" })?;
@@ -267,14 +336,19 @@ fn render_disconnected(display: &mut FbDisplay) -> Result<(), std::convert::Infa
     Rectangle::new(Point::zero(), Size::new(display.width, display.height))
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
         .draw(display)?;
-    let style = MonoTextStyle::new(&FONT_9X15, LCD_GREEN);
-    let line1 = "-- disconnected --";
-    let line2 = "reconnecting...";
-    let glyph_w = 9; // FONT_9X15
-    Text::new(line1, Point::new(((w - line1.len() as i32 * glyph_w) / 2).max(0), h / 2 - 12), style)
-        .draw(display)?;
-    Text::new(line2, Point::new(((w - line2.len() as i32 * glyph_w) / 2).max(0), h / 2 + 12), style)
-        .draw(display)?;
+    let center_x = w / 2;
+    for (line, y) in [("-- disconnected --", h / 2 - 12), ("reconnecting...", h / 2 + 12)] {
+        if let Err(e) = TEXT_FONT.render_aligned(
+            line,
+            Point::new(center_x, y),
+            VerticalPosition::Baseline,
+            HorizontalAlignment::Center,
+            FontColor::Transparent(LCD_GREEN),
+            display,
+        ) {
+            eprintln!("fbui: could not render {line:?}: {e:?}");
+        }
+    }
     Ok(())
 }
 
@@ -500,13 +574,7 @@ fn draw_crosshair(display: &mut FbDisplay, x: i32, y: i32, index: usize) -> Resu
     let stroke = PrimitiveStyle::with_stroke(LCD_GREEN, 2);
     Line::new(Point::new(x - 10, y), Point::new(x + 10, y)).into_styled(stroke).draw(display)?;
     Line::new(Point::new(x, y - 10), Point::new(x, y + 10)).into_styled(stroke).draw(display)?;
-    let style = MonoTextStyle::new(&FONT_9X15, LCD_GREEN);
-    Text::new(
-        &format!("calibration {}/{} -- touch the +", index + 1, CAL_POINTS.len()),
-        Point::new(8, h - 12),
-        style,
-    )
-    .draw(display)?;
+    draw_text(display, &format!("calibration {}/{} -- touch the +", index + 1, CAL_POINTS.len()), 8, h - 12);
     Ok(())
 }
 
@@ -555,6 +623,59 @@ mod tests {
 
         assert!((got_sx - test_sx).abs() < 1e-6, "x: got {got_sx}, want {test_sx}");
         assert!((got_sy - test_sy).abs() < 1e-6, "y: got {got_sy}, want {test_sy}");
+    }
+
+    /// A no-op sink -- only whether `TEXT_FONT.render` returns `Ok`/`Err`
+    /// matters here, per the crate's own documented default behavior:
+    /// "unknown chars will return an error" unless
+    /// `with_ignore_unknown_chars` is set (it is not, for `TEXT_FONT`).
+    struct NullDisplay;
+    impl embedded_graphics::prelude::OriginDimensions for NullDisplay {
+        fn size(&self) -> embedded_graphics::prelude::Size {
+            embedded_graphics::prelude::Size::new(64, 64)
+        }
+    }
+    impl embedded_graphics::prelude::DrawTarget for NullDisplay {
+        type Color = embedded_graphics::pixelcolor::Rgb565;
+        type Error = std::convert::Infallible;
+        fn draw_iter<I>(&mut self, _pixels: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = embedded_graphics::Pixel<Self::Color>>,
+        {
+            Ok(())
+        }
+    }
+
+    fn font_renders(ch: char) -> bool {
+        use embedded_graphics::prelude::Point;
+        let mut nd = NullDisplay;
+        super::TEXT_FONT
+            .render(ch.to_string().as_str(), Point::new(0, 20), super::VerticalPosition::Baseline, super::FontColor::Transparent(super::LCD_GREEN), &mut nd)
+            .is_ok()
+    }
+
+    /// Grounds `[SPEC-FBUI-030]`'s font choice in real data instead of a
+    /// synthetic test string, and pins it down as a regression test: these
+    /// exact characters were queried from a production `vaino.db`'s real
+    /// artist/title text (`Bj\u{f6}rk`, `M\u{f6}tley Cr\u{fc}e`, `Fernando
+    /// Mendon\u{e7}a`, `Auli\u{2bb}i Cravalho`, `Guns N\u{2019} Roses`,
+    /// `The Go\u{2010}Go\u{2019}s`, a `\u{201c}`-quoted nickname). Split
+    /// exactly the way the actual code path splits them: the accented
+    /// Latin group must render directly (this is what justified choosing
+    /// `u8g2_font_9x15_t_symbols` over plain ASCII), and the punctuation
+    /// group must NOT render directly (this is what justifies
+    /// `normalize_for_display` existing at all) but must render once
+    /// normalized.
+    #[test]
+    fn font_coverage_matches_real_library_data() {
+        for ch in ['\u{f6}', '\u{fc}', '\u{e9}', '\u{e7}'] {
+            assert!(font_renders(ch), "expected TEXT_FONT to cover accented Latin {ch:?} directly");
+        }
+        for ch in ['\u{2018}', '\u{2019}', '\u{02bb}', '\u{201c}', '\u{2010}', '\u{2014}'] {
+            assert!(!font_renders(ch), "expected TEXT_FONT to lack {ch:?} -- if this now fails, a font upgrade may let normalize_for_display drop this mapping");
+            let normalized = super::normalize_for_display(&ch.to_string());
+            assert!(font_renders(normalized.chars().next().unwrap()), "normalize_for_display({ch:?}) = {normalized:?} still doesn't render");
+        }
     }
 
     #[test]

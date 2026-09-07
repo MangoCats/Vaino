@@ -367,12 +367,24 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    disconnected message, no buttons) within one push interval of the
    restart, then returned to 7,287 within `fbui`'s own 3-second retry once
    `vaino` was back.
-6. **Non-ASCII font decision**, resolved with real library data (titles
-   this project's own catalog actually has) rather than a synthetic test
-   string.
+6. ~~Non-ASCII font decision~~ **Done, 2026-09-07** — resolved with real
+   library data, not a synthetic test string: queried a production
+   `vaino.db` for actual non-ASCII artist/title text and found accented
+   Latin (`Björk`, `Mötley Crüe`, `Fernando Mendonça`) far outnumbered by
+   curly quotes/apostrophes and Unicode dashes (`Guns N'Roses`, `The
+   Go‐Go's`) — checked, not assumed. `u8g2_font_9x15_t_symbols`
+   (`[SPEC-FBUI-030]`, revised) covers the first group directly, confirmed
+   by actually calling `render()` against it rather than trusting the
+   font's name; `normalize_for_display` maps the second, measured group to
+   plain ASCII. Both paths pinned down as a permanent regression test
+   (`tests::font_coverage_matches_real_library_data`) and confirmed live:
+   a real production title/artist pair temporarily substituted into
+   `vainoplayer3`'s currently-playing passage, rendered with no errors in
+   `fbui`'s log, and visually confirmed legible on the physical screen —
+   not just proven not to crash.
 7. **Album art**, only after 1–6 are proven — measured against real SPI
    hardware (how long one full bitmap blit actually takes) before deciding
    whether it belongs in this UI at all.
 
-Not started. This document is the plan; `[SPEC-FBUI-025]`'s hardware
-question is the one thing every step after it actually depends on.
+Phases 1–6 done and verified against real hardware, per each entry above.
+Phase 7 (album art) is the one item not yet started.

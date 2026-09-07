@@ -27,7 +27,7 @@ sampo-support = ["dep:reqwest"]
 # `ws` feature (server-side); declaring it directly here costs nothing
 # extra in the build graph, it only makes the already-compiled crate
 # nameable from this bin's own client-side code `[SPEC-FBUI-015]`.
-fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "dep:futures-util"]
+fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "dep:futures-util", "dep:u8g2-fonts"]
 
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
@@ -65,7 +65,15 @@ embedded-graphics = { version = "0.8", optional = true }
 # project already measured against real hardware -- a config change to
 # `piscreen2r`'s params should not silently desync from a hardcoded
 # assumption here.
+# Bitmap fonts with real non-ASCII coverage `[SPEC-FBUI-030]`, chosen
+# after measuring what `embedded-graphics`'s own bundled ASCII-only fonts
+# were missing against real library data (see `fbui.rs`'s own module
+# doc comment and `tests::font_coverage_matches_real_library_data`).
+# Default features only -- this crate's own `embedded_graphics_textstyle`
+# feature adds a `TextStyle`-wrapper type this binary has no use for; it
+# calls `FontRenderer::render`/`render_aligned` directly instead.
 framebuffer = { version = "0.3", optional = true }
+u8g2-fonts = { version = "0.5", optional = true }
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`: already in the
 # dependency tree via cpal/rusqlite, so this declares an existing compile
