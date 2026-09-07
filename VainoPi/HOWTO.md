@@ -90,6 +90,9 @@ came back, and exits non-zero without pretending the deploy succeeded.
   hand, per `build/README.md`) and just need it uploaded.
 - [PI001-image-and-partitions.md](PI001-image-and-partitions.md) — building the Pi image itself, not
   just what runs on it.
+- [IMPL002-database-split.md](IMPL002-database-split.md) — the detailed
+  design for splitting `vaino.db` into `library.db`/`listener.db`, PI001 §5
+  worked out to the actual call sites. Designed and reviewed; not yet built.
 - `build/README.md` — the manual two-step cross-compile process, and the
   Windows `CC` trap, in full.
 - the repo root's `HOWTO.md` — building and running Vaino and Sampo on a
