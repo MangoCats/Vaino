@@ -859,13 +859,48 @@ the three, and the only one not making a remote SQL call at all. None of
 this is built; the registry can store and hand back a listener path today,
 but nothing yet asks for one.
 
-## 17. What remains
+## 17. Rehearsed against vainopi's actual data, not a substitute
+
+Before ever touching the live device: cross-compiled `vaino` for `aarch64`
+(confirmed genuine — `file` reports `ELF 64-bit ... ARM aarch64`), pulled a
+read-only copy of vainopi's real `/srv/library/vaino.db` to the dev host
+(1,161,781,248 bytes, matching exactly — this copy also satisfies `[PI-C-030]`'s
+off-device backup requirement for the live runbook below, so it's being kept,
+not discarded), and rehearsed `split_database.py` against it: 1,065,361
+catalog rows across 19 tables, 44,337 listener rows across 15, verification
+passed. Then committed the split for real to scratch files and proved it
+two ways against actual Rust code, not just the Python tool's own checks:
+
+- `flavorcheck` against the resulting `library.db` alone: 8,151 flavor
+  subjects loaded correctly.
+- `dircheck` (given an optional second path for exactly this — `[§17]`'s
+  own addition) against the real `listener.db`+`library.db` pair:
+  **`Director::load` succeeded** — the one function reading
+  `listener_play_history`/`listener_likes`/`listener_preferences`/
+  `listener_programs` from one file and `recordings`/`artists`/`flavor`/
+  `recording_relations`/`passages`/`files` from the other, and the most
+  consequential cross-boundary path there is, since it drives actual song
+  selection. 8,330 radio passages, 733 ms cold load, 148 MB peak RSS —
+  comfortably inside `[REQ-HW-100]`'s budget even before accounting for
+  this being vainopi's tighter 464 MB, not the dev host's.
+
+This is real-data proof, not synthetic-fixture proof, for the one thing
+that most needed it.
+
+## 18. What remains
 
 - **The three tools' query-level ATTACH support** (§16) — real, scoped,
-  understood, not yet built.
-- **The live migration itself** (§8's runbook) — not attempted, no real
-  device touched by any of this yet. `split_database.py` has only ever
-  run against a copy on the dev host, never against vainopi itself.
+  understood, not yet built. Does not block the live migration below —
+  mesh-sync catalog diffing already works against a split peer per
+  `[§4.1]`; only `remote_flags.py`/`sync_preferences.py`'s own cross-table
+  fetch is affected, and neither runs unattended.
+- **The live migration itself** (§8's runbook) — everything up through
+  step 4 has now been rehearsed for real, against real data, with real
+  Rust code. Steps 5 onward — stopping vainopi's live services, deploying
+  the new binary and the two real files, restarting, hearing it play —
+  have not happened. This is the point of no easy return this document's
+  own §8 already named: real, currently-accumulating listener history is
+  at stake on a machine in active use.
 
 Scope for the first real implementation and migration pass stays vainopi
 only; `bose` and local stay single-file and untouched until vainopi has
