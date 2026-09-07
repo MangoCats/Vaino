@@ -123,9 +123,24 @@ H: Handlers=mouse0 event2
 
 A real IRQ-driven evdev device at `/dev/input/event2`, exactly the
 contract `[SPEC-FBUI-045]` assumed. One harmless, well-known fbtft quirk
-seen in `dmesg` on the first frame (`start_line=319 is larger than
-end_line=0 ... will do full display update`) — cosmetic, not a defect in
-this configuration.
+seen in `dmesg` (`start_line=319 is larger than end_line=0 ... will do
+full display update`) — cosmetic, not a defect in this configuration, and
+confirmed pre-existing rather than caused by any later phase: `dmesg -T`
+timestamps put it at 19:38-19:40 on this boot, over an hour before album
+art (§8 phase 7) was ever deployed. Only 7 total log lines exist despite
+far more redraws than that having happened since boot, so the kernel is
+clearly rate-limiting the *message*, not the underlying fallback -- it
+likely fires on every `render()` call, given `render()` already rewrites
+virtually the whole panel every time (§8 phase 7's own measurement). Its
+visible symptom (observed 2026-09-07, once album art existed to make it
+obvious): a brief whole-screen white cast on a large content change like
+a track skip, resolving to the correct frame immediately after. Not
+noticed on smaller changes (a position-bar tick) because old and new
+frames look nearly identical against each other, not because the
+underlying driver fallback fires less often for them. A kernel-driver-
+level cosmetic artifact, not something fixable from this binary's own
+code; `piscreen2r`'s untried `drm`/KMS alternative (next paragraph) is
+the only real candidate for eliminating it, and has not been pursued.
 
 This resolves §7's largest named risk. `piscreen2r`'s own KMS/`drm`-mode
 alternative remains untried (FBTFT already works, no forcing reason to);
@@ -382,29 +397,46 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    `vainoplayer3`'s currently-playing passage, rendered with no errors in
    `fbui`'s log, and visually confirmed legible on the physical screen —
    not just proven not to crash.
-7. **Album art** — the measurement this item called for is done, 2026-09-07;
-   writing the feature itself is not. Three real numbers, not estimates:
-   a raw write of a full 307,200-byte frame into `/dev/fb0`'s mmap takes
-   ~0.09ms (negligible — the mmap write is not the bottleneck at all);
-   `render()`'s own CPU-side cost (rectangles, text, font lookups) stayed
-   under 20ms across every real redraw logged during normal playback on
-   `vainoplayer3`, never once tripping a 20ms warning threshold added for
-   exactly this measurement; and the actual SPI transfer to the panel is
-   governed by `piscreen2r`'s already-configured `fps=20`, a ~50ms-per-
-   frame ceiling independent of anything this binary does. The load-
-   bearing finding: `render()` already touches virtually every pixel on
-   the panel on every call (§8.2's own pixel-readback counts confirm
-   this — it is a full-panel write each time, not a true per-region diff
-   at the hardware level), so that full-panel SPI cost is already being
-   paid on every playback update regardless of album art. A modest
-   thumbnail would add a small, bounded amount to the already-fast
-   CPU-side step, not a new separate expensive SPI operation — **the
-   measurement says this is feasible**, unlike the browser this whole
-   design replaced (§1). What's left is real engineering, not a
-   feasibility question: decoding JPEG/PNG art needs a real new
-   dependency (an `image`-crate-shaped decision this document hasn't
-   made), scaling it to a sensible in-UI region, and building it.
+7. ~~Album art~~ **Done, 2026-09-07.** The measurement came first: a raw
+   write of a full 307,200-byte frame into `/dev/fb0`'s mmap takes ~0.09ms
+   (negligible), `render()`'s own CPU-side cost stayed under 20ms across
+   every real redraw during normal playback, and the SPI transfer itself
+   is governed by `piscreen2r`'s already-configured `fps=20` (~50ms/frame)
+   independent of this binary — since `render()` already touches virtually
+   every pixel on every call, a thumbnail adds a small bounded cost to an
+   already-paid full-panel redraw, not a new expensive operation. Built on
+   that basis: `image` (default features off, `jpeg`+`png` only — real
+   production art is never anything else, per `media_type_for` in
+   `tags.rs`) decodes whatever `GET /art/:passage_id` returns, resized
+   once per passage change to a fixed 100x100 buffer (doubled from an
+   initial 50x50 after seeing it on the physical screen), blitted via
+   `FbDisplay::put_pixel` directly. `passage_id` added to `ClientSnapshot`
+   for exactly the purpose the real `Snapshot` already documents it for.
+   Fetching uses a second hand-rolled client, `http_get` (a
+   `Connection: close` GET, read to EOF — simpler than parsing
+   `Content-Length` for a loopback request to a server this project
+   controls), keyed and cached per `passage_id` so a passage confirmed to
+   have no art (most of this all-radio sample library) is not re-requested
+   on every push. Confirmed against real hardware, not just compiled: a
+   real 29KB JPEG fetched, decoded, and resized in 32.6ms on
+   `vainoplayer3`; 1,373 distinct colors read back from the 100x100 art
+   region (real photo content, not a solid fill); and confirmed visually
+   on the physical screen twice, once at each size.
+   One real, pre-existing cosmetic artifact this made newly *visible*
+   without being its cause, run down before deciding not to pursue it
+   further: `dmesg -T` shows the well-known
+   `fbtft`/`fb_ili9486` `start_line=319 is larger than end_line=0` full-
+   display-update fallback (`[SPEC-FBUI-025]`'s own §3 already named it
+   "cosmetic") firing at 19:38-19:40 on this boot -- over an hour before
+   album art was ever deployed, so it predates and is not caused by this
+   phase. It likely fires on every `render()` call (only 7 log lines exist
+   total despite far more redraws than that, so the kernel is rate-
+   limiting the *message*, not the fallback), but only became visible to
+   the eye -- a brief whole-screen white cast on a large content change
+   like a skip, resolving immediately after -- once album art gave a track
+   change a large, high-contrast frame to visibly differ from. Not pursued
+   further per explicit instruction; `piscreen2r`'s untried `drm`/KMS mode
+   remains the one real candidate for eliminating it, should it matter later.
 
-Phases 1–6 done and verified against real hardware, per each entry above.
-Phase 7's own measurement question is answered (feasible); the feature
-itself is the one item not yet built.
+Phases 1–7 done and verified against real hardware, per each entry above.
+This document's own implementation plan is complete.
