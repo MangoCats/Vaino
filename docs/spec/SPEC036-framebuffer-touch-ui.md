@@ -90,22 +90,49 @@ bandwidth reality.
 
 ---
 
-## 3. Display: fbtft framebuffer, RGB565, real device path TBD
+## 3. Display: fbtft framebuffer, RGB565 — now confirmed against real hardware
 
-**`[SPEC-FBUI-025]` Renders to whichever `/dev/fbN` the eventual overlay
-exposes** — almost certainly `/dev/fb1` (the SPI panel, alongside `fb0`'s
-HDMI), but this is **not yet confirmed**: as of this writing the hardware
-identity itself is only partially verified (SPI is disabled on
-`vainoplayer3` today; `piscreen`/`piscreen2r`/`fbtft` are the real
-candidate overlays present on this image, `waveshare35a` — named in an
-earlier, unverified identification — does not exist on it at all, checked
-directly). This design assumes the standard fbtft contract (a linear
-RGB565 framebuffer, `mmap`-able, no compositor in front of it) because
-that is what every overlay in the candidate list provides, but the exact
-device node, byte order, and whether the `drm` variant (`piscreen`'s own
-`drm` param, a different, KMS-based path) ends up preferable are open
-until the hardware bring-up from the parent conversation actually
-completes.
+**`[SPEC-FBUI-025]` Confirmed 2026-09-07, against `vainoplayer3` itself,
+not assumed.** `dtoverlay=piscreen2r,rotate=90,speed=32000000,fps=20` in
+`config.txt`, reboot, then read directly from the device rather than
+trusted from documentation:
+
+```
+$ cat /sys/class/graphics/fb0/name
+fb_ili9486
+[   12.312] graphics fb0: fb_ili9486 frame buffer, 480x320, 300 KiB video
+            memory, 32 KiB buffer memory, fps=20, spi0.0 at 32 MHz
+```
+
+**`/dev/fb0`, not `/dev/fb1`** — this design's own earlier guess was
+wrong in the specific but right in the shape: there is no HDMI output
+active on this headless build, so the SPI panel became the *first*
+framebuffer rather than a second one alongside it. 480×320 landscape,
+300 KiB = 480×320×2 bytes — confirms RGB565 (16-bit) exactly as assumed.
+`piscreen2r` was the right overlay on the first try; the original
+hardware identification (ILI9486 controller, XPT2046/ADS7846-protocol
+touch) is now fully validated, not just plausible.
+
+Touch is equally confirmed:
+
+```
+$ cat /proc/bus/input/devices
+N: Name="ADS7846 Touchscreen"
+H: Handlers=mouse0 event2
+```
+
+A real IRQ-driven evdev device at `/dev/input/event2`, exactly the
+contract `[SPEC-FBUI-045]` assumed. One harmless, well-known fbtft quirk
+seen in `dmesg` on the first frame (`start_line=319 is larger than
+end_line=0 ... will do full display update`) — cosmetic, not a defect in
+this configuration.
+
+This resolves §7's largest named risk. What's still open is only what
+this section never claimed to answer: `piscreen2r`'s own KMS/`drm`-mode
+alternative hasn't been tried (the FBTFT path already works, so there is
+no forcing reason to), and byte-order/rotation correctness for actual
+drawn content is unverified until `[embedded-graphics]` output is checked
+against the panel with eyes, not just `dmesg`.
 
 **`[SPEC-FBUI-030]` Drawing: `embedded-graphics`, not a from-scratch
 rasterizer.** A mature, widely-used Rust crate for exactly this class of
@@ -201,13 +228,14 @@ actual bring-up signal. Runs as the same `pi` user `vaino` does (needs
 Asked of this design itself, the same discipline `[IMPL002]`'s own review
 passes used, before treating this as ready to build:
 
-- **The hardware identity itself is still open**, named honestly rather
-  than assumed resolved: SPI is disabled on `vainoplayer3` as of this
-  writing, no overlay has been tried yet, and this whole design's
-  framebuffer/evdev assumptions rest on `piscreen`/`piscreen2r`/`fbtft`
-  actually working the way their documentation says for *this specific
-  clone board*. `[SPEC-FBUI-025]` already says so; repeated here because
-  it is the single largest risk to every other claim in this document.
+- ~~**The hardware identity itself is still open**~~ **Resolved
+  2026-09-07** — `[SPEC-FBUI-025]` now records the confirmed `/dev/fb0`
+  `fb_ili9486` framebuffer and the `ADS7846` touch device from real
+  hardware, not documentation. This was the single largest risk to every
+  other claim in this document when this review was first written; kept
+  here, struck through rather than deleted, so a reader of this section's
+  history sees the risk was real and was actually closed, not quietly
+  assumed away.
 - **Non-ASCII text is a real gap, not a hypothetical one.** This library
   has real, non-ASCII artist/title names (checked against this project's
   own data, not assumed) — `embedded-graphics`'s bundled fonts are small
@@ -244,12 +272,9 @@ fix. Folded into §8's phasing below rather than left as loose ends.
 
 ## 8. Implementation plan, phased against the open items above
 
-1. **Hardware bring-up first, independent of any of this code** — enable
-   SPI, try `piscreen2r` (closest name-match to a resistive-touch board),
-   confirm a `/dev/fbN` appears and a touch `/dev/input/eventN` produces
-   real events on contact. Nothing below can be usefully built, let alone
-   tested, before this resolves `[SPEC-FBUI-025]`'s open question for
-   real.
+1. ~~Hardware bring-up~~ **Done, 2026-09-07** — `/dev/fb0` (`fb_ili9486`,
+   480×320, RGB565) and `/dev/input/event2` (`ADS7846 Touchscreen`) both
+   confirmed against real hardware, per `[SPEC-FBUI-025]`.
 2. **A minimal `DrawTarget` + connection test**: open `/ws`, deserialize
    one real `Snapshot`, draw title/artist as plain text in the LCD-green
    palette, prove the pixel format and orientation assumptions against
