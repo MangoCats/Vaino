@@ -887,20 +887,59 @@ two ways against actual Rust code, not just the Python tool's own checks:
 This is real-data proof, not synthetic-fixture proof, for the one thing
 that most needed it.
 
-## 18. What remains
+## 18. The live migration: run, and one real bug found and fixed inside the same window
+
+Executed against vainopi for real, 2026-09-07, following `[§8]`'s runbook
+exactly: stopped `vaino`/`mpd`, confirmed the WAL was already clean (the
+service's own shutdown had checkpointed it — `PRAGMA wal_checkpoint(TRUNCATE)`
+afterward reported zero pages, confirming rather than assuming), made a
+timestamped on-device copy (`vaino.db.pre-split-20260907`, kept, not
+deleted), ran `split_database.py --commit` against that copy on vainopi's
+own hardware (1,065,361 catalog rows, 44,337 listener rows — identical to
+the dev-host rehearsal, verification passed), deployed the cross-compiled
+binary, updated the systemd override's `ExecStart` to the two new paths,
+reloaded, and restarted.
+
+**`[IMPL-DBSPLIT-055]` Found within the first minute, from the journal, not
+from `systemctl is-active` alone:** `record decision: query: no such table:
+main.passages` and `save player state: query: no such table: main.passages`,
+on every single call. Root cause: `[§7.7]`'s own review had already found
+both cross-boundary foreign keys (`listener_play_history`/
+`selection_decisions` → `passages`) but concluded they were inert because
+nothing in this crate explicitly enables `PRAGMA foreign_keys` — true, and
+the wrong question. Never checked whether **rusqlite's bundled SQLite
+defaults it to ON**, which it does, confirmed by asking it directly.
+SQLite only ever checks a `FOREIGN KEY` against a table in its own schema,
+never an attached one — so every write to a table referencing the
+now-attached `passages` failed, silently (both call sites are deliberately
+non-fatal — "must never stop the music" — so audio kept playing throughout,
+which is exactly why this needed the log, not the service status, to find).
+
+Same discipline as `bose`'s `[IMPL-BOS-165]`/`[IMPL-BOS-166]`: found live,
+root-caused, fixed, tested, and redeployed inside the same incident window
+rather than left running degraded. Fix: one `PRAGMA foreign_keys = OFF` in
+`QualifyingConn::open()`, turned off unconditionally rather than only when
+split, since nothing in this crate ever relied on the cascade firing from
+the player's own writes. TDD — a new test reproduces the exact failure
+shape and confirms the fix — plus full regression (386 tests), before
+redeploying. Confirmed fixed against the live system two ways: the journal
+stopped showing the error, and `listener.db` queried directly showed fresh
+`player_state`/`selection_decisions` rows landing in real time.
+
+**Status: `vaino` and `mpd` both active on vainopi, running the split
+database, writes confirmed landing correctly.** Not yet confirmed: audible
+playback, the one verification this project has never allowed a machine or
+a log line to stand in for at a point of no easy return.
+
+## 19. What remains
 
 - **The three tools' query-level ATTACH support** (§16) — real, scoped,
-  understood, not yet built. Does not block the live migration below —
-  mesh-sync catalog diffing already works against a split peer per
-  `[§4.1]`; only `remote_flags.py`/`sync_preferences.py`'s own cross-table
-  fetch is affected, and neither runs unattended.
-- **The live migration itself** (§8's runbook) — everything up through
-  step 4 has now been rehearsed for real, against real data, with real
-  Rust code. Steps 5 onward — stopping vainopi's live services, deploying
-  the new binary and the two real files, restarting, hearing it play —
-  have not happened. This is the point of no easy return this document's
-  own §8 already named: real, currently-accumulating listener history is
-  at stake on a machine in active use.
+  understood, not yet built. Does not block the migration — mesh-sync
+  catalog diffing already works against a split peer per `[§4.1]`; only
+  `remote_flags.py`/`sync_preferences.py`'s own cross-table fetch is
+  affected, and neither runs unattended.
+- **Hearing it play** — the last step, and the only one that has never
+  been substitutable by a green test or an active service.
 
 Scope for the first real implementation and migration pass stays vainopi
 only; `bose` and local stay single-file and untouched until vainopi has
