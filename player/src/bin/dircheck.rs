@@ -29,11 +29,17 @@ fn rss() -> u64 {
 }
 
 fn main() {
-    let Some(db) = std::env::args().nth(1).map(PathBuf::from) else {
-        eprintln!("usage: dircheck <vaino.db>");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(db) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: dircheck <vaino.db> [library.db]");
         std::process::exit(2);
     };
-    let lib = match Library::open(&db) {
+    // A second, optional path exercises Director::load across a genuinely
+    // split pair -- exactly the shape [PI-DB-020]/[IMPL-DBSPLIT-025]
+    // describe, and the one this tool otherwise never sees since its own
+    // single-path default (`open_split(db, db)`) never attaches anything.
+    let library = args.get(1).map(PathBuf::from).unwrap_or_else(|| db.clone());
+    let lib = match Library::open_split(&db, &library) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("cannot open {}: {e:?}", db.display());
