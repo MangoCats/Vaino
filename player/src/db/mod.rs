@@ -60,7 +60,157 @@ impl std::fmt::Display for DbError {
 /// anyone would wait for a stuck one.
 pub(crate) const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Attaches `library_path` as `lib`, read-only, when it differs from
+/// `db_path`, and returns the schema prefix every catalog query should use
+/// from then on `[IMPL-DBSPLIT-025]`.
+///
+/// The two paths are equal for every installation that hasn't split its
+/// database -- `bose`, today's vainopi, every existing test fixture. In
+/// that case nothing is attached and this returns `"main"`, so a query
+/// written `{lib}.recordings` reads the same table through the same
+/// connection it always has, and the one player binary needs no
+/// environment-specific build. Only an installation with a genuinely
+/// separate `library.db` (vainopi, once split -- `[PI-DB-020]`) ever
+/// attaches anything or ever sees `"lib"` come back.
+///
+/// Equality is the caller's to guarantee, by construction rather than by
+/// canonicalizing paths here: the CLI defaults `--library` to a clone of
+/// `--db` when the flag is absent, so the two `Path`s are byte-identical
+/// in the common case rather than merely referring to the same file on
+/// disk. A caller that passes two different spellings of the same path
+/// gets a harmless self-attach, not a silent bug -- see the doc comment on
+/// the URI mode below for why that's still safe.
+///
+/// Requires the connection to have been opened with `OpenFlags::SQLITE_OPEN_URI`
+/// -- `mode=ro` in the attach URI is SQLite's own documented way to attach
+/// a second file read-only, and it only parses as a URI (rather than a
+/// literal filename containing a `?`) when the connection has URI filenames
+/// enabled. Every one of `Library::open`, `PlayerStore::open`, and
+/// `bin/mpd_direct.rs`'s bare `Connection::open` must include that flag
+/// once they call this.
+pub fn attach_library(
+    conn: &rusqlite::Connection,
+    db_path: &std::path::Path,
+    library_path: &std::path::Path,
+) -> Result<&'static str, DbError> {
+    if db_path == library_path {
+        return Ok("main");
+    }
+    let uri = format!("file:{}?mode=ro", library_path.display());
+    conn.execute("ATTACH DATABASE ?1 AS lib", [uri])
+        .map_err(|e| DbError::Open(format!("attach library {}: {e}", library_path.display())))?;
+    Ok("lib")
+}
 
+#[cfg(test)]
+mod attach_library_tests {
+    use super::attach_library;
+    use rusqlite::{Connection, OpenFlags};
+    use std::path::{Path, PathBuf};
+
+    /// Matches the rest of this crate's tests (`player_store.rs`'s own
+    /// `vaino-rev-{pid}.db` pattern) rather than introducing a `tempfile`
+    /// dependency for one new test module.
+    fn scratch_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("vaino-attach-{name}-{}.db", std::process::id()))
+    }
+
+    fn open_uri(path: &Path) -> Connection {
+        let _ = std::fs::remove_file(path);
+        Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_URI,
+        )
+        .unwrap()
+    }
+
+    /// The common case today: every installation that hasn't split passes
+    /// the same path twice. Nothing should be attached, and `main` must
+    /// still resolve -- the whole point is that this costs nothing when
+    /// there is no split.
+    #[test]
+    fn same_path_attaches_nothing_and_returns_main() {
+        let path = scratch_path("same");
+        let conn = open_uri(&path);
+        conn.execute("CREATE TABLE recordings (mbid TEXT PRIMARY KEY)", [])
+            .unwrap();
+
+        let alias = attach_library(&conn, &path, &path).unwrap();
+        assert_eq!(alias, "main");
+
+        // The whole reason this matters: a query built with the returned
+        // alias must actually run, unqualified through `main`.
+        conn.execute(&format!("INSERT INTO {alias}.recordings VALUES ('x')"), [])
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The split case: two real files, attached read-only, queryable
+    /// through the alias this function hands back -- proven against the
+    /// actual linked SQLite rather than assumed from documentation.
+    #[test]
+    fn different_paths_attach_library_read_only_as_lib() {
+        let listener_path = scratch_path("listener");
+        let library_path = scratch_path("library");
+
+        let lib_conn = open_uri(&library_path);
+        lib_conn
+            .execute("CREATE TABLE recordings (mbid TEXT PRIMARY KEY)", [])
+            .unwrap();
+        lib_conn.execute("INSERT INTO recordings VALUES ('abc')", []).unwrap();
+        drop(lib_conn);
+
+        let conn = open_uri(&listener_path);
+        let alias = attach_library(&conn, &listener_path, &library_path).unwrap();
+        assert_eq!(alias, "lib");
+
+        let mbid: String = conn
+            .query_row(&format!("SELECT mbid FROM {alias}.recordings"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mbid, "abc");
+
+        // The safety guard this whole design leans on: a write attempt
+        // against the attached schema must fail, not silently succeed.
+        let write_err = conn
+            .execute(&format!("INSERT INTO {alias}.recordings VALUES ('def')"), [])
+            .unwrap_err();
+        let msg = write_err.to_string().to_lowercase();
+        assert!(
+            msg.contains("read-only") || msg.contains("readonly"),
+            "expected a read-only failure, got: {write_err}"
+        );
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+    }
+
+    /// A second connection, attaching the same two files independently --
+    /// the shape `Library` and `PlayerStore` actually need, since they are
+    /// two separate connections today and stay that way post-split.
+    #[test]
+    fn two_independent_connections_can_each_attach_the_same_library() {
+        let listener_path = scratch_path("listener2");
+        let library_path = scratch_path("library2");
+        open_uri(&library_path)
+            .execute("CREATE TABLE recordings (mbid TEXT PRIMARY KEY)", [])
+            .unwrap();
+
+        let conn_a = open_uri(&listener_path);
+        let conn_b = Connection::open_with_flags(
+            &listener_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
+        )
+        .unwrap();
+        assert_eq!(attach_library(&conn_a, &listener_path, &library_path).unwrap(), "lib");
+        assert_eq!(attach_library(&conn_b, &listener_path, &library_path).unwrap(), "lib");
+
+        conn_a.execute("SELECT * FROM lib.recordings", []).unwrap();
+        conn_b.execute("SELECT * FROM lib.recordings", []).unwrap();
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+    }
+}
 
 #[cfg(test)]
 pub(crate) mod test_support {
