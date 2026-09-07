@@ -43,6 +43,21 @@ buys. For a card already locked in, `sudo overlayroot-chroot` (the tool
 drop-in through to A's real lower filesystem without needing the full
 unlock/reboot/relock cycle `[IMPL-BOS-160]` exists for.
 
+Unblocking `systemd-remount-fs.service` wasn't the whole fix, though —
+it had been masking a second problem. With the dependency chain able to run
+at all, `rpi-resize-swap-file.service` failed on its own: `truncate: cannot
+open '/var/swap' for writing: No space left on device`. The default
+mechanism is zram**+file** — a writeback file at `/var/swap`, which lives on
+`/`, the RAM-backed overlay itself (`overlayroot 923M 1.3M 922M 1% /`). A
+RAM-sized swap file cannot fit in a ~900M tmpfs, and backing RAM-compressed
+swap with a file that itself lives in RAM would be circular even if it did.
+Fixed by dropping the file half: `Mechanism=zram` in `/etc/rpi/swap.conf`,
+same two-write treatment (`overlayroot-chroot` for A, plus the live overlay
+directly so it took effect without a reboot). Both fixes applied live to
+`bose` itself 2026-09-07, verified with `free -h` showing `1.8Gi` zram swap
+and `systemctl --failed` clean, in addition to being folded into
+`provision-bose.sh` for the next card.
+
 Where each phase runs, what runs it, and in what order. The design it carries
 out is [BOSE002](BOSE002-image-build.md); the machine it targets is described in
 [BOSE001](BOSE001-survey.md).

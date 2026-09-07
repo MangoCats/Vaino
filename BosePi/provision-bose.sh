@@ -179,6 +179,22 @@ on "sudo mkdir -p /etc/systemd/system/systemd-remount-fs.service.d
 say "remount-fs is now a no-op; verify after the next boot with:"
 say "  systemctl is-active dev-zram0.swap && free -h"
 
+step "zram-only swap, not zram+file  [IMPL-BOS-170]"
+# Unblocking remount-fs above still wasn't enough on its own: the "+file"
+# half of rpi-swap's default zram+file mechanism wants a writeback file at
+# /var/swap, which lives on / -- the RAM-backed overlay itself
+# (`overlayroot 923M 1.3M 922M 1% /`). A RAM-sized swap file cannot fit in a
+# ~900M tmpfs, and even if it did, backing RAM-compressed swap with a file
+# that itself lives in RAM defeats the point. `rpi-resize-swap-file.service`
+# failed with `truncate: cannot open '/var/swap' for writing: No space left
+# on device` -- found live, right after the remount-fs fix above stopped
+# masking it. Simplest correct fix for a read-only appliance: drop the file
+# half entirely, pure zram.
+on "sudo sed -i 's/^#Mechanism=auto/Mechanism=zram/' /etc/rpi/swap.conf
+    sudo systemctl daemon-reload"
+say "verify after the next boot: systemctl cat dev-zram0.swap | grep zram)"
+say "should say '(zram)', not '(zram+file)', with no rpi-setup-loop binding"
+
 step "MPD"
 [ -f BosePi/mpd.conf ] || die "BosePi/mpd.conf missing"
 scp -q BosePi/mpd.conf "$HOST:/tmp/mpd.conf" || die "upload failed"
