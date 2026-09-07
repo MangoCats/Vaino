@@ -286,11 +286,10 @@ passes used, before treating this as ready to build:
   work, appropriately deferred until `[SPEC-FBUI-025]`'s hardware
   questions are answered (a hit-test grid designed against the wrong
   orientation or the wrong overlay's rotation convention is wasted work).
-- **What happens before calibration has ever run** — first boot, no
-  calibration file present. `[SPEC-FBUI-050]`'s routine needs to be the
-  thing that runs automatically in that case, not a separate manual step
-  someone has to remember, or the appliance's first real boot shows a
-  screen that cannot be usefully touched.
+- ~~**What happens before calibration has ever run**~~ **Resolved
+  2026-09-07** — `fbui` checks for `[SPEC-FBUI-055]`'s file at startup and
+  runs `[SPEC-FBUI-050]`'s routine automatically when it's missing; no
+  separate manual step exists to forget.
 
 None of these are reasons not to build this — they are exactly the kind
 of gap this review step exists to find before code makes them expensive to
@@ -320,9 +319,20 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    Getting there also surfaced and resolved `[SPEC-FBUI-027]` (the console
    shares this device) — a real boot-hang risk found and fixed along the
    way, not merely a cosmetic finish.
-3. **Calibration routine**, run automatically when no calibration file
-   exists — resolves §7's "first boot" gap by construction rather than by
-   remembering a manual step.
+3. ~~Calibration routine~~ **Done, 2026-09-07** — the standard 3-point
+   affine solve (`[SPEC-FBUI-050]`, Vidales' algorithm, the same one
+   tslib/X11 evtouch use), raw evdev hand-parsed rather than a new crate
+   (`[SPEC-FBUI-045]`). The math is unit-tested against a synthetic
+   rotated/scaled transform (recovers a held-out 4th point exactly, the
+   check the calibration literature itself recommends) independent of any
+   hardware, then run for real: three genuine touches on `vainoplayer3`
+   produced distinct, internally-consistent raw readings (raw_x fell as
+   screen_x rose, raw_y rose sharply with screen_y — the axis remix
+   `rotate=90` predicts) and a saved `/var/vaino/touch-calibration.toml`
+   with finite, sane coefficients. Confirmed re-triggerable (`fbui
+   --calibrate`) and confirmed idempotent the other way too — a plain
+   restart finds the file and logs `using existing calibration` rather
+   than re-prompting.
 4. **Transport UI**: play/pause/skip/volume/seek, hit-tested against
    concrete regions decided once §8.1's real orientation is known, wired
    to the existing `/command`/`/volume`/`/seek` routes.
