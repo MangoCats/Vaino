@@ -23,8 +23,9 @@ use super::Ui;
 #[cfg(feature = "sampo-support")]
 pub(super) async fn segment_queue(State(ui): State<Ui>) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let out = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let items = lib.segment_queue(crate::BROWSE_LIMIT).ok()?;
         serde_json::to_value(serde_json::json!({
             "progress": lib.segment_progress(),
@@ -49,8 +50,9 @@ pub(super) async fn accept_segment(
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let done = tokio::task::spawn_blocking(move || {
-        crate::db::PlayerStore::open(&db)
+        crate::db::PlayerStore::open_split(&db, &library)
             .map_err(|e| e.message().to_string())?
             .accept_segment(passage_id)
             .map_err(|e| e.message().to_string())

@@ -20,13 +20,14 @@ pub(super) async fn browse(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let filter = crate::db::BrowseFilter {
         q: q.get("q").filter(|s| !s.is_empty()).cloned(),
         artist: q.get("artist").filter(|s| !s.is_empty()).cloned(),
         album: q.get("album").filter(|s| !s.is_empty()).cloned(),
     };
     let out = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         match kind.as_str() {
             "artists" => serde_json::to_value(lib.browse_artists(&filter).ok()?).ok(),
             "albums" => serde_json::to_value(lib.browse_albums(&filter).ok()?).ok(),
@@ -54,8 +55,9 @@ pub(super) async fn passage_info(
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let out = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         lib.passage_profile(passage_id).ok().flatten()
     })
     .await;
@@ -90,6 +92,7 @@ pub(super) async fn history(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let size = q
         .get("size")
         .and_then(|s| s.parse::<i64>().ok())
@@ -98,7 +101,7 @@ pub(super) async fn history(
     let page = q.get("page").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1).max(1);
     let offset = (page - 1) * size;
     let out = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let entries = lib.play_history(size, offset).ok()?;
         let total = lib.play_history_count().ok()?;
         Some(HistoryPage { entries, total, page, size })
@@ -128,8 +131,9 @@ pub(super) async fn set_flag(
     }
     let flagged = q.get("flagged").map(|v| v == "true" || v == "1").unwrap_or(false);
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let done = tokio::task::spawn_blocking(move || {
-        crate::db::PlayerStore::open(&db)
+        crate::db::PlayerStore::open_split(&db, &library)
             .map_err(|e| e.message().to_string())?
             .set_flag(&kind, &id, flagged)
             .map_err(|e| e.message().to_string())

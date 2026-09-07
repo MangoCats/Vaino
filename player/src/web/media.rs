@@ -31,9 +31,10 @@ pub(super) async fn lyrics(
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     // The query blocks, so it belongs off the runtime.
     let found = tokio::task::spawn_blocking(move || {
-        crate::db::Library::open(&db).ok().and_then(|lib| lib.lyrics(passage_id))
+        crate::db::Library::open_split(&db, &library).ok().and_then(|lib| lib.lyrics(passage_id))
     })
     .await
     .ok()
@@ -82,8 +83,9 @@ pub(super) async fn cover_art_back(
 /// the front and label it the back.
 pub(super) async fn art_response(ui: Ui, passage_id: i64, back: bool) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let found = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let path = lib.passage_path(passage_id).ok();
         if !back {
             if let Some(a) = path.as_deref().and_then(crate::tags::artwork) {

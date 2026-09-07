@@ -22,8 +22,9 @@ pub(super) async fn edit_info(
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let found = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let entry = lib.passage(passage_id).ok()?;
         // A recorded-but-not-yet-applied draft wins over the passage's own
         // values -- reopening the editor after a commit must show the edit
@@ -114,8 +115,9 @@ pub(super) async fn edit_review(
     axum::extract::Json(draft): axum::extract::Json<BoundaryDraft>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let done = tokio::task::spawn_blocking(move || {
-        crate::db::PlayerStore::open(&db)
+        crate::db::PlayerStore::open_split(&db, &library)
             .map_err(|e| e.message().to_string())?
             .record_boundary_review(
                 passage_id,
@@ -168,11 +170,12 @@ pub(super) async fn edit_audio(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let want_from: Option<u64> = q.get("from_ms").and_then(|s| s.parse().ok());
     let want_to: Option<u64> = q.get("to_ms").and_then(|s| s.parse().ok());
 
     let wav = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let entry = lib.passage(passage_id).ok()?;
         // The client is expected to send both, padded around the passage
         // `[SPEC-SUI-224]`; the passage's own span is the fallback for a

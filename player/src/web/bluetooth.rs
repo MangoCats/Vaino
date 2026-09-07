@@ -78,8 +78,9 @@ pub(super) async fn speaker_verb_on(
         // best-effort, since a listener whose speaker just started working
         // should not be told it failed over a bookkeeping write.
         let db = ui.db.clone();
+        let library = ui.library.clone();
         let addr2 = address.clone();
-        let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open(&db) {
+        let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open_split(&db, &library) {
             Ok(store) => match store.save_speaker_address(&addr2) {
                 // A listener-visible action deserves a journal line saying
                 // so, not just silence on success -- otherwise a later
@@ -109,8 +110,9 @@ pub(super) async fn speaker_verb_on(
 /// the live snapshot.
 pub(super) async fn led_state(State(ui): State<Ui>) -> Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let (mode, brightness) = tokio::task::spawn_blocking(move || {
-        crate::db::PlayerStore::open(&db)
+        crate::db::PlayerStore::open_split(&db, &library)
             .map(|s| (s.load_led_mode(), s.load_led_brightness()))
             .unwrap_or_else(|_| ("on".into(), 100))
     })
@@ -147,9 +149,10 @@ pub(super) async fn set_led(
         None
     };
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let mode2 = mode.clone();
     let saved = tokio::task::spawn_blocking(move || {
-        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| e.message().to_string())?;
         store.save_led_mode(&mode2).map_err(|e| e.message().to_string())?;
         if let Some(pct) = pct {
             store.save_led_brightness(pct).map_err(|e| e.message().to_string())?;
