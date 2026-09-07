@@ -735,15 +735,60 @@ a person.
 Full regression throughout: 385 lib tests, all integration tests, the
 whole workspace (every bin target) — green at each step.
 
-**Not yet built:** `tools/split_database.py`, the `sync_peers` schema
-addition (`[§7.4]`), and — the remaining player-side gap, found while
-wiring the real `vaino` binary rather than assumed away — a `--library`
-CLI flag threaded through `bin/vaino.rs` itself. That binary's `db` path
-is currently cloned into three separate places (the backup thread, the
-tag-scan thread, and the engine thread that builds `Library`/`PlayerStore`/
-`Director`), and each needs the second path threaded alongside it before
-vainopi can run split for real — `mpd_direct.rs` (a dev tool, not
-production) already has this wiring as a model for it. None of this
-remaining work has touched real data yet. Scope for the first real
-implementation and migration pass stays vainopi only; `bose` and local stay
-single-file and untouched until vainopi has proven the split in practice.
+## 12. The core playback path: wired
+
+`bin/vaino.rs` (confirmed against `bose`'s actual systemd invocation to be
+the real production binary — `mpd_direct.rs` is a dev tool) gained a
+`--library` flag, defaulting to the `--db` path like every other split-aware
+entry point. Threaded to all three places that used to clone `db` alone:
+the tag-scan thread now scans `library` (`file_tags` is B-side), the engine
+thread carries both into `Session::open`, and the backup thread was checked
+and left on `db` alone — `backup.rs`'s own `LISTENER_TABLES` constant and
+its doc comment ("Deliberately NOT here: `files`, `passages`, `recordings`,
+...") confirm backup is already listener-only by design, needing no second
+path. `Session` itself now holds both paths, including in its
+rebuild-in-flight closure (`[IMPL-SUI-075]`) — the one place still calling
+the single-path `Library::open` after everything else was converted.
+
+**A real, larger-than-expected gap found while wiring this, not assumed
+away**: `web::Ui` gained a `library` field, but its ~23 existing handler
+call sites — across `browse.rs`, `edit.rs`, `review.rs`, `media.rs`,
+`segment.rs`, `preference.rs`, `control.rs`, `bluetooth.rs`, `sampo.rs` —
+all still open only `ui.db.clone()` and call `Library::open`/`PlayerStore::open`
+with that one path. On unsplit `bose`/local this is invisible, since `open`
+already defaults to same-path. **On a split vainopi, every one of those
+pages fails with "no such table" the first time it's opened**, because
+`Library::open(db)` becomes `open_split(db, db)` and `attach_library` sees
+the two paths equal, resolving catalog references against `main` —
+`listener.db` — which does not have them.
+
+This is real remaining work, scoped out of this pass deliberately rather
+than rushed: converting 23 call sites across 9 files, each needing a second
+captured path threaded into an existing `tokio::task::spawn_blocking`
+closure, deserves its own focused pass with the same care the qualified
+queries got — not a mechanical sweep squeezed into the tail of this one
+with no test coverage of the web handlers' actual database behavior to
+catch a mistake. **The core playback path — audio, resume state, tag
+scanning, listener backup, radio selection, its periodic rebuild — is fully
+split-aware and proven. Vainopi's web UI (browse/edit/review/segment
+pages) is not, yet, and must not be assumed to work until this is done.**
+
+Full regression at every step: 385 lib tests, all integration tests, the
+whole workspace (every bin target) — green.
+
+## 13. What remains
+
+- **The web layer's 23 call sites** (§12) — next in line, since it's the
+  one gap standing between "vainopi plays" and "vainopi's web UI works,"
+  on a split installation.
+- **`tools/split_database.py`** (§8) — the actual migration tool, DDL-copy
+  approach per `[§7.1]`.
+- **`sync_peers`'s `remote_listener` column** (`[§7.4]`) and the three
+  tools that need it (`sync_preferences.py`, `remote_flags.py`,
+  `export_flags.py`).
+- **The live migration itself** (§8's runbook) — not attempted, no real
+  data touched by any of this yet.
+
+Scope for the first real implementation and migration pass stays vainopi
+only; `bose` and local stay single-file and untouched until vainopi has
+proven the split in practice.
