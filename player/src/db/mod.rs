@@ -102,6 +102,189 @@ pub fn attach_library(
     Ok("lib")
 }
 
+/// The placeholder every catalog-table reference in a query string carries
+/// -- `__LIB__.recordings`, never a bare `lib.` or `main.` written by hand
+/// -- so [`QualifyingConn::qualify`] is the one and only place that decides
+/// which schema a catalog table actually resolves to `[IMPL-DBSPLIT-035]`.
+pub(crate) const LIB_PLACEHOLDER: &str = "__LIB__.";
+
+/// Wraps a [`Connection`](rusqlite::Connection) that has already run
+/// [`attach_library`], and rewrites `__LIB__.`-prefixed catalog references
+/// in every query text passed through it before handing the query to
+/// SQLite.
+///
+/// `Library` and `PlayerStore` both hold one of these instead of a bare
+/// `Connection` -- both mix catalog and listener tables in real queries
+/// (`[IMPL-DBSPLIT-015]` enumerates why), so both need the same rewrite.
+/// Everything the query-building code already does --
+/// `self.conn.prepare(&sql)`, `self.conn.query_row(...)`, `self.conn.execute(...)`
+/// -- keeps compiling unchanged: those four names are shadowed here with
+/// the identical signatures, qualifying first; every other
+/// [`Connection`](rusqlite::Connection) method (`last_insert_rowid`,
+/// `transaction`, ...) reaches the real connection through `Deref`,
+/// needing no change at all. One rewrite point, not eighteen call sites
+/// updated by hand and eighteen more to get right the next time a query
+/// is added.
+pub struct QualifyingConn {
+    conn: rusqlite::Connection,
+    lib: &'static str,
+}
+
+impl QualifyingConn {
+    /// Opens `db_path`, runs [`attach_library`] against `library_path`, and
+    /// wraps the result. `db_path == library_path` is the common,
+    /// unsplit case -- see `attach_library`'s own doc comment.
+    pub fn open(
+        db_path: &std::path::Path,
+        library_path: &std::path::Path,
+        flags: rusqlite::OpenFlags,
+    ) -> Result<Self, DbError> {
+        let conn = rusqlite::Connection::open_with_flags(
+            db_path,
+            flags | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| DbError::Open(e.to_string()))?;
+        let lib = attach_library(&conn, db_path, library_path)?;
+        Ok(Self { conn, lib })
+    }
+
+    /// Wraps an already-open connection as unsplit (`lib = "main"`),
+    /// skipping `attach_library` entirely -- for tests that build an
+    /// in-memory fixture directly rather than through a real file path.
+    /// Real callers use [`Self::open`]; this exists so the many existing
+    /// `Library`/`PlayerStore` test fixtures don't need a real file on disk
+    /// just to get a `QualifyingConn`.
+    #[cfg(test)]
+    pub(crate) fn wrap_unsplit(conn: rusqlite::Connection) -> Self {
+        Self { conn, lib: "main" }
+    }
+
+    /// `"main"` on every installation that hasn't split; `"lib"` only once
+    /// it has. Exposed so callers that build SQL as ad hoc `format!` text
+    /// rather than through [`Self::qualify`] -- `bundle.rs`'s import path
+    /// does this for a few statements -- can still get it right by asking
+    /// rather than assuming.
+    pub fn lib_alias(&self) -> &'static str {
+        self.lib
+    }
+
+    fn qualify<'a>(&self, sql: &'a str) -> std::borrow::Cow<'a, str> {
+        if sql.contains(LIB_PLACEHOLDER) {
+            std::borrow::Cow::Owned(if self.lib == "main" {
+                sql.replace(LIB_PLACEHOLDER, "")
+            } else {
+                sql.replace(LIB_PLACEHOLDER, &format!("{}.", self.lib))
+            })
+        } else {
+            std::borrow::Cow::Borrowed(sql)
+        }
+    }
+
+    pub fn prepare(&self, sql: &str) -> rusqlite::Result<rusqlite::Statement<'_>> {
+        self.conn.prepare(&self.qualify(sql))
+    }
+
+    pub fn query_row<T, P, F>(&self, sql: &str, params: P, f: F) -> rusqlite::Result<T>
+    where
+        P: rusqlite::Params,
+        F: FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    {
+        self.conn.query_row(&self.qualify(sql), params, f)
+    }
+
+    pub fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> rusqlite::Result<usize> {
+        self.conn.execute(&self.qualify(sql), params)
+    }
+
+    pub fn execute_batch(&self, sql: &str) -> rusqlite::Result<()> {
+        self.conn.execute_batch(&self.qualify(sql))
+    }
+}
+
+impl std::ops::Deref for QualifyingConn {
+    type Target = rusqlite::Connection;
+    fn deref(&self) -> &rusqlite::Connection {
+        &self.conn
+    }
+}
+
+#[cfg(test)]
+mod qualifying_conn_tests {
+    use super::QualifyingConn;
+    use rusqlite::OpenFlags;
+    use std::path::PathBuf;
+
+    fn scratch_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("vaino-qconn-{name}-{}.db", std::process::id()))
+    }
+
+    const RW: OpenFlags =
+        OpenFlags::from_bits_truncate(OpenFlags::SQLITE_OPEN_READ_WRITE.bits() | OpenFlags::SQLITE_OPEN_CREATE.bits());
+
+    /// Unsplit: a placeholder in the query text still resolves, against
+    /// the one file, because qualifying against `"main"` just erases it.
+    #[test]
+    fn unsplit_placeholder_resolves_against_main() {
+        let path = scratch_path("unsplit");
+        let _ = std::fs::remove_file(&path);
+        let q = QualifyingConn::open(&path, &path, RW).unwrap();
+        assert_eq!(q.lib_alias(), "main");
+        q.execute_batch("CREATE TABLE __LIB__.recordings (mbid TEXT PRIMARY KEY)").unwrap();
+        q.execute("INSERT INTO __LIB__.recordings VALUES ('x')", []).unwrap();
+        let n: i64 = q.query_row("SELECT COUNT(*) FROM __LIB__.recordings", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Split: the same query text, unmodified, now resolves against the
+    /// attached `lib` schema instead -- the whole point of the
+    /// placeholder is that query-building code never has to know which
+    /// case it's in.
+    #[test]
+    fn split_placeholder_resolves_against_attached_lib() {
+        let listener_path = scratch_path("split-listener");
+        let library_path = scratch_path("split-library");
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+
+        let lib_conn = rusqlite::Connection::open(&library_path).unwrap();
+        lib_conn.execute("CREATE TABLE recordings (mbid TEXT PRIMARY KEY)", []).unwrap();
+        lib_conn.execute("INSERT INTO recordings VALUES ('y')", []).unwrap();
+        drop(lib_conn);
+
+        let q = QualifyingConn::open(&listener_path, &library_path, RW).unwrap();
+        assert_eq!(q.lib_alias(), "lib");
+        // Read-only, and correctly so -- inserting through the attached
+        // schema is exactly what must fail, per attach_library's own
+        // read-only-attach test. Reading is what this type exists for.
+        let n: i64 = q.query_row("SELECT COUNT(*) FROM __LIB__.recordings", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+
+        // A query naming a listener-side table with no placeholder at all
+        // must still work untouched -- qualify() is a no-op when there's
+        // nothing to rewrite.
+        q.execute_batch("CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY)").unwrap();
+        q.execute("INSERT INTO listener_play_history DEFAULT VALUES", []).unwrap();
+
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+    }
+
+    /// `Deref` must reach ordinary `Connection` methods this type doesn't
+    /// shadow -- `last_insert_rowid` is exactly what `PlayerStore` needs
+    /// after an insert.
+    #[test]
+    fn deref_reaches_unwrapped_connection_methods() {
+        let path = scratch_path("deref");
+        let _ = std::fs::remove_file(&path);
+        let q = QualifyingConn::open(&path, &path, RW).unwrap();
+        q.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY)").unwrap();
+        q.execute("INSERT INTO t DEFAULT VALUES", []).unwrap();
+        assert_eq!(q.last_insert_rowid(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 #[cfg(test)]
 mod attach_library_tests {
     use super::attach_library;

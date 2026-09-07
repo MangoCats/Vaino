@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use crate::db::DbError;
+use crate::db::{DbError, QualifyingConn};
 
 /// Classes must sum to 1.0 within this `[SPEC-FD-100]`.
 const SUM_TOLERANCE: f64 = 1e-4;
@@ -255,7 +255,7 @@ impl FlavorIndex {
     ///
     /// Absent tables are not an error — a library with no flavor simply cannot
     /// be shaped by character, and the Director falls back to frequency alone.
-    pub fn load(conn: &Connection) -> Result<Self, DbError> {
+    pub fn load(conn: &QualifyingConn) -> Result<Self, DbError> {
         let mut constants: HashMap<String, (f64, f64)> = HashMap::new();
         if let Ok(mut stmt) =
             conn.prepare("SELECT characteristic, beta, reliability FROM flavor_constants")
@@ -275,7 +275,7 @@ impl FlavorIndex {
         // complex ones are until Sampo extracts them -- simply does not appear.
         let mut rows: Vec<(String, String, String, f64)> = Vec::new();
         let Ok(mut stmt) = conn.prepare(
-            "SELECT subject_id, characteristic, class, value FROM flavor \
+            "SELECT subject_id, characteristic, class, value FROM __LIB__.flavor \
              WHERE subject_kind = 'recording'",
         ) else {
             return Ok(Self::empty());
@@ -451,8 +451,8 @@ impl FlavorSchema {
 mod tests {
     use super::*;
 
-    fn fixture() -> Connection {
-        let c = Connection::open_in_memory().unwrap();
+    fn fixture() -> QualifyingConn {
+        let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
         c.execute_batch(
             "CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,
                  class TEXT, value REAL, source TEXT, accuracy REAL);
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn an_absent_flavor_table_is_not_an_error() {
-        let c = Connection::open_in_memory().unwrap();
+        let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
         let idx = FlavorIndex::load(&c).unwrap();
         assert!(idx.is_empty());
         assert_eq!(idx.schema.characteristic_count(), 0);

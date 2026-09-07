@@ -29,8 +29,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use rusqlite::Connection;
-use vaino_player::db::{PlayerStore, Rejection};
+use vaino_player::db::{PlayerStore, QualifyingConn, Rejection};
 use vaino_player::director::library::{Director, QueuedNote, Rng};
 use vaino_player::mpd::{parse, quote, Mpd};
 use vaino_player::scrobble::counts_as_play;
@@ -64,7 +63,7 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (Some(db_path), Some(root)) = (flag(&args, "--db"), flag(&args, "--root")) else {
-        eprintln!("usage: mpd_direct [host:port] --db vaino.db --root MUSIC_DIRECTORY");
+        eprintln!("usage: mpd_direct [host:port] --db vaino.db --root MUSIC_DIRECTORY [--library library.db]");
         eprintln!("       [--depth 5] [--interval 5] [--for SECONDS] [--seed N]");
         std::process::exit(2);
     };
@@ -85,7 +84,9 @@ fn main() {
     // out loud: without `--write` it behaves exactly as stage 3 did.
     let write = args.iter().any(|a| a == "--write");
     let flagged: HashSet<&str> =
-        ["--db", "--root", "--depth", "--interval", "--for", "--seed"].into_iter().collect();
+        ["--db", "--root", "--library", "--depth", "--interval", "--for", "--seed"]
+            .into_iter()
+            .collect();
     let taken: HashSet<usize> = args
         .iter()
         .enumerate()
@@ -103,7 +104,16 @@ fn main() {
         None => Rng::from_clock(),
     };
 
-    let conn = Connection::open(&db_path).unwrap_or_else(|e| {
+    // `--library` names a genuinely separate `library.db`, for exercising a
+    // split installation from this dev tool too; absent, it defaults to
+    // `db_path` itself, the same unsplit case every other caller has.
+    let library_path = flag(&args, "--library").unwrap_or_else(|| db_path.clone());
+    let conn = QualifyingConn::open(
+        std::path::Path::new(&db_path),
+        std::path::Path::new(&library_path),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )
+    .unwrap_or_else(|e| {
         eprintln!("{db_path}: {e}");
         std::process::exit(1);
     });

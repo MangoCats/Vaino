@@ -9,14 +9,14 @@
 
 use std::path::PathBuf;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::OpenFlags;
 
 use crate::queue::{Naming, QueueEntry};
 
-use super::{BUSY_WAIT, DbError, TAG_TABLE};
+use super::{BUSY_WAIT, DbError, QualifyingConn, TAG_TABLE};
 
 pub struct Library {
-    conn: Connection,
+    conn: QualifyingConn,
 }
 
 /// Fill in what a passage is called, and how often it has been heard
@@ -29,17 +29,17 @@ pub struct Library {
 /// for the dozen passages actually on screen, where it costs under a
 /// millisecond each.
 const DESCRIBE: &str = "\
-    SELECT (SELECT r.title FROM recordings r WHERE r.mbid = m.mbid), \
-           (SELECT a.name FROM recording_artists ra \
-              JOIN artists a ON a.mbid = ra.artist_mbid \
+    SELECT (SELECT r.title FROM __LIB__.recordings r WHERE r.mbid = m.mbid), \
+           (SELECT a.name FROM __LIB__.recording_artists ra \
+              JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
              WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), \
-           (SELECT rel.title FROM release_recordings rr \
-              JOIN releases rel ON rel.mbid = rr.release_mbid \
+           (SELECT rel.title FROM __LIB__.release_recordings rr \
+              JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
              WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1), \
            (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid), \
            (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid), \
-           (SELECT ra.artist_mbid FROM recording_artists ra \
-              JOIN artists a ON a.mbid = ra.artist_mbid \
+           (SELECT ra.artist_mbid FROM __LIB__.recording_artists ra \
+              JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
              WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1) \
       FROM (SELECT ?1 AS mbid) m";
 
@@ -52,10 +52,10 @@ const DESCRIBE: &str = "\
 pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.duration_ms, \
                                p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                                p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, \
-                               (SELECT pr.mbid FROM passage_recordings pr \
+                               (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
                                 WHERE pr.passage_id = p.passage_id \
                                 ORDER BY pr.weight DESC, pr.mbid LIMIT 1)";
-pub(crate) const FROM: &str = "FROM passages p JOIN files f USING (file_id)";
+pub(crate) const FROM: &str = "FROM __LIB__.passages p JOIN __LIB__.files f USING (file_id)";
 
 pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
     Ok(QueueEntry {
@@ -108,8 +108,20 @@ impl Library {
     /// "only Sampo writes", which is what this comment used to say, and it is
     /// the narrow version that is true.
     pub fn open(path: &std::path::Path) -> Result<Self, DbError> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| DbError::Open(e.to_string()))?;
+        Self::open_split(path, path)
+    }
+
+    /// Opens `db_path` (the listener side) read-only and attaches
+    /// `library_path` read-only alongside it `[PI-DB-020]`. `open` above is
+    /// the common case -- every installation that hasn't split calls it
+    /// with one path, which becomes `open_split(path, path)`, attaching
+    /// nothing (`[IMPL-DBSPLIT-025]`). An installation with a genuinely
+    /// separate `library.db` calls this directly once it has two paths.
+    pub fn open_split(
+        db_path: &std::path::Path,
+        library_path: &std::path::Path,
+    ) -> Result<Self, DbError> {
+        let conn = QualifyingConn::open(db_path, library_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
         Ok(Self { conn })
     }
@@ -119,10 +131,28 @@ impl Library {
     /// The read-only default above is a real guard and stays: the player must
     /// not be able to corrupt the library. `tagscan` is a tool rather than the
     /// player -- the same standing as Sampo -- and it is the only caller here.
+    /// Always a single file (whatever `path` is, split or not -- writing
+    /// `file_tags` never needs a second file attached), so this never goes
+    /// through `open_split`: `path` plays both roles, and `QualifyingConn`
+    /// self-attaches nothing, per `attach_library`'s same-path case.
+    ///
+    /// Self-sufficient rather than trusting a prior `PlayerStore::open` run
+    /// to have created `file_tags` first `[IMPL-DBSPLIT-050]`,
+    /// `[§7.6](../../../VainoPi/IMPL002-database-split.md)`: a `library.db`
+    /// built by `tools/split_database.py` from a source that already had the
+    /// table carries it over regardless, but a library that predates any
+    /// `PlayerStore` run at all -- or a future split-native one built
+    /// straight from Sampo -- must not depend on that.
     pub fn open_writable(path: &std::path::Path) -> Result<Self, DbError> {
-        let conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
+        let conn = QualifyingConn::open(
+            path,
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        )?;
         conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
-        Ok(Self { conn })
+        let lib = Self { conn };
+        lib.ensure_tag_table()?;
+        Ok(lib)
     }
 
     /// The words for a passage, if the library has them `[SPEC-LYR-040]`.
@@ -134,7 +164,7 @@ impl Library {
     pub fn lyrics(&self, passage_id: i64) -> Option<String> {
         self.conn
             .query_row(
-                "SELECT l.text FROM passage_recordings pr                    JOIN lyrics l ON l.mbid = pr.mbid                  WHERE pr.passage_id = ?1                  ORDER BY pr.weight DESC LIMIT 1",
+                "SELECT l.text FROM __LIB__.passage_recordings pr                    JOIN lyrics l ON l.mbid = pr.mbid                  WHERE pr.passage_id = ?1                  ORDER BY pr.weight DESC LIMIT 1",
                 [passage_id],
                 |r| r.get::<_, String>(0),
             )
@@ -170,8 +200,8 @@ impl Library {
     pub fn stored_tags(&self, passage_id: i64) -> Option<crate::tags::Tags> {
         self.conn
             .query_row(
-                "SELECT t.title, t.artist, t.album FROM passages p \
-                   JOIN file_tags t ON t.file_id = p.file_id \
+                "SELECT t.title, t.artist, t.album FROM __LIB__.passages p \
+                   JOIN __LIB__.file_tags t ON t.file_id = p.file_id \
                   WHERE p.passage_id = ?1",
                 [passage_id],
                 |r| {
@@ -236,7 +266,7 @@ impl Library {
     /// Where a passage's audio lives, for serving its cover art.
     pub fn passage_path(&self, passage_id: i64) -> Result<std::path::PathBuf, DbError> {
         let p: String = self.conn.query_row(
-            "SELECT f.path FROM passages p JOIN files f ON f.file_id = p.file_id              WHERE p.passage_id = ?1",
+            "SELECT f.path FROM __LIB__.passages p JOIN __LIB__.files f ON f.file_id = p.file_id              WHERE p.passage_id = ?1",
             [passage_id],
             |r| r.get(0),
         )
@@ -271,7 +301,7 @@ impl Library {
                 .execute(&format!("ALTER TABLE file_tags ADD COLUMN {column} INTEGER"), [])
                 .is_ok();
             if added {
-                let _ = self.conn.execute("DELETE FROM file_tags", []);
+                let _ = self.conn.execute("DELETE FROM __LIB__.file_tags", []);
             }
         }
         Ok(())
@@ -314,7 +344,7 @@ impl Library {
     pub fn forget_tags(&self) -> Result<(), DbError> {
         self.ensure_tag_table()?;
         self.conn
-            .execute("DELETE FROM file_tags", [])
+            .execute("DELETE FROM __LIB__.file_tags", [])
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
     }
@@ -326,8 +356,8 @@ impl Library {
         let mut st = self
             .conn
             .prepare(
-                "SELECT f.file_id, f.path FROM files f \
-                   LEFT JOIN file_tags t ON t.file_id = f.file_id \
+                "SELECT f.file_id, f.path FROM __LIB__.files f \
+                   LEFT JOIN __LIB__.file_tags t ON t.file_id = f.file_id \
                   WHERE t.file_id IS NULL ORDER BY f.file_id",
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -344,7 +374,7 @@ impl Library {
     pub fn all_files(&self) -> Result<Vec<(i64, std::path::PathBuf)>, DbError> {
         let mut st = self
             .conn
-            .prepare("SELECT file_id, path FROM files ORDER BY file_id")
+            .prepare("SELECT file_id, path FROM __LIB__.files ORDER BY file_id")
             .map_err(|e| DbError::Query(e.to_string()))?;
         let rows = st
             .query_map([], |r| {
@@ -361,7 +391,7 @@ impl Library {
 
     pub fn count_radio(&self) -> Result<i64, DbError> {
         self.conn
-            .query_row("SELECT COUNT(*) FROM passages WHERE kind = 'radio'", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM __LIB__.passages WHERE kind = 'radio'", [], |r| r.get(0))
             .map_err(|e| DbError::Query(e.to_string()))
     }
 }
@@ -380,23 +410,23 @@ impl Library {
 /// so that is comfortably fast enough to leave as a query rather than a cache.
 const NAMED: &str = "\
     SELECT p.passage_id, p.file_id, \
-           (SELECT pr.mbid FROM passage_recordings pr \
+           (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
              WHERE pr.passage_id = p.passage_id \
              ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS mbid \
-      FROM passages p WHERE p.kind = 'radio'";
+      FROM __LIB__.passages p WHERE p.kind = 'radio'";
 
 /// The displayed artist, as a SQL expression over `NAMED` joined to `file_tags`.
 const ARTIST_EXPR: &str = "COALESCE( \
-    (SELECT a.name FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid \
+    (SELECT a.name FROM __LIB__.recording_artists ra JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
       WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), ft.artist)";
 
 /// The displayed album: MusicBrainz **Release** title, then the file's tag.
 const ALBUM_EXPR: &str = "COALESCE( \
-    (SELECT rel.title FROM release_recordings rr JOIN releases rel ON rel.mbid = rr.release_mbid \
+    (SELECT rel.title FROM __LIB__.release_recordings rr JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
       WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1), ft.album)";
 
 const TITLE_EXPR: &str =
-    "COALESCE((SELECT r.title FROM recordings r WHERE r.mbid = m.mbid), ft.title)";
+    "COALESCE((SELECT r.title FROM __LIB__.recordings r WHERE r.mbid = m.mbid), ft.title)";
 
 const PLAYS_EXPR: &str =
     "(SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid)";
@@ -405,18 +435,18 @@ const PLAYS_EXPR: &str =
 /// `file_tags` fallback `[REQ-VIS-250]`: history has no passage to join a file
 /// through, and a rescan that renumbers passages must not blank out a title
 /// six years old. `u` is the unioned history row, not `NAMED`'s `m`.
-const HIST_TITLE_EXPR: &str = "(SELECT r.title FROM recordings r WHERE r.mbid = u.mbid)";
-const HIST_ARTIST_EXPR: &str = "(SELECT a.name FROM recording_artists ra \
-    JOIN artists a ON a.mbid = ra.artist_mbid \
+const HIST_TITLE_EXPR: &str = "(SELECT r.title FROM __LIB__.recordings r WHERE r.mbid = u.mbid)";
+const HIST_ARTIST_EXPR: &str = "(SELECT a.name FROM __LIB__.recording_artists ra \
+    JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
     WHERE ra.mbid = u.mbid ORDER BY ra.weight DESC, a.name LIMIT 1)";
 /// The same winning row `HIST_ARTIST_EXPR` names, but its own mbid rather
 /// than its name -- so a history row's artist can be clicked through to a
 /// preference panel the same way the name is shown `[REQ-VIS-285]`.
-const HIST_ARTIST_MBID_EXPR: &str = "(SELECT ra.artist_mbid FROM recording_artists ra \
-    JOIN artists a ON a.mbid = ra.artist_mbid \
+const HIST_ARTIST_MBID_EXPR: &str = "(SELECT ra.artist_mbid FROM __LIB__.recording_artists ra \
+    JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
     WHERE ra.mbid = u.mbid ORDER BY ra.weight DESC, a.name LIMIT 1)";
-const HIST_ALBUM_EXPR: &str = "(SELECT rel.title FROM release_recordings rr \
-    JOIN releases rel ON rel.mbid = rr.release_mbid \
+const HIST_ALBUM_EXPR: &str = "(SELECT rel.title FROM __LIB__.release_recordings rr \
+    JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
     WHERE rr.mbid = u.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -833,7 +863,7 @@ impl Library {
         let sql = format!(
             "SELECT artist, COUNT(*), SUM(plays) FROM ( \
                SELECT {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays \
-                 FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
+                 FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE artist IS NOT NULL AND artist <> '' \
                AND (?1 = '' OR artist LIKE ?1) \
              GROUP BY artist ORDER BY artist COLLATE NOCASE"
@@ -845,7 +875,7 @@ impl Library {
         let sql = format!(
             "SELECT album, COUNT(*), SUM(plays), artist FROM ( \
                SELECT {ALBUM_EXPR} AS album, {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays \
-                 FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
+                 FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE album IS NOT NULL AND album <> '' \
                AND (?1 = '' OR album LIKE ?1) \
                AND (?2 = '' OR artist = ?2) \
@@ -930,14 +960,14 @@ impl Library {
                     {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
                     v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
                     a.artist_name, a.applied_at, c.checked_at \
-               FROM id_checks c \
+               FROM __LIB__.id_checks c \
                JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
-               LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
+               LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id \
                LEFT JOIN id_reviews v ON v.passage_id = c.passage_id \
                LEFT JOIN artist_reviews a ON a.recording_mbid = m.mbid \
               WHERE c.verdict IN ('contradicted', 'unmatched') \
                 AND NOT (c.verdict = 'unmatched' \
-                         AND EXISTS (SELECT 1 FROM passage_recordings pr \
+                         AND EXISTS (SELECT 1 FROM __LIB__.passage_recordings pr \
                                       WHERE pr.passage_id = c.passage_id \
                                         AND pr.source = 'local:ingest')) \
               ORDER BY c.score DESC, c.passage_id LIMIT ?1"
@@ -1023,8 +1053,8 @@ impl Library {
                     v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
                     a.artist_name, a.applied_at, c.checked_at \
                FROM ({NAMED}) m \
-               LEFT JOIN file_tags ft ON ft.file_id = m.file_id \
-               LEFT JOIN id_checks c ON c.passage_id = m.passage_id \
+               LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id \
+               LEFT JOIN __LIB__.id_checks c ON c.passage_id = m.passage_id \
                LEFT JOIN id_reviews v ON v.passage_id = m.passage_id \
                LEFT JOIN artist_reviews a ON a.recording_mbid = m.mbid \
               WHERE m.passage_id = ?1"
@@ -1087,8 +1117,8 @@ impl Library {
             .prepare(
                 "SELECT rel.mbid, rel.title, rel.release_date, rel.status, \
                         rel.track_count, COALESCE(rr.chosen, 0) \
-                   FROM release_recordings rr \
-                   JOIN releases rel ON rel.mbid = rr.release_mbid \
+                   FROM __LIB__.release_recordings rr \
+                   JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
                   WHERE rr.mbid = ?1 \
                   ORDER BY rr.chosen DESC, rel.release_date, rel.title",
             )
@@ -1129,9 +1159,9 @@ impl Library {
             .conn
             .query_row(
                 &format!(
-                    "SELECT a.{col} FROM cover_art a \
-                       JOIN release_recordings rr ON rr.release_mbid = a.release_mbid \
-                       JOIN passage_recordings pr ON pr.mbid = rr.mbid \
+                    "SELECT a.{col} FROM __LIB__.cover_art a \
+                       JOIN __LIB__.release_recordings rr ON rr.release_mbid = a.release_mbid \
+                       JOIN __LIB__.passage_recordings pr ON pr.mbid = rr.mbid \
                       WHERE pr.passage_id = ?1 AND a.{col} IS NOT NULL \
                       ORDER BY rr.chosen DESC LIMIT 1"
                 ),
@@ -1162,9 +1192,9 @@ impl Library {
         let n = |sql: &str| -> i64 { self.conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
         ReviewProgress {
             ran: self.has_table("id_checks"),
-            checked: n("SELECT COUNT(*) FROM id_checks"),
-            contradicted: n("SELECT COUNT(*) FROM id_checks WHERE verdict = 'contradicted'"),
-            confirmed: n("SELECT COUNT(*) FROM id_checks WHERE verdict = 'confirmed'"),
+            checked: n("SELECT COUNT(*) FROM __LIB__.id_checks"),
+            contradicted: n("SELECT COUNT(*) FROM __LIB__.id_checks WHERE verdict = 'contradicted'"),
+            confirmed: n("SELECT COUNT(*) FROM __LIB__.id_checks WHERE verdict = 'confirmed'"),
             decided: n("SELECT COUNT(*) FROM id_reviews"),
         }
     }
@@ -1254,14 +1284,14 @@ impl Library {
                     {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
                     {confidence_expr}, {outcome_expr}, \
                     EXISTS (SELECT 1 FROM boundary_reviews br2 WHERE br2.passage_id = p.passage_id) \
-               FROM passages p \
-               JOIN files f ON f.file_id = p.file_id \
-               LEFT JOIN file_tags ft ON ft.file_id = p.file_id \
+               FROM __LIB__.passages p \
+               JOIN __LIB__.files f ON f.file_id = p.file_id \
+               LEFT JOIN __LIB__.file_tags ft ON ft.file_id = p.file_id \
                LEFT JOIN (SELECT p2.passage_id AS passage_id, \
-                                 (SELECT pr.mbid FROM passage_recordings pr \
+                                 (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
                                    WHERE pr.passage_id = p2.passage_id \
                                    ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS mbid \
-                            FROM passages p2) m ON m.passage_id = p.passage_id \
+                            FROM __LIB__.passages p2) m ON m.passage_id = p.passage_id \
               WHERE p.boundary_src LIKE 'computed:segment-cascade%' \
                 AND NOT EXISTS (SELECT 1 FROM boundary_reviews br \
                                  WHERE br.passage_id = p.passage_id \
@@ -1313,12 +1343,12 @@ impl Library {
     pub fn segment_progress(&self) -> SegmentProgress {
         let n = |sql: &str| -> i64 { self.conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
         let segmented =
-            n("SELECT COUNT(*) FROM passages WHERE boundary_src LIKE 'computed:segment-cascade%'");
+            n("SELECT COUNT(*) FROM __LIB__.passages WHERE boundary_src LIKE 'computed:segment-cascade%'");
         SegmentProgress {
             ran: segmented > 0,
             segmented,
             confirmed: n(
-                "SELECT COUNT(*) FROM passages p \
+                "SELECT COUNT(*) FROM __LIB__.passages p \
                    JOIN boundary_reviews br ON br.passage_id = p.passage_id \
                   WHERE p.boundary_src LIKE 'computed:segment-cascade%' \
                     AND br.applied_at IS NOT NULL",
@@ -1361,11 +1391,11 @@ impl Library {
                SELECT m.passage_id, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, \
                       {ALBUM_EXPR} AS album, {PLAYS_EXPR} AS plays, \
                       ft.track_no AS track_no, ft.disc_no AS disc_no, \
-                      (SELECT rr.position FROM release_recordings rr \
+                      (SELECT rr.position FROM __LIB__.release_recordings rr \
                         WHERE rr.mbid = m.mbid AND rr.chosen = 1) AS mb_track, \
-                      (SELECT rr.disc FROM release_recordings rr \
+                      (SELECT rr.disc FROM __LIB__.release_recordings rr \
                         WHERE rr.mbid = m.mbid AND rr.chosen = 1) AS mb_disc \
-                 FROM ({NAMED}) m LEFT JOIN file_tags ft ON ft.file_id = m.file_id) \
+                 FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE title IS NOT NULL AND title <> '' \
                AND (?1 = '' OR title LIKE ?1) \
                AND (?2 = '' OR artist = ?2) \
@@ -1410,8 +1440,8 @@ impl Library {
                     p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                     p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, p.boundary_src, \
                     ft.title, ft.artist, ft.album \
-               FROM passages p JOIN files f ON f.file_id = p.file_id \
-               LEFT JOIN file_tags ft ON ft.file_id = f.file_id \
+               FROM __LIB__.passages p JOIN __LIB__.files f ON f.file_id = p.file_id \
+               LEFT JOIN __LIB__.file_tags ft ON ft.file_id = f.file_id \
               WHERE p.passage_id = ?1",
             [passage_id],
             |r| {
@@ -1451,7 +1481,7 @@ impl Library {
         // heaviest first.
         let mut stmt = self.conn.prepare(
             "SELECT pr.mbid, pr.weight, pr.source, r.title \
-               FROM passage_recordings pr LEFT JOIN recordings r ON r.mbid = pr.mbid \
+               FROM __LIB__.passage_recordings pr LEFT JOIN __LIB__.recordings r ON r.mbid = pr.mbid \
               WHERE pr.passage_id = ?1 ORDER BY pr.weight DESC, pr.mbid",
         ).map_err(|e| DbError::Query(e.to_string()))?;
         let mut recordings = stmt
@@ -1469,8 +1499,8 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))?;
         for rec in &mut recordings {
             let mut astmt = self.conn.prepare(
-                "SELECT a.name, ra.weight FROM recording_artists ra \
-                   JOIN artists a ON a.mbid = ra.artist_mbid \
+                "SELECT a.name, ra.weight FROM __LIB__.recording_artists ra \
+                   JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
                   WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name",
             ).map_err(|e| DbError::Query(e.to_string()))?;
             rec.artists = astmt
@@ -1493,10 +1523,10 @@ impl Library {
         // whose own radio/album pair legitimately differ in `start_ms` by
         // design -- its radio cut is independently trimmed at the row level.
         let file_id: i64 = self.conn.query_row(
-            "SELECT file_id FROM passages WHERE passage_id = ?1", [passage_id], |r| r.get(0))
+            "SELECT file_id FROM __LIB__.passages WHERE passage_id = ?1", [passage_id], |r| r.get(0))
             .map_err(|e| DbError::Query(e.to_string()))?;
         let mut sibling: Option<(i64, String)> = self.conn.query_row(
-            "SELECT passage_id, kind FROM passages \
+            "SELECT passage_id, kind FROM __LIB__.passages \
               WHERE file_id = ?1 AND kind != ?2 AND start_ms = ?3 AND end_ms = ?4",
             rusqlite::params![file_id, profile.kind, profile.start_ms, profile.end_ms],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -1504,8 +1534,8 @@ impl Library {
         if sibling.is_none() {
             if let Some(top) = profile.recordings.first() {
                 sibling = self.conn.query_row(
-                    "SELECT p2.passage_id, p2.kind FROM passages p2 \
-                       JOIN passage_recordings pr2 ON pr2.passage_id = p2.passage_id \
+                    "SELECT p2.passage_id, p2.kind FROM __LIB__.passages p2 \
+                       JOIN __LIB__.passage_recordings pr2 ON pr2.passage_id = p2.passage_id \
                       WHERE p2.file_id = ?1 AND p2.kind != ?2 AND pr2.mbid = ?3 \
                       LIMIT 1",
                     rusqlite::params![file_id, profile.kind, top.mbid],
@@ -1624,7 +1654,7 @@ mod tests {
              INSERT INTO id_checks VALUES (3,'aaaaaaaa-0000-0000-0000-000000000005','confirmed',0.99,NULL,'t');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.review_queue(50).unwrap();
         assert_eq!(q.len(), 1, "a confirmed id is not a question");
         assert_eq!(q[0].passage_id, 2);
@@ -1647,7 +1677,7 @@ mod tests {
              INSERT INTO passage_recordings VALUES (9,'aaaaaaaa-0000-0000-0000-00000000000a',1.0,'s');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
 
         // Absent entirely from the queue -- no `id_checks` row exists for it.
         let q = lib.review_queue(50).unwrap();
@@ -1691,7 +1721,7 @@ mod tests {
                  '[{\"mbid\":\"rec-q\",\"title\":\"Wrong Song (remaster)\",\"score\":0.91}]','t');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.review_queue(50).unwrap();
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].passage_id, 2, "the worse grade leads, despite a lower score");
@@ -1775,7 +1805,7 @@ mod tests {
         c.execute("INSERT INTO cover_art VALUES ('rel-1',?1,?2,'test','t')",
                   rusqlite::params![big.clone(), png])
             .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let front = lib.stored_art(2, false).expect("front cover");
         assert_eq!(front.media_type, "image/jpeg");
         assert_eq!(front.data.len(), 512);
@@ -1806,7 +1836,7 @@ mod tests {
         c.execute("INSERT INTO cover_art VALUES ('rel-other',?1,NULL,'test','t')",
                   rusqlite::params![big.clone()])
             .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let front = lib.stored_art(2, false).expect("found through the other release");
         assert_eq!(front.data.len(), 512);
     }
@@ -1828,7 +1858,7 @@ mod tests {
         c.execute("INSERT INTO cover_art VALUES ('rel-1',?1,NULL,'test','t')",
                   rusqlite::params![vec![0u8; crate::tags::MIN_ART_BYTES - 1]])
             .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         assert!(lib.stored_art(2, false).is_none());
     }
 
@@ -1836,7 +1866,7 @@ mod tests {
     /// fetched for -- must answer "no art", not fail the request.
     #[test]
     fn a_library_without_the_art_table_simply_has_no_art() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.stored_art(2, false).is_none());
         assert!(lib.stored_art(2, true).is_none());
     }
@@ -1866,7 +1896,7 @@ mod tests {
              INSERT INTO id_checks VALUES (6,'local:track:827','unmatched',NULL,NULL,'t');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.review_queue(50).unwrap();
         assert_eq!(q[0].passage_id, 6, "a missing id outranks every wrong one");
         assert_eq!(q[0].severity, "no-mbid");
@@ -1895,7 +1925,7 @@ mod tests {
              INSERT INTO id_checks VALUES (8,'local:track:827','unmatched',NULL,NULL,'t');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.review_queue(50).unwrap();
         let ids: Vec<i64> = q.iter().map(|i| i.passage_id).collect();
         assert!(!ids.contains(&7),
@@ -1934,7 +1964,7 @@ mod tests {
              INSERT INTO id_checks VALUES (5,'aaaaaaaa-0000-0000-0000-000000000006','unmatched',NULL,NULL,'t');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.review_queue(50).unwrap();
         let u = q.iter().find(|i| i.passage_id == 5).expect("unmatched must be reachable");
         assert_eq!(u.severity, "unverified");
@@ -1948,7 +1978,7 @@ mod tests {
     #[cfg(feature = "sampo-support")]
     #[test]
     fn a_passage_never_edited_has_no_boundary_review() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.boundary_review(2).is_none());
     }
 
@@ -1959,7 +1989,7 @@ mod tests {
     #[cfg(feature = "sampo-support")]
     #[test]
     fn a_library_without_findings_reviews_empty_rather_than_failing() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.review_queue(50).unwrap().is_empty());
         let p = lib.review_progress();
         assert!(!p.ran, "the page must be able to say the pass never ran");
@@ -1973,7 +2003,7 @@ mod tests {
     #[cfg(feature = "sampo-support")]
     #[test]
     fn a_library_never_segmented_has_an_empty_segment_queue() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.segment_queue(50).unwrap().is_empty());
         let p = lib.segment_progress();
         assert!(!p.ran, "the page must be able to say the cascade never ran");
@@ -2004,7 +2034,7 @@ mod tests {
                  VALUES ('md5', 'segment', 'grid:82%', 0.82, 't');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.segment_queue(50).unwrap();
         let ids: Vec<i64> = q.iter().map(|i| i.passage_id).collect();
         assert!(ids.contains(&20), "an unconfirmed cascade passage belongs in the queue");
@@ -2040,7 +2070,7 @@ mod tests {
                  VALUES (23, 5000, 65000, 't');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.segment_queue(50).unwrap();
         let item = q.iter().find(|i| i.passage_id == 23)
             .expect("recorded but not yet applied is not yet confirmed");
@@ -2061,7 +2091,7 @@ mod tests {
                   'computed:segment-cascade@v1',20,20,'exponential','exponential');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let q = lib.segment_queue(50).unwrap();
         assert_eq!(q.len(), 1);
         assert_eq!(q[0].confidence, None);
@@ -2070,7 +2100,7 @@ mod tests {
 
     #[test]
     fn reads_a_radio_passage_with_its_fades() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         let e = lib.passage(2).unwrap();
         assert_eq!(e.start_ms, 1200);
         assert_eq!(e.end_ms, 298_000);
@@ -2082,7 +2112,7 @@ mod tests {
 
     #[test]
     fn null_leads_become_zero_not_a_guess() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         let e = lib.passage(1).unwrap(); // album passage, leads NULL
         assert_eq!(e.lead_in_ms, 0);
         assert_eq!(e.lead_out_ms, 0);
@@ -2091,7 +2121,7 @@ mod tests {
 
     #[test]
     fn selection_is_radio_only() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert_eq!(lib.count_radio().unwrap(), 1);
         let picked = lib.random_radio(10).unwrap();
         assert_eq!(picked.len(), 1, "the album passage must not be selectable");
@@ -2102,7 +2132,7 @@ mod tests {
     /// and pick deterministically, or the passage appears twice in every pool.
     #[test]
     fn a_medley_passage_yields_one_row_and_the_heaviest_recording() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         let e = lib.passage(2).unwrap();
         assert_eq!(e.mbid.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000001"), "highest weight wins");
         assert_eq!(lib.random_radio(10).unwrap().len(), 1, "one row, not two");
@@ -2110,14 +2140,14 @@ mod tests {
 
     #[test]
     fn an_unidentified_passage_has_no_mbid() {
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert_eq!(lib.passage(1).unwrap().mbid, None);
     }
 
     #[test]
     fn a_null_lead_yields_a_gapless_handover() {
         use crate::queue::overlap_ms;
-        let lib = Library { conn: fixture() };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         let album = lib.passage(1).unwrap();
         let radio = lib.passage(2).unwrap();
         assert_eq!(overlap_ms(&album, &radio), 0, "unanalysed passage must not crossfade");
@@ -2148,7 +2178,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
 
         assert_eq!(lib.play_history_count().unwrap(), 2, "the dequeue is not counted");
 
@@ -2240,7 +2270,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         let rows = lib.play_history(10, 0).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].played_pct, None);
@@ -2262,7 +2292,7 @@ mod tests {
                   1.0, 's');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
 
         let p = lib.passage_profile(2).unwrap().expect("passage 2 exists");
         assert_eq!(p.passage_id, 2);
@@ -2308,7 +2338,7 @@ mod tests {
                                           20,20,'exponential','exponential');",
         )
         .unwrap();
-        let lib = Library { conn: c };
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
 
         let by_recording = lib.passage_profile(2).unwrap().unwrap();
         let sib = by_recording.sibling.expect("passage 2 must find passage 1 via their shared recording");

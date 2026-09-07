@@ -174,12 +174,13 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
 mod tests {
     use super::super::flavor::{centroid, FlavorIndex};
     use super::*;
+    use crate::db::QualifyingConn;
     use rusqlite::Connection;
 
     /// A library of `n` recordings spread evenly along one binary
     /// characteristic, so distance is a known function of index.
     fn library(n: usize) -> FlavorIndex {
-        let c = Connection::open_in_memory().unwrap();
+        let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
         c.execute_batch(
             "CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,
                  class TEXT, value REAL, source TEXT, accuracy REAL);
