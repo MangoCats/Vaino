@@ -941,11 +941,16 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(body or b"{}") or {}
                 name = (payload.get("name") or "").strip()
                 remote = (payload.get("remote") or "").strip()
+                # Optional: only a peer that has actually split
+                # (`[IMPL002 §7.4]`) has a second path at all -- absent or
+                # blank both mean "same file as remote", not an error.
+                remote_listener = (payload.get("remote_listener") or "").strip() or None
                 if not name or not remote or ":" not in remote:
                     return self.send_json(
-                        {"error": "expected {name, remote: user@host:/path/to/vaino.db}"}, code=400)
-                STATE["jobs"].upsert_peer(name, remote)
-                return self.send_json({"name": name, "remote": remote})
+                        {"error": "expected {name, remote: user@host:/path/to/library.db, "
+                                  "remote_listener: user@host:/path/to/listener.db (optional)}"}, code=400)
+                STATE["jobs"].upsert_peer(name, remote, remote_listener)
+                return self.send_json({"name": name, "remote": remote, "remote_listener": remote_listener})
             if p.startswith("/api/peers/") and p.endswith("/delete"):
                 name = p.split("/")[3]
                 STATE["jobs"].delete_peer(name)

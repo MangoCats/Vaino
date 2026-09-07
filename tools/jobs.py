@@ -75,10 +75,23 @@ CREATE TABLE IF NOT EXISTS remote_config (
 -- exactly `set_remote(peer.remote)` -- this table is only where names live.
 CREATE TABLE IF NOT EXISTS sync_peers (
     name    TEXT PRIMARY KEY,
-    remote  TEXT NOT NULL,             -- user@host:/path/to/vaino.db
+    remote  TEXT NOT NULL,             -- user@host:/path/to/library.db (or vaino.db, unsplit)
     enabled INTEGER NOT NULL DEFAULT 1
 );
 """
+
+# `remote_listener` is additive, not part of `DDL` above, because `sync_peers`
+# already exists on every console this ships to and `CREATE TABLE IF NOT
+# EXISTS` never adds a column to a table that's already there
+# `[IMPL002 §7.4]`. NULL means "same file as `remote`" -- true for every
+# peer that hasn't split, `bose` and today's vainopi included, so nothing
+# already configured needs re-entering. Needed because `sync_preferences.py`/
+# `remote_flags.py`/`export_flags.py` all join listener-side tables against
+# catalog-side ones through a peer's remote path, and a split peer can't
+# serve both halves from the one path `remote` already carries.
+_MIGRATIONS = [
+    "ALTER TABLE sync_peers ADD COLUMN remote_listener TEXT",
+]
 
 # Stage 0 ran these by hand in this order and the transcript is the reference
 # `[IMPL-SUI-020]`. Segmentation is absent because it is for DAO captures and
@@ -162,6 +175,12 @@ class Runner:
         self.proc = None             # the live subprocess, so it can be stopped
         db = self._db()
         db.executescript(DDL)
+        for migration in _MIGRATIONS:
+            try:
+                db.execute(migration)
+            except sqlite3.OperationalError:
+                pass  # already applied -- ALTER TABLE ADD COLUMN has no IF NOT EXISTS
+        db.commit()
         # A console killed mid-job leaves a row saying `running` and no process.
         # Say what happened rather than letting it look live for ever.
         db.execute("UPDATE jobs SET state='stopped', ended_at=?1 "
@@ -233,18 +252,44 @@ class Runner:
         db.commit()
         db.close()
 
+    def get_remote_listener(self) -> str | None:
+        """The listener-side path for whichever peer is active, or `None`
+        when it's the same file as `get_remote()` -- true for every peer
+        that hasn't split `[IMPL002 §7.4]`. Callers that need a listener
+        path unconditionally should do
+        `runner.get_remote_listener() or runner.get_remote()`.
+        """
+        db = self._db()
+        r = db.execute(
+            "SELECT value FROM remote_config WHERE key='sync_remote_listener'").fetchone()
+        db.close()
+        return r["value"] if r else None
+
+    def set_remote_listener(self, value: str | None) -> None:
+        db = self._db()
+        if value is None:
+            db.execute("DELETE FROM remote_config WHERE key='sync_remote_listener'")
+        else:
+            db.execute(
+                "INSERT INTO remote_config (key, value) VALUES ('sync_remote_listener', ?1) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (value,))
+        db.commit()
+        db.close()
+
     def list_peers(self) -> list:
         db = self._db()
         rows = [dict(r) for r in db.execute(
-            "SELECT name, remote, enabled FROM sync_peers ORDER BY name")]
+            "SELECT name, remote, remote_listener, enabled FROM sync_peers ORDER BY name")]
         db.close()
         return rows
 
-    def upsert_peer(self, name: str, remote: str) -> None:
+    def upsert_peer(self, name: str, remote: str, remote_listener: str | None = None) -> None:
         db = self._db()
         db.execute(
-            "INSERT INTO sync_peers (name, remote) VALUES (?1, ?2) "
-            "ON CONFLICT(name) DO UPDATE SET remote=excluded.remote", (name, remote))
+            "INSERT INTO sync_peers (name, remote, remote_listener) VALUES (?1, ?2, ?3) "
+            "ON CONFLICT(name) DO UPDATE SET remote=excluded.remote, "
+            "remote_listener=excluded.remote_listener",
+            (name, remote, remote_listener))
         db.commit()
         db.close()
 
@@ -257,14 +302,17 @@ class Runner:
     def activate_peer(self, name: str) -> str | None:
         """`[SPEC-MESH-092]`: makes `name` the target `remote-pull`/
         `remote-push`/`sync-preferences` act on, without those jobs
-        changing at all -- they still just call `get_remote()`.
+        changing at all -- they still just call `get_remote()`/
+        `get_remote_listener()`.
         """
         db = self._db()
-        r = db.execute("SELECT remote FROM sync_peers WHERE name=?1", (name,)).fetchone()
+        r = db.execute(
+            "SELECT remote, remote_listener FROM sync_peers WHERE name=?1", (name,)).fetchone()
         db.close()
         if r is None:
             return None
         self.set_remote(r["remote"])
+        self.set_remote_listener(r["remote_listener"])
         return r["remote"]
 
     def recent(self, limit: int = 25) -> list:

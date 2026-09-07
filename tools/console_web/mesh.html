@@ -20,9 +20,16 @@
   <div id="peer-list"></div>
   <div class="controls">
     <input type="text" id="peer-name" placeholder="name, e.g. bose" style="max-width:10rem">
-    <input type="search" id="peer-remote" placeholder="user@host:/path/to/vaino.db" style="min-width:20rem">
+    <input type="search" id="peer-remote" placeholder="user@host:/path/to/vaino.db (or library.db, once split)" style="min-width:20rem">
+    <input type="search" id="peer-remote-listener" placeholder="listener.db path, only if this peer has split" style="min-width:20rem">
     <button class="chip" id="add-peer">add / update</button>
   </div>
+  <p class="empty" style="font-size:.8rem;padding:.1rem 0">
+    Leave the second address blank for every peer that hasn't split its
+    database [IMPL002 §7.4] — <code style="font:12px var(--mono)">bose</code>
+    and today's <code style="font:12px var(--mono)">vainopi</code> both
+    still need only the first.
+  </p>
 
   <h2>Diff against a peer</h2>
   <p class="empty" style="font-size:.85rem;padding:.2rem 0">
@@ -69,9 +76,13 @@ async function loadPeers() {
       await fetch(`/api/peers/${encodeURIComponent(p.name)}/delete`, { method: 'POST' });
       loadPeers();
     };
+    const remoteCell = p.remote_listener
+      ? S.el('span', {}, S.el('code', { style: 'font:12px var(--mono)', text: p.remote }),
+             S.el('br'), S.el('code', { style: 'font:12px var(--mono);color:var(--muted)', text: p.remote_listener }))
+      : S.el('code', { style: 'font:12px var(--mono)', text: p.remote });
     return S.el('tr', {},
       S.el('td', { text: p.name }),
-      S.el('td', {}, S.el('code', { style: 'font:12px var(--mono)', text: p.remote })),
+      S.el('td', {}, remoteCell),
       S.el('td', {}, activateBtn),
       S.el('td', {}, deleteBtn));
   });
@@ -82,14 +93,16 @@ loadPeers();
 document.getElementById('add-peer').onclick = async () => {
   const name = document.getElementById('peer-name').value.trim();
   const remote = document.getElementById('peer-remote').value.trim();
+  const remote_listener = document.getElementById('peer-remote-listener').value.trim();
   if (!name || !remote) return alert('both a name and an address are needed');
   const r = await (await fetch('/api/peers', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, remote }),
+    body: JSON.stringify({ name, remote, remote_listener }),
   })).json();
   if (r.error) return alert(r.error);
   document.getElementById('peer-name').value = '';
   document.getElementById('peer-remote').value = '';
+  document.getElementById('peer-remote-listener').value = '';
   loadPeers();
 };
 

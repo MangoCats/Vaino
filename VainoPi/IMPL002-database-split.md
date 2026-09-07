@@ -828,11 +828,41 @@ that seeded `bose` — with no synthetic substitute: **1,066,520 rows across
 passed**, and confirmed nothing was written to disk, per the rehearsal
 contract.
 
-## 15. What remains
+## 16. `sync_peers`'s `remote_listener`: the registry half is done, the query half is not
 
-- **`sync_peers`'s `remote_listener` column** (`[§7.4]`) and the three
-  tools that need it (`sync_preferences.py`, `remote_flags.py`,
-  `export_flags.py`).
+Built: the additive `ALTER TABLE sync_peers ADD COLUMN remote_listener` migration
+(guarded against re-running on a sidecar that already has it), `remote_config`'s
+equivalent `sync_remote_listener` key, and `get_remote_listener()`/
+`set_remote_listener()`/`list_peers()`/`upsert_peer()`/`activate_peer()` all
+carrying the second path through — `NULL` means "same file as `remote`",
+true for every peer that hasn't split, so nothing already configured needs
+re-entering. `console.py`'s `/api/peers` route and `mesh.html`'s peer form
+both accept an optional second address, blank by default. Six tests in
+`test_jobs_peers.py` cover the default-to-`None` case, carrying a real
+second path through `upsert`→`activate`→`get_remote_listener()`, and
+switching from a split peer back to an unsplit one correctly clearing the
+stale listener path rather than leaving it active against the wrong peer.
+
+**Not done: the three tools this exists for don't consume it yet.**
+`remote_flags.py`'s `FLAGS_SQL` is one query joining `listener_flags` (C)
+against `passages`/`files` (B) in a single `sqlite3` invocation over `ssh`
+— exactly the shape that cannot run against a split peer's single file, the
+reason `remote_listener` exists at all. Making it work needs `remote_peek.py`'s
+`run_remote_sql()` to optionally `ATTACH` a second path before running the
+query (the same "open listener as main, attach library as `lib`" direction
+`[PI-DB-020]` and `attach_library()` already use in Rust), and `FLAGS_SQL`'s
+catalog references qualified with `lib.` to match. `sync_preferences.py`
+needs the identical treatment for its own existence-check join. `export_flags.py`
+runs locally against `self.library` already and needs only to also open
+`self.library`'s listener-side file if that ever differs — the smallest of
+the three, and the only one not making a remote SQL call at all. None of
+this is built; the registry can store and hand back a listener path today,
+but nothing yet asks for one.
+
+## 17. What remains
+
+- **The three tools' query-level ATTACH support** (§16) — real, scoped,
+  understood, not yet built.
 - **The live migration itself** (§8's runbook) — not attempted, no real
   device touched by any of this yet. `split_database.py` has only ever
   run against a copy on the dev host, never against vainopi itself.
