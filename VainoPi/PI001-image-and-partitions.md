@@ -166,16 +166,28 @@ of exactly the data nothing can rebuild, so this partition pays the fsync.
 
 ## 5. The database split
 
-**Still design, not code, confirmed 2026-09-06.** Building `bose`'s image was
-the first real attempt to apply this section, and it found no `ATTACH`, no
-second file, no schema split — `vaino.db` is still one file, exactly as
-`[SPEC-SC-010]` describes it today. `bose`'s image was built around that
-reality rather than this one: the whole file lives on C, not split across B
-and C — see [BOSE002 `[IMPL-BOS-078]`](../BosePi/BOSE002-image-build.md) for
-why that specific substitution is safe for `bose` (its B genuinely becomes
-read-only) in a way it happens not to be for `vainopi` (whose data partition
-never actually does). This section's design is unchanged by that; it simply
-has not been built yet.
+**Designed in detail, reviewed, still not built, as of 2026-09-06.** Building
+`bose`'s image was the first real attempt to apply this section, and it found
+no `ATTACH`, no second file, no schema split — `vaino.db` is still one file,
+exactly as `[SPEC-SC-010]` describes it today. `bose`'s image was built
+around that reality rather than this one: the whole file lives on C, not
+split across B and C — see [BOSE002 `[IMPL-BOS-078]`](../BosePi/BOSE002-image-build.md)
+for why that specific substitution is safe for `bose` (its B genuinely
+becomes read-only) in a way it happens not to be for `vainopi` (whose data
+partition never actually does).
+
+**[IMPL002](IMPL002-database-split.md) works out everything below in the
+detail an actual build needs**: the exact `ATTACH` mechanics, every real
+call site in the player today that mixes catalog and listener reads
+unqualified (more than the "four queries" `[PI-DB-030]` originally named —
+enumerated in full there), a genuine ownership gap found in review
+(`PlayerStore` currently creates B-side tables as a side effect of being
+"the only writable handle," which a split removes), the migration tool's
+design, and a review against synchronization (`[SPEC035]`'s mesh tooling
+needs no changes — it already addresses each side by an independent path),
+RAM, backup, and MPD. Still not built: the player refactor and the migration
+tool are both specified, not implemented, and neither has run against real
+data.
 
 **`[PI-DB-010]` One file becomes two, along a line the schema already draws.**
 `[SPEC-SC-020]` segregates listener state by the `listener_` prefix precisely
