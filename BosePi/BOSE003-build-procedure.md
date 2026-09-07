@@ -19,6 +19,30 @@ whatever number it enumerates as. Confirmed by device ownership
 (`sudo fuser -v /dev/snd/*`) moving to `pcmC2D0p`, not by trusting the log
 line alone.
 
+**`[IMPL-BOS-170]` Found live on the locked-in card, 2026-09-07: zram swap
+never actually comes up, and every SSH login makes it fail again in the
+journal.** `systemd-remount-fs.service` tries to remount `/` per `fstab`'s
+overlay entry on every pass through `local-fs.target` — not only at boot,
+but on every new SSH session too — and fails every time (`fsconfig() failed:
+overlay: No changes allowed in reconfigure`, exit 32): an overlay refuses
+post-mount reconfiguration outright, so this step can never succeed against
+one. Harmless by itself, except `rpi-resize-swap-file.service` and
+`rpi-setup-loop@var-swap.service` both hard-`Requires=` it, so its failure
+cascades into `dev-zram0.swap` never starting — `free -h` showed 0B swap
+despite `/etc/rpi/swap.conf` enabling zram+file, and each SSH login logged a
+fresh `Dependency failed for dev-zram0.swap`. Not dangerous today (1.8 GiB
+RAM, nothing under memory pressure), but no OOM cushion at all, and
+unbounded journal noise for the card's lifetime. Fixed with a no-op
+`ExecStart=` override for `systemd-remount-fs.service` — the remount is
+meaningless against an overlay root, so let the step report success instead
+of attempting one. Folded into `provision-bose.sh`, right after the journal
+step, so it lands on A before `finalize-bose.sh --lock-in` ever runs — same
+reasoning as `[IMPL-BOS-160]`'s escape hatch about what "before lock-in"
+buys. For a card already locked in, `sudo overlayroot-chroot` (the tool
+`/etc/fstab`'s own header comment names for exactly this) writes the same
+drop-in through to A's real lower filesystem without needing the full
+unlock/reboot/relock cycle `[IMPL-BOS-160]` exists for.
+
 Where each phase runs, what runs it, and in what order. The design it carries
 out is [BOSE002](BOSE002-image-build.md); the machine it targets is described in
 [BOSE001](BOSE001-survey.md).
