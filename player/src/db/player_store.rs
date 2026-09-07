@@ -10,7 +10,7 @@
 
 use rusqlite::Connection;
 
-use super::{BUSY_WAIT, DbError};
+use super::{BUSY_WAIT, DbError, QualifyingConn};
 
 /// The tag index, defined once `[REQ-VIS-180]`.
 ///
@@ -384,7 +384,7 @@ pub(crate) fn ensure_artist_review_table(conn: &Connection) -> Result<(), DbErro
 /// the recording MBID it must be keyed by `[SPEC-SC-095]` — an untested writer
 /// with no reader would be a claim nothing exercises.
 pub struct PlayerStore {
-    conn: Connection,
+    conn: QualifyingConn,
 }
 
 /// Every setting the listener owns `[REQ-VIS-155]`, in one row.
@@ -544,9 +544,90 @@ impl Rejection {
     }
 }
 
+/// The B-side tables and columns `PlayerStore` has historically created as a
+/// side effect of being the only writable handle -- `file_tags`, `cover_art`,
+/// `release_recordings`'s Sampo-selection columns and its performance index
+/// -- but only when this connection's own file genuinely *is* the library
+/// too `[IMPL002 §4.3, §7.6]`. Once split (`alias == "lib"`), `library.db` is
+/// attached read-only here and none of this can run through this connection
+/// at all -- `tools/split_database.py` carries these over at split time, and
+/// `tagscan`/`fetch_cover_art.py` own them going forward, the same
+/// self-sufficient pattern `Library::open_writable` now uses for
+/// `file_tags` `[IMPL-DBSPLIT-050]`.
+fn ensure_library_tables_if_owned(conn: &QualifyingConn) -> Result<(), DbError> {
+    if conn.lib_alias() != "main" {
+        return Ok(());
+    }
+    // Browsing joins this table, and an absent one fails the query rather
+    // than returning nothing. Filling it is `tagscan`'s job.
+    conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    // Same reasoning as the tag table above: created by whoever holds a
+    // writable handle, so the read path never meets a missing table.
+    // Filling it is `tools/fetch_cover_art.py`'s job.
+    conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    for column in ["chosen INTEGER DEFAULT 0", "position INTEGER", "disc INTEGER"] {
+        let _ =
+            conn.execute(&format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
+    }
+    // Album names are looked up BY RECORDING, and `release_recordings` is
+    // keyed `(release_mbid, mbid)` -- so the lookup uses the second column
+    // of the primary key and no index applies. SQLite falls back to a full
+    // scan of the table, once per passage.
+    //
+    // That was free when the table was empty and became quadratic the
+    // moment Sampo filled it: at 304,334 rows against 8,078 passages,
+    // browsing albums went past 400 seconds and the review queue took 229.
+    // With this index the review query is 0.50 s. Nothing about the code
+    // changed in between, only the amount of data, which is the kind of
+    // regression that arrives without a commit to blame.
+    //
+    // **And the sort after it, which the single-column index did not**
+    // `[PI-CHR-065]`. Measured on the appliance against the real library:
+    // `browse_albums` picks the chosen release per recording, so it runs
+    // `ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1` once
+    // per passage over some thirty-six releases each. Finding the rows was
+    // already cheap; ordering them was 18.05 s of a 25.7 s page.
+    //
+    // Carrying `chosen` and `release_mbid` in the index lets SQLite take the
+    // first row instead of sorting them: **0.93 s for the same 694 albums**,
+    // built once in 4.4 s. The sort cannot simply be dropped — without it
+    // the answer is 1,698 albums, because then any release will do.
+    //
+    // Created after `chosen` exists, which the ALTER above guarantees. That
+    // is why this lives here and not in `schema.sql`: that file describes
+    // the table as it is before the column this sorts on is added to it.
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_release_recordings_chosen \
+           ON release_recordings(mbid, chosen DESC, release_mbid)",
+        [],
+    );
+    // Redundant once the covering one exists — `mbid` leads both, so
+    // anything the old index served the new one serves too. Dropped after
+    // it and never before, so there is no moment with neither.
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_release_recordings_mbid", []);
+    Ok(())
+}
+
 impl PlayerStore {
     pub fn open(path: &std::path::Path) -> Result<Self, DbError> {
-        let conn = Connection::open(path).map_err(|e| DbError::Open(e.to_string()))?;
+        Self::open_split(path, path)
+    }
+
+    /// Opens `db_path` (listener-side, writable) and attaches `library_path`
+    /// read-only `[PI-DB-020]`. `open` above is the common case -- every
+    /// installation that hasn't split calls it with one path, which becomes
+    /// `open_split(path, path)`, attaching nothing
+    /// (`[IMPL-DBSPLIT-025]`). An installation with a genuinely separate
+    /// `library.db` calls this directly once it has two paths.
+    pub fn open_split(
+        db_path: &std::path::Path,
+        library_path: &std::path::Path,
+    ) -> Result<Self, DbError> {
+        let conn = QualifyingConn::open(
+            db_path,
+            library_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
+        )?;
         conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS player_state (
@@ -556,14 +637,6 @@ impl PlayerStore {
                  updated_at TEXT NOT NULL);",
         )
         .map_err(|e| DbError::Open(e.to_string()))?;
-        // Browsing joins this table, and an absent one fails the query rather
-        // than returning nothing. Created here because this is the player's
-        // only writable handle; filling it is `tagscan`'s job.
-        conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
-        // Same reasoning as the tag table above: created by whoever holds a
-        // writable handle, so the read path never meets a missing table.
-        // Filling it is `tools/fetch_cover_art.py`'s job.
-        conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
@@ -576,12 +649,6 @@ impl PlayerStore {
         ensure_boundary_review_table(&conn)?;
         #[cfg(feature = "sampo-support")]
         ensure_artist_review_table(&conn)?;
-        // Columns Sampo fills and the browse queries read `[SPEC-SA-030]`.
-        // Created HERE, on every start, rather than in `ensure_tag_table`:
-        // that only runs behind the background scan, so a library whose scan
-        // was already complete never reached it and browsing died on a missing
-        // column. A query naming a column that does not exist fails outright;
-        // it does not return nothing.
         // Settings live in `player_settings`, one row each `[SPEC-SC-099]`.
         // They used to be columns on `player_state`, added by ALTER as each was
         // invented, and read back by position -- `?11` here, `r.get(10)` there.
@@ -595,47 +662,7 @@ impl PlayerStore {
             [],
         );
         Self::adopt_old_settings_columns(&conn);
-        for column in ["chosen INTEGER DEFAULT 0", "position INTEGER", "disc INTEGER"] {
-            let _ = conn.execute(
-                &format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
-        }
-        // Album names are looked up BY RECORDING, and `release_recordings` is
-        // keyed `(release_mbid, mbid)` -- so the lookup uses the second column
-        // of the primary key and no index applies. SQLite falls back to a full
-        // scan of the table, once per passage.
-        //
-        // That was free when the table was empty and became quadratic the
-        // moment Sampo filled it: at 304,334 rows against 8,078 passages,
-        // browsing albums went past 400 seconds and the review queue took 229.
-        // With this index the review query is 0.50 s. Nothing about the code
-        // changed in between, only the amount of data, which is the kind of
-        // regression that arrives without a commit to blame.
-        //
-        // Created here because this is the player's only writable handle, and
-        // on every start rather than behind a scan, for the same reason the
-        // columns above are `[REQ-VIS-180]`.
-        // **And the sort after it, which the single-column index did not**
-        // `[PI-CHR-065]`. Measured on the appliance against the real library:
-        // `browse_albums` picks the chosen release per recording, so it runs
-        // `ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1` once
-        // per passage over some thirty-six releases each. Finding the rows was
-        // already cheap; ordering them was 18.05 s of a 25.7 s page.
-        //
-        // Carrying `chosen` and `release_mbid` in the index lets SQLite take the
-        // first row instead of sorting them: **0.93 s for the same 694 albums**,
-        // built once in 4.4 s. The sort cannot simply be dropped — without it
-        // the answer is 1,698 albums, because then any release will do.
-        //
-        // Created after `chosen` exists, which the ALTER above guarantees. That
-        // is why this lives here and not in `schema.sql`: that file describes
-        // the table as it is before the column this sorts on is added to it.
-        let _ = conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_release_recordings_chosen \
-               ON release_recordings(mbid, chosen DESC, release_mbid)", []);
-        // Redundant once the covering one exists — `mbid` leads both, so
-        // anything the old index served the new one serves too. Dropped after
-        // it and never before, so there is no moment with neither.
-        let _ = conn.execute("DROP INDEX IF EXISTS idx_release_recordings_mbid", []);
+        ensure_library_tables_if_owned(&conn)?;
         Ok(Self { conn })
     }
 
@@ -688,7 +715,7 @@ impl PlayerStore {
         let previous: Option<String> = self
             .conn
             .query_row(
-                "SELECT mbid FROM passage_recordings WHERE passage_id = ?1 \
+                "SELECT mbid FROM __LIB__.passage_recordings WHERE passage_id = ?1 \
                   ORDER BY weight DESC, mbid LIMIT 1",
                 [passage_id], |r| r.get(0))
             .ok();
@@ -806,7 +833,7 @@ impl PlayerStore {
             .query_row(
                 "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                         p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve \
-                   FROM passages p JOIN files f ON f.file_id = p.file_id \
+                   FROM __LIB__.passages p JOIN __LIB__.files f ON f.file_id = p.file_id \
                   WHERE p.passage_id = ?1",
                 [passage_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
@@ -885,7 +912,7 @@ impl PlayerStore {
         let boundary_src: String = self
             .conn
             .query_row(
-                "SELECT boundary_src FROM passages WHERE passage_id = ?1",
+                "SELECT boundary_src FROM __LIB__.passages WHERE passage_id = ?1",
                 [passage_id],
                 |r| r.get(0),
             )
@@ -903,7 +930,7 @@ impl PlayerStore {
             .query_row(
                 "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, \
                         fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve \
-                   FROM passages WHERE passage_id = ?1",
+                   FROM __LIB__.passages WHERE passage_id = ?1",
                 [passage_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
                         r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
@@ -944,7 +971,7 @@ impl PlayerStore {
         let recording_mbid: String = self
             .conn
             .query_row(
-                "SELECT mbid FROM passage_recordings WHERE passage_id = ?1 \
+                "SELECT mbid FROM __LIB__.passage_recordings WHERE passage_id = ?1 \
                   ORDER BY weight DESC, mbid LIMIT 1",
                 [passage_id],
                 |r| r.get(0),
@@ -978,7 +1005,7 @@ impl PlayerStore {
             .conn
             .query_row(
                 "SELECT ra.artist_mbid, a.name, ra.weight \
-                   FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid \
+                   FROM __LIB__.recording_artists ra JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
                   WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name LIMIT 1",
                 [&recording_mbid],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -1024,7 +1051,7 @@ impl PlayerStore {
         let recording_mbid: String = self
             .conn
             .query_row(
-                "SELECT mbid FROM passage_recordings WHERE passage_id = ?1 \
+                "SELECT mbid FROM __LIB__.passage_recordings WHERE passage_id = ?1 \
                   ORDER BY weight DESC, mbid LIMIT 1",
                 [passage_id],
                 |r| r.get(0),
@@ -1348,7 +1375,7 @@ impl PlayerStore {
     pub fn play_frequency(&self, kind: &str, id: &str) -> Result<Vec<FrequencyRow>, DbError> {
         let sql = if kind == "artist" {
             "SELECT h.selected_by, h.played_at FROM listener_play_history h \
-             JOIN recording_artists ra ON ra.mbid = h.mbid WHERE ra.artist_mbid = ?1"
+             JOIN __LIB__.recording_artists ra ON ra.mbid = h.mbid WHERE ra.artist_mbid = ?1"
         } else {
             "SELECT selected_by, played_at FROM listener_play_history WHERE mbid = ?1"
         };
@@ -2544,7 +2571,7 @@ mod tests {
     /// same enforcement `set_preference` gives `subject_kind`.
     #[test]
     fn save_led_mode_rejects_an_unknown_value() {
-        let store = PlayerStore { conn: historyable() };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         assert!(store.save_led_mode("strobe").is_err());
     }
 
@@ -2574,7 +2601,7 @@ mod tests {
     #[test]
     fn set_flag_rejects_an_unknown_subject_kind() {
         let c = historyable();
-        let store = PlayerStore { conn: c };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(c) };
         assert!(store.set_flag("album", "x", true).is_err());
     }
 
@@ -2584,7 +2611,7 @@ mod tests {
     /// `[REQ-VIS-290]`.
     #[test]
     fn get_preference_on_an_untouched_subject_is_three_nones() {
-        let store = PlayerStore { conn: historyable() };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         assert_eq!(
             store.get_preference("artist", "bbbbbbbb-0000-0000-0000-000000000001").unwrap(),
             PreferenceRow::default()
@@ -2595,7 +2622,7 @@ mod tests {
     /// means "unchanged", never "clear this too".
     #[test]
     fn set_preference_only_touches_the_fields_given() {
-        let store = PlayerStore { conn: historyable() };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         let id = "aaaaaaaa-0000-0000-0000-000000000001";
         store.set_preference("recording", id, Some(1.5), Some(2.0), None).unwrap();
         assert_eq!(
@@ -2617,7 +2644,7 @@ mod tests {
     /// per its own doc comment.
     #[test]
     fn reset_preference_clears_exactly_one_field() {
-        let store = PlayerStore { conn: historyable() };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         let id = "aaaaaaaa-0000-0000-0000-000000000001";
         store.set_preference("recording", id, Some(1.5), Some(2.0), Some(-0.5)).unwrap();
         store.reset_preference("recording", id, "recovery").unwrap();
@@ -2632,7 +2659,7 @@ mod tests {
     /// is nothing to clear, and the default already applies.
     #[test]
     fn reset_preference_on_an_untouched_subject_is_a_harmless_no_op() {
-        let store = PlayerStore { conn: historyable() };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         assert!(store.reset_preference("artist", "no-such-id", "rotation").is_ok());
     }
 
@@ -2640,13 +2667,13 @@ mod tests {
     /// own equivalent test.
     #[test]
     fn set_preference_rejects_an_unknown_subject_kind() {
-        let store = PlayerStore { conn: historyable() };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         assert!(store.set_preference("album", "x", Some(1.0), None, None).is_err());
     }
 
     #[test]
     fn reset_preference_rejects_an_unknown_field() {
-        let store = PlayerStore { conn: historyable() };
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         assert!(store.reset_preference("recording", "x", "loudness").is_err());
     }
 
@@ -2658,7 +2685,7 @@ mod tests {
     fn frequency_store() -> PlayerStore {
         let conn = historyable();
         ensure_history_columns(&conn);
-        PlayerStore { conn }
+        PlayerStore { conn: QualifyingConn::wrap_unsplit(conn) }
     }
 
     fn now() -> i64 {

@@ -1635,6 +1635,7 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
     use crate::db::test_support::*;
     use crate::db::PlayerStore; // the one cross-cutting round-trip test below
     use super::super::ART_TABLE;
@@ -2209,6 +2210,102 @@ mod tests {
 
         // Paging: asking past the end returns nothing, not an error.
         assert_eq!(lib.play_history(10, 2).unwrap().len(), 0);
+    }
+
+    /// The same fixture as the test above, physically split into two real
+    /// files -- catalog tables in one, listener tables in the other -- and
+    /// opened through `open_split` instead of one in-memory connection.
+    ///
+    /// This is the safety net every `__LIB__.`-qualified reference in this
+    /// file depends on: a reference nobody remembered to qualify resolves
+    /// to `main` (the listener side, post-split) and fails with "no such
+    /// table" the moment a genuinely separate `library.db` is involved --
+    /// exactly what an in-memory single-connection test can never catch,
+    /// since there `main` already holds everything. Reusing `historyable()`
+    /// rather than hand-writing a second fixture means this test cannot
+    /// drift from the one it mirrors.
+    #[test]
+    fn play_history_gives_the_same_answer_split_across_two_real_files() {
+        let listener_path =
+            std::env::temp_dir().join(format!("vaino-split-listener-{}.db", std::process::id()));
+        let library_path =
+            std::env::temp_dir().join(format!("vaino-split-library-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+
+        let source = historyable();
+        source
+            .execute(
+                "INSERT INTO listener_play_history (played_at, mbid, heard_ms, span_ms) \
+                 VALUES (100, 'aaaaaaaa-0000-0000-0000-000000000001', 150000, 180000)",
+                [],
+            )
+            .unwrap();
+        source
+            .execute(
+                "INSERT INTO listener_rejections (rejected_at, kind, mbid, heard_ms, span_ms) \
+                 VALUES (200, 'skip', 'aaaaaaaa-0000-0000-0000-000000000001', 9000, 180000)",
+                [],
+            )
+            .unwrap();
+
+        // Copy the source connection's own tables out to two real files, by
+        // table name rather than by hand-writing DDL a second time -- what
+        // matters here is that the split query path sees the exact same
+        // data the single-file test already trusts, not schema fidelity
+        // (`tools/split_database.py` owns getting that right for real, per
+        // IMPL002 §7.1).
+        let dest_lib = Connection::open(&library_path).unwrap();
+        for table in ["recordings", "artists", "recording_artists", "releases", "release_recordings"] {
+            copy_table(&source, &dest_lib, table);
+        }
+        drop(dest_lib);
+
+        let dest_listener = Connection::open(&listener_path).unwrap();
+        for table in ["listener_play_history", "listener_rejections", "listener_flags", "listener_preferences"] {
+            copy_table(&source, &dest_listener, table);
+        }
+        drop(dest_listener);
+
+        let lib = Library::open_split(&listener_path, &library_path).unwrap();
+        assert_eq!(lib.play_history_count().unwrap(), 2, "the dequeue is not counted");
+        let rows = lib.play_history(10, 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, "skip", "newest first");
+        assert_eq!(rows[0].title.as_deref(), Some("A Song"), "recordings resolved through lib");
+        assert_eq!(rows[0].artist.as_deref(), Some("A Band"), "recording_artists+artists through lib");
+        assert_eq!(rows[0].album.as_deref(), Some("An Album"), "release_recordings+releases through lib");
+        assert_eq!(rows[1].kind, "play");
+
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+    }
+
+    /// Copies one table's schema and rows from `src` into `dest`, both real
+    /// files -- test-only plumbing for the split-mode fixture above, not a
+    /// stand-in for `tools/split_database.py`'s own DDL-preserving copy.
+    fn copy_table(src: &Connection, dest: &Connection, table: &str) {
+        let ddl: String = src
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        dest.execute(&ddl, []).unwrap();
+        let cols: Vec<String> = {
+            let stmt = src.prepare(&format!("SELECT * FROM {table} LIMIT 0")).unwrap();
+            stmt.column_names().iter().map(|s| s.to_string()).collect()
+        };
+        let mut stmt = src.prepare(&format!("SELECT * FROM {table}")).unwrap();
+        let placeholders = cols.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect::<Vec<_>>().join(",");
+        let insert_sql = format!("INSERT INTO {table} VALUES ({placeholders})");
+        let mut rows = stmt.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let values: Vec<rusqlite::types::Value> =
+                (0..cols.len()).map(|i| row.get_unwrap(i)).collect();
+            dest.execute(&insert_sql, rusqlite::params_from_iter(values)).unwrap();
+        }
     }
 
     /// Flagging a recording, or a passage that has none yet, and reading the
