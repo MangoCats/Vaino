@@ -30,6 +30,17 @@
 //! screen-to-raw correspondence absorbs whatever rotation, mirroring, or
 //! skew actually exists between them, without needing to know what it is.
 //!
+//! Phase 4 wires that calibration to an actual transport UI: play/pause,
+//! skip, +-3dB volume, and tap-to-seek on the position bar, hit-tested
+//! against the concrete regions `render` draws and posted to `vaino`'s
+//! existing `/command/:name`, `/volume/:db`, `/seek/:ms` routes
+//! `[SPEC-FBUI-015]` -- the exact three real command names `control.rs`
+//! serves (`play`, `pause`, `skip`; there is deliberately no "prev" or
+//! "stop" `[REQ-AUD-142]`), not assumed ones. Touch is read on its own OS
+//! thread and joined with the websocket stream via `tokio::select!` in
+//! `main`, rather than sharing `fbui`'s single async worker thread with a
+//! blocking evdev read.
+//!
 //!     fbui [--calibrate] [ws://host:port/ws]   (default: ws://127.0.0.1:5720/ws)
 
 use embedded_graphics::mono_font::ascii::FONT_9X15;
@@ -50,6 +61,7 @@ struct ClientSnapshot {
     artist: Option<String>,
     position_ms: u64,
     duration_ms: u64,
+    volume_db: f32,
 }
 
 /// Wraps the real Linux framebuffer device so `embedded-graphics` can draw
@@ -137,30 +149,143 @@ fn fmt_time(ms: u64) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
-/// Clears the LCD panel area and redraws title/artist/position -- the
-/// whole-region redraw `[SPEC-FBUI-020]` says to do only on the fields
-/// that actually changed, which `main`'s own diff against the last state
-/// already guarantees by only calling this when something did.
+// ---------------------------------------------------------------------
+// Transport UI `[SPEC036]` §8 phase 4: play/pause/skip/volume/seek, hit-
+// tested against concrete regions now that orientation is confirmed
+// `[SPEC-FBUI-025]` rather than guessed at.
+// ---------------------------------------------------------------------
+
+const SEEKBAR_Y0: i32 = 58;
+const SEEKBAR_Y1: i32 = 76;
+const POS_TEXT_Y: i32 = 96;
+const BUTTON_Y0: i32 = 112;
+const BUTTON_Y1: i32 = 270;
+/// Four buttons, evenly spread across the panel's 480px width with visible
+/// gaps between them -- sized well above a fingertip's real contact area,
+/// not just legible text, since this is what a person actually presses.
+const BUTTON_XS: [(i32, i32); 4] = [(0, 110), (123, 233), (246, 356), (369, 479)];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Zone {
+    VolDown,
+    PlayPause,
+    Skip,
+    VolUp,
+    Seek,
+}
+
+/// Maps an already-calibrated screen point to whichever control (if any)
+/// it lands on. Takes screen coordinates, not raw touch ADC values --
+/// calibration `[SPEC-FBUI-050]` is applied by the caller first, so this
+/// function never needs to know this panel's rotation or axis convention.
+fn hit_test(sx: f64, sy: f64) -> Option<Zone> {
+    let (x, y) = (sx as i32, sy as i32);
+    if (SEEKBAR_Y0..=SEEKBAR_Y1).contains(&y) {
+        return Some(Zone::Seek);
+    }
+    if (BUTTON_Y0..=BUTTON_Y1).contains(&y) {
+        for (i, &(x0, x1)) in BUTTON_XS.iter().enumerate() {
+            if x >= x0 && x <= x1 {
+                return Some([Zone::VolDown, Zone::PlayPause, Zone::Skip, Zone::VolUp][i]);
+            }
+        }
+    }
+    None
+}
+
+fn draw_button(display: &mut FbDisplay, x0: i32, x1: i32, label: &str) -> Result<(), std::convert::Infallible> {
+    Rectangle::new(Point::new(x0, BUTTON_Y0), Size::new((x1 - x0) as u32, (BUTTON_Y1 - BUTTON_Y0) as u32))
+        .into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 2))
+        .draw(display)?;
+    let style = MonoTextStyle::new(&FONT_9X15, LCD_GREEN);
+    Text::new(label, Point::new(x0 + 8, (BUTTON_Y0 + BUTTON_Y1) / 2), style).draw(display)?;
+    Ok(())
+}
+
+/// Clears the LCD panel area and redraws everything -- title/artist, the
+/// tap-to-seek progress bar, position/volume, and the four transport
+/// buttons. The whole-region redraw `[SPEC-FBUI-020]` says to do only on
+/// the fields that actually changed, which `main`'s own diff against the
+/// last state already guarantees by only calling this when something did.
 fn render(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::convert::Infallible> {
-    let (w, h) = (display.width as i32, display.height as i32);
-    Rectangle::new(Point::zero(), Size::new(w as u32, h as u32))
+    let w = display.width as i32;
+    Rectangle::new(Point::zero(), Size::new(display.width, display.height))
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
         .draw(display)?;
 
     let style = MonoTextStyle::new(&FONT_9X15, LCD_GREEN);
     let title = snap.title.as_deref().unwrap_or("(nothing playing)");
     let artist = snap.artist.as_deref().unwrap_or("");
-    let pos = format!(
-        "{} {} / {}",
-        if snap.playing { ">" } else { "||" },
-        fmt_time(snap.position_ms),
-        fmt_time(snap.duration_ms)
-    );
-
     Text::new(title, Point::new(8, 20), style).draw(display)?;
     Text::new(artist, Point::new(8, 40), style).draw(display)?;
-    Text::new(&pos, Point::new(8, h - 12), style).draw(display)?;
+
+    let (bar_x0, bar_x1) = (8, w - 8);
+    Rectangle::new(
+        Point::new(bar_x0, SEEKBAR_Y0),
+        Size::new((bar_x1 - bar_x0) as u32, (SEEKBAR_Y1 - SEEKBAR_Y0) as u32),
+    )
+    .into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 1))
+    .draw(display)?;
+    if snap.duration_ms > 0 {
+        let frac = (snap.position_ms as f64 / snap.duration_ms as f64).clamp(0.0, 1.0);
+        let fill_w = (((bar_x1 - bar_x0 - 2) as f64) * frac).round() as u32;
+        if fill_w > 0 {
+            Rectangle::new(
+                Point::new(bar_x0 + 1, SEEKBAR_Y0 + 1),
+                Size::new(fill_w, (SEEKBAR_Y1 - SEEKBAR_Y0 - 2) as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(LCD_GREEN))
+            .draw(display)?;
+        }
+    }
+
+    let pos = format!(
+        "{} {} / {}  {:+.0}dB",
+        if snap.playing { ">" } else { "||" },
+        fmt_time(snap.position_ms),
+        fmt_time(snap.duration_ms),
+        snap.volume_db,
+    );
+    Text::new(&pos, Point::new(8, POS_TEXT_Y), style).draw(display)?;
+
+    draw_button(display, BUTTON_XS[0].0, BUTTON_XS[0].1, "VOL-")?;
+    draw_button(display, BUTTON_XS[1].0, BUTTON_XS[1].1, if snap.playing { "PAUSE" } else { "PLAY" })?;
+    draw_button(display, BUTTON_XS[2].0, BUTTON_XS[2].1, "SKIP")?;
+    draw_button(display, BUTTON_XS[3].0, BUTTON_XS[3].1, "VOL+")?;
     Ok(())
+}
+
+/// Fire-and-forget POST to `vaino`'s existing control API `[SPEC-FBUI-015]`
+/// -- a hand-rolled HTTP/1.1 request over a raw TCP socket rather than a
+/// client crate. `hyper` is already in this workspace's dependency tree
+/// (`axum` pulls it in), but wiring its client builder for three
+/// fire-and-forget local requests is more code than the lines below, for
+/// no behavior this UI needs -- same "every dependency is a memory
+/// decision" reasoning `Cargo.toml` already states for `reqwest`.
+async fn http_post(addr: String, path: String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = match tokio::net::TcpStream::connect(&addr).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("fbui: {path} failed to connect to {addr}: {e}");
+            return;
+        }
+    };
+    let req = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    if let Err(e) = stream.write_all(req.as_bytes()).await {
+        eprintln!("fbui: {path} failed to send: {e}");
+        return;
+    }
+    let mut buf = [0u8; 32];
+    let _ = stream.read(&mut buf).await; // drain enough for a clean close; response body unused
+}
+
+/// `ws://host:port/ws` -> `host:port`, so touch commands go to the same
+/// `vaino` this UI's websocket is already talking to, without a second
+/// address to keep in sync by hand.
+fn http_addr_from_ws_url(ws_url: &str) -> String {
+    let after_scheme = ws_url.split_once("://").map(|(_, rest)| rest).unwrap_or(ws_url);
+    after_scheme.split('/').next().unwrap_or(after_scheme).to_string()
 }
 
 // ---------------------------------------------------------------------
@@ -296,7 +421,6 @@ impl AffineCalibration {
         Self { a, b, c, d, e, f }
     }
 
-    #[allow(dead_code)] // wired up when Phase 4 adds hit-testing
     fn apply(&self, raw_x: f64, raw_y: f64) -> (f64, f64) {
         (self.a * raw_x + self.b * raw_y + self.c, self.d * raw_x + self.e * raw_y + self.f)
     }
@@ -453,20 +577,59 @@ async fn main() {
     // nothing else is scheduled) -- blocking the sole worker thread on a
     // blocking file read is exactly correct at this specific point, not
     // a shortcut around doing it properly.
-    if force_calibrate || AffineCalibration::load(CALIBRATION_PATH).is_none() {
+    let calibration: Option<AffineCalibration> = if force_calibrate
+        || AffineCalibration::load(CALIBRATION_PATH).is_none()
+    {
         match TouchDevice::open(TOUCH_DEVICE) {
             Ok(mut touch) => match run_calibration(&mut display, &mut touch) {
-                Ok(cal) => match cal.save(CALIBRATION_PATH) {
-                    Ok(()) => println!("fbui: calibration saved to {CALIBRATION_PATH}"),
-                    Err(e) => eprintln!("fbui: could not save calibration: {e}"),
-                },
-                Err(e) => eprintln!("fbui: calibration aborted: {e}"),
+                Ok(cal) => {
+                    match cal.save(CALIBRATION_PATH) {
+                        Ok(()) => println!("fbui: calibration saved to {CALIBRATION_PATH}"),
+                        Err(e) => eprintln!("fbui: could not save calibration: {e}"),
+                    }
+                    Some(cal)
+                }
+                Err(e) => {
+                    eprintln!("fbui: calibration aborted: {e}");
+                    None
+                }
             },
-            Err(e) => eprintln!("fbui: could not open {TOUCH_DEVICE} for calibration: {e}"),
+            Err(e) => {
+                eprintln!("fbui: could not open {TOUCH_DEVICE} for calibration: {e}");
+                None
+            }
         }
     } else {
         println!("fbui: using existing calibration at {CALIBRATION_PATH}");
-    }
+        AffineCalibration::load(CALIBRATION_PATH)
+    };
+
+    // Touch is read on its own OS thread, blocking on the same evdev
+    // protocol calibration above already used, and forwarded to `main`'s
+    // async loop over a channel -- a blocking file read has no place
+    // sharing this binary's one async worker thread once that loop also
+    // has a websocket to service concurrently, unlike calibration's
+    // one-time, nothing-else-running use of the same call above.
+    let (touch_tx, mut touch_rx) = tokio::sync::mpsc::unbounded_channel::<(f64, f64)>();
+    std::thread::spawn(move || loop {
+        match TouchDevice::open(TOUCH_DEVICE) {
+            Ok(mut td) => loop {
+                match td.wait_for_tap() {
+                    Ok(pos) => {
+                        if touch_tx.send(pos).is_err() {
+                            return; // main has exited; nothing left to report to
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("fbui: touch read error: {e}");
+                        break;
+                    }
+                }
+            },
+            Err(e) => eprintln!("fbui: could not open {TOUCH_DEVICE}: {e}"),
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    });
 
     // An explicit "disconnected" render before ever trying to connect, so
     // a `vaino` that is not up yet shows an honest state rather than
@@ -475,6 +638,7 @@ async fn main() {
     // the reconnect-after-drop case is not yet handled by this phase.
     let _ = render(&mut display, &ClientSnapshot::default());
 
+    let http_addr = http_addr_from_ws_url(&url);
     let mut last: Option<ClientSnapshot> = None;
     loop {
         println!("fbui: connecting to {url}");
@@ -488,34 +652,78 @@ async fn main() {
         };
         println!("fbui: connected");
         let (_, mut read) = ws.split();
-        while let Some(msg) = read.next().await {
-            let msg = match msg {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("fbui: ws error: {e}");
-                    break;
+
+        // Any taps that queued up while disconnected are stale by the time
+        // a connection succeeds -- a button press firing a command the
+        // instant reconnection completes would be surprising, not useful.
+        while touch_rx.try_recv().is_ok() {}
+
+        loop {
+            tokio::select! {
+                msg = read.next() => {
+                    let msg = match msg {
+                        Some(Ok(m)) => m,
+                        Some(Err(e)) => {
+                            eprintln!("fbui: ws error: {e}");
+                            break;
+                        }
+                        None => break, // stream ended
+                    };
+                    let text = match msg.into_text() {
+                        Ok(t) => t,
+                        Err(_) => continue, // not a text frame; nothing this phase reads
+                    };
+                    let snap: ClientSnapshot = match serde_json::from_str(&text) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("fbui: snapshot parse failed: {e}");
+                            continue;
+                        }
+                    };
+                    if last.as_ref() != Some(&snap) {
+                        if let Err(e) = render(&mut display, &snap) {
+                            // Infallible today, per DrawTarget::Error above --
+                            // kept as a real match rather than `.unwrap()` so
+                            // a future fallible backend (the `drm` path
+                            // `[SPEC-FBUI-025]` leaves open) fails loudly
+                            // here instead of panicking.
+                            eprintln!("fbui: render failed: {e:?}");
+                        }
+                        last = Some(snap);
+                    }
                 }
-            };
-            let text = match msg.into_text() {
-                Ok(t) => t,
-                Err(_) => continue, // not a text frame; nothing this phase reads
-            };
-            let snap: ClientSnapshot = match serde_json::from_str(&text) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("fbui: snapshot parse failed: {e}");
-                    continue;
+                Some((rx, ry)) = touch_rx.recv() => {
+                    let Some(cal) = &calibration else { continue };
+                    let (sx, sy) = cal.apply(rx, ry);
+                    match hit_test(sx, sy) {
+                        Some(Zone::PlayPause) => {
+                            let playing = last.as_ref().map(|s| s.playing).unwrap_or(false);
+                            let name = if playing { "pause" } else { "play" };
+                            tokio::spawn(http_post(http_addr.clone(), format!("/command/{name}")));
+                        }
+                        Some(Zone::Skip) => {
+                            tokio::spawn(http_post(http_addr.clone(), "/command/skip".to_string()));
+                        }
+                        Some(Zone::VolUp) => {
+                            let db = last.as_ref().map(|s| s.volume_db).unwrap_or(0.0) + 3.0;
+                            tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
+                        }
+                        Some(Zone::VolDown) => {
+                            let db = last.as_ref().map(|s| s.volume_db).unwrap_or(0.0) - 3.0;
+                            tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
+                        }
+                        Some(Zone::Seek) => {
+                            if let Some(s) = &last {
+                                if s.duration_ms > 0 {
+                                    let frac = ((sx - 8.0) / (display.width as f64 - 16.0)).clamp(0.0, 1.0);
+                                    let ms = (frac * s.duration_ms as f64).round() as u64;
+                                    tokio::spawn(http_post(http_addr.clone(), format!("/seek/{ms}")));
+                                }
+                            }
+                        }
+                        None => {}
+                    }
                 }
-            };
-            if last.as_ref() != Some(&snap) {
-                if let Err(e) = render(&mut display, &snap) {
-                    // Infallible today, per DrawTarget::Error above -- kept
-                    // as a real match rather than `.unwrap()` so a future
-                    // fallible backend (the `drm` path `[SPEC-FBUI-025]`
-                    // leaves open) fails loudly here instead of panicking.
-                    eprintln!("fbui: render failed: {e:?}");
-                }
-                last = Some(snap);
             }
         }
         eprintln!("fbui: disconnected; reconnecting in 3s");

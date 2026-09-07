@@ -333,9 +333,26 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    --calibrate`) and confirmed idempotent the other way too — a plain
    restart finds the file and logs `using existing calibration` rather
    than re-prompting.
-4. **Transport UI**: play/pause/skip/volume/seek, hit-tested against
-   concrete regions decided once §8.1's real orientation is known, wired
-   to the existing `/command`/`/volume`/`/seek` routes.
+4. ~~Transport UI~~ **Done, 2026-09-07, mostly confirmed** — four
+   buttons (`VOL-`, play/pause, skip, `VOL+`) plus a tap-to-seek position
+   bar, hit-tested against concrete pixel regions now that §8.1's
+   orientation is known. Wired to the exact three real command names
+   `control.rs` serves — checked against the handler itself rather than
+   assumed: `play`, `pause`, `skip` (there is deliberately no `prev` or
+   `stop`, `[REQ-AUD-142]`) — plus `/volume/:db` (±3dB per tap, computed
+   from the last known `volume_db`) and `/seek/:ms`. Posted over a
+   hand-rolled HTTP/1.1 request on a raw `TcpStream` rather than a new
+   client crate, since `reqwest` is explicitly appliance-excluded
+   (`Cargo.toml`'s own `sampo-support` reasoning) and `hyper`'s client
+   builder would be more code than three fire-and-forget local requests
+   need. Touch runs on its own OS thread, joined with the websocket
+   stream via `tokio::select!` — physically confirmed working: skip,
+   volume, and play/pause all produced their real effect when tapped on
+   `vainoplayer3`. **Seek is not yet confirmed** — this library is 31
+   radio passages, all `duration_ms == 0`, and the code correctly declines
+   to send a seek for those (`if duration_ms > 0`), so a tap there is
+   correctly inert but untested against real seekable content. Left open
+   rather than claimed.
 5. **Reconnection handling**: an explicit "disconnected" render state,
    tested by actually killing and restarting `vaino` mid-session and
    confirming the display says so rather than freezing on stale data.
