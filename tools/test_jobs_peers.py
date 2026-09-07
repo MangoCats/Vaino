@@ -78,6 +78,59 @@ def test_activate_peer_sets_remote_config(tmp: str) -> None:
           "a failed activation must not clear the previously active remote")
 
 
+def test_remote_listener_defaults_to_none(tmp: str) -> None:
+    """`[IMPL002 §7.4]`: a peer that has never split has no
+    `remote_listener` at all -- `None` means "same file as `remote`",
+    not an empty string or a copy of `remote` itself.
+    """
+    runner = _runner(tmp)
+    runner.upsert_peer("bose", "pi@bose:/var/vaino/vaino.db")
+    peers = runner.list_peers()
+    check(peers[0]["remote_listener"] is None,
+          f"an unsplit peer must have no remote_listener recorded, got {peers[0]}")
+
+    runner.activate_peer("bose")
+    check(runner.get_remote_listener() is None,
+          "activating an unsplit peer must not invent a remote_listener")
+
+
+def test_remote_listener_is_carried_through_upsert_and_activation(tmp: str) -> None:
+    """A split peer -- vainopi, once it has actually split -- carries a
+    second path all the way from `upsert_peer` through `activate_peer` to
+    `get_remote_listener()`, independent of `remote`.
+    """
+    runner = _runner(tmp)
+    runner.upsert_peer("vainopi", "pi@vainopi:/srv/library/library.db",
+                        remote_listener="pi@vainopi:/var/vaino/listener.db")
+    peers = runner.list_peers()
+    check(peers[0]["remote"] == "pi@vainopi:/srv/library/library.db", f"got {peers[0]}")
+    check(peers[0]["remote_listener"] == "pi@vainopi:/var/vaino/listener.db", f"got {peers[0]}")
+
+    runner.activate_peer("vainopi")
+    check(runner.get_remote() == "pi@vainopi:/srv/library/library.db",
+          "activation must still set the catalog path in remote_config")
+    check(runner.get_remote_listener() == "pi@vainopi:/var/vaino/listener.db",
+          "activation must carry the listener path over too, not just the catalog one")
+
+
+def test_activating_an_unsplit_peer_after_a_split_one_clears_remote_listener(tmp: str) -> None:
+    """Switching the active peer must not leave a stale `remote_listener`
+    pointing at the *previous* peer's listener file once the newly active
+    one doesn't have one.
+    """
+    runner = _runner(tmp)
+    runner.upsert_peer("vainopi", "pi@vainopi:/srv/library/library.db",
+                        remote_listener="pi@vainopi:/var/vaino/listener.db")
+    runner.upsert_peer("bose", "pi@bose:/var/vaino/vaino.db")
+    runner.activate_peer("vainopi")
+    check(runner.get_remote_listener() == "pi@vainopi:/var/vaino/listener.db", "sanity")
+
+    runner.activate_peer("bose")
+    check(runner.get_remote_listener() is None,
+          "switching to an unsplit peer must clear the previous remote_listener, "
+          "not leave vainopi's listener.db path active while bose is the target")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_add_list_and_remove(tmp)
@@ -85,6 +138,12 @@ def main() -> int:
         test_upsert_overwrites_by_name(tmp)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_activate_peer_sets_remote_config(tmp)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        test_remote_listener_defaults_to_none(tmp)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        test_remote_listener_is_carried_through_upsert_and_activation(tmp)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        test_activating_an_unsplit_peer_after_a_split_one_clears_remote_listener(tmp)
 
     print()
     if FAILED:
