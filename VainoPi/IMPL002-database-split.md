@@ -489,6 +489,14 @@ of the source. This is direct confirmation that `[§7.1]`'s migration tool
 must keep copying DDL from the live database rather than reconstructing it
 from the Rust constants, which are demonstrably not the same thing today.
 
+**A second one, found later while enumerating every real table for
+`tools/split_database.py` (§8) rather than only the ones already named
+here:** `selection_decisions` (C) carries two — `passage_id REFERENCES
+passages(passage_id)` (B) and `program_id REFERENCES
+listener_programs(program_id)` (C, so unaffected). Same shape, same
+conclusion below: nothing in the player enables `foreign_keys`, so this
+has never been enforced from playback, split or not.
+
 **Whether this matters depends on who's asking, and the answer differs by
 environment:**
 
@@ -776,18 +784,58 @@ pages) is not, yet, and must not be assumed to work until this is done.**
 Full regression at every step: 385 lib tests, all integration tests, the
 whole workspace (every bin target) — green.
 
-## 13. What remains
+## 13. The web layer: closed
 
-- **The web layer's 23 call sites** (§12) — next in line, since it's the
-  one gap standing between "vainopi plays" and "vainopi's web UI works,"
-  on a split installation.
-- **`tools/split_database.py`** (§8) — the actual migration tool, DDL-copy
-  approach per `[§7.1]`.
+All 23 call sites (§12) now clone `ui.library` alongside `ui.db` and open
+through `open_split`. Verified by a clean compile (an unused `library`
+binding would have warned) and full regression; not further tested at the
+handler/HTTP level, since this is purely mechanical threading with no new
+SQL — the qualification logic itself is proven at the `Library`/`PlayerStore`
+level already. `sampo.rs`'s one remaining `ui.db` use launches Sampo's own
+console as a subprocess and is out of scope: Sampo runs on the desktop,
+which stays single-file regardless of this work.
+
+## 14. `tools/split_database.py`: built and run against real data
+
+Built exactly to `[§7.1]`'s corrected procedure — every table's real DDL
+(`CREATE TABLE` and every associated `CREATE INDEX`) read from the source's
+own `sqlite_master` and replayed before `INSERT INTO ... SELECT`, never
+`CREATE TABLE ... AS SELECT`. Rehearses by default; `--commit` is the only
+mode that writes the real output paths, and refuses outright if either
+already exists rather than overwriting. Never opens the source for
+anything but reading.
+
+**Enumerating every real table for this** (rather than only the ones
+`[§2]`/`[§7.6]` had already named) found two more things worth recording
+plainly:
+
+- A second cross-boundary foreign key, `selection_decisions.passage_id →
+  passages` — folded into `[§7.7]`'s finding rather than treated as new,
+  since the conclusion is identical.
+- `schema_meta` (two rows: `schema_version`/`spec`) describes *a file's*
+  schema, which is ambiguous the moment there are two files. Judgment
+  call, stated as one rather than silently resolved: copied to **both**
+  outputs, so a future tool checking a database's schema version finds it
+  regardless of which half it opened.
+
+**Tested two ways**: `tools/test_split_database.py` (rehearsal writes
+nothing, `--commit` produces two correct files with their indexes intact
+and leaves the source untouched, refuses to overwrite an existing output,
+tolerates a source missing an optional table) — all pass. Then rehearsed
+for real against this project's own `data/vaino_new.db` — the same file
+that seeded `bose` — with no synthetic substitute: **1,066,520 rows across
+19 catalog tables, 42,321 rows across 15 listener tables, verification
+passed**, and confirmed nothing was written to disk, per the rehearsal
+contract.
+
+## 15. What remains
+
 - **`sync_peers`'s `remote_listener` column** (`[§7.4]`) and the three
   tools that need it (`sync_preferences.py`, `remote_flags.py`,
   `export_flags.py`).
 - **The live migration itself** (§8's runbook) — not attempted, no real
-  data touched by any of this yet.
+  device touched by any of this yet. `split_database.py` has only ever
+  run against a copy on the dev host, never against vainopi itself.
 
 Scope for the first real implementation and migration pass stays vainopi
 only; `bose` and local stay single-file and untouched until vainopi has
