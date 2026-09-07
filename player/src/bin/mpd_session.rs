@@ -63,7 +63,7 @@ fn main() {
         .unwrap_or(saved.sample_interval_ms);
 
     let loading = Instant::now();
-    let mut session = Session::open(Path::new(&db), depth).unwrap_or_else(|e| {
+    let mut session = Session::open(Path::new(&db), Path::new(&db), depth).unwrap_or_else(|e| {
         eprintln!("session: {e}");
         std::process::exit(1);
     });
