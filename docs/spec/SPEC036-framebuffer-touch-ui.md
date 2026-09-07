@@ -382,9 +382,29 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    `vainoplayer3`'s currently-playing passage, rendered with no errors in
    `fbui`'s log, and visually confirmed legible on the physical screen —
    not just proven not to crash.
-7. **Album art**, only after 1–6 are proven — measured against real SPI
-   hardware (how long one full bitmap blit actually takes) before deciding
-   whether it belongs in this UI at all.
+7. **Album art** — the measurement this item called for is done, 2026-09-07;
+   writing the feature itself is not. Three real numbers, not estimates:
+   a raw write of a full 307,200-byte frame into `/dev/fb0`'s mmap takes
+   ~0.09ms (negligible — the mmap write is not the bottleneck at all);
+   `render()`'s own CPU-side cost (rectangles, text, font lookups) stayed
+   under 20ms across every real redraw logged during normal playback on
+   `vainoplayer3`, never once tripping a 20ms warning threshold added for
+   exactly this measurement; and the actual SPI transfer to the panel is
+   governed by `piscreen2r`'s already-configured `fps=20`, a ~50ms-per-
+   frame ceiling independent of anything this binary does. The load-
+   bearing finding: `render()` already touches virtually every pixel on
+   the panel on every call (§8.2's own pixel-readback counts confirm
+   this — it is a full-panel write each time, not a true per-region diff
+   at the hardware level), so that full-panel SPI cost is already being
+   paid on every playback update regardless of album art. A modest
+   thumbnail would add a small, bounded amount to the already-fast
+   CPU-side step, not a new separate expensive SPI operation — **the
+   measurement says this is feasible**, unlike the browser this whole
+   design replaced (§1). What's left is real engineering, not a
+   feasibility question: decoding JPEG/PNG art needs a real new
+   dependency (an `image`-crate-shaped decision this document hasn't
+   made), scaling it to a sensible in-UI region, and building it.
 
 Phases 1–6 done and verified against real hardware, per each entry above.
-Phase 7 (album art) is the one item not yet started.
+Phase 7's own measurement question is answered (feasible); the feature
+itself is the one item not yet built.

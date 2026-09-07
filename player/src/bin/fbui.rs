@@ -826,7 +826,22 @@ async fn main() {
                         }
                     };
                     if last.as_ref() != Some(&snap) {
-                        if let Err(e) = render(&mut display, &snap) {
+                        // Timed, not just called `[SPEC036]` §8 phase 7: this
+                        // is already a full-panel write every time (`render`
+                        // fills the whole 480x320 canvas unconditionally, not
+                        // a true per-region diff at the framebuffer level),
+                        // so its own latency is the real answer to "how long
+                        // does one full bitmap blit take" that phase 7 needs
+                        // before deciding whether album art fits -- measured
+                        // against real hardware, not estimated from the SPI
+                        // clock rate on paper.
+                        let started = std::time::Instant::now();
+                        let result = render(&mut display, &snap);
+                        let elapsed = started.elapsed();
+                        if elapsed > std::time::Duration::from_millis(20) {
+                            println!("fbui: render took {elapsed:?}");
+                        }
+                        if let Err(e) = result {
                             // Infallible today, per DrawTarget::Error above --
                             // kept as a real match rather than `.unwrap()` so
                             // a future fallible backend (the `drm` path
