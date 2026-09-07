@@ -703,10 +703,47 @@ behavior change for the two that aren't splitting. The one open item
 (`[§7.7]`) is scoped to a future local split, not to anything being built
 or deployed now.
 
-**Not yet built:** the player refactor, `tools/split_database.py`, the
-`sync_peers` schema addition, and the live migration itself. None of these
-have touched real data yet. This document is now the corrected plan;
-executing it — starting with the `attach_library` helper, since everything
-else depends on it — is the next concrete step. Scope for the first real
-implementation and migration pass is vainopi only; `bose` and local stay
+## 11. Player refactor: built and proven
+
+**`attach_library()` and `QualifyingConn`** (`db/mod.rs`): built exactly as
+`[§7.3]` specified — `"main"` when the two paths are equal, an attached
+read-only `"lib"` only when they genuinely differ, one shared
+`prepare`/`query_row`/`execute`/`execute_batch` rewrite point so every other
+`Connection` method reaches through `Deref` unchanged. TDD'd against the
+real linked SQLite before anything used it: same-path, different-path
+(read-only enforced), two independent connections attaching the same file.
+
+**`Library` and `PlayerStore`** both now hold a `QualifyingConn`. Every real
+catalog-table reference found in `[§2]`/`[§7.6]` — 58+ sites in
+`library.rs`, 8 in `player_store.rs`, plus `Director`/`FlavorIndex`'s own —
+qualified with the `__LIB__.` placeholder and proven to resolve correctly
+under both modes. `ensure_library_tables_if_owned()` built exactly as
+`[§9]`'s cleanliness pass specified: one function, one guard
+(`lib_alias() == "main"`), not scattered conditionals. `Library::open_writable`
+made self-sufficient (`[§7.6]`) — it now calls `ensure_tag_table()` itself.
+
+**A real end-to-end safety net, not just unit tests**: `library.rs` gained
+an integration test that physically splits the existing `historyable()`
+fixture across two real files — copying each table's actual DDL from
+`sqlite_master`, not a second hand-written copy that could drift — opens
+`Library::open_split` against them, and reruns `play_history`'s exact
+assertions. It passes: title, artist, and album all resolve correctly
+through the attached schema. This is the test that would catch a future
+missed `__LIB__` prefix as a loud failure, not a slow page discovered by
+a person.
+
+Full regression throughout: 385 lib tests, all integration tests, the
+whole workspace (every bin target) — green at each step.
+
+**Not yet built:** `tools/split_database.py`, the `sync_peers` schema
+addition (`[§7.4]`), and — the remaining player-side gap, found while
+wiring the real `vaino` binary rather than assumed away — a `--library`
+CLI flag threaded through `bin/vaino.rs` itself. That binary's `db` path
+is currently cloned into three separate places (the backup thread, the
+tag-scan thread, and the engine thread that builds `Library`/`PlayerStore`/
+`Director`), and each needs the second path threaded alongside it before
+vainopi can run split for real — `mpd_direct.rs` (a dev tool, not
+production) already has this wiring as a model for it. None of this
+remaining work has touched real data yet. Scope for the first real
+implementation and migration pass stays vainopi only; `bose` and local stay
 single-file and untouched until vainopi has proven the split in practice.
