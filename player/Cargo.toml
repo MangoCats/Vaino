@@ -27,7 +27,7 @@ sampo-support = ["dep:reqwest"]
 # `ws` feature (server-side); declaring it directly here costs nothing
 # extra in the build graph, it only makes the already-compiled crate
 # nameable from this bin's own client-side code `[SPEC-FBUI-015]`.
-fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "dep:futures-util", "dep:u8g2-fonts"]
+fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "dep:futures-util", "dep:u8g2-fonts", "dep:image"]
 
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
@@ -74,6 +74,14 @@ embedded-graphics = { version = "0.8", optional = true }
 # calls `FontRenderer::render`/`render_aligned` directly instead.
 framebuffer = { version = "0.3", optional = true }
 u8g2-fonts = { version = "0.5", optional = true }
+# Decoding the same JPEG/PNG cover art `/art/:passage_id` already serves to
+# every browser skin `[SPEC036]` §8 phase 7 -- real production art is one
+# or the other (`media_type_for` in `tags.rs`), never anything else, so
+# only those two codecs are enabled. `[SPEC-FBUI-040]`'s own measurement
+# (a full-panel `render()` already stays under 20ms end to end on
+# vainoplayer3) is what justified building this at all rather than
+# leaving it a measurement.
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png"] }
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`: already in the
 # dependency tree via cpal/rusqlite, so this declares an existing compile

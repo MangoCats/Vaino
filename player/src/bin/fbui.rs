@@ -77,6 +77,10 @@ use u8g2_fonts::FontRenderer;
 #[derive(serde::Deserialize, Default, Clone, PartialEq)]
 struct ClientSnapshot {
     playing: bool,
+    /// The passage on air, for fetching its cover at `/art/{id}` -- the
+    /// exact same field the real `Snapshot` documents itself as carrying
+    /// for this exact purpose `[SPEC036]` §8 phase 7.
+    passage_id: Option<i64>,
     title: Option<String>,
     artist: Option<String>,
     position_ms: u64,
@@ -216,10 +220,23 @@ fn fmt_time(ms: u64) -> String {
 // `[SPEC-FBUI-025]` rather than guessed at.
 // ---------------------------------------------------------------------
 
-const SEEKBAR_Y0: i32 = 58;
-const SEEKBAR_Y1: i32 = 76;
-const POS_TEXT_Y: i32 = 96;
-const BUTTON_Y0: i32 = 112;
+// Album art `[SPEC036]` §8 phase 7: a thumbnail, top-left, doubled to
+// 100x100 after seeing the first size on the physical screen -- everything
+// below it shifts down by the same amount, taken back out of the button
+// row's height (touch region shrinks; it does not move sideways or split,
+// so `[SPEC036]`'s already-physically-confirmed hit-test x-ranges below
+// stay valid). Title/artist text shifts right to sit beside it.
+const ART_SIZE: u32 = 100;
+const ART_X0: u32 = 4;
+const ART_Y0: u32 = 4;
+const TEXT_X: i32 = 112;
+const TITLE_Y: i32 = 40;
+const ARTIST_Y: i32 = 65;
+
+const SEEKBAR_Y0: i32 = 110;
+const SEEKBAR_Y1: i32 = 128;
+const POS_TEXT_Y: i32 = 148;
+const BUTTON_Y0: i32 = 164;
 const BUTTON_Y1: i32 = 270;
 /// Four buttons, evenly spread across the panel's 480px width with visible
 /// gaps between them -- sized well above a fingertip's real contact area,
@@ -272,12 +289,26 @@ fn draw_button(display: &mut FbDisplay, x0: i32, x1: i32, label: &str) -> Result
     Ok(())
 }
 
+/// Blits a pre-resized `ART_SIZE`x`ART_SIZE` `Rgb565` buffer at the fixed
+/// art position, pixel by pixel via `FbDisplay::put_pixel` directly rather
+/// than through `embedded-graphics`' `Drawable` machinery -- the pixels
+/// are already exactly what the panel needs (decoded and resized once in
+/// `decode_and_resize`, not on every redraw), so there is nothing left for
+/// a generic drawing primitive to add here.
+fn draw_art(display: &mut FbDisplay, pixels: &[Rgb565]) {
+    for (i, &color) in pixels.iter().enumerate() {
+        let i = i as u32;
+        display.put_pixel(ART_X0 + i % ART_SIZE, ART_Y0 + i / ART_SIZE, color);
+    }
+}
+
 /// Clears the LCD panel area and redraws everything -- title/artist, the
-/// tap-to-seek progress bar, position/volume, and the four transport
-/// buttons. The whole-region redraw `[SPEC-FBUI-020]` says to do only on
-/// the fields that actually changed, which `main`'s own diff against the
-/// last state already guarantees by only calling this when something did.
-fn render(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::convert::Infallible> {
+/// album art thumbnail (if any), the tap-to-seek progress bar,
+/// position/volume, and the four transport buttons. The whole-region
+/// redraw `[SPEC-FBUI-020]` says to do only on the fields that actually
+/// changed, which `main`'s own diff against the last state already
+/// guarantees by only calling this when something did.
+fn render(display: &mut FbDisplay, snap: &ClientSnapshot, art: Option<&[Rgb565]>) -> Result<(), std::convert::Infallible> {
     let w = display.width as i32;
     Rectangle::new(Point::zero(), Size::new(display.width, display.height))
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
@@ -285,8 +316,11 @@ fn render(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::con
 
     let title = snap.title.as_deref().map(normalize_for_display);
     let artist = snap.artist.as_deref().map(normalize_for_display);
-    draw_text(display, title.as_deref().unwrap_or("(nothing playing)"), 8, 20);
-    draw_text(display, artist.as_deref().unwrap_or(""), 8, 40);
+    draw_text(display, title.as_deref().unwrap_or("(nothing playing)"), TEXT_X, TITLE_Y);
+    draw_text(display, artist.as_deref().unwrap_or(""), TEXT_X, ARTIST_Y);
+    if let Some(pixels) = art {
+        draw_art(display, pixels);
+    }
 
     let (bar_x0, bar_x1) = (8, w - 8);
     Rectangle::new(
@@ -375,6 +409,56 @@ async fn http_post(addr: String, path: String) {
     }
     let mut buf = [0u8; 32];
     let _ = stream.read(&mut buf).await; // drain enough for a clean close; response body unused
+}
+
+/// A minimal HTTP/1.1 GET, for the one request this UI needs a real
+/// response body from -- `[SPEC-FBUI-015]`'s `/art/:passage_id`. Same
+/// "hand-rolled beats a client crate for one route" reasoning as
+/// `http_post`. `Connection: close` means the server closes once it's
+/// done, so reading to EOF is a correct, complete read of the whole
+/// response without parsing `Content-Length` or handling chunked
+/// transfer-encoding -- axum/hyper honor the header, and this is a
+/// loopback connection to a server this project controls, not an
+/// arbitrary one on the open internet.
+async fn http_get(addr: &str, path: &str) -> Option<Vec<u8>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.ok()?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await.ok()?;
+    let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
+    let status_line = std::str::from_utf8(&raw[..header_end]).ok()?;
+    if !status_line.starts_with("HTTP/1.1 200") && !status_line.starts_with("HTTP/1.0 200") {
+        return None; // 404 (no art for this passage) or anything else -- not an error to log, just "no art"
+    }
+    Some(raw[header_end..].to_vec())
+}
+
+/// Decodes whatever `/art/:passage_id` returned (real production art is
+/// JPEG or PNG, never anything else -- `media_type_for` in `tags.rs`,
+/// `image::load_from_memory` sniffs the format from magic bytes so this
+/// doesn't need to trust or even look at the `Content-Type` header) and
+/// resizes it once to exactly `ART_SIZE`x`ART_SIZE`, so `draw_art` is a
+/// flat pixel copy on every redraw rather than a resize on every redraw.
+/// Run inside `spawn_blocking` by its caller -- decode and resize are real
+/// CPU work, not something to do on the same task that's also servicing
+/// the websocket and touch channel.
+fn decode_and_resize(bytes: &[u8]) -> Option<Vec<Rgb565>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let resized = img.resize_exact(ART_SIZE, ART_SIZE, image::imageops::FilterType::Triangle).to_rgb8();
+    Some(resized.pixels().map(|p| Rgb565::new(p.0[0] >> 3, p.0[1] >> 2, p.0[2] >> 3)).collect())
+}
+
+/// Fetches and decodes one passage's cover art, once per passage change --
+/// `[SPEC-FBUI-040]`'s own "once per track, not continuously" reasoning
+/// for why a full bitmap blit is affordable here at all. `None` covers
+/// both "no art exists for this passage" (a 404, most of this all-radio
+/// sample library) and "art existed but failed to decode" identically --
+/// this UI has nothing more useful to do with either than show no art.
+async fn fetch_art(addr: String, passage_id: i64) -> Option<Vec<Rgb565>> {
+    let bytes = http_get(&addr, &format!("/art/{passage_id}")).await?;
+    tokio::task::spawn_blocking(move || decode_and_resize(&bytes)).await.ok().flatten()
 }
 
 /// `ws://host:port/ws` -> `host:port`, so touch commands go to the same
@@ -785,6 +869,11 @@ async fn main() {
 
     let http_addr = http_addr_from_ws_url(&url);
     let mut last: Option<ClientSnapshot> = None;
+    // Keyed by passage_id, not refetched on every push -- `None` inside
+    // the tuple is cached too, so a passage confirmed to have no art (most
+    // of this all-radio sample library) is not re-requested on every
+    // ~1s snapshot push for as long as it keeps playing.
+    let mut art_cache: Option<(i64, Option<Vec<Rgb565>>)> = None;
     loop {
         println!("fbui: connecting to {url}");
         let ws = match tokio_tungstenite::connect_async(&url).await {
@@ -826,6 +915,27 @@ async fn main() {
                         }
                     };
                     if last.as_ref() != Some(&snap) {
+                        // Refetched only on an actual passage change, not on
+                        // every push -- position_ms alone changing must not
+                        // trigger this `[SPEC-FBUI-040]`'s "once per track"
+                        // reasoning is what makes a full bitmap blit
+                        // affordable at all. Awaited inline rather than
+                        // spawned+channeled: this only blocks the loop on
+                        // the one push where the track actually changed, not
+                        // on the far more frequent position-only updates.
+                        if art_cache.as_ref().map(|(id, _)| *id) != snap.passage_id {
+                            art_cache = match snap.passage_id {
+                                Some(pid) => {
+                                    let started = std::time::Instant::now();
+                                    let art = fetch_art(http_addr.clone(), pid).await;
+                                    println!("fbui: art fetch+decode for passage {pid} took {:?} ({})", started.elapsed(), if art.is_some() { "found" } else { "none" });
+                                    Some((pid, art))
+                                }
+                                None => None,
+                            };
+                        }
+                        let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
+
                         // Timed, not just called `[SPEC036]` §8 phase 7: this
                         // is already a full-panel write every time (`render`
                         // fills the whole 480x320 canvas unconditionally, not
@@ -836,7 +946,7 @@ async fn main() {
                         // against real hardware, not estimated from the SPI
                         // clock rate on paper.
                         let started = std::time::Instant::now();
-                        let result = render(&mut display, &snap);
+                        let result = render(&mut display, &snap, art);
                         let elapsed = started.elapsed();
                         if elapsed > std::time::Duration::from_millis(20) {
                             println!("fbui: render took {elapsed:?}");
