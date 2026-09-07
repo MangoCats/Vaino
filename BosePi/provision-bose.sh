@@ -154,6 +154,31 @@ on "sudo mkdir -p /etc/systemd/journald.conf.d
       | sudo tee /etc/systemd/journald.conf.d/vaino.conf >/dev/null"
 say "Storage=persistent, SystemMaxUse=64M, on C via /var/log"
 
+step "Overlay-safe remount-fs  [IMPL-BOS-170, found live on bose 2026-09-07]"
+# systemd-remount-fs.service tries to remount / per fstab's overlay entry --
+# not just at boot, but every time anything pulls in local-fs.target, which
+# includes every new SSH login's session scope. It fails every single time:
+# `fsconfig() failed: overlay: No changes allowed in reconfigure` (exit 32),
+# because an overlay refuses post-mount reconfiguration outright. Harmless on
+# its own, except rpi-resize-swap-file.service and rpi-setup-loop@var-swap
+# both hard-Require= it, so its failure cascades into dev-zram0.swap never
+# coming up -- found by `free -h` showing 0B swap on a locked-in card despite
+# /etc/rpi/swap.conf enabling zram+file, and confirmed by watching a fresh
+# `Dependency failed for dev-zram0.swap` land on every single SSH login.
+# The remount itself is meaningless for an overlay root, so the fix is a
+# no-op override, not a real remount: let the step report success instead of
+# actually attempting anything. Must land on A before finalize-bose.sh's
+# --lock-in enables the overlay [IMPL-BOS-160 is the precedent for "why here,
+# why now"] -- once A is the overlay's read-only lower layer, adding this
+# needs `overlayroot-chroot` instead (see the live fix applied to bose itself,
+# same date).
+on "sudo mkdir -p /etc/systemd/system/systemd-remount-fs.service.d
+    printf '[Service]\nExecStart=\nExecStart=/bin/true\n' \
+      | sudo tee /etc/systemd/system/systemd-remount-fs.service.d/overlayroot-noop.conf >/dev/null
+    sudo systemctl daemon-reload"
+say "remount-fs is now a no-op; verify after the next boot with:"
+say "  systemctl is-active dev-zram0.swap && free -h"
+
 step "MPD"
 [ -f BosePi/mpd.conf ] || die "BosePi/mpd.conf missing"
 scp -q BosePi/mpd.conf "$HOST:/tmp/mpd.conf" || die "upload failed"
