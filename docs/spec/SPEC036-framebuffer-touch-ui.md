@@ -127,12 +127,11 @@ seen in `dmesg` on the first frame (`start_line=319 is larger than
 end_line=0 ... will do full display update`) — cosmetic, not a defect in
 this configuration.
 
-This resolves §7's largest named risk. What's still open is only what
-this section never claimed to answer: `piscreen2r`'s own KMS/`drm`-mode
-alternative hasn't been tried (the FBTFT path already works, so there is
-no forcing reason to), and byte-order/rotation correctness for actual
-drawn content is unverified until `[embedded-graphics]` output is checked
-against the panel with eyes, not just `dmesg`.
+This resolves §7's largest named risk. `piscreen2r`'s own KMS/`drm`-mode
+alternative remains untried (FBTFT already works, no forcing reason to);
+byte-order is now confirmed too, by §8 phase 2's pixel-readback test, but
+*perceived* correctness on the physical panel — orientation, color, real
+refresh behavior — still wants an actual look, not just measured bytes.
 
 **`[SPEC-FBUI-030]` Drawing: `embedded-graphics`, not a from-scratch
 rasterizer.** A mature, widely-used Rust crate for exactly this class of
@@ -229,13 +228,9 @@ Asked of this design itself, the same discipline `[IMPL002]`'s own review
 passes used, before treating this as ready to build:
 
 - ~~**The hardware identity itself is still open**~~ **Resolved
-  2026-09-07** — `[SPEC-FBUI-025]` now records the confirmed `/dev/fb0`
-  `fb_ili9486` framebuffer and the `ADS7846` touch device from real
-  hardware, not documentation. This was the single largest risk to every
-  other claim in this document when this review was first written; kept
-  here, struck through rather than deleted, so a reader of this section's
-  history sees the risk was real and was actually closed, not quietly
-  assumed away.
+  2026-09-07, per `[SPEC-FBUI-025]`** — was the single largest risk in
+  this document when this review was written; struck through rather than
+  deleted so this section's own history stays legible.
 - **Non-ASCII text is a real gap, not a hypothetical one.** This library
   has real, non-ASCII artist/title names (checked against this project's
   own data, not assumed) — `embedded-graphics`'s bundled fonts are small
@@ -275,10 +270,22 @@ fix. Folded into §8's phasing below rather than left as loose ends.
 1. ~~Hardware bring-up~~ **Done, 2026-09-07** — `/dev/fb0` (`fb_ili9486`,
    480×320, RGB565) and `/dev/input/event2` (`ADS7846 Touchscreen`) both
    confirmed against real hardware, per `[SPEC-FBUI-025]`.
-2. **A minimal `DrawTarget` + connection test**: open `/ws`, deserialize
-   one real `Snapshot`, draw title/artist as plain text in the LCD-green
-   palette, prove the pixel format and orientation assumptions against
-   actual hardware before building anything else on top of them.
+2. ~~A minimal `DrawTarget` + connection test~~ **Done, 2026-09-07** —
+   `player/src/bin/fbui.rs` (feature-gated `fbui`, `bose`/`vainopi` builds
+   never compile it), a `ClientSnapshot` naming only the fields this phase
+   draws rather than making the real `Snapshot` `Deserialize` too
+   (`[SPEC-FBUI-015]`'s "zero server-side changes" held in practice, not
+   just on paper). Deployed and run as a real systemd service on
+   `vainoplayer3` (`After=vaino.service`), stable, not crash-looping.
+   Verified past "it didn't crash" — read `/dev/fb0` back after a render
+   and counted actual pixel bytes: 496 pixels matching `LCD_GREEN`'s exact
+   RGB565 encoding (real text was drawn, not garbage) against ~153,040
+   matching `LCD_BG`'s (the whole-screen fill), out of 153,600 total. The
+   `embedded-graphics` → RGB565 → byte-order → real-framebuffer pipeline
+   works end to end. **Not yet confirmed by looking at the physical
+   screen** — byte-level readback proves the pixels are correct, not that
+   the panel displays them the way a person would expect (orientation,
+   perceived color, refresh behavior all still want an actual look).
 3. **Calibration routine**, run automatically when no calibration file
    exists — resolves §7's "first boot" gap by construction rather than by
    remembering a manual step.
