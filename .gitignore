@@ -103,3 +103,9 @@ scratch/
 # per invocation, timestamped, never meant to be reproducible or reviewed
 # after the fact from git history.
 /BosePi/logs/
+
+# Personal launcher for a plain desktop/dev Vaino instance (not an
+# appliance build) -- hardcodes wherever *this* machine's own database and
+# music actually live, which is different per machine and never meant to
+# be shared or committed.
+/run-local.sh
