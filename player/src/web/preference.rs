@@ -50,8 +50,9 @@ pub(super) async fn get_preference(
         return (StatusCode::BAD_REQUEST, "kind must be recording or artist").into_response();
     }
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let got = tokio::task::spawn_blocking(move || {
-        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| e.message().to_string())?;
         store.get_preference(&kind, &id).map(|row| PreferenceView {
             rotation: row.rotation,
             recovery: row.recovery,
@@ -128,9 +129,10 @@ pub(super) async fn set_preference(
         .collect();
 
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let (kind2, id2) = (kind.clone(), id.clone());
     let done = tokio::task::spawn_blocking(move || {
-        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| e.message().to_string())?;
         if sets != (None, None, None) {
             store
                 .set_preference(&kind2, &id2, sets.0, sets.1, sets.2)
@@ -168,8 +170,9 @@ pub(super) async fn play_frequency(
         return (StatusCode::BAD_REQUEST, "kind must be recording or artist").into_response();
     }
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let got = tokio::task::spawn_blocking(move || {
-        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| e.message().to_string())?;
         store.play_frequency(&kind, &id).map_err(|e| e.message().to_string())
     })
     .await;

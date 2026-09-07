@@ -123,8 +123,9 @@ pub(super) async fn queue_passage(
         _ => return StatusCode::NOT_FOUND,
     };
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let entries = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         // Order is the caller's, and it is the order they were looking at.
         // A passage that cannot be read is dropped rather than failing the
         // batch: nineteen passages queued beats none.

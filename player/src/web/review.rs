@@ -20,8 +20,9 @@ use super::Ui;
 #[cfg(feature = "sampo-support")]
 pub(super) async fn review_queue(State(ui): State<Ui>) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let out = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let items = lib.review_queue(crate::BROWSE_LIMIT).ok()?;
         serde_json::to_value(serde_json::json!({
             "progress": lib.review_progress(),
@@ -48,8 +49,9 @@ pub(super) async fn review_passage(
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let item = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         lib.review_item_for(passage_id)
     })
     .await
@@ -78,10 +80,11 @@ pub(super) async fn record_review(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let mbid = q.get("mbid").cloned();
     let release = q.get("release").cloned();
     let done = tokio::task::spawn_blocking(move || {
-        let store = crate::db::PlayerStore::open(&db)
+        let store = crate::db::PlayerStore::open_split(&db, &library)
             .map_err(|e| e.message().to_string())?;
         // `reopen` is the undo. It is a decision verb like the others from the
         // page's point of view, and a different operation underneath, so it
@@ -117,10 +120,11 @@ pub(super) async fn artist_review_verb(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let mbid = q.get("mbid").cloned();
     let name = q.get("name").cloned();
     let done = tokio::task::spawn_blocking(move || {
-        let store = crate::db::PlayerStore::open(&db).map_err(|e| e.message().to_string())?;
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| e.message().to_string())?;
         if verb == "reopen" {
             store.clear_artist_review(passage_id).map_err(|e| e.message().to_string())
         } else {
@@ -153,8 +157,9 @@ pub(super) async fn review_releases(
     axum::extract::Path(mbid): axum::extract::Path<String>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let out = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open(&db).ok()?;
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         serde_json::to_value(lib.releases_for(&mbid).ok()?).ok()
     })
     .await;
