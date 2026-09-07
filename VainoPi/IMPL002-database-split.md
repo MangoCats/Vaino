@@ -170,15 +170,19 @@ scoped to `listener.db` and has no writable path to `library.db` at all —
 by design, per `[PI-B-010]`, B is read-only except during an attended
 import.
 
-**Resolution: move this table/column creation out of runtime `open()`
-entirely, into the migration tool itself (§4.4) and into `attended-import.sh`'s
-own "prepare B for writing" step**, alongside whatever `tagscan` and
-`fetch_cover_art.py` already do when they open B read-write. The player never
-needs to create these — it only ever needs to find them already present,
-the same way it already tolerates an absent `lyrics` table by treating the
-query failure as "none" (`db/library.rs`'s `lyrics()` doc comment). A
-library.db that predates this split, or predates a given tool, is a gap in
-what's been run against it, not a fault the player papers over at startup.
+**Resolution, corrected in `[§7.6]` after a cross-environment check found
+"entirely" was too strong: conditional on whether this installation has
+actually split.** When `db_path == library_path` (bose, local, every
+unsplit installation) `PlayerStore`'s connection *is* the library's own
+writable connection, exactly as today, and removing its bootstrap
+unconditionally would have broken a fresh single-file library exactly the
+way the original doc comment warned against. Only when the two paths
+genuinely differ does `PlayerStore` skip these statements (it has no
+writable path to `lib` to run them against) — moved instead to the
+migration tool (§8) for whatever the source already had at split time, and
+to `tagscan`/`fetch_cover_art.py` making their own bootstrap
+self-sufficient (`fetch_cover_art.py` already is; `tagscan` needs the same
+fix — see `[§7.6]`).
 
 ### 4.4 Backup — smaller and more frequent becomes possible, not required
 
@@ -421,6 +425,108 @@ start services → verify again. A rehearsal against a *downloaded copy* of
 the live file (§8) has no such requirement, since nothing there is being
 promoted to production.
 
+### 7.6 Gap, found only by checking that the schema still works for `bose` and local: `PlayerStore`'s bootstrap can't just disappear
+
+Asked directly whether the resulting schema stays equally functional on
+`bose` and the local dev instance, not only vainopi — checking that
+question against §4.3's own resolution found it had overreached. "Move
+this table/column creation out of runtime `open()` entirely" would have
+stopped `PlayerStore` from ever creating `file_tags`/`cover_art`/
+`release_recordings`'s tuning columns **even on `bose` and local, which
+are not splitting and whose `PlayerStore` connection genuinely still owns
+that data.** That is exactly the fresh-library bootstrap failure the
+original doc comment ("a library whose scan was already complete never
+reached it and browsing died on a missing column") existed to prevent —
+the review would have reintroduced the bug it was quoting as the reason
+not to.
+
+**Fixed, per `[§4.3]`'s correction above:** the bootstrap stays,
+unconditionally, for the case that matters unchanged today — `alias ==
+"main"`. It is skipped only when `alias == "lib"`, i.e. only on an
+installation that has actually split, because in that case `PlayerStore`
+has no writable path to run it against at all.
+
+That still leaves a real gap for the split case alone: `tagscan.rs` opens
+`library.db` via `Library::open_writable` and assumes `file_tags` and its
+two indexes already exist — true today only because `PlayerStore` created
+them first. **Checked, not assumed:** `tools/fetch_cover_art.py` already
+creates its own `cover_art` table (`CREATE TABLE IF NOT EXISTS`) before
+using it — already self-sufficient, needs no change. `tagscan.rs` does
+not have the equivalent for `file_tags` and needs it added, so a
+split-native `library.db` — one built by Sampo/`tagscan` directly rather
+than descended from a single-file installation's split — bootstraps
+correctly too, not only one that inherited the tables from a
+pre-existing `PlayerStore` run.
+
+### 7.7 Found in the real schema, not the source: a foreign key does cross the boundary after all
+
+`[§7.2]` checked `player/src/db/mod.rs`'s and `player_store.rs`'s
+in-tree `CREATE TABLE` text for a `REFERENCES` crossing the split and found
+none. Checking the *actual deployed schema* on all three environments
+directly — `sqlite_master`, not the Rust source — for this pass found one:
+
+```sql
+-- local, bose, and vainopi all agree, byte-for-byte:
+CREATE TABLE listener_play_history (
+    ...
+    passage_id  INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
+    -- denormalised on purpose: six years of history must survive a rescan
+    -- that renumbers passages [SPEC-SC-095]
+    ...
+```
+
+`listener_play_history` (C) references `passages` (B) — a real
+cross-boundary foreign key, present identically on every installation
+checked. It is not in the current `PLAY_TABLE` constant in
+`player_store.rs`, which defines `passage_id` with no `REFERENCES` clause
+at all: the deployed databases carry a constraint an earlier version of
+this file's schema added and a later simplification of the source stopped
+re-stating — `CREATE TABLE IF NOT EXISTS` never retroactively strips a
+constraint from a table that already exists, so the two have quietly
+disagreed since whenever that simplification landed, on every
+installation, unnoticed until this check went to `sqlite_master` instead
+of the source. This is direct confirmation that `[§7.1]`'s migration tool
+must keep copying DDL from the live database rather than reconstructing it
+from the Rust constants, which are demonstrably not the same thing today.
+
+**Whether this matters depends on who's asking, and the answer differs by
+environment:**
+
+- SQLite does not enforce a `FOREIGN KEY` across two `ATTACH`ed databases.
+  Once `passages` and `listener_play_history` are in different files, this
+  constraint's `ON DELETE SET NULL` cascade simply stops firing — silently,
+  since a query naming a schema-qualified table across an attach boundary
+  doesn't error, it just doesn't get FK enforcement it would have gotten
+  in one file.
+- The player's own connections never `PRAGMA foreign_keys = ON`
+  (checked — zero occurrences in `player/src/`), so this cascade has never
+  fired from anything the player itself does, split or not.
+- It **is** live today on the desktop: `segment_dao.py`, `apply_changes.py`,
+  `apply_reviews.py`, `ingest_cd.py`, `ingest_folder.py`,
+  `backfill_album_cuts.py`, `apply_boundary_reviews.py`, and
+  `accept_remote_basis.py` all set `PRAGMA foreign_keys = ON`, and all run
+  against the local desktop database when Sampo renumbers or deletes a
+  passage — exactly the six-years-of-history case the inline comment
+  names. **Neither `bose` nor `vainopi` ever runs any of these tools
+  against its own database** — segmentation labor is desktop-only per
+  `[SPEC035]`'s own decision that "Sampo work only happens on Sampo-capable
+  nodes."
+
+**Conclusion: does not block vainopi's migration.** vainopi never
+exercises this cascade today and won't after splitting, for the same
+reason it doesn't today — it has no Sampo. It also does not affect
+`bose`, which isn't splitting. **It is a real, tracked prerequisite for
+ever splitting the *local* database specifically** — before that could
+happen safely, the eight tools above need an explicit application-level
+replacement for the cascade (an `UPDATE listener_play_history SET
+passage_id = NULL WHERE passage_id NOT IN (SELECT passage_id FROM
+passages)`-shaped step run by whichever of them deletes or renumbers a
+passage), matching the pattern `backup.rs::restore()` already uses for
+cross-database consistency it can't get from a database-level constraint.
+Not built, not needed for the work this document scopes, named here so it
+is a known prerequisite rather than a surprise when local's own split is
+eventually considered.
+
 ---
 
 ## 8. The migration procedure, corrected
@@ -481,18 +587,36 @@ services — no binary change needed, per `[§7.3]`.
 
 ## 9. Status
 
-**Designed in detail, reviewed twice** — once against synchronization,
-RAM, backup, and MPD (§4), and once against the plan itself for gaps,
-oversights, conflicts, and ambiguities (§7). Four real problems found in
-the second pass and fixed on paper before any of this was built: a schema-
-fidelity gap in the migration tool, a compatibility conflict that would
-have broken `bose`, a genuine gap in the `tools/` peer-path model
-affecting three existing scripts, and a sequencing requirement the
-original sketch left implicit. One thing checked and found *not* to be a
-problem, stated rather than assumed: no foreign key crosses the boundary.
+**Designed in detail, reviewed three times** — against synchronization,
+RAM, backup, and MPD (§4); against the plan itself for gaps, oversights,
+conflicts, and ambiguities (§7.1–7.5); and against whether the resulting
+schema stays equally functional on `bose` and the local instance, not only
+vainopi (§7.6–7.7). Six real problems found across the second and third
+passes and fixed on paper before any of this was built: a schema-fidelity
+gap in the migration tool, a compatibility conflict that would have broken
+`bose`, a gap in the `tools/` peer-path model affecting three existing
+scripts, a sequencing requirement the original sketch left implicit, an
+overcorrection in `[§4.3]`'s own fix that would have broken `bose`/local's
+fresh-library bootstrap, and a real cross-boundary foreign key present in
+every deployed database checked but absent from the current Rust source —
+found by querying `sqlite_master` directly rather than trusting the
+source, and confirmed to not block vainopi or `bose` (neither runs the
+Sampo tools that exercise it) while being named as a genuine prerequisite
+for ever splitting *local* specifically.
+
+**Confirmed equally functional across all three environments for the work
+this document actually scopes**: the `attach_library` alias approach
+(`[§7.3]`) makes the one player binary behave identically on `bose` and
+local (nothing attached, `alias = "main"`, unchanged) and on a split
+vainopi (`lib` attached read-only) — no environment-specific binary, no
+behavior change for the two that aren't splitting. The one open item
+(`[§7.7]`) is scoped to a future local split, not to anything being built
+or deployed now.
 
 **Not yet built:** the player refactor, `tools/split_database.py`, the
 `sync_peers` schema addition, and the live migration itself. None of these
 have touched real data yet. This document is now the corrected plan;
 executing it — starting with the `attach_library` helper, since everything
-else depends on it — is the next concrete step.
+else depends on it — is the next concrete step. Scope for the first real
+implementation and migration pass is vainopi only; `bose` and local stay
+single-file and untouched until vainopi has proven the split in practice.
