@@ -56,7 +56,7 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!("vaino {}", vaino_player::build_id());
-        eprintln!("usage: vaino <vaino.db> [--port N] [--depth N] [--device NAME]");
+        eprintln!("usage: vaino <vaino.db> [--library library.db] [--port N] [--depth N] [--device NAME]");
         eprintln!("       [--mpd HOST:PORT --mpd-root MUSIC_DIRECTORY]");
         std::process::exit(2);
     }
@@ -66,6 +66,10 @@ async fn main() {
     }
     println!("vaino {}", vaino_player::build_id());
     let db = PathBuf::from(&args[0]);
+    // The catalog-side file. Equal to `db` on every installation that
+    // hasn't split `[IMPL-DBSPLIT-025]`, `[IMPL-DBSPLIT-030]` -- vainopi,
+    // once split, is the first to ever pass a genuinely different one.
+    let library = text_flag(&args, "--library").map(PathBuf::from).unwrap_or_else(|| db.clone());
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);
     let device = text_flag(&args, "--device");
@@ -101,11 +105,13 @@ async fn main() {
     // browse pages came up empty in the first place. Incremental, so it is a
     // no-op on every start after the first, and off the audio path entirely.
     {
-        let scan_db = db.clone();
+        // `file_tags` is a B-side table `[PI-DB-010]` -- `library`, not `db`,
+        // is where it lives once split; equal to `db` until then.
+        let scan_library = library.clone();
         std::thread::Builder::new()
             .name("vaino-tagscan".into())
             .spawn(move || {
-                if let Err(e) = vaino_player::tags::backfill(&scan_db, true) {
+                if let Err(e) = vaino_player::tags::backfill(&scan_library, true) {
                     eprintln!("tag scan unavailable ({e}); album names will be missing");
                 }
             })
@@ -115,13 +121,14 @@ async fn main() {
     // The web side needs the library too, to read cover art out of the files
     // [REQ-VIS-170]; the engine thread takes ownership of the path itself.
     let art_db = db.clone();
+    let art_library = library.clone();
 
     // The engine thread builds everything it owns, then reports its handle
     // back. Nothing audio-related crosses a thread boundary afterwards.
     let (tx, rx) = sync_channel(1);
     std::thread::Builder::new()
         .name("vaino-engine".into())
-        .spawn(move || engine_thread(db, depth, device, mpd_addr, mpd_root, tx))
+        .spawn(move || engine_thread(db, library, depth, device, mpd_addr, mpd_root, tx))
         .expect("spawn engine thread");
 
     let (handle, why, controls) = match rx.recv() {
@@ -131,7 +138,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let ui = web::Ui { handle, why, controls, db: art_db };
+    let ui = web::Ui { handle, why, controls, db: art_db, library: art_library };
     let app = web::router(ui);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port as u16));
@@ -188,6 +195,7 @@ fn state_of(
 
 fn engine_thread(
     db: PathBuf,
+    library: PathBuf,
     depth: usize,
     device: Option<String>,
     mpd_addr: Option<String>,
@@ -198,7 +206,7 @@ fn engine_thread(
         SharedControls,
     )>,
 ) {
-    let mut session = match Session::open(&db, depth) {
+    let mut session = match Session::open(&db, &library, depth) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");

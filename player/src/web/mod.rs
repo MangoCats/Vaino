@@ -72,11 +72,16 @@ use wifi::*;
 #[derive(Clone)]
 pub struct Ui {
     pub handle: Arc<EngineHandle>,
-    /// The library file, for serving cover art. A path rather than a
-    /// connection: `rusqlite`'s is not `Sync`, art is asked for once per
-    /// passage change, and opening one for that is cheaper than sharing one
-    /// forever.
+    /// The listener-side file. A path rather than a connection:
+    /// `rusqlite`'s is not `Sync`, and a request opens its own.
     pub db: std::path::PathBuf,
+    /// The catalog-side file, for serving cover art and everything else a
+    /// handler reads through `Library`. Equal to `db` on every installation
+    /// that hasn't split `[IMPL-DBSPLIT-025]` -- every handler in this
+    /// module still opens `db` alone as of this field's addition; wiring
+    /// each one to `Library::open_split(&db, &library)` instead is tracked,
+    /// separately scoped work, not yet done.
+    pub library: std::path::PathBuf,
     pub why: Explanations,
     pub controls: SharedControls,
 }

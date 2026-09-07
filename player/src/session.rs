@@ -210,10 +210,15 @@ pub struct Session {
     /// the rest are pruned to what is still queued -- a passage that has been
     /// admitted can no longer fail to open, so its note is dead weight.
     notes: HashMap<i64, crate::director::library::QueuedNote>,
-    /// The library file, so a rebuild can open its own connection
+    /// The listener-side file, so a rebuild can open its own connection
     /// `[IMPL-SUI-075]`. A path rather than a shared handle, for the reason
     /// `Ui` keeps one: `rusqlite`'s `Connection` is not `Sync`.
     db: std::path::PathBuf,
+    /// The catalog-side file. Equal to `db` on every installation that
+    /// hasn't split `[IMPL-DBSPLIT-025]`; carried separately here for the
+    /// same reason `db` is -- the rebuild thread needs both to reopen
+    /// `Library::open_split`, not just one.
+    library: std::path::PathBuf,
     /// A rebuild in flight. `Director` is `Send`, asserted at compile time in
     /// `dircheck`, so it is built on its own thread and handed back here —
     /// the running one keeps answering selections throughout, and there is
@@ -222,12 +227,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// `depth` is how many passages to keep queued ahead.
-    pub fn open(db: &Path, depth: usize) -> Result<Self, DbError> {
-        let lib = Library::open(db)?;
+    /// `depth` is how many passages to keep queued ahead. `library` is the
+    /// catalog-side file -- equal to `db` on every installation that hasn't
+    /// split `[IMPL-DBSPLIT-025]`.
+    pub fn open(db: &Path, library: &Path, depth: usize) -> Result<Self, DbError> {
+        let lib = Library::open_split(db, library)?;
         // A resume point that cannot be opened is a first run, not a failure:
         // playback must never be blocked by the loss of a convenience.
-        let store = PlayerStore::open(db)
+        let store = PlayerStore::open_split(db, library)
             .map_err(|e| eprintln!("resume state unavailable ({e}); continuing without it"))
             .ok();
         let saved = store.as_ref().and_then(|s| s.load().ok()).flatten();
@@ -262,11 +269,12 @@ impl Session {
             depth,
             director,
             rng: Rng::from_clock(),
-            decisions: PlayerStore::open(db).ok(),
+            decisions: PlayerStore::open_split(db, library).ok(),
             explanations: Explanations::default(),
             controls: SharedControls::default(),
             notes: HashMap::new(),
             db: db.to_path_buf(),
+            library: library.to_path_buf(),
             rebuild: None,
         })
     }
@@ -338,11 +346,12 @@ impl Session {
         }
 
         let path = self.db.clone();
+        let library = self.library.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         match std::thread::Builder::new()
             .name("director-rebuild".into())
             .spawn(move || {
-                let built = Library::open(&path)
+                let built = Library::open_split(&path, &library)
                     .and_then(|l| l.director())
                     .map(Box::new)
                     .map_err(|e| format!("{e:?}"));

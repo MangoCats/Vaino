@@ -24,7 +24,7 @@ fn main() {
     let count: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
     let list_only = args.iter().any(|a| a == "--list");
 
-    let mut session = match Session::open(&db, count) {
+    let mut session = match Session::open(&db, &db, count) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");
