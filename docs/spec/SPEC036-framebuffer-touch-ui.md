@@ -131,7 +131,40 @@ This resolves §7's largest named risk. `piscreen2r`'s own KMS/`drm`-mode
 alternative remains untried (FBTFT already works, no forcing reason to);
 byte-order is now confirmed too, by §8 phase 2's pixel-readback test, but
 *perceived* correctness on the physical panel — orientation, color, real
-refresh behavior — still wants an actual look, not just measured bytes.
+refresh behavior — still wants an actual look, not just measured bytes,
+**since confirmed directly**: real green text on a black background, seen
+on the physical unit.
+
+**`[SPEC-FBUI-027]` The kernel's own framebuffer console shares this
+device, and must be tamed rather than removed.** Found the hard way, not
+designed for up front: `/dev/fb0` is also Linux's text console (`fbcon`),
+because `cmdline.txt` binds `console=tty1` to it. Removing that binding
+looked like the obvious fix for a login-prompt cursor stomping on
+`fbui`'s output — instead it hung `vainoplayer3` at boot, reproducibly,
+three times in a row, with no filesystem corruption on either the ext4
+`SYSTEM` partition (`e2fsck`-clean) or the f2fs `STATE` partition (full
+read-only check passed, checkpoint recorded a proper `unmount`) to explain
+it — something in this image's boot sequence depends on a VT console
+existing at all, even an unused one. `console=tty1` stays. The two actual
+symptoms it caused are instead solved without touching boot config:
+
+- The login prompt itself: `getty@tty1.service` disabled (`systemctl
+  disable --now`) — confirmed durable by finding no unit symlink at all
+  under `/etc/systemd/system` after a reboot, not just believing the
+  command's own output.
+- `fbcon`'s VT cursor, which keeps blinking even with no getty attached
+  (a property of the console layer itself, not of whatever reads from
+  it): turned off live with `TERM=linux setterm -cursor off > /dev/tty1`,
+  made durable via `fbui.service`'s own `ExecStartPre` (a `+`-prefixed
+  line, since `/dev/tty1` isn't writable by the `pi` user the rest of the
+  unit runs as) — tying the fix to the unit that actually owns the
+  display, rather than a separate boot-order-dependent script.
+
+One narrow, cosmetic residual: for the few seconds between `fbcon`
+claiming the console during boot and `fbui`'s own first paint, boot text
+can in principle still flash on screen once. Self-heals immediately
+(`fbui` unconditionally repaints the whole panel on start) and has not
+needed chasing further.
 
 **`[SPEC-FBUI-030]` Drawing: `embedded-graphics`, not a from-scratch
 rasterizer.** A mature, widely-used Rust crate for exactly this class of
@@ -282,10 +315,11 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    RGB565 encoding (real text was drawn, not garbage) against ~153,040
    matching `LCD_BG`'s (the whole-screen fill), out of 153,600 total. The
    `embedded-graphics` → RGB565 → byte-order → real-framebuffer pipeline
-   works end to end. **Not yet confirmed by looking at the physical
-   screen** — byte-level readback proves the pixels are correct, not that
-   the panel displays them the way a person would expect (orientation,
-   perceived color, refresh behavior all still want an actual look).
+   works end to end. **Confirmed by looking at the physical screen**, not
+   just by byte-level readback: real green text on black, as designed.
+   Getting there also surfaced and resolved `[SPEC-FBUI-027]` (the console
+   shares this device) — a real boot-hang risk found and fixed along the
+   way, not merely a cosmetic finish.
 3. **Calibration routine**, run automatically when no calibration file
    exists — resolves §7's "first boot" gap by construction rather than by
    remembering a manual step.
