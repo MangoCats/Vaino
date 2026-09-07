@@ -144,6 +144,25 @@ impl QualifyingConn {
             flags | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
         .map_err(|e| DbError::Open(e.to_string()))?;
+        // Found live, on vainopi's first real split: rusqlite's *bundled*
+        // SQLite defaults `PRAGMA foreign_keys` to ON -- confirmed by
+        // asking it directly, not by grepping this crate for an explicit
+        // enable, which is exactly the check `[IMPL002 §7.7]` stopped one
+        // step short of and got wrong as a result. Harmless on every
+        // unsplit installation (`listener_play_history`/`selection_decisions`
+        // and the `passages` they reference all sit in the same file, so
+        // the lookup always succeeds) -- and fatal to every write on a
+        // split one, since SQLite only ever checks a FOREIGN KEY against a
+        // table in its *own* schema, never an attached one: the write
+        // doesn't fail loudly, `record_decision`/`save` just start
+        // returning "no such table: main.passages" on every call, silently
+        // dropping resume state and decision explanations forever after.
+        // Turned off unconditionally, split or not, because nothing in
+        // this crate ever relied on the cascade firing from the player's
+        // own writes -- only Sampo's desktop tools do, deliberately and
+        // explicitly, on their own connections, not this one.
+        conn.execute("PRAGMA foreign_keys = OFF", [])
+            .map_err(|e| DbError::Open(e.to_string()))?;
         let lib = attach_library(&conn, db_path, library_path)?;
         Ok(Self { conn, lib })
     }
@@ -211,7 +230,7 @@ impl std::ops::Deref for QualifyingConn {
 #[cfg(test)]
 mod qualifying_conn_tests {
     use super::QualifyingConn;
-    use rusqlite::OpenFlags;
+    use rusqlite::{Connection, OpenFlags};
     use std::path::PathBuf;
 
     fn scratch_path(name: &str) -> PathBuf {
@@ -282,6 +301,50 @@ mod qualifying_conn_tests {
         q.execute("INSERT INTO t DEFAULT VALUES", []).unwrap();
         assert_eq!(q.last_insert_rowid(), 1);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Found live, on vainopi's actual first split: rusqlite's *bundled*
+    /// SQLite defaults `PRAGMA foreign_keys` to ON, and this project's real
+    /// schema has two foreign keys crossing the split boundary
+    /// (`listener_play_history`/`selection_decisions` -> `passages`,
+    /// `[IMPL002 §7.7]`). SQLite only ever checks a `FOREIGN KEY` against a
+    /// table in its *own* schema, never an attached one -- so once
+    /// `passages` moved to `lib`, every insert into a table referencing it
+    /// started failing "no such table: main.passages," silently dropping
+    /// resume state and decision explanations. Reproduces the exact
+    /// failure, unfixed, then proves the fix.
+    #[test]
+    fn a_write_referencing_an_attached_table_does_not_fail_foreign_key_lookup() {
+        let listener_path = scratch_path("fk-listener");
+        let library_path = scratch_path("fk-library");
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+
+        Connection::open(&library_path)
+            .unwrap()
+            .execute_batch("CREATE TABLE passages (passage_id INTEGER PRIMARY KEY)")
+            .unwrap();
+
+        let q = QualifyingConn::open(&listener_path, &library_path, RW).unwrap();
+        // Confirms *why* this would have failed before the fix -- if this
+        // assertion ever starts failing because a future rusqlite/SQLite
+        // upgrade changes the bundled default, the PRAGMA in `open()` is
+        // still correct defense, but this comment's premise needs revisiting.
+        let fk: i64 = q.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert_eq!(fk, 0, "open() must turn this off; the bundled default is 1");
+
+        q.execute_batch(
+            "CREATE TABLE selection_decisions (decision_id INTEGER PRIMARY KEY, \
+             passage_id INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL)",
+        )
+        .unwrap();
+        // The exact shape of the live failure: passage_id names a real row
+        // that exists only in the attached schema, not in main.
+        q.execute("INSERT INTO selection_decisions (passage_id) VALUES (1)", [])
+            .expect("must not fail with 'no such table: main.passages'");
+
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
     }
 }
 
