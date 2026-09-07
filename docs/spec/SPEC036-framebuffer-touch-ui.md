@@ -353,9 +353,20 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    to send a seek for those (`if duration_ms > 0`), so a tap there is
    correctly inert but untested against real seekable content. Left open
    rather than claimed.
-5. **Reconnection handling**: an explicit "disconnected" render state,
-   tested by actually killing and restarting `vaino` mid-session and
-   confirming the display says so rather than freezing on stale data.
+5. ~~Reconnection handling~~ **Done, 2026-09-07** — `render_disconnected`
+   replaces `render`'s old "connect before first try" placeholder (which
+   only covered the first-ever connection, not a later drop) and now fires
+   on every disconnect, with `last` reset to `None` alongside it. That
+   reset is the actual fix, not the message alone: without it, a `vaino`
+   restart that happened to come back with an identical snapshot would
+   fail `[SPEC-FBUI-020]`'s diff check and leave the disconnected screen
+   up forever despite real data flowing again. Tested exactly as planned
+   — `systemctl restart vaino.service` mid-session on `vainoplayer3` — and
+   confirmed by framebuffer readback, not just log lines: the green-pixel
+   count dropped from 7,186 (full transport UI) to 508 (the two-line
+   disconnected message, no buttons) within one push interval of the
+   restart, then returned to 7,287 within `fbui`'s own 3-second retry once
+   `vaino` was back.
 6. **Non-ASCII font decision**, resolved with real library data (titles
    this project's own catalog actually has) rather than a synthetic test
    string.

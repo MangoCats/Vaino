@@ -255,6 +255,29 @@ fn render(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::con
     Ok(())
 }
 
+/// An explicit, unmistakably different screen for "not connected to
+/// `vaino` right now" `[SPEC036]` §7's reconnection gap -- no buttons, no
+/// seek bar, none of `render`'s controls that would be silently inert if
+/// tapped while there is nothing to send them to. Deliberately not just
+/// `render` called with a default/empty `ClientSnapshot`: that would read
+/// as "connected, and nothing happens to be playing," which is a real,
+/// different state a person could otherwise not tell apart from this one.
+fn render_disconnected(display: &mut FbDisplay) -> Result<(), std::convert::Infallible> {
+    let (w, h) = (display.width as i32, display.height as i32);
+    Rectangle::new(Point::zero(), Size::new(display.width, display.height))
+        .into_styled(PrimitiveStyle::with_fill(LCD_BG))
+        .draw(display)?;
+    let style = MonoTextStyle::new(&FONT_9X15, LCD_GREEN);
+    let line1 = "-- disconnected --";
+    let line2 = "reconnecting...";
+    let glyph_w = 9; // FONT_9X15
+    Text::new(line1, Point::new(((w - line1.len() as i32 * glyph_w) / 2).max(0), h / 2 - 12), style)
+        .draw(display)?;
+    Text::new(line2, Point::new(((w - line2.len() as i32 * glyph_w) / 2).max(0), h / 2 + 12), style)
+        .draw(display)?;
+    Ok(())
+}
+
 /// Fire-and-forget POST to `vaino`'s existing control API `[SPEC-FBUI-015]`
 /// -- a hand-rolled HTTP/1.1 request over a raw TCP socket rather than a
 /// client crate. `hyper` is already in this workspace's dependency tree
@@ -633,10 +656,11 @@ async fn main() {
 
     // An explicit "disconnected" render before ever trying to connect, so
     // a `vaino` that is not up yet shows an honest state rather than
-    // whatever garbage was in video memory at boot `[SPEC-FBUI]` §7's
-    // reconnection-state gap, addressed here for the first (connect) case;
-    // the reconnect-after-drop case is not yet handled by this phase.
-    let _ = render(&mut display, &ClientSnapshot::default());
+    // whatever garbage was in video memory at boot -- the same state
+    // `render_disconnected` also shows on every later drop, resolving
+    // `[SPEC036]` §7's reconnection-state gap for both cases now, not
+    // just this first one.
+    let _ = render_disconnected(&mut display);
 
     let http_addr = http_addr_from_ws_url(&url);
     let mut last: Option<ClientSnapshot> = None;
@@ -727,6 +751,15 @@ async fn main() {
             }
         }
         eprintln!("fbui: disconnected; reconnecting in 3s");
+        let _ = render_disconnected(&mut display);
+        // Cleared, not carried over: the next successful snapshot must
+        // render even if it happens to be identical to the last one shown
+        // before this drop -- otherwise the diff check in the loop above
+        // would see no change and leave this disconnected screen up
+        // indefinitely despite `vaino` being back and pushing real data
+        // `[SPEC036]` §7's reconnection-state gap, the actual bug this
+        // phase exists to close, not just the missing message on its own.
+        last = None;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
 }
