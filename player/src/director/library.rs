@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::db::QualifyingConn;
+
 use super::frequency::{
     weigh, Candidate, Exclusion, Policy, Related, TimeScale, Tuning, Weighing,
 };
@@ -182,7 +184,7 @@ pub struct Director {
 }
 
 impl Director {
-    pub fn load(conn: &Connection) -> Result<Self, DbError> {
+    pub fn load(conn: &QualifyingConn) -> Result<Self, DbError> {
         let q = |e: rusqlite::Error| DbError::Query(e.to_string());
 
         let sql = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio'");
@@ -237,7 +239,7 @@ impl Director {
             );
         }
 
-        let artist_of: HashMap<String, String> = map_query(conn, "SELECT mbid, artist_mbid FROM recording_artists")?;
+        let artist_of: HashMap<String, String> = map_query(conn, "SELECT mbid, artist_mbid FROM __LIB__.recording_artists")?;
 
         let mut last_played = HashMap::new();
         let mut artist_last_played: HashMap<String, i64> = HashMap::new();
@@ -792,7 +794,7 @@ pub struct Census {
 ///
 /// Missing tables are not an error: a library with no occasions defined simply
 /// has no seasons, and every multiplier is 1.0.
-fn load_occasions(conn: &Connection) -> Result<Occasions, DbError> {
+fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError> {
     let mut modes: HashMap<(String, String), Interp> = HashMap::new();
     let mut pts: HashMap<(String, String), Vec<(u16, f64)>> = HashMap::new();
 
@@ -845,7 +847,7 @@ fn load_occasions(conn: &Connection) -> Result<Occasions, DbError> {
     // dimensions of musical flavor, and none of those are seasonal.
     let mut values: crate::director::occasion::SubjectValues = HashMap::new();
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT subject_id, characteristic, class, value FROM flavor \
+        "SELECT subject_id, characteristic, class, value FROM __LIB__.flavor \
          WHERE subject_kind = 'recording'",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| {
@@ -875,7 +877,7 @@ fn load_occasions(conn: &Connection) -> Result<Occasions, DbError> {
 ///
 /// **Unexercised:** `listener_likes` is empty in the migrated library, so this
 /// path has unit tests and no field data behind it.
-fn load_taste(conn: &Connection, flavor: &FlavorIndex) -> (Option<Flavor>, Option<Flavor>) {
+fn load_taste(conn: &QualifyingConn, flavor: &FlavorIndex) -> (Option<Flavor>, Option<Flavor>) {
     let mut likes: Vec<(&Flavor, f64)> = Vec::new();
     let mut dislikes: Vec<(&Flavor, f64)> = Vec::new();
     let Ok(mut stmt) = conn.prepare("SELECT mbid, weight FROM listener_likes") else {
@@ -898,7 +900,7 @@ fn load_taste(conn: &Connection, flavor: &FlavorIndex) -> (Option<Flavor>, Optio
     (centroid(&flavor.schema, &likes), centroid(&flavor.schema, &dislikes))
 }
 
-fn map_query(conn: &Connection, sql: &str) -> Result<HashMap<String, String>, DbError> {
+fn map_query(conn: &QualifyingConn, sql: &str) -> Result<HashMap<String, String>, DbError> {
     let q = |e: rusqlite::Error| DbError::Query(e.to_string());
     let mut stmt = conn.prepare(sql).map_err(q)?;
     let rows = stmt
@@ -918,8 +920,8 @@ mod tests {
 
     /// The slice of SPEC008 selection touches. Written out rather than loaded
     /// from schema.sql so these tests pin the column names the queries need.
-    fn fixture() -> Connection {
-        let c = Connection::open_in_memory().unwrap();
+    fn fixture() -> QualifyingConn {
+        let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
         c.execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL,
                                  duration_ms INTEGER);

@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use vaino_player::db::QualifyingConn;
 use vaino_player::director::flavor::FlavorIndex;
 
 fn main() {
@@ -22,10 +23,10 @@ fn main() {
     let db = PathBuf::from(&args[0]);
     let samples: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(20_000);
 
-    let conn = match rusqlite::Connection::open_with_flags(
-        &db,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) {
+    // Single path, `db` playing both roles: this tool measures whatever file
+    // it's pointed at, split or not -- point it straight at `library.db` on
+    // an installation that has split, since `flavor` lives there.
+    let conn = match QualifyingConn::open(&db, &db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("open: {e}");

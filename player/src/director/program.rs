@@ -278,9 +278,10 @@ pub fn sync_os_utc_offset(conn: &Connection) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::QualifyingConn;
 
-    fn fixture() -> Connection {
-        let c = Connection::open_in_memory().unwrap();
+    fn fixture() -> QualifyingConn {
+        let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
         c.execute_batch(
             "CREATE TABLE listener_programs (program_id INTEGER, name TEXT, start_time TEXT);
              CREATE TABLE listener_program_seeds (program_id INTEGER, mbid TEXT, position INTEGER);
