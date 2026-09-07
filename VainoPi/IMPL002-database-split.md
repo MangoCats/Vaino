@@ -26,7 +26,8 @@ and `tools/resolve_mesh_conflict.py` already address each side of a diff by
 an independent `(path, table)` pair drawn from a hardcoded `TABLES` allowlist
 (`files`, `recordings`, `passages` — never a `listener_*` name), so a split
 target just means pointing the tool at `library.db` instead of `vaino.db`.
-**`[IMPL-DBSPLIT-005]`** No change to either sync tool is needed for this.
+
+**`[IMPL-DBSPLIT-005]` No change to either sync tool is needed for this.**
 That finding is *why* this is safe to build now rather than a reason to
 build it — see §5 for the review in full.
 
@@ -44,9 +45,10 @@ workaround — it can build the split PI-DB-010 actually describes.
 
 Reading `[PI-DB-030]`'s claim of "four queries cross the boundary" against
 the player source directly (not against the doc) found the real shape is
-bigger, but still bounded and enumerable. **`[IMPL-DBSPLIT-010]`** As of this
-writing, `vaino` opens the *same* `vaino.db` path three separate times, for
-three different reasons:
+bigger, but still bounded and enumerable.
+
+**`[IMPL-DBSPLIT-010]` As of this writing, `vaino` opens the *same*
+`vaino.db` path three separate times**, for three different reasons:
 
 | Connection | Opened in | Mode | Owns |
 | :--- | :--- | :--- | :--- |
