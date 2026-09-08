@@ -501,3 +501,49 @@ notices a dummy and reopens `[SPEC-APS-060]`, and `vaino-speaker` notices the
 routing disagreeing with the connected device `[PI3-AIM-050]`. Two mechanisms
 that did not exist then now cover the case this was holding the entire boot
 still to prevent.
+
+## 6. Startup stutter, and the observer that caused some of it
+
+**`[PI3-FOUND-170]` Diagnosing this over ssh perturbs the thing being
+measured.** The Pi Zero 2W puts Wi-Fi and Bluetooth on one chip behind one
+antenna, so a `journalctl` dump competes directly with the A2DP stream it is
+being used to investigate. On the first boot with a persistent journal to
+read, the ssh login landed at 60.4 s and the reported stutters at roughly
+80 s, 97 s and 101 s — during the diagnosis, not merely near it. Some earlier
+"stuttery audio" reports coincide with active diagnosis in the same way.
+
+This is not the whole explanation — stutter was also reported on cycles with
+nobody connected — but it is enough to invalidate any measurement taken over
+ssh while listening. `vaino-startup-sample` exists for that reason: a boot-time
+service that reads `/proc` once a second into a local file, with no network,
+no subprocesses in its loop, `Nice=19` and idle I/O. It can run while the
+listener simply listens, and be read afterwards with the appliance quiet.
+
+**`[PI3-FOUND-180]` No audio thread on this appliance has real-time priority,
+and the usual ways of granting it do not work here.** Measured: `pipewire`'s
+`data-loop.0` — the thread that encodes SBC and feeds A2DP — runs
+`SCHED_OTHER` at priority 0 carrying `SCHED_RESET_ON_FORK`, which is the
+fingerprint of a request made and refused. `rtkit-daemon` confirms it, once a
+minute: *"Supervising 0 threads of 0 processes of 0 users."* The cause is a
+hard limit: `/proc/<pipewire>/limits` reads `Max realtime priority 0 0`.
+
+Three fixes were tried and **none of them worked**, which is the part worth
+recording:
+
+- Adding the account to the `pipewire` group, the usual advice. Debian's
+  `@pipewire - rtprio 95` is applied by `pam_limits`, and **`/etc/pam.d/systemd-user`
+  does not exist on this image**, so no PAM limits reach a systemd *user*
+  session — which is where PipeWire runs.
+- `LimitRTPRIO=95` as a drop-in on `user@.service`. `systemctl show` duly
+  reported 95 for the instance, and the manager process still came up with a
+  hard limit of 0.
+- `DefaultLimitRTPRIO=95` in `/etc/systemd/system.conf`, with `daemon-reexec`
+  and across a full reboot. The manager default read 95; PID 1 itself and the
+  user manager both still read 0.
+
+All three were reverted rather than left in place, because configuration that
+looks like it grants real time and does not is worse than none. Whether RT is
+even the right target is unproven: `pw-top` shows the audio thread using 2–4%
+of its quantum with zero xruns in steady state, so it has considerable headroom
+and would need a >20 ms scheduling delay to glitch. Establish that such delays
+actually occur before spending more on this.
