@@ -23,9 +23,31 @@
 # player ends up bound to the wrong one. So the speaker gets first refusal,
 # and anything real is accepted only once its grace period has passed --
 # which keeps a speakerless appliance booting promptly.
+# **`[PI3-FOUND-150]` Waiting here is only free until it stops overlapping
+# with something.** The player does not touch its output when it starts: it
+# backs up listener state, builds the library index -- 8330 passages off a
+# 1.1 GB database on a Pi Zero 2W, about twenty seconds -- and only then opens
+# a device. So the twenty seconds after `vaino` starts are twenty seconds in
+# which Bluetooth may finish settling at no cost at all, and every second
+# spent waiting *before* starting it is a second added to the total rather
+# than hidden inside it. Measured on a power cycle: this gate waited its full
+# 45 s, gave up, and only then let a twenty-second library load begin --
+# ninety-five seconds to audio, of which about forty-five were spent
+# deliberately doing nothing.
+#
+# So the deadline is short now. It still catches the case it was written for
+# -- a warm restart, where the speaker's sink is already there and the answer
+# is instant -- and it still gives the chosen speaker first refusal. What it
+# no longer does is serialise a wait that the library load was going to cover
+# anyway. If the sink turns up late the player opens onto a dummy, which is
+# no longer the dead end it was when this gate was written: the path
+# supervisor notices and reopens `[SPEC-APS-060]`, and `vaino-speaker` sees
+# the routing disagree with the connected device and says so `[PI3-AIM-050]`.
+# Two mechanisms that did not exist then now cover the case this was holding
+# the whole boot still to prevent.
 set -u
-DEADLINE=${VAINO_SINK_WAIT:-45}
-SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-30}
+DEADLINE=${VAINO_SINK_WAIT:-15}
+SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-10}
 DB="${VAINO_DB:-/srv/library/vaino.db}"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
