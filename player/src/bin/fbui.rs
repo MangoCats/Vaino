@@ -128,6 +128,10 @@ struct ClientSnapshot {
     passage_id: Option<i64>,
     title: Option<String>,
     artist: Option<String>,
+    /// The Release title -- `None` until the release tables are populated
+    /// and the file carries no album tag either, matching the real
+    /// `Snapshot`'s own field exactly.
+    album: Option<String>,
     position_ms: u64,
     duration_ms: u64,
     volume_db: f32,
@@ -431,7 +435,8 @@ const ART_X0: u32 = 4;
 const ART_Y0: u32 = 4;
 const TEXT_X: i32 = 112;
 const TITLE_Y: i32 = 40;
-const ARTIST_Y: i32 = 65;
+const ARTIST_Y: i32 = 64;
+const ALBUM_Y: i32 = 88;
 
 const SEEKBAR_Y0: i32 = 110;
 const SEEKBAR_Y1: i32 = 128;
@@ -521,9 +526,14 @@ fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Optio
 
     let title = snap.title.as_deref().map(normalize_for_display);
     let artist = snap.artist.as_deref().map(normalize_for_display);
+    let album = snap.album.as_deref().map(normalize_for_display);
     draw_text_color(display, title.as_deref().unwrap_or("(nothing playing)"), TEXT_X, TITLE_Y, MULIB_TEXT);
-    // Artist dimmed, matching the web skin's own `.nowplaying i { color: #888 }`.
+    // Artist and album both dimmed, matching the web skin's own
+    // `.nowplaying i { color: #888 }` -- album left blank (`Snapshot`'s
+    // own `None`, not a placeholder string) rather than shown as
+    // "(unknown)", the same absent-is-blank treatment artist already gets.
     draw_text_color(display, artist.as_deref().unwrap_or(""), TEXT_X, ARTIST_Y, MULIB_DIM);
+    draw_text_color(display, album.as_deref().unwrap_or(""), TEXT_X, ALBUM_Y, MULIB_DIM);
     if let Some(pixels) = art {
         draw_art(display, pixels);
     }
