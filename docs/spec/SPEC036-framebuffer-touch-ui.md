@@ -1,11 +1,14 @@
 # SPEC036: A native framebuffer/touch UI, for small SPI displays
 
-**Design Specification — Tier 2 · PROVISIONAL, not yet built**
+**Design Specification — Tier 2 · Built, deployed, and running** — tagged
+`testedInTruck`: confirmed functional in a real vehicle install (a 2019
+Ram Classic Tradesman's center console, AUX-in to the factory head unit),
+not just on a bench.
 
 A second, native UI for Vaino, alongside the existing browser one — not a
 replacement for it, and not built the same way. Motivated by a concrete
 need: `vainoplayer3` (a Raspberry Pi 3B, first built `2026-09-07`) has a
-320×480 SPI-driven touchscreen too small and too memory-constrained (1 GB
+480×320 SPI-driven touchscreen too small and too memory-constrained (1 GB
 total, `[REQ-HW-100]`'s player budget already spoken for) to run a kiosk
 browser against — checked directly rather than assumed: Chromium's
 own well-documented ~512 MB baseline and WPE/cog's real, currently-open
@@ -191,40 +194,74 @@ rendering is included, and is more likely to have an undiscovered bug in
 exactly the pixel-format-handling code this design most needs to be
 right.
 
-**`[SPEC-FBUI-035]` Visual language borrows directly from the existing
-`winamp` skin, not from scratch.** Found while grounding this spec, not
-assumed: `web/skins/winamp/skin.css`'s chassis is a fixed **320px** wide
-— which is not a coincidence to route around but a near-exact match to
-this panel's own 320-pixel dimension. Same palette (`#3d3d47` chassis,
-`#0b0f0b` LCD background, `#22dd22` LCD green), same idiom (a small LCD
-readout for title/artist/position, flat transport buttons) — reimplemented
-as native primitives, not by parsing or rendering the CSS itself.
+**`[SPEC-FBUI-035]` Visual language borrows directly from an existing web
+skin, not from scratch — originally WinAmp, since revised into two
+themes, one per page.** Found while grounding this spec, not assumed:
+`web/skins/winamp/skin.css`'s chassis is a fixed **320px** wide — which is
+not a coincidence to route around but a near-exact match to this panel's
+own 320-pixel dimension. Same palette (`#3d3d47` chassis, `#0b0f0b` LCD
+background, `#22dd22` LCD green), same idiom (a small LCD readout for
+title/artist/position, flat transport buttons) — reimplemented as native
+primitives, not by parsing or rendering the CSS itself. This is still
+Settings' own theme entirely, and remains the gear icon's on both pages.
+
+**Now Playing re-themed to MuLibPlay on 2026-09-08**, on direct request:
+`web/skins/mulibplay/skin.css`'s own real, measured palette (`#000000`
+"black ground", `#cccccc` text, `#2010a0` filled buttons, `#d0a000` gold
+for whichever programme is active, `#7ab7ff` progress fill) rather than
+WinAmp green, once the button grid grew from four transport buttons to
+ten (two rows of five: play/pause, skip, all 8 programmes — §9). Filled
+and rounded rather than outlined, the same simplification a low-resolution
+rendering of that skin needs regardless of this project's own reasons for
+it (a thin outline stroke does not read clearly at 480×320): confirmed
+directly, not assumed, after an outlined first attempt read as illegible
+on the physical panel. The literal hex values from the desktop skin
+needed further darkening beyond that for this specific panel's own
+real, measured low contrast, and button labels moved to a bold ASCII
+font — both again confirmed by looking at the physical screen rather than
+trusting the numbers on paper. See §9 for the full account.
 
 ---
 
 ## 4. The SPI bandwidth budget, stated as a real constraint
 
 **`[SPEC-FBUI-040]` A full-panel redraw is the most expensive thing this
-UI can do, and this design avoids doing it more than once per track.**
-fbtft over SPI at the panel's rated speed (32 MHz per the original
-hardware identification) has well-documented low full-frame refresh rates
-— this is a property of the *bus*, not of how efficient the drawing code
-is, and no amount of Rust performance work changes it. Consequences this
-design commits to:
+UI can do, and this design avoids doing it more than necessary.** fbtft
+over SPI — originally assumed to matter at the bus's rated 32 MHz, but
+this design ended up committing to full-panel redraws anyway (below), so
+the number that actually governs refresh cost is whatever
+`piscreen2r`'s `speed=` is configured to, not a fixed original figure.
+**Lowered to 16 MHz on 2026-09-08**, after real vehicle use surfaced
+intermittent color corruption (a "white-washed, almost inverted" flicker,
+worse on large content changes like a track skip) consistent with SPI
+signal-integrity trouble at the higher rate on this board's actual
+wiring — confirmed as the fix by direct observation before/after, not
+just plausible reasoning. Refresh is visibly slower as a result; nothing
+about this UI's own usage pattern (an update every few seconds at most,
+never continuous motion) needs the faster rate back.
 
-- The position/duration text and any progress bar update on a timer
-  (matching the browser's own 500 ms-ish cadence is unnecessary here;
-  once per second is enough for a number a person glances at, not reads
-  continuously) and touch **only their own small screen region**, never
-  the whole frame.
-- Title/artist/album redraw **only on track change** — exactly what the
-  diff rule above already limits this to.
-- **Album art (`/art/:passage_id`) is the one open question, not a
-  committed feature of v1.** A full-color bitmap blit is the single most
-  expensive possible SPI operation this panel could be asked to do, and
-  doing it once per track (not continuously) may still be worth the cost
-  — but this is explicitly deferred to be measured against real hardware
-  rather than assumed acceptable. See §7's open items.
+**Region-limited redraw was the original plan; full-panel redraw is what
+was actually built,** once §8 phase 2 measured the real cost of the
+alternative: `render()`'s own CPU-side work stayed under 20ms even
+redrawing the *entire* 480×320 canvas on every call, an order of
+magnitude below anything a person would perceive as lag. Given that,
+tracking exactly which sub-regions changed and redrawing only those
+would have added real code and real risk (partial-redraw bugs are a
+classic source of stale-looking UI) for a saving that never mattered in
+practice. What *is* still true from the original plan:
+
+- The position/duration text and progress bar update on a timer — not
+  every push (matching the browser's ~500ms cadence is unnecessary here),
+  throttled instead to **once per 5 seconds** for a position-only change
+  (`differs_ignoring_position`, added once queue/programme/volume state
+  gave the diff rule more to ignore); anything else still redraws the
+  full panel at once.
+- Title/artist/album still only actually *change* on track change — the
+  diff rule's job, not a region-redraw's.
+- **Album art was the one open question, and is no longer one.** §8
+  phase 7 measured it and built it: a full-color bitmap blit adds a
+  small, bounded cost to the full-panel redraw this design already pays
+  for on every real change, not a new separate expensive operation.
 
 ---
 
@@ -439,4 +476,93 @@ fix. Folded into §8's phasing below rather than left as loose ends.
    remains the one real candidate for eliminating it, should it matter later.
 
 Phases 1–7 done and verified against real hardware, per each entry above.
-This document's own implementation plan is complete.
+This document's original seven-phase plan is complete; §9 covers real
+work that came after it.
+
+---
+
+## 9. Beyond the seven-phase plan
+
+The original plan closed with a single-page, WinAmp-themed transport UI.
+Real use — including the vehicle install itself — asked for more, all
+done and verified against real `vainoplayer3` hardware between
+2026-09-07 and 2026-09-08:
+
+- **Two pages, not one.** A gear icon (top-right, both pages, drawn last
+  so its own backdrop always wins over whatever text runs underneath it)
+  toggles between Now Playing and a new Settings page. Splitting was
+  necessary, not stylistic: volume control, all 8 programmes, and
+  per-track queue editing do not fit one 480×320 screen alongside album
+  art and transport controls.
+- **A 2×5 button grid**: play/pause, skip, then all 8 of `SPEC009`'s own
+  programmes, the currently active one highlighted (a filled gold button
+  rather than an outline — "which programme is active" has no other
+  indicator on this screen). Never sends `auto`: this appliance has
+  no realtime clock and a truck's driving hours have no relationship to a
+  schedule tuned for home listening, so only a specific programme id is
+  ever posted to `/program/:id`. Persistence for this was a real,
+  necessary backend fix, not a UI-only change — `[SPEC-DIR-185]`,
+  `SPEC009` §6.
+- **Settings**: volume +/− (moved off Now Playing to make room for the
+  programme grid) and the upcoming queue, each entry with the same
+  sooner/remove/later actions `/queue/:qid/:action` already serves every
+  browser skin — found already built and reused, not a new server-side
+  route.
+- **Album name.** A third line under title/artist, from the real
+  `Snapshot`'s own `album` field, blank rather than a placeholder string
+  when unknown.
+- **MuLibPlay re-theme, contrast, and weight** — `[SPEC-FBUI-035]` above
+  has the full account: darker button fill and progress-bar track than
+  the desktop skin's own literal values, a bold ASCII font for button
+  labels (`Cool`, `Fun`, `Mellow`, `Soft`, `Prog`, `Light`, `Loud`,
+  `Groove` — `vainoplayer3`'s own real programme names, not synthetic
+  ones), both fixes made only after the first attempt was reported too
+  low-contrast to read on the physical panel.
+- **Album art's resize filter was a real, found bug, not a style
+  choice.** `image`'s `FilterType::Triangle` blends source pixels in
+  their stored gamma-encoded (sRGB) values rather than in linear light,
+  which systematically biases a large downscale brighter than correct —
+  reported as art looking "washed out, too white." Real production art
+  is confirmed plain JPEG (ruling out a PNG-alpha explanation), and this
+  UI's own flat-filled colors are never interpolated at all, so a
+  resize-blending bias was the one thing left that explained it
+  happening only on album art. Switched to `FilterType::Nearest`, which
+  picks one source pixel untouched per output pixel and so cannot be
+  biased by a blend that never happens — a real fix, not a full
+  correct-and-proper linear-light resize, but the right-sized one for a
+  100×100 thumbnail on a panel this coarse. A residual, panel-hardware
+  viewing-angle washout remains and is not a software defect.
+- **`/dev/fb0` and `/dev/input/event2` are not fixed paths anymore.**
+  Disabling `vc4-kms-v3d` for boot speed (`[REQ-HW-100]`'s audio-first
+  priority, next bullet) removed the hand-off that used to keep the
+  legacy firmware framebuffer (`BCM2708 FB`, 32bpp) from ever claiming a
+  device node at all — it now claims `fb0` first on boot, bumping the
+  real panel to `fb1`, and evdev's own enumeration order shifted the
+  touchscreen from `event2` to `event0` the same way. A fixed path had
+  already broken once from a config change this file had no part in;
+  `FbDisplay::find_panel_path`/`find_touch_path` now find both by their
+  real driver/device name (`fb_ili9486`, `ADS7846 Touchscreen`) instead,
+  surviving the next such shift rather than breaking on it again.
+- **Boot-to-audio time, halved.** Prompted directly: "is vainoplayer3's
+  boot sequence optimized to reach audio playout as soon as possible,"
+  answered honestly (no) and then fixed, in priority order the appliance
+  actually needs (audio, then touch display, then network; HDMI never).
+  Real measurement, not estimation: ~28.5s power-on-to-audio before,
+  ~12.4s after. Two independent fixes, not one:
+  - **OS boot**: `cloud-init` (its one-time job long done, still costing
+    5+ seconds every boot for nothing) and Bluetooth (unused on this
+    install) disabled; `vc4-kms-v3d` disabled (HDMI never used, and it
+    was actively probing for a display every boot regardless).
+    `fsck.repair=yes` was deliberately left alone — trading this
+    appliance's own power-interruption protection for boot speed is not
+    a trade worth making.
+  - **`vaino`'s own startup**: `Session::open()` was loading the Program
+    Director's full flavor index (578,523 rows) synchronously before
+    playback could resume, measured at ~13-15s, even though resuming an
+    already-known passage needs no selection at all. Moved onto the same
+    background-rebuild machinery `[SPEC-DIR-185]`'s persistence fix
+    already reuses for a live `/library/reload` — including its existing
+    SD-card-contention-aware queue-depth gate, not a new one invented for
+    this. Selection runs on the pre-existing frequency-only fallback
+    (the same one a library with no Director tables at all already used)
+    for the few seconds until the background build lands.
