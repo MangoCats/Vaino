@@ -1,8 +1,11 @@
 //! What it costs to rebuild the Program Director in place `[SPEC009]`.
 //!
-//! `Director::load` runs once inside `Session::open` and nothing reloads it, so
-//! imported music is browsable at once and unselectable until the player
-//! restarts `[IMPL-SUI-070]`. Rebuilding it live instead is attractive because
+//! `Director::load` is requested once by `Session::open` and built on its own
+//! thread rather than blocking startup on it -- a resumed passage needs no
+//! selection to start playing, and this tool's own numbers below are exactly
+//! why that block was worth removing. Imported music is browsable at once and
+//! unselectable until that first build lands, or the player restarts
+//! `[IMPL-SUI-070]`. Rebuilding it live instead is attractive because
 //! **the Director is off the audio path entirely** — it chooses what plays next
 //! and never touches decode, mix or output, so a rebuild cannot glitch a note.
 //!
