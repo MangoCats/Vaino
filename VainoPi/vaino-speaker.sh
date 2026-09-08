@@ -173,10 +173,30 @@ esac
 # the page timeout happens to be, and the number that must stay under the
 # timer's own period is seconds. Nothing here loops without a deadline --
 # a wedged keeper is the one thing this must never become.
+# **`[PI3-FOUND-140]` Never page a device the controller already has a link
+# to.** `Connected` on the D-Bus device goes true when a PROFILE connects, so
+# it reads false through the whole of A2DP negotiation -- and the first
+# version of this chase took that as "absent" and paged again every two
+# seconds. Every one of those collided with the negotiation already in
+# flight: `avdtp_connect_cb() ... Operation already in progress (114)`, eight
+# times in one boot, and A2DP that had previously completed at 75 s did not
+# finish until 88 s. The chase delayed the thing it existed to hurry.
+#
+# `hcitool con` is the honest question, because it asks the controller
+# whether a baseband link exists rather than asking BlueZ whether a profile
+# finished. A link present means a connection is up or coming up, and the
+# only useful thing to do is keep out of its way.
 started=$(date +%s)
 while :; do
-    bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
-    sleep 2
+    if hcitool con 2>/dev/null | grep -qi "$SPEAKER"; then
+        sleep 3
+    else
+        bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
+        # Long enough that two pages cannot overlap: a page that goes
+        # unanswered costs the controller its own timeout, and starting the
+        # next one on top of it is what produced the collisions above.
+        sleep 3
+    fi
     if bluetoothctl info "$SPEAKER" 2>/dev/null | grep -qi 'Connected: yes'; then
         # Connected. The stream does not dependably follow a change of default
         # sink [PI3-WHY-020], so the player is told explicitly -- and only

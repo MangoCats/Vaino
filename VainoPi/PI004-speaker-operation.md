@@ -457,3 +457,47 @@ asserts it every tick: checked before it is set, so a healthy appliance
 spends nothing, and loud when it actually repaired something. Verified by
 untrusting the speaker and watching the next tick restore `Trusted=true` to
 disk.
+
+**`[PI3-FOUND-140]` The chase collided with the connection it was hurrying.**
+`[PI3-AIM-060]`'s persistent chase was written against a speaker that does
+not answer at all, and it read "absent" from the D-Bus `Connected` property.
+That property goes true when a *profile* connects, so it reads false through
+the whole of A2DP negotiation — and the chase therefore paged again every
+two seconds while a negotiation was already in flight. Each page collided
+with it:
+
+```
+[50.6] avdtp_connect_cb() connect to ...: Operation already in progress (114)
+[52.7] [54.8] [56.9] [59.0] [59.0]  ... the same, six more times
+```
+
+Eight collisions in one boot, and A2DP that had completed at 75 s on the
+previous boot did not finish until 88 s. The measurable effect of making the
+keeper more determined was to make audio arrive thirteen seconds later.
+
+`hcitool con` is the honest question: it asks the controller whether a
+baseband link exists, rather than asking BlueZ whether a profile has
+finished. A link present means a connection is up or coming up, and the only
+useful thing to do is keep out of its way. The chase now skips paging
+entirely while a link exists, and waits 3 s rather than 2 s between pages so
+that two unanswered pages cannot overlap each other's timeouts.
+
+**`[PI3-FOUND-150]` The boot gate was serialising a wait the library load
+would have covered for free.** The player does not touch its output when it
+starts — it backs up listener state, then builds the library index, 8330
+passages off a 1.1 GB database on a Pi Zero 2W, about twenty seconds — and
+only then opens a device. Those twenty seconds are twenty seconds in which
+Bluetooth may finish settling at no cost, so a second spent waiting *before*
+starting the player is a second added to the total rather than hidden inside
+it. Measured on a power cycle: the gate waited its full 45 s, gave up, and
+only then let the twenty-second load begin. Ninety-five seconds to audio, of
+which about forty-five were spent deliberately doing nothing.
+
+The deadline is now 15 s. It still catches what it was written for — a warm
+restart, where the sink is already present and the answer is instant — and
+still gives the chosen speaker first refusal. A sink that turns up late is no
+longer the dead end it was when this gate was written: the path supervisor
+notices a dummy and reopens `[SPEC-APS-060]`, and `vaino-speaker` notices the
+routing disagreeing with the connected device `[PI3-AIM-050]`. Two mechanisms
+that did not exist then now cover the case this was holding the entire boot
+still to prevent.
