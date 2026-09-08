@@ -376,3 +376,46 @@ carrying audio — and the helper's reports now carry it, alongside a `reach`
 field separating "never answered, so held by another device or asleep" from
 "answered and refused". Both used to render as plain failure, which sent the
 listener to the wrong problem.
+
+**`[PI3-FOUND-120]` Every power-down on this appliance is a power cut, and
+one of them stopped the player from ever starting again.** Because the
+speaker supplies the Pi `[PI3-FOUND-090]`, switching the speaker off yanks
+the supply from a running system with open databases. There is no shutdown
+and no opportunity for one, so it is a supported event rather than misuse.
+
+What it leaves is a hot rollback journal beside the database — measured,
+`/var/vaino/listener.db-journal`, 8720 bytes. SQLite's contract is that the
+next connection rolls it back, but rolling back is a *write*, and Vaino
+attaches deliberately `mode=ro` so the player cannot corrupt the library
+`[IMPL-DBSPLIT-025]`. A read-only connection cannot perform the recovery it
+is required to perform. It therefore fails, permanently:
+
+```
+$ sqlite3 vaino.db "ATTACH 'file:/var/vaino/listener.db?mode=ro' AS lsn; ..."
+Error: stepping, attempt to write a readonly database (8)
+```
+
+`Restart=always` then turns that into a crash loop — observed at 23 restarts
+and still climbing, with no web interface, no audio, and nothing in the
+failure naming a journal file. Note the misdirection in the log: the fatal
+line reads `attach library /srv/library/library.db`, and `library.db` was
+provably fine the whole time; it was `listener.db` that could not be
+recovered. Chasing the name in the error message leads to the wrong file.
+
+Recovery took one read-write open, which is all SQLite needs to notice the
+journal and roll it back. `vaino-db-recover` now does exactly that for all
+three databases as the first `ExecStartPre`, so the appliance heals itself
+instead of needing someone with an ssh key. It costs 30 ms and prints
+nothing when there is nothing to recover. `PRAGMA user_version` rather than
+`integrity_check`: the rollback happens on first read by a read-write
+connection, so the cheapest read suffices, and a real check of a 1.1 GB
+library on a Pi Zero 2W would add minutes to every boot to answer a question
+nobody asked.
+
+> **Verified 2026-09-08** on the real failure, not a simulation: the hot
+> journal was present, the read-only attach failed with the error above, a
+> single read-write open removed the journal, and the same attach then
+> returned its row count. The player started, resumed, and reached the
+> speaker. Attempts to manufacture a synthetic hot journal afterwards were
+> abandoned — SQLite optimises the no-op transaction away — which is worth
+> knowing before anyone tries to write a regression test for this.
