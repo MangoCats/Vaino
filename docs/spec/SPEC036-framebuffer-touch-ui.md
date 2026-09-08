@@ -90,22 +90,96 @@ bandwidth reality.
 
 ---
 
-## 3. Display: fbtft framebuffer, RGB565, real device path TBD
+## 3. Display: fbtft framebuffer, RGB565 — now confirmed against real hardware
 
-**`[SPEC-FBUI-025]` Renders to whichever `/dev/fbN` the eventual overlay
-exposes** — almost certainly `/dev/fb1` (the SPI panel, alongside `fb0`'s
-HDMI), but this is **not yet confirmed**: as of this writing the hardware
-identity itself is only partially verified (SPI is disabled on
-`vainoplayer3` today; `piscreen`/`piscreen2r`/`fbtft` are the real
-candidate overlays present on this image, `waveshare35a` — named in an
-earlier, unverified identification — does not exist on it at all, checked
-directly). This design assumes the standard fbtft contract (a linear
-RGB565 framebuffer, `mmap`-able, no compositor in front of it) because
-that is what every overlay in the candidate list provides, but the exact
-device node, byte order, and whether the `drm` variant (`piscreen`'s own
-`drm` param, a different, KMS-based path) ends up preferable are open
-until the hardware bring-up from the parent conversation actually
-completes.
+**`[SPEC-FBUI-025]` Confirmed 2026-09-07, against `vainoplayer3` itself,
+not assumed.** `dtoverlay=piscreen2r,rotate=90,speed=32000000,fps=20` in
+`config.txt`, reboot, then read directly from the device rather than
+trusted from documentation:
+
+```
+$ cat /sys/class/graphics/fb0/name
+fb_ili9486
+[   12.312] graphics fb0: fb_ili9486 frame buffer, 480x320, 300 KiB video
+            memory, 32 KiB buffer memory, fps=20, spi0.0 at 32 MHz
+```
+
+**`/dev/fb0`, not `/dev/fb1`** — this design's own earlier guess was
+wrong in the specific but right in the shape: there is no HDMI output
+active on this headless build, so the SPI panel became the *first*
+framebuffer rather than a second one alongside it. 480×320 landscape,
+300 KiB = 480×320×2 bytes — confirms RGB565 (16-bit) exactly as assumed.
+`piscreen2r` was the right overlay on the first try; the original
+hardware identification (ILI9486 controller, XPT2046/ADS7846-protocol
+touch) is now fully validated, not just plausible.
+
+Touch is equally confirmed:
+
+```
+$ cat /proc/bus/input/devices
+N: Name="ADS7846 Touchscreen"
+H: Handlers=mouse0 event2
+```
+
+A real IRQ-driven evdev device at `/dev/input/event2`, exactly the
+contract `[SPEC-FBUI-045]` assumed. One harmless, well-known fbtft quirk
+seen in `dmesg` (`start_line=319 is larger than end_line=0 ... will do
+full display update`) — cosmetic, not a defect in this configuration, and
+confirmed pre-existing rather than caused by any later phase: `dmesg -T`
+timestamps put it at 19:38-19:40 on this boot, over an hour before album
+art (§8 phase 7) was ever deployed. Only 7 total log lines exist despite
+far more redraws than that having happened since boot, so the kernel is
+clearly rate-limiting the *message*, not the underlying fallback -- it
+likely fires on every `render()` call, given `render()` already rewrites
+virtually the whole panel every time (§8 phase 7's own measurement). Its
+visible symptom (observed 2026-09-07, once album art existed to make it
+obvious): a brief whole-screen white cast on a large content change like
+a track skip, resolving to the correct frame immediately after. Not
+noticed on smaller changes (a position-bar tick) because old and new
+frames look nearly identical against each other, not because the
+underlying driver fallback fires less often for them. A kernel-driver-
+level cosmetic artifact, not something fixable from this binary's own
+code; `piscreen2r`'s untried `drm`/KMS alternative (next paragraph) is
+the only real candidate for eliminating it, and has not been pursued.
+
+This resolves §7's largest named risk. `piscreen2r`'s own KMS/`drm`-mode
+alternative remains untried (FBTFT already works, no forcing reason to);
+byte-order is now confirmed too, by §8 phase 2's pixel-readback test, but
+*perceived* correctness on the physical panel — orientation, color, real
+refresh behavior — still wants an actual look, not just measured bytes,
+**since confirmed directly**: real green text on a black background, seen
+on the physical unit.
+
+**`[SPEC-FBUI-027]` The kernel's own framebuffer console shares this
+device, and must be tamed rather than removed.** Found the hard way, not
+designed for up front: `/dev/fb0` is also Linux's text console (`fbcon`),
+because `cmdline.txt` binds `console=tty1` to it. Removing that binding
+looked like the obvious fix for a login-prompt cursor stomping on
+`fbui`'s output — instead it hung `vainoplayer3` at boot, reproducibly,
+three times in a row, with no filesystem corruption on either the ext4
+`SYSTEM` partition (`e2fsck`-clean) or the f2fs `STATE` partition (full
+read-only check passed, checkpoint recorded a proper `unmount`) to explain
+it — something in this image's boot sequence depends on a VT console
+existing at all, even an unused one. `console=tty1` stays. The two actual
+symptoms it caused are instead solved without touching boot config:
+
+- The login prompt itself: `getty@tty1.service` disabled (`systemctl
+  disable --now`) — confirmed durable by finding no unit symlink at all
+  under `/etc/systemd/system` after a reboot, not just believing the
+  command's own output.
+- `fbcon`'s VT cursor, which keeps blinking even with no getty attached
+  (a property of the console layer itself, not of whatever reads from
+  it): turned off live with `TERM=linux setterm -cursor off > /dev/tty1`,
+  made durable via `fbui.service`'s own `ExecStartPre` (a `+`-prefixed
+  line, since `/dev/tty1` isn't writable by the `pi` user the rest of the
+  unit runs as) — tying the fix to the unit that actually owns the
+  display, rather than a separate boot-order-dependent script.
+
+One narrow, cosmetic residual: for the few seconds between `fbcon`
+claiming the console during boot and `fbui`'s own first paint, boot text
+can in principle still flash on screen once. Self-heals immediately
+(`fbui` unconditionally repaints the whole panel on start) and has not
+needed chasing further.
 
 **`[SPEC-FBUI-030]` Drawing: `embedded-graphics`, not a from-scratch
 rasterizer.** A mature, widely-used Rust crate for exactly this class of
@@ -201,13 +275,10 @@ actual bring-up signal. Runs as the same `pi` user `vaino` does (needs
 Asked of this design itself, the same discipline `[IMPL002]`'s own review
 passes used, before treating this as ready to build:
 
-- **The hardware identity itself is still open**, named honestly rather
-  than assumed resolved: SPI is disabled on `vainoplayer3` as of this
-  writing, no overlay has been tried yet, and this whole design's
-  framebuffer/evdev assumptions rest on `piscreen`/`piscreen2r`/`fbtft`
-  actually working the way their documentation says for *this specific
-  clone board*. `[SPEC-FBUI-025]` already says so; repeated here because
-  it is the single largest risk to every other claim in this document.
+- ~~**The hardware identity itself is still open**~~ **Resolved
+  2026-09-07, per `[SPEC-FBUI-025]`** — was the single largest risk in
+  this document when this review was written; struck through rather than
+  deleted so this section's own history stays legible.
 - **Non-ASCII text is a real gap, not a hypothetical one.** This library
   has real, non-ASCII artist/title names (checked against this project's
   own data, not assumed) — `embedded-graphics`'s bundled fonts are small
@@ -230,11 +301,10 @@ passes used, before treating this as ready to build:
   work, appropriately deferred until `[SPEC-FBUI-025]`'s hardware
   questions are answered (a hit-test grid designed against the wrong
   orientation or the wrong overlay's rotation convention is wasted work).
-- **What happens before calibration has ever run** — first boot, no
-  calibration file present. `[SPEC-FBUI-050]`'s routine needs to be the
-  thing that runs automatically in that case, not a separate manual step
-  someone has to remember, or the appliance's first real boot shows a
-  screen that cannot be usefully touched.
+- ~~**What happens before calibration has ever run**~~ **Resolved
+  2026-09-07** — `fbui` checks for `[SPEC-FBUI-055]`'s file at startup and
+  runs `[SPEC-FBUI-050]`'s routine automatically when it's missing; no
+  separate manual step exists to forget.
 
 None of these are reasons not to build this — they are exactly the kind
 of gap this review step exists to find before code makes them expensive to
@@ -244,31 +314,129 @@ fix. Folded into §8's phasing below rather than left as loose ends.
 
 ## 8. Implementation plan, phased against the open items above
 
-1. **Hardware bring-up first, independent of any of this code** — enable
-   SPI, try `piscreen2r` (closest name-match to a resistive-touch board),
-   confirm a `/dev/fbN` appears and a touch `/dev/input/eventN` produces
-   real events on contact. Nothing below can be usefully built, let alone
-   tested, before this resolves `[SPEC-FBUI-025]`'s open question for
-   real.
-2. **A minimal `DrawTarget` + connection test**: open `/ws`, deserialize
-   one real `Snapshot`, draw title/artist as plain text in the LCD-green
-   palette, prove the pixel format and orientation assumptions against
-   actual hardware before building anything else on top of them.
-3. **Calibration routine**, run automatically when no calibration file
-   exists — resolves §7's "first boot" gap by construction rather than by
-   remembering a manual step.
-4. **Transport UI**: play/pause/skip/volume/seek, hit-tested against
-   concrete regions decided once §8.1's real orientation is known, wired
-   to the existing `/command`/`/volume`/`/seek` routes.
-5. **Reconnection handling**: an explicit "disconnected" render state,
-   tested by actually killing and restarting `vaino` mid-session and
-   confirming the display says so rather than freezing on stale data.
-6. **Non-ASCII font decision**, resolved with real library data (titles
-   this project's own catalog actually has) rather than a synthetic test
-   string.
-7. **Album art**, only after 1–6 are proven — measured against real SPI
-   hardware (how long one full bitmap blit actually takes) before deciding
-   whether it belongs in this UI at all.
+1. ~~Hardware bring-up~~ **Done, 2026-09-07** — `/dev/fb0` (`fb_ili9486`,
+   480×320, RGB565) and `/dev/input/event2` (`ADS7846 Touchscreen`) both
+   confirmed against real hardware, per `[SPEC-FBUI-025]`.
+2. ~~A minimal `DrawTarget` + connection test~~ **Done, 2026-09-07** —
+   `player/src/bin/fbui.rs` (feature-gated `fbui`, `bose`/`vainopi` builds
+   never compile it), a `ClientSnapshot` naming only the fields this phase
+   draws rather than making the real `Snapshot` `Deserialize` too
+   (`[SPEC-FBUI-015]`'s "zero server-side changes" held in practice, not
+   just on paper). Deployed and run as a real systemd service on
+   `vainoplayer3` (`After=vaino.service`), stable, not crash-looping.
+   Verified past "it didn't crash" — read `/dev/fb0` back after a render
+   and counted actual pixel bytes: 496 pixels matching `LCD_GREEN`'s exact
+   RGB565 encoding (real text was drawn, not garbage) against ~153,040
+   matching `LCD_BG`'s (the whole-screen fill), out of 153,600 total. The
+   `embedded-graphics` → RGB565 → byte-order → real-framebuffer pipeline
+   works end to end. **Confirmed by looking at the physical screen**, not
+   just by byte-level readback: real green text on black, as designed.
+   Getting there also surfaced and resolved `[SPEC-FBUI-027]` (the console
+   shares this device) — a real boot-hang risk found and fixed along the
+   way, not merely a cosmetic finish.
+3. ~~Calibration routine~~ **Done, 2026-09-07** — the standard 3-point
+   affine solve (`[SPEC-FBUI-050]`, Vidales' algorithm, the same one
+   tslib/X11 evtouch use), raw evdev hand-parsed rather than a new crate
+   (`[SPEC-FBUI-045]`). The math is unit-tested against a synthetic
+   rotated/scaled transform (recovers a held-out 4th point exactly, the
+   check the calibration literature itself recommends) independent of any
+   hardware, then run for real: three genuine touches on `vainoplayer3`
+   produced distinct, internally-consistent raw readings (raw_x fell as
+   screen_x rose, raw_y rose sharply with screen_y — the axis remix
+   `rotate=90` predicts) and a saved `/var/vaino/touch-calibration.toml`
+   with finite, sane coefficients. Confirmed re-triggerable (`fbui
+   --calibrate`) and confirmed idempotent the other way too — a plain
+   restart finds the file and logs `using existing calibration` rather
+   than re-prompting.
+4. ~~Transport UI~~ **Done, 2026-09-07, mostly confirmed** — four
+   buttons (`VOL-`, play/pause, skip, `VOL+`) plus a tap-to-seek position
+   bar, hit-tested against concrete pixel regions now that §8.1's
+   orientation is known. Wired to the exact three real command names
+   `control.rs` serves — checked against the handler itself rather than
+   assumed: `play`, `pause`, `skip` (there is deliberately no `prev` or
+   `stop`, `[REQ-AUD-142]`) — plus `/volume/:db` (±3dB per tap, computed
+   from the last known `volume_db`) and `/seek/:ms`. Posted over a
+   hand-rolled HTTP/1.1 request on a raw `TcpStream` rather than a new
+   client crate, since `reqwest` is explicitly appliance-excluded
+   (`Cargo.toml`'s own `sampo-support` reasoning) and `hyper`'s client
+   builder would be more code than three fire-and-forget local requests
+   need. Touch runs on its own OS thread, joined with the websocket
+   stream via `tokio::select!` — physically confirmed working: skip,
+   volume, and play/pause all produced their real effect when tapped on
+   `vainoplayer3`. **Seek is not yet confirmed** — this library is 31
+   radio passages, all `duration_ms == 0`, and the code correctly declines
+   to send a seek for those (`if duration_ms > 0`), so a tap there is
+   correctly inert but untested against real seekable content. Left open
+   rather than claimed.
+5. ~~Reconnection handling~~ **Done, 2026-09-07** — `render_disconnected`
+   replaces `render`'s old "connect before first try" placeholder (which
+   only covered the first-ever connection, not a later drop) and now fires
+   on every disconnect, with `last` reset to `None` alongside it. That
+   reset is the actual fix, not the message alone: without it, a `vaino`
+   restart that happened to come back with an identical snapshot would
+   fail `[SPEC-FBUI-020]`'s diff check and leave the disconnected screen
+   up forever despite real data flowing again. Tested exactly as planned
+   — `systemctl restart vaino.service` mid-session on `vainoplayer3` — and
+   confirmed by framebuffer readback, not just log lines: the green-pixel
+   count dropped from 7,186 (full transport UI) to 508 (the two-line
+   disconnected message, no buttons) within one push interval of the
+   restart, then returned to 7,287 within `fbui`'s own 3-second retry once
+   `vaino` was back.
+6. ~~Non-ASCII font decision~~ **Done, 2026-09-07** — resolved with real
+   library data, not a synthetic test string: queried a production
+   `vaino.db` for actual non-ASCII artist/title text and found accented
+   Latin (`Björk`, `Mötley Crüe`, `Fernando Mendonça`) far outnumbered by
+   curly quotes/apostrophes and Unicode dashes (`Guns N'Roses`, `The
+   Go‐Go's`) — checked, not assumed. `u8g2_font_9x15_t_symbols`
+   (`[SPEC-FBUI-030]`, revised) covers the first group directly, confirmed
+   by actually calling `render()` against it rather than trusting the
+   font's name; `normalize_for_display` maps the second, measured group to
+   plain ASCII. Both paths pinned down as a permanent regression test
+   (`tests::font_coverage_matches_real_library_data`) and confirmed live:
+   a real production title/artist pair temporarily substituted into
+   `vainoplayer3`'s currently-playing passage, rendered with no errors in
+   `fbui`'s log, and visually confirmed legible on the physical screen —
+   not just proven not to crash.
+7. ~~Album art~~ **Done, 2026-09-07.** The measurement came first: a raw
+   write of a full 307,200-byte frame into `/dev/fb0`'s mmap takes ~0.09ms
+   (negligible), `render()`'s own CPU-side cost stayed under 20ms across
+   every real redraw during normal playback, and the SPI transfer itself
+   is governed by `piscreen2r`'s already-configured `fps=20` (~50ms/frame)
+   independent of this binary — since `render()` already touches virtually
+   every pixel on every call, a thumbnail adds a small bounded cost to an
+   already-paid full-panel redraw, not a new expensive operation. Built on
+   that basis: `image` (default features off, `jpeg`+`png` only — real
+   production art is never anything else, per `media_type_for` in
+   `tags.rs`) decodes whatever `GET /art/:passage_id` returns, resized
+   once per passage change to a fixed 100x100 buffer (doubled from an
+   initial 50x50 after seeing it on the physical screen), blitted via
+   `FbDisplay::put_pixel` directly. `passage_id` added to `ClientSnapshot`
+   for exactly the purpose the real `Snapshot` already documents it for.
+   Fetching uses a second hand-rolled client, `http_get` (a
+   `Connection: close` GET, read to EOF — simpler than parsing
+   `Content-Length` for a loopback request to a server this project
+   controls), keyed and cached per `passage_id` so a passage confirmed to
+   have no art (most of this all-radio sample library) is not re-requested
+   on every push. Confirmed against real hardware, not just compiled: a
+   real 29KB JPEG fetched, decoded, and resized in 32.6ms on
+   `vainoplayer3`; 1,373 distinct colors read back from the 100x100 art
+   region (real photo content, not a solid fill); and confirmed visually
+   on the physical screen twice, once at each size.
+   One real, pre-existing cosmetic artifact this made newly *visible*
+   without being its cause, run down before deciding not to pursue it
+   further: `dmesg -T` shows the well-known
+   `fbtft`/`fb_ili9486` `start_line=319 is larger than end_line=0` full-
+   display-update fallback (`[SPEC-FBUI-025]`'s own §3 already named it
+   "cosmetic") firing at 19:38-19:40 on this boot -- over an hour before
+   album art was ever deployed, so it predates and is not caused by this
+   phase. It likely fires on every `render()` call (only 7 log lines exist
+   total despite far more redraws than that, so the kernel is rate-
+   limiting the *message*, not the fallback), but only became visible to
+   the eye -- a brief whole-screen white cast on a large content change
+   like a skip, resolving immediately after -- once album art gave a track
+   change a large, high-contrast frame to visibly differ from. Not pursued
+   further per explicit instruction; `piscreen2r`'s untried `drm`/KMS mode
+   remains the one real candidate for eliminating it, should it matter later.
 
-Not started. This document is the plan; `[SPEC-FBUI-025]`'s hardware
-question is the one thing every step after it actually depends on.
+Phases 1–7 done and verified against real hardware, per each entry above.
+This document's own implementation plan is complete.

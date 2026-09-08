@@ -251,15 +251,31 @@ impl Session {
         if let Some(s) = &store {
             s.sync_utc_offset();
         }
-        // Selection degrades rather than fails: a library without the Program
-        // Director's tables still plays, just uniformly at random.
-        let director = match lib.director() {
-            Ok(d) => Some(d),
-            Err(e) => {
-                eprintln!("program director unavailable ({e}); selecting at random");
-                None
-            }
-        };
+        // The Director is not built here, synchronously -- loading its
+        // flavor index over 8,330 radio passages measures ~10s on this
+        // appliance `[IMPL-SUI-075]`'s own recorded figure, and a resumed
+        // passage is already known: it needs no selection at all to start
+        // playing. `reload_requested` below asks for the *same* background
+        // build `tend_rebuild` already runs for a live `/library/reload`,
+        // through the *same* queue-depth gate `[IMPL-SUI-075]` already
+        // reasons about for exactly this SD-card-contention concern --
+        // cold start has no queued audio yet either, so it is the right
+        // gate to reuse, not a new one to invent. Selection runs on
+        // frequency alone (no character shaping) until it adopts, which is
+        // the existing no-Director fallback arriving slightly later rather
+        // than a new code path.
+        let controls = SharedControls::default();
+        if let Ok(mut c) = controls.lock() {
+            c.reload_requested = true;
+            // Restored here, not left to default to `None` (time of day):
+            // an appliance with no realtime clock and no at-home relevance
+            // to a truck's driving hours must never fall back to schedule-
+            // based selection, only ever to whatever was chosen last
+            // `[SPEC-DIR-185]`. `active()`'s own stale-id fallback already
+            // handles a program that no longer exists, so this is safe to
+            // set blind, before the Director that would validate it exists.
+            c.manual_program = store.as_ref().and_then(|s| s.load_manual_program());
+        }
         Ok(Self {
             lib,
             store,
@@ -267,11 +283,11 @@ impl Session {
             resume_id,
             resume_playing,
             depth,
-            director,
+            director: None,
             rng: Rng::from_clock(),
             decisions: PlayerStore::open_split(db, library).ok(),
             explanations: Explanations::default(),
-            controls: SharedControls::default(),
+            controls,
             notes: HashMap::new(),
             db: db.to_path_buf(),
             library: library.to_path_buf(),
