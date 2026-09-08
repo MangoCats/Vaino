@@ -80,11 +80,19 @@
 //! (`differs_ignoring_position`); every other change still redraws at
 //! once.
 //!
+//! Now Playing's palette was then re-themed to match MuLibPlay's own web
+//! skin (`web/skins/mulibplay/skin.css`'s real, measured colors -- black
+//! ground, `#ccc` text, filled `#2010a0` buttons, `#d0a000` gold for
+//! whatever is active, `#7ab7ff` progress fill) rather than WinAmp green,
+//! at the same resolution-driven simplification that skin's own outlined
+//! variants get: filled and rounded, no thin outline strokes, which do not
+//! read clearly at 480x320. Settings keeps the original WinAmp palette.
+//!
 //!     fbui [--calibrate] [ws://host:port/ws]   (default: ws://127.0.0.1:5720/ws)
 
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{Circle, CornerRadii, Line, PrimitiveStyle, Rectangle, RoundedRectangle};
 use framebuffer::Framebuffer;
 use futures_util::StreamExt;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
@@ -234,9 +242,41 @@ impl DrawTarget for FbDisplay {
 
 /// The WinAmp-derived palette `[SPEC-FBUI-035]` -- same values as
 /// `web/skins/winamp/skin.css`'s `--lcd-bg`/`--lcd`, so the two UIs read as
-/// the same player rather than coincidentally similar ones.
+/// the same player rather than coincidentally similar ones. Still used for
+/// Settings, the gear icon's own outline on both pages, calibration, and
+/// the disconnected screen -- only Now Playing's own content re-themes.
 const LCD_BG: Rgb565 = Rgb565::new(1, 3, 1); // ~#0b0f0b at 5/6/5 bit depth
 const LCD_GREEN: Rgb565 = Rgb565::new(4, 59, 4); // ~#22dd22
+
+/// MuLibPlay's own palette, the same real, measured values
+/// `web/skins/mulibplay/skin.css`'s own doc comment states for itself:
+/// "black ground, #ccc text, big rounded #2010a0 buttons with a #d0a000
+/// gold for whatever is currently on." Filled and rounded rather than
+/// outlined -- the same simplification any low-resolution rendering of
+/// that skin needs, since a thin outline stroke does not read clearly at
+/// 480x320.
+const MULIB_BG: Rgb565 = Rgb565::new(0, 0, 0); // #000000, "black ground"
+const MULIB_TEXT: Rgb565 = Rgb565::new(25, 52, 25); // #cccccc
+const MULIB_DIM: Rgb565 = Rgb565::new(17, 34, 17); // #888888, secondary text
+/// Darker than `#2010a0`'s own literal value -- the real web skin has that
+/// color next to `#ccc` text on a browser's own accurate display; this
+/// panel's real, measured contrast between the two was reported too low
+/// to read comfortably, so the button is darkened rather than the text
+/// lightened (keeping `MULIB_TEXT` shared and correct for title/artist
+/// against pure black elsewhere on the same page).
+const MULIB_BUTTON: Rgb565 = Rgb565::new(1, 1, 9); // darker than #2010a0
+const MULIB_GOLD: Rgb565 = Rgb565::new(25, 40, 0); // #d0a000, "whatever is currently on"
+const MULIB_GOLD_TEXT: Rgb565 = Rgb565::new(2, 4, 2); // #111111, .buttonOn's own text color
+/// Darker than `#333333`'s own literal value, for the same reported-low-
+/// contrast reason as `MULIB_BUTTON` -- against `MULIB_FILL`, "which part
+/// of the bar has played" needs to be legible on this specific panel, not
+/// just correct against a desktop reference.
+const MULIB_TRACK: Rgb565 = Rgb565::new(2, 4, 2); // darker than #333333
+const MULIB_FILL: Rgb565 = Rgb565::new(15, 45, 31); // #7ab7ff
+/// `.button`'s own 20px on desktop-sized buttons; scaled down for this
+/// panel's much smaller ones, kept generous enough to still read as "big
+/// rounded" rather than barely-softened corners.
+const MULIB_RADIUS: u32 = 14;
 
 /// `[SPEC-FBUI-030]`, revised for Phase 6: `embedded-graphics`'s own
 /// bundled fonts are ASCII-only, which real library data (not a synthetic
@@ -246,6 +286,17 @@ const LCD_GREEN: Rgb565 = Rgb565::new(4, 59, 4); // ~#22dd22
 /// rendering, not by trusting the font's name
 /// (`tests::font_coverage_matches_real_library_data`).
 const TEXT_FONT: FontRenderer = FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_9x15_t_symbols>();
+
+/// Bold, for button labels specifically -- reported low body/text contrast
+/// on the MuLibPlay-themed buttons is helped by weight as well as by
+/// `MULIB_BUTTON`'s own darkening. ASCII-only (`_tr`, not `_t_symbols`):
+/// no bold+full-coverage variant of this font exists, but every button
+/// label this file ever draws is either this project's own fixed English
+/// text (PLAY, SKIP, VOL -, ...) or a real production programme name
+/// (`Cool`, `Fun`, `Mellow`, `Soft`, `Prog`, `Light`, `Loud`, `Groove` --
+/// checked against `vainoplayer3`'s own deployed database, not assumed),
+/// all plain ASCII.
+const BUTTON_FONT: FontRenderer = FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_9x15B_tr>();
 
 /// Maps the specific, measured set of punctuation this library's titles
 /// use that `TEXT_FONT` does not carry a glyph for -- curly quotes and
@@ -287,13 +338,26 @@ fn truncate_display(s: &str, max_chars: usize) -> String {
 /// reaches here, so surfacing it loudly if it somehow doesn't is more
 /// useful than a silent `.unwrap_or(())`.
 fn draw_text(display: &mut FbDisplay, text: &str, x: i32, y: i32) {
-    if let Err(e) = TEXT_FONT.render(text, Point::new(x, y), VerticalPosition::Baseline, FontColor::Transparent(LCD_GREEN), display) {
+    draw_text_color(display, text, x, y, LCD_GREEN);
+}
+
+/// As `draw_text`, in a caller-chosen color -- Now Playing's MuLibPlay
+/// theme and Settings/calibration's WinAmp green share this one renderer,
+/// not two near-identical copies of it.
+fn draw_text_color(display: &mut FbDisplay, text: &str, x: i32, y: i32, color: Rgb565) {
+    if let Err(e) = TEXT_FONT.render(text, Point::new(x, y), VerticalPosition::Baseline, FontColor::Transparent(color), display) {
         eprintln!("fbui: could not render {text:?}: {e:?}");
     }
 }
 
 fn draw_text_centered(display: &mut FbDisplay, text: &str, center: Point, color: Rgb565) {
-    if let Err(e) = TEXT_FONT.render_aligned(
+    draw_text_centered_font(display, &TEXT_FONT, text, center, color);
+}
+
+/// As `draw_text_centered`, in a caller-chosen font -- `draw_button_mulib`
+/// uses this with `BUTTON_FONT` instead of `TEXT_FONT`.
+fn draw_text_centered_font(display: &mut FbDisplay, font: &FontRenderer, text: &str, center: Point, color: Rgb565) {
+    if let Err(e) = font.render_aligned(
         text,
         center,
         VerticalPosition::Center,
@@ -329,12 +393,16 @@ const GEAR_CY: i32 = 22;
 const GEAR_HIT_X0: i32 = 420;
 const GEAR_HIT_Y1: i32 = 44;
 
-fn draw_gear(display: &mut FbDisplay) -> Result<(), std::convert::Infallible> {
+/// `backdrop` matches whichever page is currently drawn (`MULIB_BG` on Now
+/// Playing, `LCD_BG` on Settings) -- the gear's own outline stays WinAmp
+/// green on both, a fixed piece of chrome rather than page content, but
+/// its backdrop patch would otherwise stand out as a mismatched square.
+fn draw_gear(display: &mut FbDisplay, backdrop: Rgb565) -> Result<(), std::convert::Infallible> {
     // A solid backdrop first: this corner is drawn last so it always wins
     // regardless of how long the title text underneath it runs, rather
     // than hoping no title is ever wide enough to reach the corner.
     Rectangle::new(Point::new(GEAR_HIT_X0, 0), Size::new(60, GEAR_HIT_Y1 as u32))
-        .into_styled(PrimitiveStyle::with_fill(LCD_BG))
+        .into_styled(PrimitiveStyle::with_fill(backdrop))
         .draw(display)?;
     let (r_in, r_out) = (9i32, 16i32);
     Circle::with_center(Point::new(GEAR_CX, GEAR_CY), (r_in * 2) as u32)
@@ -392,7 +460,9 @@ const PROGRAM_SLOTS: [(i32, i32, i32, i32); 8] = [
     (GRID_XS[4].0, GRID_XS[4].1, ROW2_Y0, ROW2_Y1),
 ];
 
-fn draw_button(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
+/// WinAmp-styled: an outline, sharp corners, green -- used by Settings,
+/// unaffected by Now Playing's MuLibPlay re-theme.
+fn draw_button_winamp(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
     if highlighted {
         // Inverted: a filled background is unmistakable at a glance, which
         // matters more here than anywhere else in this UI -- "which
@@ -408,6 +478,22 @@ fn draw_button(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32, labe
             .draw(display)?;
         draw_text_centered(display, label, Point::new((x0 + x1) / 2, (y0 + y1) / 2), LCD_GREEN);
     }
+    Ok(())
+}
+
+/// MuLibPlay-styled: filled, big rounded corners, no outline stroke -- a
+/// thin outline does not read clearly at this panel's resolution, the same
+/// simplification a low-resolution rendering of that skin needs regardless
+/// of this project's own reasons for it. `#2010a0` indigo normally,
+/// `#d0a000` gold (with `#111` text, matching `.buttonOn` exactly) for
+/// whichever programme is currently active `[SPEC-DIR-140]`.
+fn draw_button_mulib(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
+    let (fill, text) = if highlighted { (MULIB_GOLD, MULIB_GOLD_TEXT) } else { (MULIB_BUTTON, MULIB_TEXT) };
+    let rect = Rectangle::new(Point::new(x0, y0), Size::new((x1 - x0) as u32, (y1 - y0) as u32));
+    RoundedRectangle::new(rect, CornerRadii::new(Size::new(MULIB_RADIUS, MULIB_RADIUS)))
+        .into_styled(PrimitiveStyle::with_fill(fill))
+        .draw(display)?;
+    draw_text_centered_font(display, &BUTTON_FONT, label, Point::new((x0 + x1) / 2, (y0 + y1) / 2), text);
     Ok(())
 }
 
@@ -430,33 +516,35 @@ fn draw_art(display: &mut FbDisplay, pixels: &[Rgb565]) {
 fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Option<&[Rgb565]>) -> Result<(), std::convert::Infallible> {
     let w = display.width as i32;
     Rectangle::new(Point::zero(), Size::new(display.width, display.height))
-        .into_styled(PrimitiveStyle::with_fill(LCD_BG))
+        .into_styled(PrimitiveStyle::with_fill(MULIB_BG))
         .draw(display)?;
 
     let title = snap.title.as_deref().map(normalize_for_display);
     let artist = snap.artist.as_deref().map(normalize_for_display);
-    draw_text(display, title.as_deref().unwrap_or("(nothing playing)"), TEXT_X, TITLE_Y);
-    draw_text(display, artist.as_deref().unwrap_or(""), TEXT_X, ARTIST_Y);
+    draw_text_color(display, title.as_deref().unwrap_or("(nothing playing)"), TEXT_X, TITLE_Y, MULIB_TEXT);
+    // Artist dimmed, matching the web skin's own `.nowplaying i { color: #888 }`.
+    draw_text_color(display, artist.as_deref().unwrap_or(""), TEXT_X, ARTIST_Y, MULIB_DIM);
     if let Some(pixels) = art {
         draw_art(display, pixels);
     }
 
     let (bar_x0, bar_x1) = (8, w - 8);
-    Rectangle::new(
-        Point::new(bar_x0, SEEKBAR_Y0),
-        Size::new((bar_x1 - bar_x0) as u32, (SEEKBAR_Y1 - SEEKBAR_Y0) as u32),
+    let bar_radius = ((SEEKBAR_Y1 - SEEKBAR_Y0) / 2) as u32;
+    RoundedRectangle::new(
+        Rectangle::new(Point::new(bar_x0, SEEKBAR_Y0), Size::new((bar_x1 - bar_x0) as u32, (SEEKBAR_Y1 - SEEKBAR_Y0) as u32)),
+        CornerRadii::new(Size::new(bar_radius, bar_radius)),
     )
-    .into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 1))
+    .into_styled(PrimitiveStyle::with_fill(MULIB_TRACK))
     .draw(display)?;
     if snap.duration_ms > 0 {
         let frac = (snap.position_ms as f64 / snap.duration_ms as f64).clamp(0.0, 1.0);
-        let fill_w = (((bar_x1 - bar_x0 - 2) as f64) * frac).round() as u32;
+        let fill_w = (((bar_x1 - bar_x0) as f64) * frac).round() as u32;
         if fill_w > 0 {
-            Rectangle::new(
-                Point::new(bar_x0 + 1, SEEKBAR_Y0 + 1),
-                Size::new(fill_w, (SEEKBAR_Y1 - SEEKBAR_Y0 - 2) as u32),
+            RoundedRectangle::new(
+                Rectangle::new(Point::new(bar_x0, SEEKBAR_Y0), Size::new(fill_w, (SEEKBAR_Y1 - SEEKBAR_Y0) as u32)),
+                CornerRadii::new(Size::new(bar_radius, bar_radius)),
             )
-            .into_styled(PrimitiveStyle::with_fill(LCD_GREEN))
+            .into_styled(PrimitiveStyle::with_fill(MULIB_FILL))
             .draw(display)?;
         }
     }
@@ -467,20 +555,20 @@ fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Optio
         fmt_time(snap.position_ms),
         fmt_time(snap.duration_ms),
     );
-    draw_text(display, &pos, 8, POS_TEXT_Y);
+    draw_text_color(display, &pos, 8, POS_TEXT_Y, MULIB_TEXT);
 
-    draw_button(display, GRID_XS[0].0, GRID_XS[0].1, ROW1_Y0, ROW1_Y1, if snap.playing { "PAUSE" } else { "PLAY" }, false)?;
-    draw_button(display, GRID_XS[1].0, GRID_XS[1].1, ROW1_Y0, ROW1_Y1, "SKIP", false)?;
+    draw_button_mulib(display, GRID_XS[0].0, GRID_XS[0].1, ROW1_Y0, ROW1_Y1, if snap.playing { "PAUSE" } else { "PLAY" }, false)?;
+    draw_button_mulib(display, GRID_XS[1].0, GRID_XS[1].1, ROW1_Y0, ROW1_Y1, "SKIP", false)?;
     for (i, &(x0, x1, y0, y1)) in PROGRAM_SLOTS.iter().enumerate() {
         let label = snap.programs.get(i).map(|p| truncate_display(&normalize_for_display(&p.name), 8));
         let active = snap
             .programs
             .get(i)
             .is_some_and(|p| snap.program.as_deref() == Some(p.name.as_str()));
-        draw_button(display, x0, x1, y0, y1, label.as_deref().unwrap_or(""), active)?;
+        draw_button_mulib(display, x0, x1, y0, y1, label.as_deref().unwrap_or(""), active)?;
     }
 
-    draw_gear(display)?;
+    draw_gear(display, MULIB_BG)?;
     Ok(())
 }
 
@@ -521,8 +609,8 @@ fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(),
 
     draw_text(display, "SETTINGS", 8, 20);
 
-    draw_button(display, VOL_DOWN_X.0, VOL_DOWN_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1, "VOL -", false)?;
-    draw_button(display, VOL_UP_X.0, VOL_UP_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1, "VOL +", false)?;
+    draw_button_winamp(display, VOL_DOWN_X.0, VOL_DOWN_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1, "VOL -", false)?;
+    draw_button_winamp(display, VOL_UP_X.0, VOL_UP_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1, "VOL +", false)?;
     draw_text_centered(
         display,
         &format!("{:+.0}dB", snap.volume_db),
@@ -538,12 +626,12 @@ fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(),
             None => item.title.clone(),
         };
         draw_text(display, &truncate_display(&normalize_for_display(&label), 34), 8, y1 - 12);
-        draw_button(display, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1, "-", false)?;
-        draw_button(display, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1, "+", false)?;
-        draw_button(display, QUEUE_BTN_X.0, QUEUE_BTN_X.1, y0, y1, "X", false)?;
+        draw_button_winamp(display, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1, "-", false)?;
+        draw_button_winamp(display, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1, "+", false)?;
+        draw_button_winamp(display, QUEUE_BTN_X.0, QUEUE_BTN_X.1, y0, y1, "X", false)?;
     }
 
-    draw_gear(display)?;
+    draw_gear(display, LCD_BG)?;
     Ok(())
 }
 
@@ -635,9 +723,22 @@ async fn http_get(addr: &str, path: &str) -> Option<Vec<u8>> {
 /// Run inside `spawn_blocking` by its caller -- decode and resize are real
 /// CPU work, not something to do on the same task that's also servicing
 /// the websocket and touch channel.
+///
+/// `FilterType::Nearest`, not a smoother filter -- `image`'s own resize
+/// blends source pixels directly in their stored, gamma-encoded (sRGB)
+/// values rather than in linear light, which systematically biases a
+/// large downscale *brighter* than correct (averaging gamma-encoded values
+/// is not the same as averaging light). Reported as album art looking
+/// "washed out, too white" -- real production art is confirmed plain
+/// JPEG, and this project's own flat-filled UI colors are never
+/// interpolated at all, so a resize-blending bias is the one thing that
+/// explains it happening only here. `Nearest` picks one source pixel
+/// untouched per output pixel, so there is no blend to be biased --
+/// correctness over smoothness for a 100x100 thumbnail on a panel this
+/// coarse, where the trade is barely visible either way.
 fn decode_and_resize(bytes: &[u8]) -> Option<Vec<Rgb565>> {
     let img = image::load_from_memory(bytes).ok()?;
-    let resized = img.resize_exact(ART_SIZE, ART_SIZE, image::imageops::FilterType::Triangle).to_rgb8();
+    let resized = img.resize_exact(ART_SIZE, ART_SIZE, image::imageops::FilterType::Nearest).to_rgb8();
     Some(resized.pixels().map(|p| Rgb565::new(p.0[0] >> 3, p.0[1] >> 2, p.0[2] >> 3)).collect())
 }
 
@@ -1022,11 +1123,13 @@ mod tests {
     }
 
     fn font_renders(ch: char) -> bool {
+        text_renders(&super::TEXT_FONT, &ch.to_string())
+    }
+
+    fn text_renders(font: &super::FontRenderer, text: &str) -> bool {
         use embedded_graphics::prelude::Point;
         let mut nd = NullDisplay;
-        super::TEXT_FONT
-            .render(ch.to_string().as_str(), Point::new(0, 20), super::VerticalPosition::Baseline, super::FontColor::Transparent(super::LCD_GREEN), &mut nd)
-            .is_ok()
+        font.render(text, Point::new(0, 20), super::VerticalPosition::Baseline, super::FontColor::Transparent(super::LCD_GREEN), &mut nd).is_ok()
     }
 
     /// Grounds `[SPEC-FBUI-030]`'s font choice in real data instead of a
@@ -1050,6 +1153,24 @@ mod tests {
             assert!(!font_renders(ch), "expected TEXT_FONT to lack {ch:?} -- if this now fails, a font upgrade may let normalize_for_display drop this mapping");
             let normalized = super::normalize_for_display(&ch.to_string());
             assert!(font_renders(normalized.chars().next().unwrap()), "normalize_for_display({ch:?}) = {normalized:?} still doesn't render");
+        }
+    }
+
+    /// `BUTTON_FONT` is deliberately ASCII-only (no bold+full-coverage
+    /// variant of this font exists) -- this pins down that every label it
+    /// is actually asked to draw is covered, using the real production
+    /// programme names queried from vainoplayer3's own deployed database
+    /// (`Cool`, `Fun`, `Mellow`, `Soft`, `Prog`, `Light`, `Loud`,
+    /// `Groove`), not an assumption that programme names are always
+    /// simple English words.
+    #[test]
+    fn button_font_covers_every_real_label() {
+        let labels = [
+            "PLAY", "PAUSE", "SKIP", "VOL -", "VOL +", "-", "+", "X",
+            "Cool", "Fun", "Mellow", "Soft", "Prog", "Light", "Loud", "Groove",
+        ];
+        for label in labels {
+            assert!(text_renders(&super::BUTTON_FONT, label), "BUTTON_FONT could not render {label:?}");
         }
     }
 
