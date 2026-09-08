@@ -277,3 +277,102 @@ caller — a person at a terminal — cannot be told something different.
 > off, on, and the speaker reconnected — rather than a second time through the
 > route, which would have interrupted music being listened to for a branch
 > already proven.
+
+---
+
+## 5. The silence of 2026-09-08, and what it was not
+
+**`[PI3-FOUND-065]` The reported fault was "vainopi cannot connect to
+Middleton." Bluetooth was working the entire time.** Established by
+measurement rather than by asking the stack whether it was happy: BlueZ's
+own `MediaTransport1.State` read `active`, `hcitool con` showed an
+authenticated encrypted ACL link, the PipeWire sink and the player's stream
+were both in state `running` with their links `active`, and — the decisive
+one — ten seconds captured off the sink's monitor with `pw-record` contained
+real, non-silent music.
+
+That last technique is the useful residue of this episode. Every layer in
+this stack can be asked "are you all right?" and every layer will say yes;
+the monitor capture asks instead "what did you actually send?", and it is
+the only question whose answer cannot be a stale property:
+
+```sh
+pw-record --target <sink-id> -P '{ stream.capture.sink=true }' \
+          --rate 44100 --channels 2 --format s16 /tmp/cap.wav
+# then measure: rms/peak in dBFS. Music sits near -18 rms / -2 peak.
+```
+
+**`[PI3-FOUND-066]` Retired: the "split-brain" theory.** A previous pass read
+`api.bluez5.connection = "disconnected"` and `bluez5.profile = "off"` out of
+`wpctl inspect` on the bluez5 *device* node, saw them contradict BlueZ's own
+`Connected: yes`, and concluded the sink was a correctly-named phantom with
+no live profile behind it. **Those two properties are set when WirePlumber
+creates the device object and are not maintained afterwards.** They contradict
+live state routinely, on a perfectly working link, and they are not evidence
+of anything. Recorded here because the theory was coherent, fitted the
+symptom, and was wrong — and because the next person to run `wpctl inspect`
+on a silent speaker will see exactly the same two lines.
+
+**`[PI3-FOUND-090]` The speaker powers the Pi, so they can only power up
+together — and the Pi always loses the race.** vainopi is fed from the
+Middleton's own USB port. Switching the speaker off cuts power to the
+appliance; switching it on starts a boot. The speaker is connectable within
+about two seconds and the Pi needs some thirty to reach a working Bluetooth
+stack, so any already-awake phone in the room takes the speaker first, every
+time. A speaker that is carrying another device's connection stops answering
+pages altogether: the Pi's attempt returns `br-connection-page-timeout`,
+which is indistinguishable from the speaker being switched off, and the old
+one-attempt-per-tick keeper duly concluded exactly that. **This is the normal
+state at every power-up on this appliance, not an exceptional one**, which is
+what makes a single attempt the wrong policy — see `[PI3-AIM-060]` for what
+replaced it, and why the replacement is still timid whenever audio is
+actually playing.
+
+**`[PI3-FOUND-110]` `vaino-wait-sink` never held, on any machine, in any
+state.** Its first condition was
+
+```sh
+wpctl status | sed -n '/Sinks:/,/^ *├─ [A-Z]/p' | grep -qv 'Dummy Output'
+```
+
+read as "a sink that is not the dummy exists". `grep -v` succeeds when *any*
+line fails to match, and the block it is handed opens with the `├─ Sinks:`
+header, so the condition is true unconditionally. The gate reduced to its
+third clause alone, which passes whenever no sink is marked default.
+
+The consequence needed a machine with no hardware sink to become visible, and
+vainopi is one: `snd_bcm2835.enable_hdmi=0` and `enable_headphones=0` are both
+on its kernel command line, so until Bluetooth arrives it genuinely has
+nowhere audible to send audio. Measured on the 15:37 boot — *"real sink
+present after 3s"*, thirty seconds before the speaker existed, releasing the
+player to open its output onto a dummy and stay there. Every layer above
+reported success, which is `[PI3-WHY-010]` arriving by a new road.
+
+Rewritten to parse only the numbered sink rows, so no header or box-drawing
+line can be counted as a sink, and to give the *chosen* speaker first refusal
+before accepting any other real sink — a grace period rather than a
+preference, so an appliance with no speaker still boots promptly.
+
+**`[PI3-FOUND-100]` The `scan` verb could not see a speaker.**
+`pair_sequence` has set `transport bredr` since it was written, for a reason
+recorded in its own comment: the default discovery filter returns LE only,
+and a speaker is a classic BR/EDR device. `scan` never did. So the one verb
+whose entire purpose is finding a speaker was structurally incapable of
+returning one — confirmed live, a scan returning nine devices, eight of them
+nameless LE random addresses, and not the Middleton sitting a metre away.
+It reads exactly like the speaker being switched off.
+
+Fixed, and nameless devices are now dropped from the listing: bluetoothctl
+renders a device it has no name for as its own address with dashes, a real
+speaker always advertises a name, and a dozen identical-looking hex rows are
+how the one row that matters gets missed. The panel went from nine junk
+entries to the two real speakers.
+
+**`[PI3-FOUND-070]` `Connected: yes` is not proof of audio, and now nothing
+claims it is.** The device-level ACL link survives perfectly well while the
+A2DP media profile underneath it is idle or absent. `MediaTransport1.State`
+is the only honest answer — `active` means a stream endpoint is acquired and
+carrying audio — and the helper's reports now carry it, alongside a `reach`
+field separating "never answered, so held by another device or asleep" from
+"answered and refused". Both used to render as plain failure, which sent the
+listener to the wrong problem.
