@@ -624,3 +624,52 @@ cross-compiled binary rather than a configuration change.
 
 `vaino-underruns` exists so this is never again invisible: the counter is
 published only over the websocket, and nothing on the appliance could read it.
+
+## 7. Where the startup time and the stutters actually went
+
+**`[PI3-FOUND-210]` `Session::open` was never slow; it was starved.**
+Instrumented and measured on the appliance, the phases read:
+
+```
+warm restart   session open: library 8ms, store 10ms, resume-load 0ms, utc-sync 1ms (total 19ms)
+caches dropped session open: total 25ms,  prime 712ms
+cold boot      session open: library 474ms ... (total 489ms), prime 690ms
+```
+
+Nineteen *milliseconds* of work had been taking nineteen *seconds* on a boot.
+Nothing in the function was expensive; it was competing with everything else
+starting at once on four small cores and one SD card, and the boot journal
+shows a fifteen-second silence across the window in which nothing logged and
+the machine was plainly busy. A sidecar to skip the library open — the
+obvious fix, and one seriously considered — would have saved 19 ms.
+
+The remedy was to stop the competition instead: `mpd`, a guest backend that
+is configured but idle until switched to `[SPEC-BK-020]`, now runs
+`IOSchedulingClass=idle` and `Nice=10`. On the next cold boot the whole
+player startup was **1.9 s** (32.4 s to 34.3 s), and underruns fell from
+654,768 samples to 102,266 — 14.85 s of missing audio to 2.32 s.
+
+**`[PI3-FOUND-220]` The rest of the stutters were the Director rebuild,
+which left no trace.** With the player itself starting in under two seconds,
+the listener still heard stutters at 46 s, 61 s, 76 s, 89 s and 96 s. The
+first two were the radio: `wpa_supplicant` re-associating, alternately with
+two access points on the same SSID at near-identical strength (56 and 54, both
+channel 1, no BSSID pinned), each attempt costing antenna time the A2DP link
+needs. Those settled at 64 s and never recurred.
+
+The last three were the Director rebuild — a flavor index over 8,330 radio
+passages, **measured at 16.5 s and 10.3 s**, running at the same priority as
+the thread feeding the speaker, and logging absolutely nothing. That silence
+is why its stutters were attributed to the radio for most of an evening.
+
+`RELOAD_MIN_QUEUE_MS` already decided *when* it may start and decided it
+well. Nothing decided how hard it should push once running. It now calls
+`step_aside()` first — `setpriority` and `ioprio_set`, both per-thread on
+Linux, so the engine keeps everything it has and only the rebuild yields —
+and reports its duration.
+
+> **Verified 2026-09-08 by measurement, not by ear.** The rebuild thread was
+> caught mid-run reading `nice=10 idle`, and the player's own underrun counter
+> read **72,590 before a 10.3 s rebuild and 72,590 after it**: zero samples
+> lost to work that used to be audible. `vaino-underruns` is what made that a
+> number rather than an opinion.
