@@ -50,8 +50,18 @@ SPEAKER="${SPEAKER:-$(sqlite3 "$DB" \
 # nothing ever puts it back. So it is asserted here instead: every tick,
 # idempotent, checked before it is set so a healthy appliance spends nothing,
 # and loud when it actually had to repair something.
-if [ -n "${SPEAKER:-}" ] &&
-   ! bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q 'Trusted: yes'; then
+# **`[PI3-FOUND-230]` Ask bluetoothd once, not four times.** Every
+# `bluetoothctl` invocation opens a D-Bus connection and enumerates the
+# adapter's objects, and this script had grown to three or four of them per
+# tick -- trust, connected-list, audio-sink, alias -- against a daemon that is
+# at that moment carrying an A2DP stream. Measured: the listener's stutters at
+# 120 s and 151 s land on the timer's own ticks at 118 s and 153 s. The
+# information wanted is all in one `info` block, so it is fetched once and
+# read several times. The keeper polls; polling should cost as little as it
+# can while something is playing.
+INFO=$(bluetoothctl info "${SPEAKER:-none}" 2>/dev/null)
+
+if [ -n "${SPEAKER:-}" ] && ! echo "$INFO" | grep -q 'Trusted: yes'; then
     bluetoothctl trust "$SPEAKER" >/dev/null 2>&1 &&
         echo "trusted $SPEAKER -- it was not, so it could not have reconnected on its own"
 fi
@@ -74,11 +84,22 @@ fi
 # `SPEAKER`, and there is nothing left to do: paging the stored address on
 # top of a working connection is the disruption, not the fix.
 CONNECTED=""
-for addr in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
-    bluetoothctl info "$addr" 2>/dev/null | grep -q 'UUID: Audio Sink' || continue
-    CONNECTED="$addr"
-    break
-done
+if [ -n "${SPEAKER:-}" ] &&
+   echo "$INFO" | grep -q 'Connected: yes' &&
+   echo "$INFO" | grep -q 'UUID: Audio Sink'; then
+    # The overwhelmingly common case, and it is already answered: the speaker
+    # on record is the one connected `[PI3-FOUND-230]`. Asking BlueZ for the
+    # connected list here would be asking a question whose answer is in hand.
+    CONNECTED="$SPEAKER"
+else
+    # Reality may have moved on -- a different speaker, or none. Only now is
+    # it worth the extra round trips to find out which.
+    for addr in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
+        bluetoothctl info "$addr" 2>/dev/null | grep -q 'UUID: Audio Sink' || continue
+        CONNECTED="$addr"
+        break
+    done
+fi
 
 if [ -n "$CONNECTED" ]; then
     if [ "$CONNECTED" != "$SPEAKER" ]; then
@@ -121,8 +142,14 @@ if [ -n "$CONNECTED" ]; then
     # node after the alias BlueZ reports for the device, so the two are
     # compared as text; a mismatch, including "nothing" or "Dummy Output",
     # is the one case a reopen is actually for.
-    ALIAS=$(bluetoothctl info "$CONNECTED" 2>/dev/null |
-        sed -n 's/^[[:space:]]*Alias: //p')
+    # From the block already in hand when it is the speaker on record, which
+    # is the case that runs every thirty seconds forever `[PI3-FOUND-230]`.
+    if [ "$CONNECTED" = "${SPEAKER:-}" ]; then
+        ALIAS=$(echo "$INFO" | sed -n 's/^[[:space:]]*Alias: //p')
+    else
+        ALIAS=$(bluetoothctl info "$CONNECTED" 2>/dev/null |
+            sed -n 's/^[[:space:]]*Alias: //p')
+    fi
     ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
         sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
     if [ -n "$ALIAS" ] &&

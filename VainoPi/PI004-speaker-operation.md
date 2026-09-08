@@ -673,3 +673,30 @@ and reports its duration.
 > read **72,590 before a 10.3 s rebuild and 72,590 after it**: zero samples
 > lost to work that used to be audible. `vaino-underruns` is what made that a
 > number rather than an opinion.
+
+**`[PI3-FOUND-230]` The keeper's own polling was audible.** Every
+`bluetoothctl` invocation opens a D-Bus connection and enumerates the
+adapter's objects, and `vaino-speaker` had grown to three or four of them per
+tick — trust, connected-list, audio-sink, alias — against a daemon that is at
+that moment carrying an A2DP stream. Measured on a boot where the player
+started in 1.9 s and the Director rebuild had already been made polite: the
+listener's stutters at 120 s and 151 s land on the timer's own ticks at 118 s
+and 153 s.
+
+All of it is in one `info` block, so it is fetched once and read several
+times, and the connected-device search is skipped entirely when the speaker
+on record is the one connected — the case that runs every thirty seconds
+forever. A tick now costs 0.245 s rather than 0.4 s, and one round trip to
+BlueZ rather than four. Verified against all three branches afterwards: trust
+self-heal still repairs an untrusted speaker and persists it, a healthy tick
+is silent, and a routing mismatch still asks the player to reopen.
+
+**The Wi-Fi roam-flap is left alone, deliberately.** Two access points share
+the SSID at near-identical strength and the client re-associates between
+them, each attempt costing antenna time the A2DP link needs — the listener's
+stutters at 46 s and 61 s on one boot were exactly this. Pinning a BSSID
+would stop it, and was declined on purpose: *"accessibility is more important
+than temporary radio instability"* — the appliance is headless and that Wi-Fi
+is the only way to reach it, so a pin that outlives the AP it names would
+cost far more than the stutters do. Recorded so the option is not
+rediscovered and quietly taken later.
