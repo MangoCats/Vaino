@@ -99,9 +99,29 @@ What that costs, beyond what is already built:
   remembers: if a real, audio-capable device is already connected, that
   settles it, whether or not it matches `SPEAKER` -- paging the stored
   address on top of a working connection was the disruption, not a fix for
-  one. A mismatch is corrected silently (the database row alone, no reopen,
-  since audio is already flowing correctly); nothing is paged unless BlueZ
-  reports nothing connected at all.
+  one. A mismatch is corrected silently (the database row alone); nothing is
+  paged unless BlueZ reports nothing connected at all.
+- **`[PI3-AIM-050]` Done, 2026-09-08.** `[PI3-AIM-040]`'s "audio is already
+  flowing correctly" was an assumption, not a check, and it was wrong twice
+  over on a vainopi boot that a listener experienced as "can't connect to
+  Middleton" even though the radio link was fine the whole time. First:
+  `vaino-wait-sink` releases the player on the first *any* real sink it
+  sees, and on this hardware that can be the onboard HDMI output --
+  observed 28 s before Middleton's own A2DP transport came up, meaning the
+  player had already opened its stream onto the wrong sink before Middleton
+  was even reachable. Second: BlueZ reconnects a trusted device
+  autonomously, with nobody having asked `vaino-speaker` to act at all, so
+  its "already connected" branch ran and found nothing to do -- by design,
+  the device link genuinely was fine -- while the stream stayed exactly
+  where boot had left it. Both land in the same place: BlueZ reports
+  "connected," and the player is talking to a different sink regardless.
+  `vaino-speaker` now checks one layer further in on every tick, connected
+  or not: whether the player's own stream (`GET /audio/sink`
+  `[SPEC-APS-060]`) is actually linked to the device BlueZ has connected,
+  by comparing PipeWire's sink name against the device's Bluetooth alias.
+  A mismatch -- including a dummy or absent sink -- gets exactly the
+  existing `reopen-output` treatment `[PI3-WHY-020]`, whether this script's
+  own connect put the device there or BlueZ did it unasked.
 - **Failure has to stay legible.** A speaker that is off, flat, or in pairing
   mode cannot be reached by any amount of retrying, and the panel should say
   which of those it looks like rather than spinning `[PI3-UI-010]`.
