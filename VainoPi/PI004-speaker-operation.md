@@ -548,8 +548,8 @@ of its quantum with zero xruns in steady state, so it has considerable headroom
 and would need a >20 ms scheduling delay to glitch. Establish that such delays
 actually occur before spending more on this.
 
-**`[PI3-FOUND-030] was never fixed durably`, and this is why.** The recorded
-remedy was `systemctl enable --now upower`, and it worked — for that session.
+**The upower remedy recorded above never survived a reboot, and this is
+why.** `systemctl enable --now upower` worked — for that session.
 `upower.service` ships `WantedBy=graphical.target`, and this appliance boots
 to `multi-user.target` with no display, so enabling it creates a want that is
 never reached. Every boot since has come up with `upower` *enabled* and
