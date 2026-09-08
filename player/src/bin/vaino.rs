@@ -226,7 +226,14 @@ fn engine_thread(
     // Taken before the handle is sent away: the loop below reads the listener's
     // settings from here once the engine has become an anonymous backend.
     let published = state_of(&handle);
+    // `prime` is where the resumed passage is looked up and the queue is first
+    // filled, so it is the last thing between a started process and a sounding
+    // one `[PI3-FOUND-210]`. Timed separately from `Session::open` because the
+    // two have entirely different remedies: one is a database open, the other
+    // is selection.
+    let primed = std::time::Instant::now();
     session.prime(&mut engine);
+    eprintln!("session prime: {}ms", primed.elapsed().as_millis());
     if tx.send((handle, session.explanations(), session.controls())).is_err() {
         return; // nobody left to control it
     }

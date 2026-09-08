@@ -231,13 +231,28 @@ impl Session {
     /// catalog-side file -- equal to `db` on every installation that hasn't
     /// split `[IMPL-DBSPLIT-025]`.
     pub fn open(db: &Path, library: &Path, depth: usize) -> Result<Self, DbError> {
+        // **`[PI3-FOUND-210]` The phases are timed because guessing at them
+        // cost a whole evening.** Measured on vainopi: nineteen seconds pass
+        // inside this function before the audio device is even opened, and
+        // not one instrument on the appliance could say which statement spent
+        // them. Four separate plausible culprits were proposed and measured
+        // away first -- the Director build (already deferred, below), the tag
+        // scan (a no-op once `file_tags` is complete), `count_radio` (82 ms),
+        // and PipeWire xruns (zero). Boot-to-audio is a headline number for a
+        // machine whose power switch is the speaker's own, so the phases that
+        // make it up are now reported at startup rather than reconstructed
+        // from a journal afterwards.
+        let started = std::time::Instant::now();
         let lib = Library::open_split(db, library)?;
+        let after_lib = started.elapsed();
         // A resume point that cannot be opened is a first run, not a failure:
         // playback must never be blocked by the loss of a convenience.
         let store = PlayerStore::open_split(db, library)
             .map_err(|e| eprintln!("resume state unavailable ({e}); continuing without it"))
             .ok();
+        let after_store = started.elapsed();
         let saved = store.as_ref().and_then(|s| s.load().ok()).flatten();
+        let after_load = started.elapsed();
         // The saved play state is carried, not discarded. It was read and
         // thrown away here for as long as the row has existed, which is why an
         // appliance that lost power came back silent even though it had been
@@ -251,6 +266,17 @@ impl Session {
         if let Some(s) = &store {
             s.sync_utc_offset();
         }
+        // Cumulative marks, differenced here, so each line is the cost of one
+        // step rather than a running total the reader has to subtract.
+        let after_utc = started.elapsed();
+        eprintln!(
+            "session open: library {}ms, store {}ms, resume-load {}ms, utc-sync {}ms (total {}ms)",
+            after_lib.as_millis(),
+            (after_store - after_lib).as_millis(),
+            (after_load - after_store).as_millis(),
+            (after_utc - after_load).as_millis(),
+            after_utc.as_millis(),
+        );
         // The Director is not built here, synchronously -- loading its
         // flavor index over 8,330 radio passages measures ~10s on this
         // appliance `[IMPL-SUI-075]`'s own recorded figure, and a resumed
