@@ -700,3 +700,46 @@ than temporary radio instability"* — the appliance is headless and that Wi-Fi
 is the only way to reach it, so a pin that outlives the AP it names would
 cost far more than the stutters do. Recorded so the option is not
 rediscovered and quietly taken later.
+
+## 8. Diagnostic tools, and how to switch them back on
+
+Three instruments were built during the 2026-09-08 investigation. Two are
+**off by default** because they cost something to run; all three stay
+installed, because the expensive part was working out what to measure, not
+writing it.
+
+**`vaino-underruns` — always available, costs nothing.** Prints the player's
+own `underrun_samples`: how many samples the output ring failed to supply.
+The single most useful number here, and the one that finally separated "the
+player could not keep its buffer fed" from "the radio dropped packets" —
+PipeWire reports zero xruns for the first case, because from its side nothing
+went wrong `[PI3-FOUND-200]`. Run it twice a few seconds apart: a counter that
+is still climbing is a live fault, one that has stopped is a startup
+transient.
+
+**`vaino-startup-sample` — installed, disabled.** A boot service that reads
+`/proc` once a second into `/var/log/vaino-startup.log`: load, memory, swap
+counters, the player's CPU and RSS. Built because diagnosing over ssh
+perturbs what it measures `[PI3-FOUND-170]`, and it answered its question —
+that the startup stutter was not memory, swap or CPU. It walks every process
+each pass, which costs about 5% of one core on a Pi Zero 2W, so it is not
+left running.
+
+    sudo systemctl enable --now vaino-startup-sample    # on
+    sudo systemctl disable --now vaino-startup-sample   # off
+
+**Persistent journal — off, restored to `Storage=volatile`.** The appliance
+ships volatile deliberately: it is power-cut on every shutdown
+`[PI3-FOUND-120]` and SD writes are not free. But volatile means a power
+cycle destroys the evidence of what just went wrong, which is exactly the
+class of fault this machine has. Three power cycles were investigated blind
+before it was turned on, and it immediately paid for itself. Turn it on for
+any mystery that survives a reboot, and off again afterwards:
+
+    sudo sed -i 's/^Storage=volatile/Storage=persistent/' /etc/systemd/journald.conf
+    sudo systemctl restart systemd-journald
+    # and to revert, the same substitution the other way round
+
+It also captures the *user* journal, where WirePlumber logs live — a blind
+spot named in `[PI3-FOUND-030]`'s original investigation and not closed until
+now.
