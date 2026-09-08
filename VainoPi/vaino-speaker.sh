@@ -107,12 +107,57 @@ fi
 # stale or empty address must do nothing, not page something.
 [ -n "$SPEAKER" ] || exit 0
 
-bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
-sleep 5
-bluetoothctl info "$SPEAKER" 2>/dev/null | grep -qi 'Connected: yes' || exit 0
+# **`[PI3-AIM-060]` How hard to chase depends on what chasing can cost.**
+#
+# `[PI3-AIM-020]`/`[PI3-AIM-040]` both ended in the same injury: paging a
+# device that could not answer tied up the shared radio and stalled the
+# speaker that WAS playing. The conclusion drawn then -- try once, briefly,
+# and stop -- was right about the risk and wrong as a general policy, because
+# it also governs the case where nothing is playing at all, where there is
+# no audio to protect and the timid attempt simply loses.
+#
+# And on this appliance losing is the default. `[PI3-FOUND-090]`: the
+# Middleton powers the Pi from its own USB port, so the two can only power up
+# together; the Pi needs ~30 s to reach a working Bluetooth stack, and any
+# phone already awake in the room has had the speaker since second two. The
+# speaker then stops answering pages entirely, so the Pi's one attempt comes
+# back `br-connection-page-timeout` and the appliance concludes, every single
+# power cycle, that its speaker is switched off.
+#
+# So the cost is what sets the effort, not a fixed rule: if the player is on
+# a real sink right now, something is audible and the old timidity is exactly
+# right. If it is on a dummy or on nothing, there is no audio to interrupt,
+# and the radio's time is better spent staying after the speaker than idle.
+ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
+    sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
+case "${ROUTED:-none}" in
+    none|"Dummy Output") BUDGET="${VAINO_CHASE_SECONDS:-22}" ;;
+    *)                   BUDGET=0 ;;
+esac
 
-# Connected. The stream does not dependably follow a change of default sink
-# [PI3-WHY-020], so the player is told explicitly -- and it is told only after
-# a connection actually succeeded, so a reopen is never spent on nothing.
-curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
-echo "connected $SPEAKER and asked the player to reopen"
+# Bounded by wall clock, not by a count of tries: each attempt costs whatever
+# the page timeout happens to be, and the number that must stay under the
+# timer's own period is seconds. Nothing here loops without a deadline --
+# a wedged keeper is the one thing this must never become.
+started=$(date +%s)
+while :; do
+    bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
+    sleep 2
+    if bluetoothctl info "$SPEAKER" 2>/dev/null | grep -qi 'Connected: yes'; then
+        # Connected. The stream does not dependably follow a change of default
+        # sink [PI3-WHY-020], so the player is told explicitly -- and only
+        # after a connection actually succeeded, so a reopen is never spent on
+        # nothing.
+        curl -s -o /dev/null -X POST \
+            "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
+        echo "connected $SPEAKER after $(( $(date +%s) - started ))s and asked the player to reopen"
+        exit 0
+    fi
+    [ $(( $(date +%s) - started )) -lt "$BUDGET" ] || break
+done
+
+# Not reached. Said once per tick, and only when there was nothing to lose by
+# trying, so the log shows a speaker being waited for rather than an appliance
+# repeating that it has failed.
+[ "$BUDGET" -gt 0 ] && echo "$SPEAKER did not answer in ${BUDGET}s (held by another device, or asleep)"
+exit 0
