@@ -583,3 +583,44 @@ is meaningless for music with no synchronised display. **Unverified against a
 cold boot at the time of writing** — the change was made and confirmed live
 (sink quantum 2048, zero xruns), but the boot it is meant to improve has not
 been run yet.
+
+**`[PI3-FOUND-200]` The stutter was the player starving its own ring, and
+every other instrument said the machine was fine.** After ruling out memory,
+swap, CPU and PipeWire xruns, the measurement that had not been taken was the
+player's own:
+
+```
+$ vaino-underruns
+underrun_samples   654768  (14.85s at 44.1kHz)
+lock_failures      1
+```
+
+Fourteen and a half seconds of samples the output ring could not supply, in a
+startup where `pw-top` reported **zero** xruns, `free` showed 216 MB
+available, the swap counters never moved, and the player used about 5% of one
+core. None of those instruments could have shown it: from PipeWire's side
+nothing went wrong — it was handed silence and delivered silence faithfully.
+
+Sampled three times ten seconds apart afterwards, the counter did not move.
+So the whole 14.85 s accrued during startup and stopped, which is exactly the
+shape the listener reported: stuttering as playback begins, clean later.
+
+**5% of a core while starving means blocked, not slow.** The player is not
+compute-bound during that window; it is waiting. What it waits on is the SD
+card, which has just been asked to read a 1.1 GB library database — flushing
+the page cache and saturating the queue immediately before playback begins.
+The player then had no explicit I/O class at all, only whatever its `Nice=-5`
+implied, and 128 KB of readahead for sequential audio files.
+
+Two changes, both cheap and both at the level the problem actually lives:
+`IOSchedulingClass=best-effort` with `IOSchedulingPriority=0` on
+`vaino.service`, and readahead raised to 512 KB through `tmpfiles.d`. **Not
+yet verified across a cold boot at the time of writing.**
+
+The durable answer is almost certainly the one vainoplayer3 already has:
+deferring the library/Director build off the resume path, so the card is not
+being saturated in the seconds before audio starts. That needs a
+cross-compiled binary rather than a configuration change.
+
+`vaino-underruns` exists so this is never again invisible: the counter is
+published only over the websocket, and nothing on the appliance could read it.
