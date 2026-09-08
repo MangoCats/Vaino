@@ -130,6 +130,56 @@ state_of() {
     fi
 }
 
+# **`[PI3-FOUND-070]` `Connected: yes` is not proof of audio.** BlueZ reports
+# the device-level (ACL) link, which survives perfectly well while the A2DP
+# media profile underneath it is idle or gone. The one honest answer is
+# BlueZ's own MediaTransport1: `active` means a stream endpoint is acquired
+# and carrying audio, and nothing else does. Prints `none` when no transport
+# object exists at all, which is a different and more common failure than an
+# idle one.
+transport_state() {
+    local p
+    p="$(busctl --list tree org.bluez 2>/dev/null \
+         | grep -E "/dev_${1//:/_}/sep[0-9]+/fd[0-9]+$" | head -1)"
+    [ -n "$p" ] || { echo none; return; }
+    busctl get-property org.bluez "$p" org.bluez.MediaTransport1 State 2>/dev/null \
+        | sed 's/^s "//; s/"$//' | grep -E '^[a-z]+$' || echo none
+}
+
+# **`[PI3-FOUND-080]` One `connect` is a coin toss, not a policy.** A speaker
+# already carrying another device's connection stops answering pages
+# altogether: BlueZ returns `br-connection-page-timeout`, which is
+# indistinguishable from "switched off" and was being reported as plain
+# failure. On this appliance that is the NORMAL state at power-up, not an
+# exception -- the speaker feeds the Pi's USB, so the two power up together,
+# the Pi needs ~30 s to bring Bluetooth up, and any already-awake phone in
+# the room has had the speaker for twenty-odd seconds by then
+# `[PI3-FOUND-090]`. A single attempt loses that race every time; staying
+# after it wins the moment the other device lets go, or the moment someone
+# presses the speaker's pairing button.
+#
+# Bounded by a deadline rather than an attempt count, because each attempt
+# costs whatever the page timeout happens to be, and a budget in seconds is
+# the thing the caller actually has to spend.
+patient_connect() {
+    local addr="$1" budget="${2:-45}" started="$SECONDS" out last=unreachable
+    while :; do
+        bluetoothctl info "$addr" 2>/dev/null | grep -q 'Connected: yes' \
+            && { echo connected; return 0; }
+        out="$(bluetoothctl connect "$addr" 2>&1)"
+        case "$out" in
+            *"Connection successful"*|*"already connected"*|*AlreadyConnected*)
+                echo connected; return 0 ;;
+            *page-timeout*) last=unreachable ;;
+            *) last=refused ;;
+        esac
+        [ $(( SECONDS - started )) -lt "$budget" ] || break
+        sleep 2
+    done
+    echo "$last"
+    return 1
+}
+
 # `ok` reports the OUTCOME, never that the helper managed to run. That
 # distinction is not pedantry: `repair` once returned ok:true beside
 # state:"found", having destroyed a working pairing and failed to make a new
@@ -149,6 +199,14 @@ json_devices() {
     printf '{"ok":true,"devices":['
     while read -r _ mac name; do
         [[ "$mac" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]] || continue
+        # **`[PI3-FOUND-100]` A nameless device is noise, and noise hides the
+        # speaker.** bluetoothctl renders a device it has no name for as its
+        # own address with dashes; a BR/EDR speaker always advertises a name,
+        # so these are LE strangers the radio happened to overhear. Listing
+        # them buries the one row the listener is looking for among a dozen
+        # identical-looking hex strings, which is how "the speaker isn't
+        # there" gets concluded while it is sitting in the list.
+        [ "$name" = "${mac//:/-}" ] && continue
         [ $first -eq 1 ] || printf ','
         first=0
         printf '{"address":"%s","name":"%s","state":"%s"}' \
@@ -164,8 +222,22 @@ case "$VERB" in
     scan)
         # Bounded. A permanently scanning radio is a permanently degraded one
         # on an antenna shared with Wi-Fi [PI3-UI-040].
-        { printf 'power on\n'; sleep 1
-          printf 'scan on\n';  sleep "${SCAN_SECONDS:-20}"
+        #
+        # **`[PI3-FOUND-100]` The scan had the same blindness `pair` was
+        # already fixed for.** `pair_sequence` sets `transport bredr` because
+        # the default discovery filter returns LE only and a speaker is a
+        # classic BR/EDR device; `scan` never did, so the one verb whose
+        # entire job is finding a speaker was structurally incapable of
+        # seeing one. Observed directly 2026-09-08: a scan run while looking
+        # for the Middleton returned nine devices, eight of them nameless LE
+        # random addresses, and not the speaker -- which reads exactly like
+        # the speaker being switched off, and sends the listener to the
+        # wrong problem.
+        { printf 'power on\n';    sleep 1
+          printf 'menu scan\n';   sleep 1
+          printf 'transport bredr\n'; sleep 1
+          printf 'back\n';        sleep 1
+          printf 'scan on\n';     sleep "${SCAN_SECONDS:-20}"
           printf 'scan off\nquit\n'; } | bluetoothctl >/dev/null 2>&1
         json_devices
         ;;
@@ -199,10 +271,17 @@ case "$VERB" in
         report "$st" "connected paired"
         ;;
     use)
+        # **The panel's "use this one" is the listener's grab handle**, and it
+        # is the button pressed straight after the speaker's own pairing
+        # button, so it must be willing to wait out a pairing window rather
+        # than report failure in five seconds and leave the person pressing
+        # buttons in the dark `[PI3-FOUND-080]`. Trust comes first, because
+        # trust is what survives the next power cut `[PI3-WHY-040]` and this
+        # appliance power-cycles every time the speaker does
+        # `[PI3-FOUND-090]`.
         need_addr
-        bluetoothctl trust "$ADDR"   >/dev/null 2>&1
-        bluetoothctl connect "$ADDR" >/dev/null 2>&1
-        sleep 5
+        bluetoothctl trust "$ADDR" >/dev/null 2>&1
+        conn="$(patient_connect "$ADDR" "${VAINO_GRAB_SECONDS:-45}")"
         # Make it the default sink. The caller must still reopen the player's
         # output: the stream does not dependably follow [PI3-WHY-020].
         node="$(sudo -u "${SUDO_USER:-$USER}" \
@@ -211,8 +290,13 @@ case "$VERB" in
                 | grep -iv 'Dummy Output' | grep -oE '[0-9]+\.' | head -1 | tr -d '.')"
         [ -n "$node" ] && sudo -u "${SUDO_USER:-$USER}" \
             XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" wpctl set-default "$node" 2>/dev/null
+        # `reach` distinguishes the two failures the panel could otherwise
+        # only render as one: `unreachable` is a speaker that never answered
+        # (held by another device, or asleep -- press its pairing button),
+        # `refused` is one that answered and said no. `transport` is the
+        # honest end of the whole exercise `[PI3-FOUND-070]`.
         report "$(state_of "$ADDR")" "connected" \
-               ",\"sink_node\":\"${node:-none}\""
+               ",\"sink_node\":\"${node:-none}\",\"reach\":\"$conn\",\"transport\":\"$(transport_state "$ADDR")\""
         ;;
     forget)
         need_addr

@@ -1,25 +1,68 @@
 #!/bin/sh
-# Block until PipeWire has a sink that is not the Dummy Output.
+# Block until PipeWire has somewhere audible to send audio.
 #
 # Bluetooth is the slow case: BlueZ has to auto-connect a trusted device after
 # the radio comes up, which takes several seconds after the graph is ready.
 # Exits 0 regardless -- a player with no speaker should still come up and say
 # so in its interface, which is more use than a service that refuses to run.
-set -eu
+#
+# **`[PI3-FOUND-110]` The gate this replaces never actually held.** Its first
+# condition was `... | grep -qv 'Dummy Output'`, read as "a sink that is not
+# the dummy exists". `grep -v` succeeds when ANY line fails to match, and the
+# block it was fed begins with the `├─ Sinks:` header -- so the condition was
+# true on every machine in every state, including one whose only sink was the
+# dummy. Measured 2026-09-08 on vainopi, whose HDMI and headphone outputs are
+# both switched off at the kernel command line and which therefore has no
+# hardware sink at all until Bluetooth arrives: it reported "real sink present
+# after 3s" and released the player onto a dummy, 30 s before the speaker
+# existed. The player then opened its output onto nothing audible and stayed
+# there. Every layer above reported success.
+#
+# Naming a sink is also not enough on its own: the point of waiting is the
+# CHOSEN speaker, and any other real sink satisfying the wait is how the
+# player ends up bound to the wrong one. So the speaker gets first refusal,
+# and anything real is accepted only once its grace period has passed --
+# which keeps a speakerless appliance booting promptly.
+set -u
 DEADLINE=${VAINO_SINK_WAIT:-45}
+SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-30}
+DB="${VAINO_DB:-/srv/library/vaino.db}"
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+# Every sink PipeWire currently offers, one name per line, dummy excluded.
+# Parsed from the numbered rows only, so no header or box-drawing line can be
+# mistaken for a sink -- the whole of `[PI3-FOUND-110]`.
+real_sinks() {
+    wpctl status 2>/dev/null |
+        sed -n '/Sinks:/,/Sink endpoints/p' |
+        sed -n 's/^[^0-9]*[0-9][0-9]*\.[[:space:]]*\(.*\)$/\1/p' |
+        sed 's/[[:space:]]*\[vol.*$//; s/[[:space:]]*$//' |
+        grep -v '^Dummy Output$'
+}
+
+# The speaker the listener chose, by the name PipeWire will give its sink
+# [PI3-AIM-020]. Absent is fine and common: it just means anything real will
+# do.
+WANT=""
+ADDR=$(sqlite3 "$DB" \
+    "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null)
+[ -n "${ADDR:-}" ] && WANT=$(bluetoothctl info "$ADDR" 2>/dev/null |
+    sed -n 's/^[[:space:]]*Alias: //p')
+
 i=0
 while [ "$i" -lt "$DEADLINE" ]; do
-    if wpctl status 2>/dev/null |
-       sed -n '/Sinks:/,/^ *├─ [A-Z]/p' |
-       grep -qv 'Dummy Output' 2>/dev/null &&
-       wpctl status 2>/dev/null |
-       sed -n '/Sinks:/,/Sink endpoints/p' |
-       grep -q '[0-9]\+\.' &&
-     ! wpctl status 2>/dev/null |
-       sed -n '/Sinks:/,/Sink endpoints/p' |
-       grep '\*' | grep -q 'Dummy Output'; then
-        echo "vaino-wait-sink: real sink present after ${i}s"
-        exit 0
+    sinks=$(real_sinks)
+    if [ -n "$sinks" ]; then
+        if [ -n "$WANT" ] && echo "$sinks" | grep -qxF "$WANT"; then
+            echo "vaino-wait-sink: $WANT present after ${i}s"
+            exit 0
+        fi
+        # Something real, but not the speaker. Worth having, but not worth
+        # binding to while the speaker may still be seconds away.
+        if [ -z "$WANT" ] || [ "$i" -ge "$SPEAKER_GRACE" ]; then
+            echo "vaino-wait-sink: real sink present after ${i}s ($(echo "$sinks" | tr '\n' ' '))"
+            exit 0
+        fi
     fi
     i=$((i + 1))
     sleep 1

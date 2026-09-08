@@ -122,9 +122,29 @@ What that costs, beyond what is already built:
   A mismatch -- including a dummy or absent sink -- gets exactly the
   existing `reopen-output` treatment `[PI3-WHY-020]`, whether this script's
   own connect put the device there or BlueZ did it unasked.
+- **`[PI3-AIM-060]` Done, 2026-09-08. How hard to chase is set by what
+  chasing can cost.** `[PI3-AIM-020]` and `[PI3-AIM-040]` both ended in the
+  same injury — paging a device that could not answer tied up the shared
+  radio and stalled the speaker that *was* playing — and the conclusion drawn
+  from them, try once and stop, was right about that risk and wrong as a
+  general policy. It also governs the case where nothing is playing at all,
+  where there is no audio to protect and a single attempt simply loses. On
+  this appliance losing is the default: `[PI3-FOUND-090]`, the speaker powers
+  the Pi from its own USB port, so they can only power up together, and the
+  thirty seconds the Pi needs to reach a working Bluetooth stack are thirty
+  seconds in which any already-awake phone takes the speaker — after which it
+  stops answering pages entirely and the appliance concludes it is switched
+  off. The keeper now spends a wall-clock budget staying after the speaker
+  rather than making one attempt, **but only while the player is on a dummy
+  or on nothing**. Audible audio keeps the old timidity exactly as it was.
+  The lesson those two findings taught is not weakened by this; it is given
+  the condition it always implied.
 - **Failure has to stay legible.** A speaker that is off, flat, or in pairing
   mode cannot be reached by any amount of retrying, and the panel should say
-  which of those it looks like rather than spinning `[PI3-UI-010]`.
+  which of those it looks like rather than spinning `[PI3-UI-010]`. Half of
+  this arrived with `[PI3-FOUND-070]`: reports now separate a speaker that
+  never answered from one that answered and refused, and carry whether A2DP
+  is actually streaming rather than merely linked.
 
 ## 2. The shape of it
 
