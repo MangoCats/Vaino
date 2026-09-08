@@ -547,3 +547,39 @@ even the right target is unproven: `pw-top` shows the audio thread using 2–4%
 of its quantum with zero xruns in steady state, so it has considerable headroom
 and would need a >20 ms scheduling delay to glitch. Establish that such delays
 actually occur before spending more on this.
+
+**`[PI3-FOUND-030] was never fixed durably`, and this is why.** The recorded
+remedy was `systemctl enable --now upower`, and it worked — for that session.
+`upower.service` ships `WantedBy=graphical.target`, and this appliance boots
+to `multi-user.target` with no display, so enabling it creates a want that is
+never reached. Every boot since has come up with `upower` *enabled* and
+*inactive*, and WirePlumber has logged
+`Failed to get percentage from UPower: org.freedesktop.DBus.Error.NameHasNoOwner`
+each time. The verb that actually holds on a headless appliance is
+`systemctl add-wants multi-user.target upower.service`, which is now in place.
+
+Worth noting what this did **not** turn out to explain: the error appears
+exactly once per boot here, at about 13 s, not on the repeating ~2.5 minute
+sweep that `[PI3-FOUND-030]` originally described, and the startup stutter
+being investigated happens at 63-80 s. Fixed because it is a known hazard and
+the fix is one line, not because it was the cause.
+
+**`[PI3-FOUND-190]` What the startup stutter is not.** With a sampler running
+unattended (`vaino-startup-sample`, no ssh connected), the window the listener
+reported as stuttering — 63 s to 80 s — shows: swap counters static, 216 MB
+available, the player using about 5% of one core, and zero xruns. The load
+average sits near 1.4 but is a lagging average decaying from the library index
+build at 27-50 s, not live work. So it is not memory, not swap, not CPU
+starvation, and not the player missing its ring.
+
+What remains is the radio. Wi-Fi and Bluetooth share one chip and one antenna
+on a Pi Zero 2W, DHCP completed at 56.9 s and the NetworkManager dispatcher ran
+57-67 s — overlapping the start of the stutter exactly — and no amount of CPU
+headroom prevents an antenna being used by something else. Since that cannot be
+removed, the lever is margin: the graph was running a 1024-frame quantum, about
+21 ms, so any interruption longer than that glitches. `default.clock.min-quantum`
+is now 2048, which doubles the tolerance to about 46 ms, at a latency cost that
+is meaningless for music with no synchronised display. **Unverified against a
+cold boot at the time of writing** — the change was made and confirmed live
+(sink quantum 2048, zero xruns), but the boot it is meant to improve has not
+been run yet.
