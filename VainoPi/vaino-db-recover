@@ -1,0 +1,53 @@
+#!/bin/sh
+# Roll back any hot SQLite journal before the player opens anything.
+#
+# **`[PI3-FOUND-120]` On this appliance every power-down is a power CUT.**
+# vainopi is fed from the Middleton's own USB port `[PI3-FOUND-090]`, so
+# switching the speaker off yanks the supply from a running Linux system with
+# open databases. There is no shutdown, and there is no warning there could
+# have been one. That is not misuse -- it is the only way the hardware can be
+# switched off -- so it has to be a supported event rather than an accident.
+#
+# What it leaves behind is a hot rollback journal: `listener.db-journal`,
+# beside the database, holding the pages of a transaction that never
+# committed. SQLite's contract is that the next connection to open that
+# database rolls it back. The catch is that rolling back is a WRITE, and
+# Vaino attaches its databases `mode=ro` -- deliberately, so the player
+# cannot corrupt the library `[IMPL-DBSPLIT-025]`. A read-only connection
+# cannot perform the recovery it is required to perform, so it fails, with
+# `attempt to write a readonly database`, for ever.
+#
+# Measured 2026-09-08, after a power cycle: `vaino.service` failed on that
+# error and `Restart=always` turned it into a crash loop -- 23 restarts, no
+# web interface, no audio, and nothing in the failure that pointed at a
+# journal file. Recovering by hand took one read-write open. This does that
+# open, every start, so the appliance heals itself instead of needing
+# someone with an ssh key.
+#
+# `PRAGMA user_version` and not `integrity_check`: the rollback happens when
+# a read-write connection first reads the database and notices the journal,
+# so the cheapest possible read is enough. A real check of a 1.1 GB library
+# on a Pi Zero 2W would add minutes to every boot to answer a question that
+# was not asked.
+set -u
+
+DB="${VAINO_DB:-/srv/library/vaino.db}"
+LIB="${VAINO_LIBRARY_DB:-/srv/library/library.db}"
+LISTENER="${VAINO_LISTENER_DB:-/var/vaino/listener.db}"
+
+for db in "$DB" "$LIB" "$LISTENER"; do
+    [ -f "$db" ] || continue
+    # A journal beside the database is the whole reason this runs; say so
+    # when there is one, so the boot log carries the fact that an unclean
+    # shutdown happened rather than leaving it to be deduced later.
+    [ -f "$db-journal" ] && echo "vaino-db-recover: hot journal on $db, rolling back"
+    if sqlite3 "$db" 'PRAGMA user_version;' >/dev/null 2>&1; then
+        [ -f "$db-journal" ] && echo "vaino-db-recover: $db still journalled after recovery" >&2
+    else
+        # Never fatal. A database this cannot open is a problem the player
+        # itself will report far better than a pre-start script can, and
+        # refusing to start is strictly worse than starting and saying so.
+        echo "vaino-db-recover: could not open $db" >&2
+    fi
+done
+exit 0

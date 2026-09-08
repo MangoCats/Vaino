@@ -252,6 +252,13 @@ After=local-fs.target sound.target
 # speaker connects plays flawlessly into the dummy for ever, reports itself
 # healthy, and leaves the speaker with no audio to hold A2DP open. That is the
 # disconnect-a-few-seconds-in symptom, and this is where it is fixed.
+# Roll back any hot SQLite journal first [PI3-FOUND-120]. Every power-down on
+# this appliance is a power cut -- the speaker supplies the Pi -- and the
+# journal that leaves behind cannot be recovered by the read-only attach the
+# player uses, which turns Restart=always into a crash loop. Ordered before
+# the sink wait because it is instant and must happen even when that wait
+# runs its full timeout.
+ExecStartPre=/usr/local/bin/vaino-db-recover
 ExecStartPre=/usr/local/bin/vaino-wait-sink
 ExecStart=/usr/local/bin/vaino /srv/library/vaino.db --port 5720
 Restart=always
@@ -294,7 +301,7 @@ fi
 # these verbs, with the device address validated before it reaches BlueZ.
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in vaino-btctl vaino-wait-sink vaino-led-boot vaino-wifi-revert; do
+for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-led-boot vaino-wifi-revert; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
