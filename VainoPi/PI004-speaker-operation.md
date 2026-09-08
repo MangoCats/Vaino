@@ -419,3 +419,41 @@ nobody asked.
 > speaker. Attempts to manufacture a synthetic hot journal afterwards were
 > abandoned — SQLite optimises the no-op transaction away — which is worth
 > knowing before anyone tries to write a regression test for this.
+
+**`[PI3-FOUND-130]` Trust is what lets the speaker reconnect to *us*, and a
+hand recovery throws it away silently.** BlueZ auto-authorises an incoming
+service connection only from a trusted device; untrusted, it asks an agent,
+and this appliance registers one only for the duration of a `pair`
+`[PI3-WHY-060]`. At every other moment there is nobody to ask, so the request
+is refused outright.
+
+Measured on the boot after the Middleton was hard-reset and re-paired by
+hand. The speaker had an ACL link to the Pi by 20.8 s, then tried three times
+to bring up A2DP and was refused each time:
+
+```
+[20.836] vaino-speaker: ...is connected but the stream was on 'nothing'
+[28.952] bluetoothd: Authentication attempt without agent
+[28.953] bluetoothd: a2dp.c:auth_cb() Access denied: org.bluez.Error.Rejected
+[37.798] ... Rejected      [46.693] ... Rejected
+[55.719] vaino-speaker: connected 20:64:DE:CF:F3:AD after 5s
+```
+
+Its persisted record read `Trusted=false` beside a perfectly good link key.
+Thirty-five seconds were spent refusing the speaker's own offers to connect,
+until this script's outbound connect finally won.
+
+The delay is the smaller half. **The speaker reaching out to us is the one
+path that does not have to win the power-up race `[PI3-FOUND-090]`** — it
+costs no paging and no shared-radio time, and it begins the moment the
+speaker is awake, which on this appliance is also the moment the Pi is
+plugged in. Losing trust disables that path entirely and leaves only the
+race, which is the path the Pi loses by design.
+
+`use` has always trusted `[PI3-WHY-040]`, but a listener recovering by
+forgetting the device and reconnecting through any other path lands on a
+bonded, untrusted speaker, and nothing ever put it back. `vaino-speaker` now
+asserts it every tick: checked before it is set, so a healthy appliance
+spends nothing, and loud when it actually repaired something. Verified by
+untrusting the speaker and watching the next tick restore `Trusted=true` to
+disk.

@@ -22,6 +22,40 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 SPEAKER="${SPEAKER:-$(sqlite3 "$DB" \
     "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null)}"
 
+# **`[PI3-FOUND-130]` Trust is what lets the speaker reconnect to US**, and it
+# is the first thing a recovery throws away.
+#
+# BlueZ auto-authorises an incoming service connection only from a device
+# marked trusted. Untrusted, it asks an agent instead; this appliance
+# registers one only for the duration of a `pair` `[PI3-WHY-060]`, so at every
+# other moment there is nobody to ask and the request is refused outright.
+# Measured 2026-09-08, on the boot after the speaker was hard-reset and
+# re-paired by hand: the Middleton had an ACL link to the Pi by 20.8 s and
+# then tried three times to bring up A2DP -- 28.9 s, 37.8 s, 46.7 s -- and was
+# rejected every time with `Authentication attempt without agent` /
+# `Access denied`. Its persisted record read `Trusted=false` while the link
+# key beside it was perfectly good. Audio did not arrive until this script's
+# own outbound connect won at 55.7 s: some thirty-five seconds spent refusing
+# the speaker's own offers to connect.
+#
+# That matters beyond the delay. The speaker reaching out to us is the ONE
+# path that does not have to win the power-up race `[PI3-FOUND-090]` -- it
+# costs no paging, no shared-radio time, and it starts the moment the speaker
+# is awake. Losing trust silently disables it and leaves only the race, which
+# is the path this appliance loses by design.
+#
+# `use` has always trusted `[PI3-WHY-040]`, but a listener who recovers by
+# forgetting the device and reconnecting -- through `bluetoothctl`, or through
+# any path but that one verb -- lands on a bonded, untrusted speaker and
+# nothing ever puts it back. So it is asserted here instead: every tick,
+# idempotent, checked before it is set so a healthy appliance spends nothing,
+# and loud when it actually had to repair something.
+if [ -n "${SPEAKER:-}" ] &&
+   ! bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q 'Trusted: yes'; then
+    bluetoothctl trust "$SPEAKER" >/dev/null 2>&1 &&
+        echo "trusted $SPEAKER -- it was not, so it could not have reconnected on its own"
+fi
+
 # **Ground truth first, stored belief second** [PI3-AIM-040]. Recorded once,
 # live 2026-09-04: `speaker_address` had gone stale (still MIDDLETON, from
 # earlier testing) while the appliance was actually connected to and playing
