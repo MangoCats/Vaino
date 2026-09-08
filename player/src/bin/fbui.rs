@@ -4,9 +4,11 @@
 //! assumptions against real hardware before building anything else on top
 //! of them. This binary does exactly one thing -- connect to `vaino`'s
 //! *existing* `/ws`, the same push every browser skin already reads, and
-//! draw the title/artist it carries onto the confirmed `/dev/fb0`
-//! (`fb_ili9486`, 480x320, RGB565 -- `[SPEC-FBUI-025]`, measured against
-//! `vainoplayer3` directly, not assumed).
+//! draw the title/artist it carries onto whichever `/dev/fbN` the
+//! `fb_ili9486` driver claims (`FbDisplay::find_panel_path`, found by name
+//! rather than a fixed index after a later boot-config change moved it
+//! from `fb0` to `fb1`) -- 480x320, RGB565 `[SPEC-FBUI-025]`, measured
+//! against `vainoplayer3` directly, not assumed.
 //!
 //! Deliberately not the real `Snapshot` from `web::mod` -- that type is
 //! `Serialize`-only (the server never deserializes its own push), and
@@ -62,15 +64,50 @@
 //! content of a title is unaffected by a curly apostrophe rendering as a
 //! straight one.
 //!
+//! A post-Phase-7 refinement adds two pages -- Now Playing and Settings,
+//! reached by a gear icon in the top-right corner of both -- rather than
+//! trying to fit volume control, all 8 programmes, and per-track queue
+//! editing onto one 480x320 screen at once. Now Playing gained a 2x5
+//! button grid (play/pause, skip, then all 8 programmes, the currently
+//! active one highlighted); Settings holds volume +/- and the upcoming
+//! queue, each entry with the same sooner/remove/later actions the
+//! browser skins already expose at `/queue/:qid/:action`
+//! `[SPEC-FBUI-015]`. The programme buttons never send `auto`
+//! (time-of-day selection) -- only ever a specific id -- matching this
+//! appliance's own requirement (no realtime clock, and a truck's driving
+//! hours have no relationship to a schedule tuned for home listening).
+//! The position/progress redraw is throttled to once per 5 seconds
+//! (`differs_ignoring_position`); every other change still redraws at
+//! once.
+//!
 //!     fbui [--calibrate] [ws://host:port/ws]   (default: ws://127.0.0.1:5720/ws)
 
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle, Rectangle};
 use framebuffer::Framebuffer;
 use futures_util::StreamExt;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::FontRenderer;
+
+/// Named in the real `Snapshot` as `ProgramItem` -- only `id`/`name` are
+/// drawn here, `start` is not; serde ignores the field it never asked for.
+#[derive(serde::Deserialize, Default, Clone, PartialEq)]
+struct ProgramItem {
+    id: i64,
+    name: String,
+}
+
+/// Named in the real `Snapshot` as `QueueItem` -- only what a queue row
+/// displays and edits. `qid` (not `passage_id`) is what `/queue/:qid/:action`
+/// takes `[REQ-VIS-186]`: the same passage queued twice must be editable
+/// as two different rows.
+#[derive(serde::Deserialize, Default, Clone, PartialEq)]
+struct QueueItem {
+    qid: u64,
+    title: String,
+    artist: Option<String>,
+}
 
 /// Only the fields this phase draws. Unknown incoming fields are ignored by
 /// serde automatically -- the real `Snapshot` carries dozens more.
@@ -86,6 +123,15 @@ struct ClientSnapshot {
     position_ms: u64,
     duration_ms: u64,
     volume_db: f32,
+    /// The programme in force, by name -- the real `Snapshot` carries no
+    /// numeric id for it, only `programs[].id` for the *available* list.
+    /// Matched against `programs` by name to decide which button to
+    /// highlight; names are unique in practice (`listener_programs` has no
+    /// uniqueness constraint on `name`, but nothing in this project has
+    /// ever given two programmes the same one).
+    program: Option<String>,
+    programs: Vec<ProgramItem>,
+    queue: Vec<QueueItem>,
 }
 
 /// Wraps the real Linux framebuffer device so `embedded-graphics` can draw
@@ -103,6 +149,30 @@ struct FbDisplay {
 }
 
 impl FbDisplay {
+    /// Finds whichever `/dev/fbN` the `fb_ili9486` driver actually claimed,
+    /// by name (`/sys/class/graphics/fbN/name`) rather than a fixed index.
+    ///
+    /// `[SPEC-FBUI-025]` originally confirmed this panel at `/dev/fb0`
+    /// because nothing else claimed a framebuffer on that boot. Disabling
+    /// `vc4-kms-v3d` for boot speed (audio-first priority) removed the
+    /// hand-off that used to keep the legacy firmware framebuffer
+    /// (`BCM2708 FB`, 32bpp) from ever appearing at all -- it now claims
+    /// `fb0` first, bumping the real panel to `fb1`. A fixed path already
+    /// broke once from a config change this file had no part in; scanning
+    /// by name survives the next one too.
+    fn find_panel_path() -> String {
+        for n in 0..4 {
+            let name_path = format!("/sys/class/graphics/fb{n}/name");
+            if std::fs::read_to_string(&name_path).map(|s| s.trim() == "fb_ili9486").unwrap_or(false) {
+                return format!("/dev/fb{n}");
+            }
+        }
+        // Falls through to the historically-confirmed default so the error
+        // this produces downstream (wrong bpp, or no such device) still
+        // names a real path to go look at, rather than an empty string.
+        "/dev/fb0".to_string()
+    }
+
     fn open(path: &str) -> Result<Self, String> {
         let fb = Framebuffer::new(path).map_err(|e| format!("open {path}: {e:?}"))?;
         let width = fb.var_screen_info.xres;
@@ -196,6 +266,19 @@ fn normalize_for_display(s: &str) -> String {
         .collect()
 }
 
+/// Cut to `max_chars`, ellipsis included, using three ASCII dots rather
+/// than the single Unicode ellipsis glyph (`…`, U+2026) -- untested against
+/// `TEXT_FONT` and not worth adding to `normalize_for_display`'s mapping
+/// for the one place this file would ever produce it.
+fn truncate_display(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut t: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+    t.push_str("...");
+    t
+}
+
 /// Renders one line of already-`normalize_for_display`-cleaned text at a
 /// given left/baseline anchor. Errors are logged, not propagated --
 /// `FbDisplay`'s own `DrawTarget::Error` is `Infallible`, so the only way
@@ -209,23 +292,72 @@ fn draw_text(display: &mut FbDisplay, text: &str, x: i32, y: i32) {
     }
 }
 
+fn draw_text_centered(display: &mut FbDisplay, text: &str, center: Point, color: Rgb565) {
+    if let Err(e) = TEXT_FONT.render_aligned(
+        text,
+        center,
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        FontColor::Transparent(color),
+        display,
+    ) {
+        eprintln!("fbui: could not render {text:?}: {e:?}");
+    }
+}
+
 fn fmt_time(ms: u64) -> String {
     let s = ms / 1000;
     format!("{}:{:02}", s / 60, s % 60)
 }
 
 // ---------------------------------------------------------------------
-// Transport UI `[SPEC036]` §8 phase 4: play/pause/skip/volume/seek, hit-
-// tested against concrete regions now that orientation is confirmed
-// `[SPEC-FBUI-025]` rather than guessed at.
+// Pages. Reached by the gear icon, present (and at the same coordinates)
+// on both -- a settings/back toggle, not a stack, since there are only
+// ever these two.
+// ---------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Page {
+    NowPlaying,
+    Settings,
+}
+
+/// Top-right, both pages. Hit region is deliberately larger than the drawn
+/// icon -- a fingertip is wider than a 2px gear outline.
+const GEAR_CX: i32 = 458;
+const GEAR_CY: i32 = 22;
+const GEAR_HIT_X0: i32 = 420;
+const GEAR_HIT_Y1: i32 = 44;
+
+fn draw_gear(display: &mut FbDisplay) -> Result<(), std::convert::Infallible> {
+    // A solid backdrop first: this corner is drawn last so it always wins
+    // regardless of how long the title text underneath it runs, rather
+    // than hoping no title is ever wide enough to reach the corner.
+    Rectangle::new(Point::new(GEAR_HIT_X0, 0), Size::new(60, GEAR_HIT_Y1 as u32))
+        .into_styled(PrimitiveStyle::with_fill(LCD_BG))
+        .draw(display)?;
+    let (r_in, r_out) = (9i32, 16i32);
+    Circle::with_center(Point::new(GEAR_CX, GEAR_CY), (r_in * 2) as u32)
+        .into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 2))
+        .draw(display)?;
+    for i in 0..8 {
+        let theta = (i as f64) * std::f64::consts::PI / 4.0;
+        let (sin, cos) = theta.sin_cos();
+        let p0 = Point::new(GEAR_CX + (cos * r_in as f64) as i32, GEAR_CY + (sin * r_in as f64) as i32);
+        let p1 = Point::new(GEAR_CX + (cos * r_out as f64) as i32, GEAR_CY + (sin * r_out as f64) as i32);
+        Line::new(p0, p1).into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 2)).draw(display)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// Now Playing: album art, the tap-to-seek progress bar, and a 2x5 button
+// grid -- play/pause, skip, then all 8 programmes `[SPEC-DIR-140]`, the
+// currently active one highlighted.
 // ---------------------------------------------------------------------
 
 // Album art `[SPEC036]` §8 phase 7: a thumbnail, top-left, doubled to
-// 100x100 after seeing the first size on the physical screen -- everything
-// below it shifts down by the same amount, taken back out of the button
-// row's height (touch region shrinks; it does not move sideways or split,
-// so `[SPEC036]`'s already-physically-confirmed hit-test x-ranges below
-// stay valid). Title/artist text shifts right to sit beside it.
+// 100x100 after seeing the first size on the physical screen.
 const ART_SIZE: u32 = 100;
 const ART_X0: u32 = 4;
 const ART_Y0: u32 = 4;
@@ -236,55 +368,45 @@ const ARTIST_Y: i32 = 65;
 const SEEKBAR_Y0: i32 = 110;
 const SEEKBAR_Y1: i32 = 128;
 const POS_TEXT_Y: i32 = 148;
-const BUTTON_Y0: i32 = 164;
-const BUTTON_Y1: i32 = 270;
-/// Four buttons, evenly spread across the panel's 480px width with visible
-/// gaps between them -- sized well above a fingertip's real contact area,
-/// not just legible text, since this is what a person actually presses.
-const BUTTON_XS: [(i32, i32); 4] = [(0, 110), (123, 233), (246, 356), (369, 479)];
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Zone {
-    VolDown,
-    PlayPause,
-    Skip,
-    VolUp,
-    Seek,
-}
+/// Two rows of five: play/pause, skip, then all 8 programmes. Sized well
+/// above a fingertip's real contact area, not just legible text, since
+/// this is what a person actually presses -- same reasoning as the
+/// original single-row grid, now split to fit ten buttons instead of four.
+const GRID_XS: [(i32, i32); 5] = [(0, 88), (96, 184), (192, 280), (288, 376), (384, 472)];
+const ROW1_Y0: i32 = 162;
+const ROW1_Y1: i32 = 208;
+const ROW2_Y0: i32 = 214;
+const ROW2_Y1: i32 = 260;
 
-/// Maps an already-calibrated screen point to whichever control (if any)
-/// it lands on. Takes screen coordinates, not raw touch ADC values --
-/// calibration `[SPEC-FBUI-050]` is applied by the caller first, so this
-/// function never needs to know this panel's rotation or axis convention.
-fn hit_test(sx: f64, sy: f64) -> Option<Zone> {
-    let (x, y) = (sx as i32, sy as i32);
-    if (SEEKBAR_Y0..=SEEKBAR_Y1).contains(&y) {
-        return Some(Zone::Seek);
-    }
-    if (BUTTON_Y0..=BUTTON_Y1).contains(&y) {
-        for (i, &(x0, x1)) in BUTTON_XS.iter().enumerate() {
-            if x >= x0 && x <= x1 {
-                return Some([Zone::VolDown, Zone::PlayPause, Zone::Skip, Zone::VolUp][i]);
-            }
-        }
-    }
-    None
-}
+/// `programs[0..8]`'s screen slots, in row-major reading order matching the
+/// physical grid: row 1 is transport, row 2 is entirely programmes 4-8.
+const PROGRAM_SLOTS: [(i32, i32, i32, i32); 8] = [
+    (GRID_XS[2].0, GRID_XS[2].1, ROW1_Y0, ROW1_Y1),
+    (GRID_XS[3].0, GRID_XS[3].1, ROW1_Y0, ROW1_Y1),
+    (GRID_XS[4].0, GRID_XS[4].1, ROW1_Y0, ROW1_Y1),
+    (GRID_XS[0].0, GRID_XS[0].1, ROW2_Y0, ROW2_Y1),
+    (GRID_XS[1].0, GRID_XS[1].1, ROW2_Y0, ROW2_Y1),
+    (GRID_XS[2].0, GRID_XS[2].1, ROW2_Y0, ROW2_Y1),
+    (GRID_XS[3].0, GRID_XS[3].1, ROW2_Y0, ROW2_Y1),
+    (GRID_XS[4].0, GRID_XS[4].1, ROW2_Y0, ROW2_Y1),
+];
 
-fn draw_button(display: &mut FbDisplay, x0: i32, x1: i32, label: &str) -> Result<(), std::convert::Infallible> {
-    Rectangle::new(Point::new(x0, BUTTON_Y0), Size::new((x1 - x0) as u32, (BUTTON_Y1 - BUTTON_Y0) as u32))
-        .into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 2))
-        .draw(display)?;
-    let center = Point::new((x0 + x1) / 2, (BUTTON_Y0 + BUTTON_Y1) / 2);
-    if let Err(e) = TEXT_FONT.render_aligned(
-        label,
-        center,
-        VerticalPosition::Center,
-        HorizontalAlignment::Center,
-        FontColor::Transparent(LCD_GREEN),
-        display,
-    ) {
-        eprintln!("fbui: could not render button {label:?}: {e:?}");
+fn draw_button(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
+    if highlighted {
+        // Inverted: a filled background is unmistakable at a glance, which
+        // matters more here than anywhere else in this UI -- "which
+        // programme is active" is the one piece of state this screen has
+        // no other way to show `[SPEC-DIR-140]`.
+        Rectangle::new(Point::new(x0, y0), Size::new((x1 - x0) as u32, (y1 - y0) as u32))
+            .into_styled(PrimitiveStyle::with_fill(LCD_GREEN))
+            .draw(display)?;
+        draw_text_centered(display, label, Point::new((x0 + x1) / 2, (y0 + y1) / 2), LCD_BG);
+    } else {
+        Rectangle::new(Point::new(x0, y0), Size::new((x1 - x0) as u32, (y1 - y0) as u32))
+            .into_styled(PrimitiveStyle::with_stroke(LCD_GREEN, 2))
+            .draw(display)?;
+        draw_text_centered(display, label, Point::new((x0 + x1) / 2, (y0 + y1) / 2), LCD_GREEN);
     }
     Ok(())
 }
@@ -302,13 +424,10 @@ fn draw_art(display: &mut FbDisplay, pixels: &[Rgb565]) {
     }
 }
 
-/// Clears the LCD panel area and redraws everything -- title/artist, the
-/// album art thumbnail (if any), the tap-to-seek progress bar,
-/// position/volume, and the four transport buttons. The whole-region
-/// redraw `[SPEC-FBUI-020]` says to do only on the fields that actually
-/// changed, which `main`'s own diff against the last state already
-/// guarantees by only calling this when something did.
-fn render(display: &mut FbDisplay, snap: &ClientSnapshot, art: Option<&[Rgb565]>) -> Result<(), std::convert::Infallible> {
+/// Now Playing: title/artist, art, the seek bar, position, and the 2x5
+/// button grid. `[SPEC-FBUI-020]`'s whole-region redraw on any change is
+/// `main`'s job to gate, not this function's.
+fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Option<&[Rgb565]>) -> Result<(), std::convert::Infallible> {
     let w = display.width as i32;
     Rectangle::new(Point::zero(), Size::new(display.width, display.height))
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
@@ -343,18 +462,88 @@ fn render(display: &mut FbDisplay, snap: &ClientSnapshot, art: Option<&[Rgb565]>
     }
 
     let pos = format!(
-        "{} {} / {}  {:+.0}dB",
+        "{} {} / {}",
         if snap.playing { ">" } else { "||" },
         fmt_time(snap.position_ms),
         fmt_time(snap.duration_ms),
-        snap.volume_db,
     );
     draw_text(display, &pos, 8, POS_TEXT_Y);
 
-    draw_button(display, BUTTON_XS[0].0, BUTTON_XS[0].1, "VOL-")?;
-    draw_button(display, BUTTON_XS[1].0, BUTTON_XS[1].1, if snap.playing { "PAUSE" } else { "PLAY" })?;
-    draw_button(display, BUTTON_XS[2].0, BUTTON_XS[2].1, "SKIP")?;
-    draw_button(display, BUTTON_XS[3].0, BUTTON_XS[3].1, "VOL+")?;
+    draw_button(display, GRID_XS[0].0, GRID_XS[0].1, ROW1_Y0, ROW1_Y1, if snap.playing { "PAUSE" } else { "PLAY" }, false)?;
+    draw_button(display, GRID_XS[1].0, GRID_XS[1].1, ROW1_Y0, ROW1_Y1, "SKIP", false)?;
+    for (i, &(x0, x1, y0, y1)) in PROGRAM_SLOTS.iter().enumerate() {
+        let label = snap.programs.get(i).map(|p| truncate_display(&normalize_for_display(&p.name), 8));
+        let active = snap
+            .programs
+            .get(i)
+            .is_some_and(|p| snap.program.as_deref() == Some(p.name.as_str()));
+        draw_button(display, x0, x1, y0, y1, label.as_deref().unwrap_or(""), active)?;
+    }
+
+    draw_gear(display)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// Settings: volume +/-, and the upcoming queue with per-item sooner/
+// remove/later controls -- the same three actions `/queue/:qid/:action`
+// already serves every browser skin `[SPEC-FBUI-015]`.
+// ---------------------------------------------------------------------
+
+const VOL_DOWN_X: (i32, i32) = (8, 150);
+const VOL_UP_X: (i32, i32) = (330, 472);
+const VOL_ROW_Y: (i32, i32) = (30, 72);
+
+const QUEUE_ROW_HEIGHT: i32 = 44;
+const QUEUE_TOP_Y: i32 = 94;
+const QUEUE_ROW_GAP: i32 = 2;
+/// However many rows actually fit above the bottom margin -- not tied to
+/// any particular queue depth setting, since `[REQ-VIS-180]`-style depth
+/// changes must not silently need a layout change here too.
+const MAX_QUEUE_ROWS: usize = 5;
+
+/// A queue row's three action buttons, right-aligned: "-"/"+" (sooner/
+/// later) grouped together since both reorder, "X" (remove) set apart at
+/// the far edge so reordering and deleting are not adjacent under a thumb.
+const QUEUE_BTN_MINUS: (i32, i32) = (356, 390);
+const QUEUE_BTN_PLUS: (i32, i32) = (394, 428);
+const QUEUE_BTN_X: (i32, i32) = (436, 472);
+
+fn queue_row_y(row: usize) -> (i32, i32) {
+    let y0 = QUEUE_TOP_Y + row as i32 * (QUEUE_ROW_HEIGHT + QUEUE_ROW_GAP);
+    (y0, y0 + QUEUE_ROW_HEIGHT)
+}
+
+fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::convert::Infallible> {
+    Rectangle::new(Point::zero(), Size::new(display.width, display.height))
+        .into_styled(PrimitiveStyle::with_fill(LCD_BG))
+        .draw(display)?;
+
+    draw_text(display, "SETTINGS", 8, 20);
+
+    draw_button(display, VOL_DOWN_X.0, VOL_DOWN_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1, "VOL -", false)?;
+    draw_button(display, VOL_UP_X.0, VOL_UP_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1, "VOL +", false)?;
+    draw_text_centered(
+        display,
+        &format!("{:+.0}dB", snap.volume_db),
+        Point::new((VOL_DOWN_X.1 + VOL_UP_X.0) / 2, (VOL_ROW_Y.0 + VOL_ROW_Y.1) / 2),
+        LCD_GREEN,
+    );
+
+    draw_text(display, "NEXT UP", 8, 88);
+    for (row, item) in snap.queue.iter().take(MAX_QUEUE_ROWS).enumerate() {
+        let (y0, y1) = queue_row_y(row);
+        let label = match &item.artist {
+            Some(a) => format!("{} - {}", item.title, a),
+            None => item.title.clone(),
+        };
+        draw_text(display, &truncate_display(&normalize_for_display(&label), 34), 8, y1 - 12);
+        draw_button(display, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1, "-", false)?;
+        draw_button(display, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1, "+", false)?;
+        draw_button(display, QUEUE_BTN_X.0, QUEUE_BTN_X.1, y0, y1, "X", false)?;
+    }
+
+    draw_gear(display)?;
     Ok(())
 }
 
@@ -365,6 +554,8 @@ fn render(display: &mut FbDisplay, snap: &ClientSnapshot, art: Option<&[Rgb565]>
 /// `render` called with a default/empty `ClientSnapshot`: that would read
 /// as "connected, and nothing happens to be playing," which is a real,
 /// different state a person could otherwise not tell apart from this one.
+/// Page-agnostic on purpose -- there is nothing to page between when there
+/// is nothing to show.
 fn render_disconnected(display: &mut FbDisplay) -> Result<(), std::convert::Infallible> {
     let (w, h) = (display.width as i32, display.height as i32);
     Rectangle::new(Point::zero(), Size::new(display.width, display.height))
@@ -470,12 +661,99 @@ fn http_addr_from_ws_url(ws_url: &str) -> String {
 }
 
 // ---------------------------------------------------------------------
+// Hit-testing: maps an already-calibrated screen point, plus the current
+// page and snapshot (programme ids and queue qids are dynamic, unlike the
+// fixed transport regions), to whichever action it lands on.
+// ---------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Zone {
+    Gear,
+    PlayPause,
+    Skip,
+    Program(i64),
+    VolDown,
+    VolUp,
+    Seek,
+    QueueSooner(u64),
+    QueueRemove(u64),
+    QueueLater(u64),
+}
+
+fn in_rect(x: i32, y: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
+    (x0..=x1).contains(&x) && (y0..=y1).contains(&y)
+}
+
+/// Takes screen coordinates, not raw touch ADC values -- calibration
+/// `[SPEC-FBUI-050]` is applied by the caller first, so this function
+/// never needs to know this panel's rotation or axis convention.
+fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone> {
+    let (x, y) = (sx as i32, sy as i32);
+    if x >= GEAR_HIT_X0 && y <= GEAR_HIT_Y1 {
+        return Some(Zone::Gear);
+    }
+    match page {
+        Page::NowPlaying => {
+            if (SEEKBAR_Y0..=SEEKBAR_Y1).contains(&y) {
+                return Some(Zone::Seek);
+            }
+            if in_rect(x, y, GRID_XS[0].0, GRID_XS[0].1, ROW1_Y0, ROW1_Y1) {
+                return Some(Zone::PlayPause);
+            }
+            if in_rect(x, y, GRID_XS[1].0, GRID_XS[1].1, ROW1_Y0, ROW1_Y1) {
+                return Some(Zone::Skip);
+            }
+            for (i, &(x0, x1, y0, y1)) in PROGRAM_SLOTS.iter().enumerate() {
+                if in_rect(x, y, x0, x1, y0, y1) {
+                    return snap.programs.get(i).map(|p| Zone::Program(p.id));
+                }
+            }
+            None
+        }
+        Page::Settings => {
+            if in_rect(x, y, VOL_DOWN_X.0, VOL_DOWN_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1) {
+                return Some(Zone::VolDown);
+            }
+            if in_rect(x, y, VOL_UP_X.0, VOL_UP_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1) {
+                return Some(Zone::VolUp);
+            }
+            for (row, item) in snap.queue.iter().take(MAX_QUEUE_ROWS).enumerate() {
+                let (y0, y1) = queue_row_y(row);
+                if in_rect(x, y, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1) {
+                    return Some(Zone::QueueLater(item.qid));
+                }
+                if in_rect(x, y, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1) {
+                    return Some(Zone::QueueSooner(item.qid));
+                }
+                if in_rect(x, y, QUEUE_BTN_X.0, QUEUE_BTN_X.1, y0, y1) {
+                    return Some(Zone::QueueRemove(item.qid));
+                }
+            }
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // Touch `[SPEC-FBUI-045]`: raw evdev, hand-parsed rather than a new crate.
 // ---------------------------------------------------------------------
 
-/// Confirmed against real hardware -- `ADS7846 Touchscreen` enumerates
-/// here on `vainoplayer3` (`[SPEC-FBUI-025]`'s own touch confirmation).
-const TOUCH_DEVICE: &str = "/dev/input/event2";
+/// Finds whichever `/dev/input/eventN` the `ADS7846 Touchscreen` device
+/// actually enumerated as, by name (`/sys/class/input/eventN/device/name`)
+/// rather than a fixed index -- `[SPEC-FBUI-025]` originally confirmed this
+/// at `event2`, but disabling `vc4-kms-v3d` for boot speed shifted evdev's
+/// own enumeration order and moved it to `event0`, the same class of
+/// fragility `FbDisplay::find_panel_path` exists to survive on the
+/// framebuffer side.
+fn find_touch_path() -> String {
+    for n in 0..8 {
+        let name_path = format!("/sys/class/input/event{n}/device/name");
+        if std::fs::read_to_string(&name_path).map(|s| s.trim() == "ADS7846 Touchscreen").unwrap_or(false) {
+            return format!("/dev/input/event{n}");
+        }
+    }
+    "/dev/input/event2".to_string() // historically-confirmed fallback, names a real path to investigate
+}
 
 /// Where the calibration this module produces gets stored -- a C-partition
 /// (state) artifact by `[SPEC-FBUI-055]`'s own reasoning, alongside
@@ -679,6 +957,19 @@ fn run_calibration(display: &mut FbDisplay, touch: &mut TouchDevice) -> std::io:
     Ok(AffineCalibration::from_three_points(screen_pts, raw_pts))
 }
 
+/// True if `a` and `b` differ in anything other than `position_ms` --
+/// `main`'s redraw gate uses this to throttle the once-a-second position
+/// tick to once per 5 seconds without also delaying an actual play/pause,
+/// skip, programme, volume, or queue change, which must still redraw at
+/// once. Compares via a modified clone rather than a hand-written
+/// field list, so a future field addition to `ClientSnapshot` is caught
+/// by this comparison automatically instead of silently being ignored.
+fn differs_ignoring_position(a: &ClientSnapshot, b: &ClientSnapshot) -> bool {
+    let mut a2 = a.clone();
+    a2.position_ms = b.position_ms;
+    a2 != *b
+}
+
 #[cfg(test)]
 mod tests {
     use super::AffineCalibration;
@@ -772,6 +1063,32 @@ mod tests {
         std::fs::remove_file(path).ok();
         assert_eq!((cal.a, cal.b, cal.c, cal.d, cal.e, cal.f), (loaded.a, loaded.b, loaded.c, loaded.d, loaded.e, loaded.f));
     }
+
+    #[test]
+    fn truncate_display_leaves_short_strings_alone() {
+        assert_eq!(super::truncate_display("short", 10), "short");
+    }
+
+    #[test]
+    fn truncate_display_cuts_long_strings_with_an_ascii_ellipsis() {
+        let out = super::truncate_display("a very long title indeed", 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.ends_with("..."));
+    }
+
+    fn snap(position_ms: u64, title: &str) -> super::ClientSnapshot {
+        super::ClientSnapshot { position_ms, title: Some(title.to_string()), ..Default::default() }
+    }
+
+    #[test]
+    fn differs_ignoring_position_ignores_only_that_field() {
+        let a = snap(1000, "Same Title");
+        let b = snap(6000, "Same Title");
+        assert!(!super::differs_ignoring_position(&a, &b), "position alone must not count as a difference");
+
+        let c = snap(1000, "Different Title");
+        assert!(super::differs_ignoring_position(&a, &c), "a real change must still count, regardless of position");
+    }
 }
 
 #[tokio::main]
@@ -787,7 +1104,7 @@ async fn main() {
     }
     let url = url.unwrap_or_else(|| "ws://127.0.0.1:5720/ws".to_string());
 
-    let mut display = match FbDisplay::open("/dev/fb0") {
+    let mut display = match FbDisplay::open(&FbDisplay::find_panel_path()) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("fbui: {e}");
@@ -808,7 +1125,8 @@ async fn main() {
     let calibration: Option<AffineCalibration> = if force_calibrate
         || AffineCalibration::load(CALIBRATION_PATH).is_none()
     {
-        match TouchDevice::open(TOUCH_DEVICE) {
+        let touch_path = find_touch_path();
+        match TouchDevice::open(&touch_path) {
             Ok(mut touch) => match run_calibration(&mut display, &mut touch) {
                 Ok(cal) => {
                     match cal.save(CALIBRATION_PATH) {
@@ -823,7 +1141,7 @@ async fn main() {
                 }
             },
             Err(e) => {
-                eprintln!("fbui: could not open {TOUCH_DEVICE} for calibration: {e}");
+                eprintln!("fbui: could not open {touch_path} for calibration: {e}");
                 None
             }
         }
@@ -840,7 +1158,11 @@ async fn main() {
     // one-time, nothing-else-running use of the same call above.
     let (touch_tx, mut touch_rx) = tokio::sync::mpsc::unbounded_channel::<(f64, f64)>();
     std::thread::spawn(move || loop {
-        match TouchDevice::open(TOUCH_DEVICE) {
+        // Re-resolved on every retry, not just once -- cheap (a handful of
+        // sysfs reads), and robust to a device that enumerates late rather
+        // than one that moved.
+        let touch_path = find_touch_path();
+        match TouchDevice::open(&touch_path) {
             Ok(mut td) => loop {
                 match td.wait_for_tap() {
                     Ok(pos) => {
@@ -854,7 +1176,7 @@ async fn main() {
                     }
                 }
             },
-            Err(e) => eprintln!("fbui: could not open {TOUCH_DEVICE}: {e}"),
+            Err(e) => eprintln!("fbui: could not open {touch_path}: {e}"),
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     });
@@ -868,7 +1190,11 @@ async fn main() {
     let _ = render_disconnected(&mut display);
 
     let http_addr = http_addr_from_ws_url(&url);
+    let mut page = Page::NowPlaying;
     let mut last: Option<ClientSnapshot> = None;
+    // Set in the past so the very first snapshot always redraws regardless
+    // of the 5-second position-only throttle below.
+    let mut last_position_redraw = std::time::Instant::now() - std::time::Duration::from_secs(5);
     // Keyed by passage_id, not refetched on every push -- `None` inside
     // the tuple is cached too, so a passage confirmed to have no art (most
     // of this all-radio sample library) is not re-requested on every
@@ -914,7 +1240,17 @@ async fn main() {
                             continue;
                         }
                     };
-                    if last.as_ref() != Some(&snap) {
+                    // Throttled to once per 5s for a position-only change
+                    // (the once-a-second push while a track plays), full
+                    // speed for anything else -- a play/pause, skip,
+                    // programme, volume, or queue change always redraws
+                    // at once.
+                    let due = last_position_redraw.elapsed() >= std::time::Duration::from_secs(5);
+                    let should_redraw = match &last {
+                        None => true,
+                        Some(l) => differs_ignoring_position(l, &snap) || due,
+                    };
+                    if should_redraw {
                         // Refetched only on an actual passage change, not on
                         // every push -- position_ms alone changing must not
                         // trigger this `[SPEC-FBUI-040]`'s "once per track"
@@ -946,7 +1282,10 @@ async fn main() {
                         // against real hardware, not estimated from the SPI
                         // clock rate on paper.
                         let started = std::time::Instant::now();
-                        let result = render(&mut display, &snap, art);
+                        let result = match page {
+                            Page::NowPlaying => render_now_playing(&mut display, &snap, art),
+                            Page::Settings => render_settings(&mut display, &snap),
+                        };
                         let elapsed = started.elapsed();
                         if elapsed > std::time::Duration::from_millis(20) {
                             println!("fbui: render took {elapsed:?}");
@@ -959,37 +1298,66 @@ async fn main() {
                             // here instead of panicking.
                             eprintln!("fbui: render failed: {e:?}");
                         }
-                        last = Some(snap);
+                        last_position_redraw = std::time::Instant::now();
                     }
+                    last = Some(snap);
                 }
                 Some((rx, ry)) = touch_rx.recv() => {
                     let Some(cal) = &calibration else { continue };
                     let (sx, sy) = cal.apply(rx, ry);
-                    match hit_test(sx, sy) {
+                    let snap = last.clone().unwrap_or_default();
+                    match hit_test(page, sx, sy, &snap) {
+                        Some(Zone::Gear) => {
+                            page = match page { Page::NowPlaying => Page::Settings, Page::Settings => Page::NowPlaying };
+                            let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
+                            let result = match page {
+                                Page::NowPlaying => render_now_playing(&mut display, &snap, art),
+                                Page::Settings => render_settings(&mut display, &snap),
+                            };
+                            if let Err(e) = result {
+                                eprintln!("fbui: render failed: {e:?}");
+                            }
+                        }
                         Some(Zone::PlayPause) => {
-                            let playing = last.as_ref().map(|s| s.playing).unwrap_or(false);
+                            let playing = snap.playing;
                             let name = if playing { "pause" } else { "play" };
                             tokio::spawn(http_post(http_addr.clone(), format!("/command/{name}")));
                         }
                         Some(Zone::Skip) => {
                             tokio::spawn(http_post(http_addr.clone(), "/command/skip".to_string()));
                         }
+                        Some(Zone::Program(id)) => {
+                            // Never "auto" -- this appliance has no realtime
+                            // clock and time-of-day selection has no
+                            // relationship to a truck's driving hours. Only
+                            // ever a specific id, persisted server-side by
+                            // `set_program` so it survives a restart
+                            // `[SPEC-DIR-185]`.
+                            tokio::spawn(http_post(http_addr.clone(), format!("/program/{id}")));
+                        }
                         Some(Zone::VolUp) => {
-                            let db = last.as_ref().map(|s| s.volume_db).unwrap_or(0.0) + 3.0;
+                            let db = snap.volume_db + 3.0;
                             tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
                         }
                         Some(Zone::VolDown) => {
-                            let db = last.as_ref().map(|s| s.volume_db).unwrap_or(0.0) - 3.0;
+                            let db = snap.volume_db - 3.0;
                             tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
                         }
                         Some(Zone::Seek) => {
-                            if let Some(s) = &last {
-                                if s.duration_ms > 0 {
-                                    let frac = ((sx - 8.0) / (display.width as f64 - 16.0)).clamp(0.0, 1.0);
-                                    let ms = (frac * s.duration_ms as f64).round() as u64;
-                                    tokio::spawn(http_post(http_addr.clone(), format!("/seek/{ms}")));
-                                }
+                            if snap.duration_ms > 0 {
+                                let frac = ((sx - 8.0) / (display.width as f64 - 16.0)).clamp(0.0, 1.0);
+                                let ms = (frac * snap.duration_ms as f64).round() as u64;
+                                tokio::spawn(http_post(http_addr.clone(), format!("/seek/{ms}")));
                             }
+                        }
+                        Some(Zone::QueueSooner(qid)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/sooner")));
+                        }
+                        Some(Zone::QueueLater(qid)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/later")));
+                        }
+                        Some(Zone::QueueRemove(qid)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/remove")));
                         }
                         None => {}
                     }

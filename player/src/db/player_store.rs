@@ -1252,6 +1252,46 @@ impl PlayerStore {
             .unwrap_or(100)
     }
 
+    /// The programme chosen by hand, persisted so it survives a restart
+    /// rather than reverting to time-of-day selection every power cycle
+    /// `[SPEC-DIR-185]`. Written whenever `set_program` is asked for a real
+    /// id; cleared (deleted, not written as empty) when asked for `auto`,
+    /// so `load_manual_program` returning `None` means the same thing on
+    /// read as it does when nothing has ever been chosen.
+    pub fn save_manual_program(&self, id: Option<i64>) -> Result<(), DbError> {
+        match id {
+            Some(id) => self
+                .conn
+                .execute(
+                    "INSERT INTO player_settings (key, value, updated_at)
+                     VALUES ('manual_program', ?1, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET
+                         value = excluded.value, updated_at = excluded.updated_at",
+                    rusqlite::params![id.to_string()],
+                )
+                .map(|_| ())
+                .map_err(|e| DbError::Query(e.to_string())),
+            None => self
+                .conn
+                .execute("DELETE FROM player_settings WHERE key = 'manual_program'", [])
+                .map(|_| ())
+                .map_err(|e| DbError::Query(e.to_string())),
+        }
+    }
+
+    /// `None` both when nothing has ever been chosen and when a stored value
+    /// no longer parses -- either way there is nothing to override the clock
+    /// with, and `Programs::active`'s own stale-id fallback already handles
+    /// an id that no longer exists.
+    pub fn load_manual_program(&self) -> Option<i64> {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'manual_program'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+    }
+
     /// Set or clear "flag this for review" on a recording or a passage
     /// `[REQ-VIS-265]`. A plain toggle, not a decision: unlike `id_reviews`
     /// and its siblings, there is nothing here to apply and nothing to
@@ -2592,6 +2632,26 @@ mod tests {
 
         st.save_led_brightness(255).unwrap();
         assert_eq!(st.load_led_brightness(), 100, "clamped down to the maximum");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// `None` both before anything is ever chosen and after `auto` clears a
+    /// choice -- an appliance with no realtime clock must never be able to
+    /// tell those two states apart as "fall back to the schedule" versus
+    /// "fall back to something else" `[SPEC-DIR-185]`.
+    #[test]
+    fn manual_program_round_trips_and_auto_clears_it() {
+        let dir = std::env::temp_dir().join(format!("vaino_program_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+
+        assert_eq!(st.load_manual_program(), None, "nothing chosen yet");
+        st.save_manual_program(Some(4)).unwrap();
+        assert_eq!(st.load_manual_program(), Some(4));
+        st.save_manual_program(Some(7)).unwrap();
+        assert_eq!(st.load_manual_program(), Some(7), "a later choice replaces the earlier one");
+        st.save_manual_program(None).unwrap();
+        assert_eq!(st.load_manual_program(), None, "auto clears it rather than storing empty");
         let _ = std::fs::remove_file(&dir);
     }
 

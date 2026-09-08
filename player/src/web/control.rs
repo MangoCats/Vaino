@@ -199,18 +199,38 @@ pub(super) async fn set_program(
     State(ui): State<Ui>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> StatusCode {
-    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
-    if id == "auto" {
-        c.manual_program = None;
-        return StatusCode::NO_CONTENT;
-    }
-    match id.parse::<i64>() {
-        Ok(n) if c.programs.iter().any(|p| p.0 == n) => {
-            c.manual_program = Some(n);
-            StatusCode::NO_CONTENT
+    let new_value = {
+        let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+        if id == "auto" {
+            c.manual_program = None;
+            Some(None)
+        } else {
+            match id.parse::<i64>() {
+                Ok(n) if c.programs.iter().any(|p| p.0 == n) => {
+                    c.manual_program = Some(n);
+                    Some(Some(n))
+                }
+                _ => None,
+            }
         }
-        _ => StatusCode::NOT_FOUND,
-    }
+    };
+    let Some(new_value) = new_value else { return StatusCode::NOT_FOUND };
+    // Persisted so it survives a restart rather than reverting to
+    // time-of-day selection every power cycle `[SPEC-DIR-185]`. Best-effort,
+    // off the request's own success: a save that fails here costs the choice
+    // not surviving the *next* restart, not this one working.
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open_split(&db, &library) {
+        Ok(store) => {
+            if let Err(e) = store.save_manual_program(new_value) {
+                eprintln!("save manual program: {e}");
+            }
+        }
+        Err(e) => eprintln!("save manual program: {e}"),
+    })
+    .await;
+    StatusCode::NO_CONTENT
 }
 
 /// Where the audio is actually going `[PI3-API-020]`.

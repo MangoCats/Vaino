@@ -267,6 +267,14 @@ impl Session {
         let controls = SharedControls::default();
         if let Ok(mut c) = controls.lock() {
             c.reload_requested = true;
+            // Restored here, not left to default to `None` (time of day):
+            // an appliance with no realtime clock and no at-home relevance
+            // to a truck's driving hours must never fall back to schedule-
+            // based selection, only ever to whatever was chosen last
+            // `[SPEC-DIR-185]`. `active()`'s own stale-id fallback already
+            // handles a program that no longer exists, so this is safe to
+            // set blind, before the Director that would validate it exists.
+            c.manual_program = store.as_ref().and_then(|s| s.load_manual_program());
         }
         Ok(Self {
             lib,
