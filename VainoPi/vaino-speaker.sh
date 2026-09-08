@@ -49,8 +49,7 @@ done
 if [ -n "$CONNECTED" ]; then
     if [ "$CONNECTED" != "$SPEAKER" ]; then
         # Reality moved on from what Vaino remembers -- catch the
-        # bookkeeping up to it, silently: audio is already flowing, so there
-        # is nothing to reopen and no reason to touch the player at all.
+        # bookkeeping up to it, silently.
         # Shape-checked before it reaches SQL, the same discipline
         # `bluetooth.rs::is_address` applies to an address arriving from a
         # browser -- this one arrives from bluetoothctl's own output instead
@@ -66,6 +65,36 @@ if [ -n "$CONNECTED" ]; then
                     && echo "adopted $CONNECTED as the speaker (was ${SPEAKER:-<none>})"
                 ;;
         esac
+    fi
+
+    # **`[PI3-AIM-050]` Connected is not the same claim as playing.**
+    # `[PI3-AIM-040]` stopped as soon as BlueZ showed a real device
+    # connected, on the belief that audio must already be flowing -- true
+    # only when this script itself put the connection there. It is false
+    # whenever the player's own stream got bound before this device did:
+    # `vaino-wait-sink` releases the player on the first *any* real sink it
+    # sees, which on this hardware can be the onboard HDMI output, seconds
+    # before Middleton's A2DP transport actually comes up. It is equally
+    # false mid-session, when BlueZ reconnects a trusted device entirely on
+    # its own -- which it does -- with nobody having asked this script to do
+    # anything. Either way the device link is fine and the player is simply
+    # talking to the wrong sink, which is indistinguishable from "can't
+    # connect to Middleton" to anyone listening. So ground truth is checked
+    # one layer further in than `[PI3-AIM-040]` did: not just "is the device
+    # connected" but "is the player's stream actually linked to it"
+    # `[PI3-WHY-020]` -- the same question `GET /audio/sink` already answers
+    # for the settings panel `[SPEC-APS-060]`. `wpctl` names a PipeWire sink
+    # node after the alias BlueZ reports for the device, so the two are
+    # compared as text; a mismatch, including "nothing" or "Dummy Output",
+    # is the one case a reopen is actually for.
+    ALIAS=$(bluetoothctl info "$CONNECTED" 2>/dev/null |
+        sed -n 's/^[[:space:]]*Alias: //p')
+    ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
+        sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
+    if [ -n "$ALIAS" ] &&
+       [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
+        curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
+        echo "$CONNECTED is connected but the stream was on '${ROUTED:-nothing}', not '$ALIAS' -- asked the player to reopen"
     fi
     exit 0
 fi
