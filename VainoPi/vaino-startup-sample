@@ -1,0 +1,52 @@
+#!/bin/sh
+# Record what the machine is doing for the first three minutes after boot.
+#
+# **Why this exists `[PI3-FOUND-170]`.** Startup stutter on this appliance was
+# being diagnosed over ssh, and ssh is not free here: the Pi Zero 2W puts
+# Wi-Fi and Bluetooth on one chip behind one antenna, so every `journalctl`
+# dump competes with the A2DP stream it is being used to investigate. On the
+# boot that finally had a persistent journal to read, the ssh login landed at
+# 60.4 s and the reported stutters at roughly 80 s, 97 s and 101 s -- which is
+# to say, during the diagnosis rather than merely near it. An observer that
+# has to be connected to observe cannot answer this question.
+#
+# So: no network, no subprocesses in the loop, nothing but `/proc` reads
+# appended to a local file. It costs one wake-up a second and a few hundred
+# bytes, and it can therefore run while the listener simply listens.
+#
+# Read it afterwards with the appliance idle. Columns are cumulative where
+# the kernel reports them cumulatively -- take differences between rows.
+set -u
+OUT="${VAINO_SAMPLE_OUT:-/var/log/vaino-startup.log}"
+SECONDS_TO_RUN="${VAINO_SAMPLE_SECS:-180}"
+
+# Truncate per boot: the interesting sample is always the most recent one, and
+# an appliance that power-cycles as often as this one would otherwise grow a
+# log nobody reads.
+: > "$OUT" 2>/dev/null || exit 0
+echo "# mono load1 memavail_kb swapfree_kb pswpin pswpout vaino_jiffies vaino_rss_kb" >> "$OUT"
+
+i=0
+while [ "$i" -lt "$SECONDS_TO_RUN" ]; do
+    mono=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)
+    load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
+    memav=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)
+    swfree=$(awk '/^SwapFree:/{print $2}' /proc/meminfo 2>/dev/null)
+    swin=$(awk '/^pswpin/{print $2}' /proc/vmstat 2>/dev/null)
+    swout=$(awk '/^pswpout/{print $2}' /proc/vmstat 2>/dev/null)
+
+    # The player's own CPU and resident size, straight from its stat line:
+    # fields 14/15 are utime/stime in jiffies, 24 is RSS in pages.
+    vj=-1; vr=-1
+    for p in /proc/[0-9]*; do
+        [ "$(cat "$p/comm" 2>/dev/null)" = vaino ] || continue
+        set -- $(cat "$p/stat" 2>/dev/null)
+        [ $# -ge 24 ] && vj=$(( ${14} + ${15} )) && vr=$(( ${24} * 4 ))
+        break
+    done
+
+    echo "$mono $load $memav $swfree $swin $swout $vj $vr" >> "$OUT"
+    i=$((i + 1))
+    sleep 1
+done
+exit 0
