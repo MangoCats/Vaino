@@ -158,6 +158,45 @@ pub struct Handoff {
 /// is short, which is exactly when the Director is needed for something else.
 pub const RELOAD_MIN_QUEUE_MS: u64 = 180_000;
 
+/// Put the calling thread at the back of both queues `[PI3-FOUND-220]`.
+///
+/// The Director rebuild is the one piece of genuinely heavy work Vaino does
+/// while audio is playing -- a flavor index over 8,330 radio passages, about
+/// ten seconds of CPU and SD card on a Pi Zero 2W. `RELOAD_MIN_QUEUE_MS`
+/// already decides *when* it may start, and decides it well; what neither it
+/// nor anything else decided was how hard it should push once running. It ran
+/// at the same priority as the thread feeding the speaker.
+///
+/// Measured on vainopi: with the queue deep enough for the gate to open, the
+/// listener heard stutters at 76 s, 89 s and 96 s after power-up, while every
+/// instrument said the machine was healthy -- and the rebuild left no log line
+/// to connect them to. Underruns confirmed the player, not the radio, was
+/// missing its deadline.
+///
+/// Both calls are per-**thread** on Linux despite their names: `PRIO_PROCESS`
+/// and `IOPRIO_WHO_PROCESS` with a pid of `0` mean the calling thread. That is
+/// exactly the granularity wanted -- the engine keeps everything it has, and
+/// only the rebuild gives way. A process-wide `Nice=` in the unit file could
+/// not express this, which is why it is here and not there.
+#[cfg(target_os = "linux")]
+fn step_aside() {
+    // `IOPRIO_CLASS_IDLE` is 3, in the top three bits of the priority word:
+    // the card is touched only when nothing else wants it. Failures are
+    // ignored on purpose -- a rebuild that could not lower itself is still a
+    // rebuild worth doing, and refusing to run would cost the listener their
+    // programmes to protect a few seconds of audio.
+    const IOPRIO_WHO_PROCESS: libc::c_long = 1;
+    const IOPRIO_CLASS_IDLE: libc::c_long = 3;
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+        libc::syscall(libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO_CLASS_IDLE << 13);
+    }
+}
+
+/// Nothing to do where the notion does not exist; the rebuild simply runs.
+#[cfg(not(target_os = "linux"))]
+fn step_aside() {}
+
 /// Bounded on purpose. Only the queue and what is playing can be asked about,
 /// so a handful is plenty and an unbounded map would grow for the life of the
 /// process.
@@ -393,10 +432,17 @@ impl Session {
         match std::thread::Builder::new()
             .name("director-rebuild".into())
             .spawn(move || {
+                step_aside();
+                let began = std::time::Instant::now();
                 let built = Library::open_split(&path, &library)
                     .and_then(|l| l.director())
                     .map(Box::new)
                     .map_err(|e| format!("{e:?}"));
+                // Said out loud because it was not: this thread spends about
+                // ten seconds of a Pi Zero 2W and left no trace at all, which
+                // is why the stutters it caused were attributed to the radio
+                // for most of an evening `[PI3-FOUND-220]`.
+                eprintln!("director rebuild finished in {}ms", began.elapsed().as_millis());
                 let _ = tx.send(built);
             }) {
             Ok(_) => {
