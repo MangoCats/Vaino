@@ -216,23 +216,30 @@ if [ -n "$CONNECTED" ]; then
     # unchanged, and the stuttering stopped -- underruns flat across the next
     # sixty seconds and none heard. Nothing else was touched.
     #
-    # Why an inbound link should differ is not established. The one visible
-    # correlate is that mode A also carries an AVDTP collision
-    # `[PI3-FOUND-360]` -- both ends reaching at once -- which an outbound
-    # redial resolves by making the negotiation single-sided.
+    # **Both explanations for that were then refuted `[PI3-FOUND-390]`.** The
+    # next mode A boot came up on an *outbound* link, with zero AVDTP
+    # collisions, and stuttered anyway -- so neither the direction nor the
+    # collision is the mechanism, and a redial conditioned on either would not
+    # have fired at all. Worse, the trial that appeared to prove the redial ran
+    # at 57 s and a second at 180 s, and mode A settles on its own by about
+    # 180 s: both were confounded by the very thing they were meant to measure.
     #
-    # Once per boot, and only when the link came in: an outbound boot is left
-    # strictly alone, so mode B pays nothing. The cost where it does fire is
-    # one deliberate gap of a few seconds, in exchange for three minutes of
-    # stuttering, and the marker lives in the runtime directory so it clears
-    # itself on the next boot.
+    # So this fires once per boot unconditionally, well before that settling
+    # point, for two reasons. It is the only remaining candidate that can be
+    # acted on at all, and firing it early is the only way to tell a redial
+    # that fixes something from a speaker that was going to settle anyway --
+    # if stuttering stops at ~50 s instead of ~180 s, that is an answer.
+    #
+    # It costs a mode B boot a few seconds of gap it did not previously pay.
+    # That is a real regression if the redial turns out to do nothing, and the
+    # reason this is written as an experiment with a date on it rather than as
+    # a fix.
     REDIAL="${XDG_RUNTIME_DIR:-/tmp}/vaino-speaker.redialled"
-    if [ "$CONNECTED" = "${SPEAKER:-}" ] && [ ! -f "$REDIAL" ] &&
-       hcitool con 2>/dev/null | grep -F "$SPEAKER" | grep -qE '^[[:space:]]*>'; then
+    if [ "$CONNECTED" = "${SPEAKER:-}" ] && [ ! -f "$REDIAL" ]; then
         # Marked before it is attempted, not after: a redial that fails must
         # not become a redial that repeats every thirty seconds.
         : > "$REDIAL" 2>/dev/null
-        echo "$SPEAKER opened this link inbound; redialling outbound once to renegotiate"
+        echo "redialling $SPEAKER once, to renegotiate the link the boot came up with"
         bluetoothctl disconnect "$SPEAKER" >/dev/null 2>&1
         sleep 4
         bluetoothctl connect "$SPEAKER" >/dev/null 2>&1

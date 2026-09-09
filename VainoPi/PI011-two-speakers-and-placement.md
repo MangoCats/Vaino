@@ -488,3 +488,40 @@ minutes of stuttering.
 > and two plausible stories have already been withdrawn from this document.
 > What is established is narrower and worth stating exactly: **redialling
 > outbound stops it, once, reproducibly on the boot it was tried.** One trial.
+
+## 10. Both explanations refuted, and the experiment that remains
+
+**`[PI3-FOUND-390]` The next mode A boot came up outbound, collision-free, and
+stuttered anyway.** That is both hypotheses of section 9 gone in one
+observation:
+
+| | Mode B (clean) | Mode A, boot 1 | Mode A, boot 2 |
+|---|---|---|---|
+| ACL direction | `<` outbound | `>` inbound | **`<` outbound** |
+| AVDTP collisions | 0 | 1 | **0** |
+| Configuration | `ay 4 17 21 2 53` | same | same |
+| Stuttered | no | yes | **yes** |
+
+The keeper had connected it outbound itself at 36 s, so the redial built in
+section 9 — conditioned on finding an inbound link — never even fired.
+
+**And the trial that appeared to prove the redial was confounded.** It ran at
+57 s, and a second attempt at 180 s; mode A settles on its own by about 180 s.
+Neither trial separated "the redial fixed it" from "the speaker was going to
+settle anyway". The second could not have: it was run at the settling point.
+
+So nothing at the Bluetooth layer now distinguishes a stuttering boot from a
+clean one. Configuration, codec, transport state, volume, direction and
+collision count are all identical. The difference remains the one thing this
+machine cannot observe: whether the speaker was cold-booted.
+
+**What is left is an experiment, and it is written as one.** The redial now
+fires once per boot unconditionally at around 50 s, well before the settling
+point, because that is the only arrangement that can tell the two apart: if
+stuttering stops at ~50 s rather than running to ~180 s, the redial does
+something. If it runs to 180 s regardless, it does not, and the honest answer
+becomes the listener's own workaround — power-cycle the Pi, not the speaker.
+
+> **This costs a mode B boot a gap it did not previously pay**, and that is a
+> real regression if the redial turns out to do nothing. It is deliberate, and
+> it should be reverted the moment the experiment answers either way.
