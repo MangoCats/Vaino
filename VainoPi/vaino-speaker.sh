@@ -126,7 +126,30 @@ else
 fi
 
 if [ -n "$CONNECTED" ]; then
-    if [ "$CONNECTED" != "$SPEAKER" ]; then
+    # **`[PI3-FOUND-310]` A choice the listener made outranks whatever turned
+    # up.** `[PI3-AIM-040]` had this adopt any connected audio device over the
+    # stored address, and was right to: a stale address was being paged every
+    # thirty seconds, stalling the speaker that was actually playing. But
+    # `[PI3-AIM-060]` later fixed that injury at its source -- nothing is
+    # paged at all while audio is reaching a real sink -- which leaves
+    # adoption doing only harm.
+    #
+    # Measured: the listener chose the Middleton in the settings panel and
+    # power-cycled. The keeper connected it at 30 s, the OontZ auto-connected
+    # behind it (still trusted, so BlueZ reaches for it unprompted), took the
+    # one A2DP transport `[PI3-FOUND-290]`, and the Middleton dropped. At
+    # 50 s this adopted the OontZ and overwrote the stored address -- and the
+    # appliance spent the rest of the boot playing through the speaker the
+    # listener had just navigated away from, with the record of their choice
+    # destroyed.
+    #
+    # So adoption now happens only where it cannot contradict anybody:
+    # when no speaker has been chosen at all. A recorded choice stands until
+    # the listener changes it, and a device that shows up uninvited is
+    # reported rather than promoted.
+    if [ -n "${SPEAKER:-}" ] && [ "$CONNECTED" != "$SPEAKER" ]; then
+        echo "$CONNECTED is connected but $SPEAKER is the chosen speaker -- leaving the choice alone"
+    elif [ "$CONNECTED" != "$SPEAKER" ]; then
         # Reality moved on from what Vaino remembers -- catch the
         # bookkeeping up to it, silently.
         # Shape-checked before it reaches SQL, the same discipline

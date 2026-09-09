@@ -194,6 +194,20 @@ report() {
     [ "$ok" = true ] || exit 1
 }
 
+# Withdraw the standing invitation from every audio device but this one
+# `[PI3-FOUND-310]`. Paired is left intact -- only the auto-connect is taken
+# away, so any of them is one `use` away from coming back.
+withdraw_others() {
+    local keep="$1" other
+    for other in $(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}'); do
+        [ "$other" = "$keep" ] && continue
+        bluetoothctl info "$other" 2>/dev/null | grep -q 'UUID: Audio Sink' || continue
+        bluetoothctl info "$other" 2>/dev/null | grep -q 'Trusted: yes' || continue
+        bluetoothctl untrust "$other" >/dev/null 2>&1 &&
+            echo "untrusted $other so it stops auto-connecting over the chosen speaker" >&2
+    done
+}
+
 json_devices() {
     local first=1 mac name
     printf '{"ok":true,"devices":['
@@ -282,6 +296,22 @@ case "$VERB" in
         need_addr
         bluetoothctl trust "$ADDR" >/dev/null 2>&1
 
+        # **`[PI3-FOUND-310]` Trust means "reconnect to this without being
+        # asked", and only one speaker should be doing that.** A second
+        # trusted speaker is reached for by BlueZ unprompted on every boot,
+        # and since the adapter carries one A2DP transport `[PI3-FOUND-290]`
+        # it takes it from whichever speaker was chosen. Measured: the
+        # listener selected the Middleton and power-cycled; the keeper
+        # connected it at 30 s, the still-trusted OontZ auto-connected behind
+        # it, the Middleton dropped, and the boot finished playing through the
+        # speaker they had just navigated away from.
+        #
+        # Choosing a speaker therefore withdraws that standing invitation
+        # from the others -- see `withdraw_others`, called at the end of this
+        # verb rather than here. They stay PAIRED: the link key is untouched
+        # and `use` reconnects any of them on demand in seconds; they simply
+        # stop letting themselves in `[PI3-WHY-040]`.
+
         # **`[PI3-FOUND-290]` Free A2DP before asking for it.** The adapter
         # carries one A2DP transport at a time. A second speaker connected
         # beside the first does not fail -- it quietly negotiates HSP/HFP
@@ -358,6 +388,15 @@ case "$VERB" in
         # (held by another device, or asleep -- press its pairing button),
         # `refused` is one that answered and said no. `transport` is the
         # honest end of the whole exercise `[PI3-FOUND-070]`.
+        # Last, deliberately `[PI3-FOUND-310]`. `vaino-speaker` trusts whatever
+        # address is *stored*, and the store still names the old speaker until
+        # the caller records this one -- which it does only once this verb
+        # returns ok. Done at the top, a keeper tick landing mid-connect
+        # re-trusted the speaker just withdrawn, and it was still auto-
+        # connecting on the next boot. Observed exactly once, then fixed by
+        # moving it here, where the remaining window is the microseconds
+        # between this line and the caller's write.
+        withdraw_others "$ADDR"
         report "$(state_of "$ADDR")" "connected" \
                ",\"sink_node\":\"${node:-none}\",\"reach\":\"$conn\",\"transport\":\"$(transport_state "$ADDR")\""
         ;;

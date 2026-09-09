@@ -925,3 +925,53 @@ and no amount of work on this side will reach it.
 > number was high, but because it went *static while the symptom continued*,
 > which is what proved the fault was downstream of the player. A counter that
 > stops moving can be as informative as one that climbs.
+
+## 12. Two speakers, and who gets to decide
+
+**`[PI3-FOUND-310]` A choice the listener made was being overwritten by
+whatever turned up.** Measured: the Middleton was selected in the settings
+panel and the appliance power-cycled with the speaker left on.
+
+```
+30.3s  vaino-speaker: connected 20:64:DE:CF:F3:AD after 10s, asked reopen
+50.7s  vaino-speaker: adopted 08:EB:ED:26:14:12 as the speaker (was 20:64:DE:CF:F3:AD)
+71.2s  resuming playback            -- on the OontZ
+```
+
+The keeper connected the chosen speaker correctly. The OontZ — still trusted,
+so BlueZ reaches for it unprompted — connected behind it, took the one A2DP
+transport `[PI3-FOUND-290]`, and the Middleton dropped. The listener heard a
+connect tone and a disconnect tone seconds apart. Then `[PI3-AIM-040]`'s
+adopt-what-is-connected rule promoted the interloper and **destroyed the
+record of the choice**, and the boot finished playing through the speaker
+they had just navigated away from.
+
+Adoption was right when it was written: a stale address was being paged every
+thirty seconds and stalling the speaker that was actually playing. But
+`[PI3-AIM-060]` fixed that injury at its source — nothing is paged while
+audio reaches a real sink — which left adoption doing only harm. It now
+happens **only when no speaker has been chosen at all**; a recorded choice
+stands until the listener changes it, and an uninvited device is reported
+rather than promoted.
+
+**The other half is trust.** Trust means "reconnect to this without being
+asked", and on an adapter that carries one A2DP transport only one speaker
+should hold that. Choosing a speaker now withdraws the standing invitation
+from the others: they stay **paired**, so `use` brings any of them back in
+seconds, they simply stop letting themselves in `[PI3-WHY-040]`.
+
+That withdrawal runs **last** in the verb, and the reason is a race worth
+recording. Done first, it was silently undone: `vaino-speaker` trusts
+whichever address is *stored*, the store still names the old speaker until
+the caller records the new one — which happens only after the verb returns
+ok — so a keeper tick landing mid-connect re-trusted the speaker just
+withdrawn, and it was still auto-connecting on the next boot. Observed once,
+diagnosed from the persisted `Trusted=` flag disagreeing with what the verb
+had just done. Moved to the end, the window is the microseconds between that
+line and the caller's write.
+
+> **Verified.** The OontZ was re-trusted by hand and `use` run against the
+> Middleton: the OontZ came back `Trusted=false` on disk, the Middleton
+> `Trusted=true`, connected, `transport: "active"`, stream on MIDDLETON. A
+> keeper tick with the OontZ deliberately connected alongside left
+> `speaker_address` untouched.
