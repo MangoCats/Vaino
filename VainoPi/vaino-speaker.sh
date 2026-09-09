@@ -10,7 +10,31 @@
 # A timer runs it. Nothing here retries in a loop, because a loop is a thing
 # that can wedge and this must not be the reason audio stops.
 set -u
-DB="${VAINO_DB:-/srv/library/vaino.db}"
+# **`[PI3-FOUND-280]` The listener's settings moved and this did not follow.**
+# `[IMPL-DBSPLIT-025]` split the database: the catalog stayed in
+# `/srv/library/`, and everything the listener chooses -- volume, programme,
+# and `speaker_address` -- moved to `/var/vaino/listener.db`. These scripts
+# kept reading the pre-split file, which still exists and still holds a
+# `speaker_address` row. It was the *same* address, so nothing looked wrong
+# for weeks.
+#
+# It stopped being the same the moment a second speaker was chosen. Measured:
+# the settings page moved the player to the OontZ and wrote that address to
+# `listener.db`; this script read MIDDLETON out of the stale file, decided the
+# routing disagreed with the speaker "on record", and asked the player to
+# reopen -- fighting the listener's own choice every thirty seconds, on the
+# authority of a file nothing had written to in weeks.
+#
+# Chosen by what exists rather than by a build-time flag, so one script serves
+# a split appliance and an unsplit one without being told which it is on.
+DB="${VAINO_DB:-}"
+if [ -z "$DB" ]; then
+    if [ -f /var/vaino/listener.db ]; then
+        DB=/var/vaino/listener.db
+    else
+        DB=/srv/library/vaino.db
+    fi
+fi
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 # The address is whatever the player last recorded through `use`/`pair`

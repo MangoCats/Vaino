@@ -60,7 +60,18 @@
 set -u
 DEADLINE=${VAINO_SINK_WAIT:-60}
 SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-45}
-DB="${VAINO_DB:-/srv/library/vaino.db}"
+# The listener-side file, not the pre-split one `[PI3-FOUND-280]`: the
+# speaker this gate waits for is whichever the listener last chose, and that
+# choice is recorded in `listener.db` since `[IMPL-DBSPLIT-025]`. Reading the
+# old path here meant waiting for the speaker they used to have.
+DB="${VAINO_DB:-}"
+if [ -z "$DB" ]; then
+    if [ -f /var/vaino/listener.db ]; then
+        DB=/var/vaino/listener.db
+    else
+        DB=/srv/library/vaino.db
+    fi
+fi
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 # Every sink PipeWire currently offers, one name per line, dummy excluded.

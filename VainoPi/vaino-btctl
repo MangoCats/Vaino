@@ -284,10 +284,39 @@ case "$VERB" in
         conn="$(patient_connect "$ADDR" "${VAINO_GRAB_SECONDS:-45}")"
         # Make it the default sink. The caller must still reopen the player's
         # output: the stream does not dependably follow [PI3-WHY-020].
-        node="$(sudo -u "${SUDO_USER:-$USER}" \
-                XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" wpctl status 2>/dev/null \
-                | sed -n '/Sinks:/,/Sink endpoints/p' \
-                | grep -iv 'Dummy Output' | grep -oE '[0-9]+\.' | head -1 | tr -d '.')"
+        # **`[PI3-FOUND-270]` The sink has to be THIS device's sink.** This
+        # took the first non-dummy sink in the list, which is correct only
+        # while exactly one speaker is connected. Connect a second and the
+        # verb quietly points the default at whichever happens to be listed
+        # first: asked to use the OontZ with the Middleton also connected, it
+        # answered `{"ok":true,"sink_node":"48"}` -- node 48 being the
+        # Middleton, node 56 the OontZ -- and the player, told to reopen on
+        # the strength of that `ok`, moved to the speaker the listener had
+        # just asked to leave. It reported success for doing the opposite of
+        # what it was asked.
+        #
+        # Matched by the alias BlueZ holds for the address, which is what
+        # WirePlumber names the node after -- the same join `vaino-speaker`
+        # uses `[PI3-AIM-050]`. No match means the sink is not there yet
+        # (a device can be connected with no transport, which is exactly the
+        # state a second speaker sits in), and that is reported as `none`
+        # rather than papered over with somebody else's sink.
+        want="$(bluetoothctl info "$ADDR" 2>/dev/null |
+                sed -n 's/^[[:space:]]*Alias: //p')"
+        # WirePlumber creates the sink a moment after BlueZ reports the
+        # connection, so a check made immediately finds nothing and would give
+        # up on a speaker that is about to work. Bounded, and it exits the
+        # instant the sink appears.
+        node=""
+        tries=0
+        while [ -n "$want" ] && [ -z "$node" ] && [ "$tries" -lt 10 ]; do
+            node="$(sudo -u "${SUDO_USER:-$USER}" \
+                    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" wpctl status 2>/dev/null \
+                    | sed -n '/Sinks:/,/Sink endpoints/p' \
+                    | grep -F "$want" | grep -oE '[0-9]+\.' | head -1 | tr -d '.')"
+            [ -n "$node" ] || sleep 1
+            tries=$((tries + 1))
+        done
         [ -n "$node" ] && sudo -u "${SUDO_USER:-$USER}" \
             XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" wpctl set-default "$node" 2>/dev/null
         # `reach` distinguishes the two failures the panel could otherwise

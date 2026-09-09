@@ -793,3 +793,55 @@ the instant that sink appears — 0.14 s on a healthy boot — so the higher
 number costs nothing when things are well, and only stops the player
 committing to a dummy when they are not. Starting early buys nothing here and
 costs a reopen; starting late costs only silence that was silent anyway.
+
+## 10. Two bugs that only appear with a second speaker
+
+**`[PI3-FOUND-270]` "Use this one" used whichever speaker was listed first.**
+The `use` verb set the default sink by taking the first non-dummy entry out of
+`wpctl status`, which is right only while exactly one speaker is connected.
+Connect a second and it points the default at whoever sorts first. Measured,
+with both connected and the listener asking for the OontZ:
+
+```
+$ vaino-btctl use 08:EB:ED:26:14:12          # the OontZ
+{"ok":true,"state":"connected","sink_node":"48"}   # node 48 is the MIDDLETON
+```
+
+It answered `ok:true` for doing the opposite of what it was asked, and the web
+handler — which reopens the player's output on the strength of that `ok`
+`[REQ-VIS-260]` — dutifully moved the audio to the speaker the listener had
+just asked to leave. From the settings page it looked like the button did
+nothing at all.
+
+Now matched by the alias BlueZ holds for the requested address, which is what
+WirePlumber names the node after — the same join `vaino-speaker` already uses
+`[PI3-AIM-050]` — and it waits up to ten seconds for that sink, because
+WirePlumber creates it a moment after BlueZ reports the connection. No match
+is reported as `none` rather than papered over with somebody else's sink.
+
+**`[PI3-FOUND-280]` The scripts were reading a database the player stopped
+writing to.** `[IMPL-DBSPLIT-025]` moved everything the listener chooses into
+`/var/vaino/listener.db`, leaving the catalog in `/srv/library/`. Both
+`vaino-speaker` and `vaino-wait-sink` kept reading the pre-split
+`/srv/library/vaino.db`, which still exists and still holds a stale
+`speaker_address` row. **The two held the same address, so nothing looked
+wrong for weeks.**
+
+They stopped agreeing the instant a second speaker was chosen:
+
+```
+legacy /srv/library/vaino.db: 20:64:DE:CF:F3:AD     (MIDDLETON)
+live   /var/vaino/listener.db: 08:EB:ED:26:14:12    (OontZ)
+```
+
+The keeper read MIDDLETON, saw the stream on the OontZ, concluded the routing
+disagreed with the speaker "on record", and asked the player to reopen —
+fighting the listener's own choice every thirty seconds on the authority of a
+file nothing had written to in weeks. `vaino-wait-sink` had the same fault and
+would have spent its boot waiting for the speaker they used to have.
+
+Both now prefer `listener.db` when it exists and fall back to the pre-split
+path when it does not, so one script serves a split appliance and an unsplit
+one without being told which it is on. Verified: the keeper falls silent on a
+tick after the speaker is changed, and the gate reports *"OontZ_Angle 3 U412
+present after 0s"*.
