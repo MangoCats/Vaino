@@ -48,10 +48,12 @@ scheduler in use honoured it).
 **If stutters return, check three things before reading any further.** Each of
 them alone has brought the stuttering back:
 
-1. **The signal level** — `awk 'NR==3{print $4}' /proc/net/wireless`.
-   Around -50 dBm has sounded clean; -59 to -66 has stuttered, on four boots
-   `[PI3-FOUND-340]`. Level only: retry counts were tried and withdrawn, being
-   a counter cumulative since boot rather than a rate.
+1. **How the appliance was power-cycled** `[PI3-FOUND-350]`. Switching the
+   speaker off cuts the Pi's supply, so both cold-boot together and the boot
+   stutters; power-cycling the Pi alone, leaving the speaker powered, has been
+   clean. That is the strongest signal there is so far, and **no instrument on
+   the Pi explains it** — signal level, load and disk I/O all measured
+   *better* on the boot that stuttered.
 2. **Where the appliance is sitting** — on the speaker ruins the link
    `[PI3-FOUND-320]`, though it is the link, not the distance, that matters.
 3. **That `/etc/pipewire/pipewire.conf.d/10-vaino-quantum.conf` exists**

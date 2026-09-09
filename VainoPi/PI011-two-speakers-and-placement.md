@@ -346,3 +346,50 @@ did because the clock underneath it was moving.
 > stuttered**, on four boots. A working threshold from few points, not a
 > specification — but it is one number, it needs no audio, and it beats moving
 > the box and hoping.
+
+## 7. The power-cycle mode decides it, and nothing on the Pi explains why
+
+**`[PI3-FOUND-350]` Two modes, measured back to back, 2026-09-09.** The
+listener noticed that switching the speaker off — which cuts the Pi's supply,
+since it is powered from the speaker's USB `[PI3-FOUND-090]` — correlated with
+stuttering restarts, where power-cycling the Pi alone did not. Run as a
+controlled pair with the appliance eighteen inches clear in both:
+
+- **Mode A**, speaker switched off and on: connect at 35 s, then stutters at
+  40, 55, 72, 87, 94, 110 and 119 s, continuing past 180 s before settling.
+- **Mode B**, speaker left powered, Pi alone cycled: reconnect at 33 s, **no
+  stuttering at all through 120 s+**.
+
+The observation is real. **The explanation is not on this machine.** Sampled
+unattended over an identical 35–120 s window:
+
+| | Mode A (stuttered) | Mode B (clean) |
+|---|---|---|
+| Wi-Fi signal | **-58.6 dBm** | **-71.9 dBm** |
+| Load average | 0.75 | **1.33** |
+| Disk read | 1837 kB/s | **2333 kB/s** |
+| Player CPU | 15.7 jiffies/s | 14.1 jiffies/s |
+
+Every one of them points the wrong way. The clean boot had **thirteen
+decibels worse signal**, higher load and more I/O than the boot that
+stuttered.
+
+**`[PI3-FOUND-340]` is therefore withdrawn.** Signal level looked like the
+predictor across four boots and is not one; it was the second metric offered
+here to fail, after retry counts. Both failed the same way — a number that
+correlated across a handful of boots, presented as though it explained
+something, and falsified by the first experiment designed to test it rather
+than to confirm it.
+
+What is left is the variable the Pi cannot see: in mode A **the speaker is
+cold-booting too**, its own radio and audio stack initialising, while in mode
+B it is settled and only the link is re-made. Nothing in `/proc`, `pw-top` or
+the player's counters observes that.
+
+> **Next step, and what it needs.** The closest available proxy is
+> `bluetoothd`'s own view — transport state changes, AVDTP negotiation, and
+> whether anything else attaches to the speaker while it boots. Capturing that
+> across both modes needs the persistent journal turned back on
+> (PI010 §3), because the volatile default destroyed mode A's log the moment
+> mode B booted. Turn it on, repeat the pair, and compare the Bluetooth logs
+> rather than the Pi's own health.
