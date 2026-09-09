@@ -430,7 +430,8 @@ for pair in \
     "vaino-mpd-guest.conf:/etc/systemd/system/vaino.service.d/mpd-guest.conf" \
     "vaino-io-priority.conf:/etc/systemd/system/vaino.service.d/20-vaino-io.conf" \
     "mpd-polite.conf:/etc/systemd/system/mpd.service.d/10-vaino-polite.conf" \
-    "sd-tuning.conf:/etc/tmpfiles.d/vaino-readahead.conf" ; do
+    "sd-tuning.conf:/etc/tmpfiles.d/vaino-readahead.conf" \
+    "pipewire-quantum.conf:/etc/pipewire/pipewire.conf.d/10-vaino-quantum.conf" ; do
     src="$HERE/${pair%%:*}"; dst="${pair#*:}"
     [ -f "$src" ] || { note "${pair%%:*}" "ABSENT — stage it beside this script"; continue; }
     mkdir -p "$(dirname "$dst")"

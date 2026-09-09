@@ -96,14 +96,25 @@ removed, the lever is margin: the graph was running a 1024-frame quantum, about
 is now 2048, which doubles the tolerance to about 46 ms, at a latency cost that
 is meaningless for music with no synchronised display.
 
-**Outcome: it did not help, and the reasoning above is half wrong
-`[PI3-FOUND-320]`.** The cold boot that followed stuttered exactly as before.
-The radio *was* the answer, but not through contention with Wi-Fi traffic —
-through where the appliance was physically sitting, which no amount of buffer
-absorbs because the packets were being lost after they left. The quantum is
-left at 2048: it costs nothing measurable and a wider margin is defensible on
-hardware this small, but it fixed nothing and should not be cited as though
-it did.
+**`[PI3-FOUND-330]` It was written off as useless, deleted, and its removal
+was the regression.** The cold boot after this change stuttered exactly as
+before, so it was recorded as having fixed nothing and later removed as dead
+configuration. **That test was confounded** — the appliance was still sitting
+on the speaker `[PI3-FOUND-320]`, a fault large enough to hide whatever the
+buffer was doing.
+
+Deleting the drop-in brought the stuttering straight back, on a boot eighteen
+inches clear of the speaker with everything else as it had been through two
+clean power cycles. The only difference was the quantum: 2048 while clean,
+1024 once removed. So both mattered and neither alone sufficed — moving the
+box stops the antenna being detuned, and the wider quantum carries the stream
+over what interference remains. 1024 frames, about 21 ms, is not enough here.
+Restored, this time on evidence rather than on the absence of it.
+
+> **The lesson is about the test, not the setting.** "Changed X, symptom
+> persisted, therefore X did nothing" holds only when nothing else is broken.
+> Here a second fault dominated the measurement, and the conclusion drawn from
+> it survived long enough to be acted on.
 
 **`[PI3-FOUND-200]` Some of the early silence was the player starving its own
 ring, and every other instrument said the machine was fine.** (Read the

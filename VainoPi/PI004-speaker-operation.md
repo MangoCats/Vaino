@@ -31,7 +31,7 @@ Current understanding, for a reader who needs only that:
 
 | Symptom | Cause | Where |
 |---|---|---|
-| Periodic stuttering, every instrument healthy | The Pi was sitting **on** the speaker, detuning the antenna its Wi-Fi and Bluetooth share | `[PI3-FOUND-320]`, PI011 §5 |
+| Periodic stuttering, every instrument healthy | **Two causes, both needed.** The Pi sitting **on** the speaker detunes the antenna its Wi-Fi and Bluetooth share; and a 1024-frame graph quantum (~21 ms) leaves too little margin for what interference remains | `[PI3-FOUND-320]` + `[PI3-FOUND-330]`, PI011 §5 and PI010 §1 |
 | Player wedged after a power cut, 23 restarts | Hot SQLite journal, unrecoverable through a read-only attach | `[PI3-FOUND-120]`, PI009 |
 | Speaker never reconnects after a power cycle | The speaker powers the Pi, so the Pi is always late — and it had lost `Trusted` | `[PI3-FOUND-090]`/`-130`, PI009 |
 | ~19 s of startup that was not work | Contention with `mpd`, which now yields | `[PI3-FOUND-210]`, PI010 §2 |
@@ -45,8 +45,12 @@ cycle); that the boot gate's wait should be shortened (`[PI3-FOUND-260]`); and
 that setting an idle I/O class made anything polite (`[PI3-FOUND-250]` — no
 scheduler in use honoured it).
 
-**If stutters return, check where the appliance is physically sitting before
-reading any further.** Diagnostic tools and how to switch them on: PI010 §3.
+**If stutters return, check two things before reading any further:** where the
+appliance is physically sitting, and that
+`/etc/pipewire/pipewire.conf.d/10-vaino-quantum.conf` is still present
+(`pw-top` should show the Bluetooth sink at 2048, not 1024). Each of those
+alone brought the stuttering back. Diagnostic tools and how to switch them on:
+PI010 §3.
 
 ---
 
