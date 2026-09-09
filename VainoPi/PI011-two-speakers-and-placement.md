@@ -315,11 +315,11 @@ negotiation was byte-identical (`ay 4 17 21 2 53`), the transport was
 
 What differed was the radio, and it differs by a number worth writing down:
 
-| | signal | retry discards | stutters |
-|---|---|---|---|
-| Appliance resting on the speaker | -61 to -66 dBm | 69, later 267 | yes |
-| Eighteen inches clear, clean runs | **-50 dBm** | **8** | none |
-| Eighteen inches clear, stuttering again | **-59 to -60 dBm** | **55** | yes |
+| | signal | stutters |
+|---|---|---|
+| Appliance resting on the speaker | -61 to -66 dBm | yes |
+| Eighteen inches clear, clean runs | **-50 dBm** | none |
+| Eighteen inches clear, stuttering | **-59 to -66 dBm** | yes |
 
 Three points, and the symptom tracks the link rather than the distance. On
 the stuttering boot the appliance had also associated with the *other* access
@@ -332,9 +332,17 @@ reliably ruins the link and moving off it reliably helps, but neither is the
 mechanism: what matters is how much of the one shared antenna Bluetooth gets,
 and Wi-Fi conditions move that on their own.
 
-> **Check it before listening.** `awk 'NR==3{print $4, $9}' /proc/net/wireless`
-> gives level and retry discards in one line, needs no audio, and answers in a
-> second what an ear takes a minute to guess at. **Around -50 with retries in
-> single figures has always sounded clean here; -60 with retries in the tens
-> has always stuttered.** That is a working threshold from three data points,
-> not a specification — but it beats moving the box and hoping.
+**Retry counts were offered as half of this and are withdrawn.** They looked
+discriminating — 8 on a clean run against 55 on a stuttering one — but
+`/proc/net/wireless` reports retry discards as a **counter cumulative since
+boot**, and those two numbers were read at different uptimes. Compared
+properly as a rate, a stuttering boot on 2026-09-09 ran at 0.03 retries/s,
+which is nothing. The figure never discriminated; it only looked as though it
+did because the clock underneath it was moving.
+
+> **Check it before listening.** `awk 'NR==3{print $4}' /proc/net/wireless`
+> gives the signal level, which is instantaneous and therefore comparable
+> between boots. **Around -50 dBm has sounded clean here; -59 to -66 has
+> stuttered**, on four boots. A working threshold from few points, not a
+> specification — but it is one number, it needs no audio, and it beats moving
+> the box and hoping.

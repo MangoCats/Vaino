@@ -48,10 +48,10 @@ scheduler in use honoured it).
 **If stutters return, check three things before reading any further.** Each of
 them alone has brought the stuttering back:
 
-1. **The link quality** — `awk 'NR==3{print $4, $9}' /proc/net/wireless`.
-   Around -50 with retries in single figures has sounded clean; -60 with
-   retries in the tens has stuttered `[PI3-FOUND-340]`. This is the fastest
-   check and the one that actually predicts it.
+1. **The signal level** — `awk 'NR==3{print $4}' /proc/net/wireless`.
+   Around -50 dBm has sounded clean; -59 to -66 has stuttered, on four boots
+   `[PI3-FOUND-340]`. Level only: retry counts were tried and withdrawn, being
+   a counter cumulative since boot rather than a rate.
 2. **Where the appliance is sitting** — on the speaker ruins the link
    `[PI3-FOUND-320]`, though it is the link, not the distance, that matters.
 3. **That `/etc/pipewire/pipewire.conf.d/10-vaino-quantum.conf` exists**
