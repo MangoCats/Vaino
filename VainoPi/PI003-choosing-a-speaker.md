@@ -101,6 +101,14 @@ What that costs, beyond what is already built:
   address on top of a working connection was the disruption, not a fix for
   one. A mismatch is corrected silently (the database row alone); nothing is
   paged unless BlueZ reports nothing connected at all.
+  **Narrowed 2026-09-08 by `[PI3-FOUND-310]`:** adopting *any* connected
+  device overwrote a choice the listener had just made in the settings panel,
+  when a second trusted speaker auto-connected and took the one A2DP
+  transport. The injury this rule was written against — a stale address paged
+  every thirty seconds — is now prevented at its source by `[PI3-AIM-060]`,
+  which pages nothing while audio reaches a real sink, so adoption survives
+  only for the case where no speaker has been chosen at all. A recorded
+  choice now stands until the listener changes it.
 - **`[PI3-AIM-050]` Done, 2026-09-08.** `[PI3-AIM-040]`'s "audio is already
   flowing correctly" was an assumption, not a check, and it was wrong twice
   over on a vainopi boot that a listener experienced as "can't connect to

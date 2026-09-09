@@ -16,6 +16,36 @@ Everything here is dated and measured. Nothing here is a plan.
 
 ---
 
+## 0. Where this stands, and what to distrust in it
+
+This is a record of investigations, not a summary of conclusions, and several
+of its sections reach answers that a later section overturns. **Every
+superseded claim is marked in place**, but read the marks: a paragraph here
+is evidence of what was believed on a date, not necessarily of what is true.
+
+Current understanding, for a reader who needs only that:
+
+| Symptom | Cause | Where |
+|---|---|---|
+| Periodic stuttering, every instrument healthy | The Pi was sitting **on** the speaker, detuning its shared Wi-Fi/BT antenna | `[PI3-FOUND-320]` |
+| Player wedged after a power cut, 23 restarts | Hot SQLite journal, unrecoverable through a read-only attach | `[PI3-FOUND-120]` |
+| Speaker never reconnects after a power cycle | Speaker powers the Pi, so the Pi is always late; and it had lost `Trusted` | `[PI3-FOUND-090]`, `[PI3-FOUND-130]` |
+| ~19 s of startup that was not work | Contention with `mpd`, which now yields | `[PI3-FOUND-210]` |
+| Second speaker silent at full volume | It connected as an HSP headset, not A2DP | `[PI3-FOUND-290]` |
+| Chosen speaker replaced by another | The keeper adopted any connected device | `[PI3-FOUND-310]` |
+
+**Three theories in here were wrong and cost real time**, and are kept rather
+than deleted because each is one somebody else would reach for: that the
+15-second stutter period matched `BUFFER_FRAMES` (the ring is topped up every
+10 ms and never drains on a cycle); that the boot gate's wait should be
+shortened (`[PI3-FOUND-260]`); and that setting an idle I/O class made
+anything polite (`[PI3-FOUND-250]` — no scheduler in use honoured it).
+
+**If stutters return, check where the appliance is physically sitting before
+reading any further.** That is not where anyone looked for most of a day.
+
+---
+
 ## 1. Interference, and what shares the antenna
 
 **`[PI3-FOUND-010]` Interference is the cause.** Measured 2026-08-16 with the
@@ -52,6 +82,15 @@ USB Bluetooth dongle**, giving the radios separate antennas. **Toggling Wi-Fi
 off during playback** `[PI3-FOUND-020]` costs no hardware but costs
 reachability, and an appliance unreachable while playing cannot be debugged in
 the state that matters.
+
+> **Partly vindicated, 2026-09-08, by a different mechanism** — see
+> `[PI3-FOUND-320]` below. The withdrawal above is still correct: those numbers
+> measured the method, not the hardware, and Wi-Fi *association* was never
+> shown to drop the link. But the single shared antenna this section worried
+> about does matter, and measurably — resting the appliance on the speaker
+> cost 11-16 dB of signal and raised Wi-Fi retries roughly thirtyfold, which
+> was audible as stuttering for most of a day. The cheapest remedy turned out
+> to be none of the three listed here: move the box eighteen inches.
 
 **`[PI3-FOUND-030]` WirePlumber was demolishing the link, on its own schedule.**
 Found 2026-08-16. `bluetoothd` shows the A2DP endpoints being unregistered and
@@ -280,7 +319,7 @@ caller — a person at a terminal — cannot be told something different.
 
 ---
 
-## 5. The silence of 2026-09-08, and what it was not
+## 4. The silence of 2026-09-08, and what it was not
 
 **`[PI3-FOUND-065]` The reported fault was "vainopi cannot connect to
 Middleton." Bluetooth was working the entire time.** Established by
@@ -502,7 +541,7 @@ routing disagreeing with the connected device `[PI3-AIM-050]`. Two mechanisms
 that did not exist then now cover the case this was holding the entire boot
 still to prevent.
 
-## 6. Startup stutter, and the observer that caused some of it
+## 5. Startup stutter, and the observer that caused some of it
 
 **`[PI3-FOUND-170]` Diagnosing this over ssh perturbs the thing being
 measured.** The Pi Zero 2W puts Wi-Fi and Bluetooth on one chip behind one
@@ -579,13 +618,22 @@ headroom prevents an antenna being used by something else. Since that cannot be
 removed, the lever is margin: the graph was running a 1024-frame quantum, about
 21 ms, so any interruption longer than that glitches. `default.clock.min-quantum`
 is now 2048, which doubles the tolerance to about 46 ms, at a latency cost that
-is meaningless for music with no synchronised display. **Unverified against a
-cold boot at the time of writing** — the change was made and confirmed live
-(sink quantum 2048, zero xruns), but the boot it is meant to improve has not
-been run yet.
+is meaningless for music with no synchronised display.
 
-**`[PI3-FOUND-200]` The stutter was the player starving its own ring, and
-every other instrument said the machine was fine.** After ruling out memory,
+**Outcome: it did not help, and the reasoning above is half wrong
+`[PI3-FOUND-320]`.** The cold boot that followed stuttered exactly as before.
+The radio *was* the answer, but not through contention with Wi-Fi traffic —
+through where the appliance was physically sitting, which no amount of buffer
+absorbs because the packets were being lost after they left. The quantum is
+left at 2048: it costs nothing measurable and a wider margin is defensible on
+hardware this small, but it fixed nothing and should not be cited as though
+it did.
+
+**`[PI3-FOUND-200]` Some of the early silence was the player starving its own
+ring, and every other instrument said the machine was fine.** (Read the
+qualifier: this accounts for the *startup* underruns, not for the periodic
+stuttering that outlasted them — that was `[PI3-FOUND-320]`, and underrun
+counts turn out not to predict audibility at all.) After ruling out memory,
 swap, CPU and PipeWire xruns, the measurement that had not been taken was the
 player's own:
 
@@ -614,8 +662,16 @@ implied, and 128 KB of readahead for sequential audio files.
 
 Two changes, both cheap and both at the level the problem actually lives:
 `IOSchedulingClass=best-effort` with `IOSchedulingPriority=0` on
-`vaino.service`, and readahead raised to 512 KB through `tmpfiles.d`. **Not
-yet verified across a cold boot at the time of writing.**
+`vaino.service`, and readahead raised to 512 KB through `tmpfiles.d`.
+
+**Outcome, across the cold boots that followed:** startup underruns did fall
+a long way — 654,768 samples to 118,346 — but attributing that to these two
+changes would be wrong, because `mpd` was made to yield in the same window
+`[PI3-FOUND-210]` and that is the change with a measured 19 s → 1.9 s behind
+it. Worse, the process-wide I/O priority here is too blunt to be the right
+shape: it raises the Director rebuild along with the decoder, which is the
+opposite of what `[PI3-FOUND-220]` then had to arrange per-thread. Both are
+kept as harmless and defensible, neither is evidence of anything.
 
 The durable answer is almost certainly the one vainoplayer3 already has:
 deferring the library/Director build off the resume path, so the card is not
@@ -625,7 +681,7 @@ cross-compiled binary rather than a configuration change.
 `vaino-underruns` exists so this is never again invisible: the counter is
 published only over the websocket, and nothing on the appliance could read it.
 
-## 7. Where the startup time and the stutters actually went
+## 6. Where the startup time and the stutters actually went
 
 **`[PI3-FOUND-210]` `Session::open` was never slow; it was starved.**
 Instrumented and measured on the appliance, the phases read:
@@ -701,7 +757,7 @@ is the only way to reach it, so a pin that outlives the AP it names would
 cost far more than the stutters do. Recorded so the option is not
 rediscovered and quietly taken later.
 
-## 8. Diagnostic tools, and how to switch them back on
+## 7. Diagnostic tools, and how to switch them back on
 
 Three instruments were built during the 2026-09-08 investigation. Two are
 **off by default** because they cost something to run; all three stay
@@ -718,12 +774,24 @@ is still climbing is a live fault, one that has stopped is a startup
 transient.
 
 **`vaino-startup-sample` — installed, disabled.** A boot service that reads
-`/proc` once a second into `/var/log/vaino-startup.log`: load, memory, swap
-counters, the player's CPU and RSS. Built because diagnosing over ssh
-perturbs what it measures `[PI3-FOUND-170]`, and it answered its question —
-that the startup stutter was not memory, swap or CPU. It walks every process
-each pass, which costs about 5% of one core on a Pi Zero 2W, so it is not
-left running.
+`/proc` once a second into `/var/log/vaino-startup.log`: uptime, load, the
+player's CPU, and its `read_bytes`/`write_bytes`/`rchar` — block-device
+traffic separated from reads the page cache served. Built because diagnosing
+over ssh perturbs what it measures `[PI3-FOUND-170]`, and it answered two
+questions: that the startup stutter was not memory, swap or CPU, and that
+after the first ninety seconds the decoder touches the card not at all.
+
+**`[PI3-FOUND-240]` Its first version was a suspect in its own
+measurements.** It walked every process in `/proc` on each pass to find the
+player, which cost about 5% of a core, so it could not be ruled out of the
+stutters it was watching for. Disabling it left them unchanged at their
+steady fifteen-second spacing, which cleared it — but an instrument that has
+to be alibied is a bad instrument. It now finds the player once and spends
+one subprocess a second, so its cost is constant rather than periodic and
+cannot produce a periodic symptom.
+
+Still disabled by default — an idle appliance should not be paying for an
+instrument nobody is reading.
 
     sudo systemctl enable --now vaino-startup-sample    # on
     sudo systemctl disable --now vaino-startup-sample   # off
@@ -744,7 +812,7 @@ It also captures the *user* journal, where WirePlumber logs live — a blind
 spot named in `[PI3-FOUND-030]`'s original investigation and not closed until
 now.
 
-## 9. Politeness that was not enforced, and a deadline cut on stale reasoning
+## 8. Politeness that was not enforced, and a deadline cut on stale reasoning
 
 **`[PI3-FOUND-250]` `IOSchedulingClass=idle` did nothing, because the
 scheduler in use has no idea what it means.** The Director rebuild was made
@@ -767,12 +835,21 @@ The cause is the elevator: `/sys/block/mmcblk0/queue/scheduler` was
 `mq-deadline`, which implements deadlines and nothing else. **I/O priority
 classes are implemented by BFQ and by essentially nothing else in a modern
 kernel**, so `ioprio_set(IDLE)` on the rebuild thread was a request nobody
-was listening to. Switching the card to `bfq` is what makes "polite" mean
-anything at all here; without it, every I/O-priority change in this document
-is decoration.
+was listening to. Switching the card to `bfq` is what makes an I/O-priority
+class mean anything at all here; without it, every such change in this
+document is decoration.
 
 Set through `tmpfiles.d` alongside the 512 KB readahead, so it survives a
 reboot on an appliance that gets power-cut rather than shut down.
+
+**What `bfq` did not do is fix the stutters, and the measurement says so.**
+On the boot after the switch the rebuild still read ~255 MB at ~15 MB/s,
+essentially unchanged — correctly, because BFQ's idle class defers only to
+*competing* I/O, and the decoder was reading from the page cache rather than
+the card, so there was nothing to defer to. The stutters had another cause
+entirely `[PI3-FOUND-320]`. The change is kept because the reasoning holds —
+an idle-class request that no scheduler honours is a bug whatever else is
+true — but it is a correctness fix, not the remedy for anything audible.
 
 **`[PI3-FOUND-260]` The boot gate's deadline was cut on reasoning that had
 already expired.** `[PI3-FOUND-150]` shortened it from 45 s to 15 s because
@@ -794,7 +871,7 @@ number costs nothing when things are well, and only stops the player
 committing to a dummy when they are not. Starting early buys nothing here and
 costs a reopen; starting late costs only silence that was silent anyway.
 
-## 10. Two bugs that only appear with a second speaker
+## 9. Two bugs that only appear with a second speaker
 
 **`[PI3-FOUND-270]` "Use this one" used whichever speaker was listed first.**
 The `use` verb set the default sink by taking the first non-dummy entry out of
@@ -881,7 +958,7 @@ is connected without a transport, so a speaker already carrying A2DP is left
 strictly alone rather than having the audio interrupted by the verb meant to
 deliver it.
 
-## 11. The answer, by substitution
+## 10. A wrong answer, by substitution
 
 **`[PI3-FOUND-300]` The periodic stutters were the Middleton, not the
 appliance.** Every Pi-side instrument had been saying so for a while — the
@@ -911,12 +988,20 @@ trouble. Whatever the listener was hearing on the Middleton was therefore not
 Vaino's underruns — those are a couple of seconds during the Director rebuild,
 on any speaker, and they are inaudible.
 
-That closes a question this document has been circling since section 5. The
-appliance's own faults were real and are fixed — a boot that reached audio in
-88-95 s now does it in 24.5 s, a power cut that wedged the player into 23
-restarts now heals itself, and a speaker that could not reconnect after a
-power cycle now does. What remained after all of that belongs to the speaker,
-and no amount of work on this side will reach it.
+The appliance's own faults were real and are fixed — a boot that reached
+audio in 88-95 s now does it in 24.5 s, a power cut that wedged the player
+into 23 restarts now heals itself, and a speaker that could not reconnect
+after a power cycle now does.
+
+> **The conclusion drawn here was wrong; see `[PI3-FOUND-320]`.** This section
+> ended "what remained belongs to the speaker, and no amount of work on this
+> side will reach it." It did not belong to the speaker. The OontZ was clean
+> because it was not being used as a shelf: the Pi was resting on the
+> Middleton, and its shared Wi-Fi/Bluetooth antenna was being detuned and
+> desensitised by the chassis and the speaker's own radio inches away. Two
+> variables were changed — the speaker *and* the geometry — while one was
+> believed to have been. Substitution answered the question it was asked; the
+> inference drawn from it did not survive the next observation.
 
 > **Method worth keeping.** Four separate causes were proposed for these
 > stutters and measured away — memory, swap, CPU starvation, and SD
@@ -926,7 +1011,7 @@ and no amount of work on this side will reach it.
 > which is what proved the fault was downstream of the player. A counter that
 > stops moving can be as informative as one that climbs.
 
-## 12. Two speakers, and who gets to decide
+## 11. Two speakers, and who gets to decide
 
 **`[PI3-FOUND-310]` A choice the listener made was being overwritten by
 whatever turned up.** Measured: the Middleton was selected in the settings
@@ -976,7 +1061,7 @@ line and the caller's write.
 > keeper tick with the OontZ deliberately connected alongside left
 > `speaker_address` untouched.
 
-## 13. The stutters were where the appliance was sitting
+## 12. The stutters were where the appliance was sitting
 
 **`[PI3-FOUND-320]` The Pi was on top of the speaker.** Moving it about
 eighteen inches away — same cable, same speaker, same everything else —
@@ -1004,9 +1089,9 @@ were being handed to a controller that was duly transmitting them into a
 degraded link. Nothing in software can see a packet that was sent and not
 heard.
 
-It also explains the substitution result in section 11 honestly. The OontZ
+It also explains the substitution result in section 10 honestly. The OontZ
 was clean not because the Middleton's electronics are at fault, but because
-the OontZ was not being used as a shelf. **The conclusion in section 11 —
+the OontZ was not being used as a shelf. **The conclusion in section 10 —
 "what remains belongs to the speaker" — is wrong, and this supersedes it.**
 What remained belonged to the geometry.
 
