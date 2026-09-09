@@ -31,7 +31,7 @@ Current understanding, for a reader who needs only that:
 
 | Symptom | Cause | Where |
 |---|---|---|
-| Periodic stuttering, every instrument healthy | **Two causes, both needed.** The Pi sitting **on** the speaker detunes the antenna its Wi-Fi and Bluetooth share; and a 1024-frame graph quantum (~21 ms) leaves too little margin for what interference remains | `[PI3-FOUND-320]` + `[PI3-FOUND-330]`, PI011 §5 and PI010 §1 |
+| Periodic stuttering for ~3 min after boot | **How it was power-cycled.** Switching the speaker off cuts the Pi's power with it, and a boot where both come up together stutters; cycling the Pi alone does not. Mitigated by redialling the link once, at a cost | `[PI3-FOUND-350]`, `[PI3-FOUND-400]`, PI011 §11 |
 | Player wedged after a power cut, 23 restarts | Hot SQLite journal, unrecoverable through a read-only attach | `[PI3-FOUND-120]`, PI009 |
 | Speaker never reconnects after a power cycle | The speaker powers the Pi, so the Pi is always late — and it had lost `Trusted` | `[PI3-FOUND-090]`/`-130`, PI009 |
 | ~19 s of startup that was not work | Contention with `mpd`, which now yields | `[PI3-FOUND-210]`, PI010 §2 |
@@ -45,21 +45,27 @@ cycle); that the boot gate's wait should be shortened (`[PI3-FOUND-260]`); and
 that setting an idle I/O class made anything polite (`[PI3-FOUND-250]` — no
 scheduler in use honoured it).
 
-**If stutters return, check three things before reading any further.** Each of
-them alone has brought the stuttering back:
+**If stutters return, the first question is how it was power-cycled**
+`[PI3-FOUND-350]`. Switching the speaker off cuts the Pi's supply, so both
+cold-boot together and the boot stutters for about three minutes; cycling the
+Pi alone, leaving the speaker powered, has been clean every time. `vaino-speaker`
+now redials the link once at ~50 s, which stops it — 3 of 3 — but costs an
+eight-second interruption and leaves audio unsettled until ~95 s
+`[PI3-FOUND-400]`.
 
-1. **How the appliance was power-cycled** `[PI3-FOUND-350]`. Switching the
-   speaker off cuts the Pi's supply, so both cold-boot together and the boot
-   stutters; power-cycling the Pi alone, leaving the speaker powered, has been
-   clean. That is the strongest signal there is so far, and **no instrument on
-   the Pi explains it** — signal level, load and disk I/O all measured
-   *better* on the boot that stuttered.
-2. **Where the appliance is sitting** — on the speaker ruins the link
-   `[PI3-FOUND-320]`, though it is the link, not the distance, that matters.
-3. **That `/etc/pipewire/pipewire.conf.d/10-vaino-quantum.conf` exists**
-   (`pw-top` should show the Bluetooth sink at 2048, not 1024)
-   `[PI3-FOUND-330]`. Diagnostic tools and how to switch them on:
-PI010 §3.
+**No instrument on this machine detects the symptom** `[PI3-FOUND-420]`;
+signal level, load and disk I/O all measured *better* on boots that stuttered,
+and the listener's ear remains the only detector. Budget for that before
+forming a theory: three have been published here and withdrawn.
+
+Two older answers are **confounded** by that variable and no longer claimed
+as causes `[PI3-FOUND-410]`: placement `[PI3-FOUND-320]` (its clean runs were
+all the harmless power-cycle mode) and the graph quantum `[PI3-FOUND-330]`
+(its evidence came from boots that would have stuttered regardless). Sitting
+the Pi on the speaker still costs 11-16 dB of signal and is worth avoiding on
+its own terms.
+
+Diagnostic tools, and how to switch them on: PI010 §3.
 
 ---
 

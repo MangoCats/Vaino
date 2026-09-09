@@ -240,10 +240,29 @@ if [ -n "$CONNECTED" ]; then
         # not become a redial that repeats every thirty seconds.
         : > "$REDIAL" 2>/dev/null
         echo "redialling $SPEAKER once, to renegotiate the link the boot came up with"
+        # Polled rather than slept through. The first version spent a flat
+        # four seconds after the disconnect and six after the connect, and the
+        # listener heard the whole eleven-second hole; most of that was this
+        # script waiting on a clock rather than on the speaker. Each wait now
+        # ends the moment BlueZ agrees, with the fixed sleep kept only as the
+        # ceiling.
         bluetoothctl disconnect "$SPEAKER" >/dev/null 2>&1
-        sleep 4
+        i=0
+        while [ "$i" -lt 4 ] &&
+              bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q 'Connected: yes'; do
+            sleep 1
+            i=$((i + 1))
+        done
         bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
-        sleep 6
+        i=0
+        while [ "$i" -lt 10 ] &&
+              ! bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q 'Connected: yes'; do
+            sleep 1
+            i=$((i + 1))
+        done
+        # One second for WirePlumber to publish the sink the reopen will look
+        # for; without it the player reopens onto whatever the old one was.
+        sleep 1
         curl -s -o /dev/null -X POST             "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
     fi
 

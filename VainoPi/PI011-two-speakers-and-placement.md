@@ -6,10 +6,15 @@ Split from [PI004](PI004-speaker-operation.md) on 2026-09-08. Concludes the
 investigation begun in [PI009](PI009-the-silence-of-2026-09-08.md) and
 continued in [PI010](PI010-startup-time-and-stutter.md).
 
-**The answer is `[PI3-FOUND-320]`, and it is not in software.** The appliance
-was resting on the speaker, detuning the one antenna its Wi-Fi and Bluetooth
-share. §2 reaches the wrong conclusion first and says so; it is kept because
-it is the conclusion the evidence genuinely supported at the time.
+**Read section 11 first.** This document reaches three different answers in
+sequence and the last one supersedes the rest: the stuttering is decided by
+**how the appliance was power-cycled**, and redialling the Bluetooth link once
+after boot stops it. The placement finding of `[PI3-FOUND-320]` and the
+quantum finding of `[PI3-FOUND-330]`, which sections 5 and 6 present as
+causes, are both **confounded** by that variable and are no longer claimed.
+The earlier sections are kept because each was the conclusion the evidence
+genuinely supported at the time, and because the way each failed is the useful
+part.
 
 > **Related:** [PI004](PI004-speaker-operation.md) §0 for current understanding ·
 > [PI003](PI003-choosing-a-speaker.md) for the speaker-choice design
@@ -525,3 +530,74 @@ becomes the listener's own workaround — power-cycle the Pi, not the speaker.
 > **This costs a mode B boot a gap it did not previously pay**, and that is a
 > real regression if the redial turns out to do nothing. It is deliberate, and
 > it should be reverted the moment the experiment answers either way.
+
+## 11. Where this ended, and what is still owed
+
+**`[PI3-FOUND-400]` The redial works, three times out of three, and the cure
+is uncomfortable.** On every mode A power cycle since it was made
+unconditional, the boot comes up stuttering, the keeper redials at around 50 s,
+and the audio is smooth afterwards. But the listener's summary is the honest
+measure of it:
+
+> *"the audio is smooth after a redial-reconnect, but that takes up to 95
+> seconds post power to achieve and involves significant distracting
+> start/stop/restart audio in the process."*
+
+So it is a mitigation, not a fix. Audio arrives at ~37 s, stutters, is cut off
+for several seconds around 50 s, returns, and only settles by ~95 s. Polling
+BlueZ instead of sleeping on a fixed clock cut the interruption from about
+eleven seconds to eight; the rest is inherent to tearing a link down and
+rebuilding it.
+
+**`[PI3-FOUND-410]` Two earlier findings are confounded by the power-cycle
+mode and are withdrawn as causes.** Neither was tested against it, because it
+was not known to be a variable at the time:
+
+- **`[PI3-FOUND-320]`, placement.** The clean runs that established it were
+  mode B — the listener's own note records the speaker staying powered, since
+  it only announced the disconnect when the Pi came back. Mode B is clean at
+  any placement. Sitting on the speaker does measurably cost 11–16 dB of
+  signal, which is worth knowing, but signal level was itself refuted as a
+  predictor of the stutter `[PI3-FOUND-390]`.
+- **`[PI3-FOUND-330]`, the graph quantum.** Its evidence was "removed it, the
+  stuttering returned" — on boots that were mode A and would have stuttered
+  regardless. The quantum is left at 2048 because a wider margin is defensible
+  on hardware this small, not because it is known to do anything.
+
+**`[PI3-FOUND-420]` There is no instrument for this symptom.** Every detector
+tried sits either before the loss or measures something that does not track
+it:
+
+| Instrument | Verdict |
+|---|---|
+| `vaino-underruns` | Does not correlate — 11.58 s sounded perfect, 1.64 s stuttered |
+| `pw-top` xruns | Always zero, clean and stuttering alike |
+| Sink-monitor capture | Measures audio *before* SBC encode and transmit; always continuous |
+| Signal level, retry counts | Both tried, both refuted |
+| `debugfs` `hci0` | Configuration knobs only; no throughput or error counters |
+| PipeWire `wchar` | Reads zero while playing; not a proxy |
+
+**The listener's ear is the only detector**, which is why every hypothesis
+here cost a three-minute listening test, why the data points are few and
+noisy, and why three explanations were published and withdrawn. Any future
+work on this should budget for that or build an instrument first.
+
+### Two paths worth taking, neither of them a fix
+
+**The HCI layer.** `btmon` sees actual ACL data packets and the controller's
+own flow control — around 75 packets/s during healthy playback. It is the one
+layer between the SBC encoder and the air that has not been observed during a
+stuttering boot, and the only remaining candidate for a real instrument. It is
+privileged and heavy enough to perturb what it measures, which has already
+happened twice here `[PI3-FOUND-170]`, `[PI3-FOUND-240]`, so it wants a
+bounded startup capture rather than a permanent watcher.
+
+**Suspending the library load entirely.** The Director rebuild reads ~256 MB
+at ~15 MB/s while using half a core `[PI3-FOUND-250]`, overlapping exactly the
+window in which the stuttering happens. Making it *fully* wait — not merely
+yield, which `bfq` and per-thread idle priority already arrange — would say
+whether the startup work contributes at all. It is not a shipping design: an
+appliance that will not choose its next passage until minutes after boot has
+traded one fault for another. But as an experiment it cleanly separates "the
+link is bad" from "the machine is too busy to feed it", which nothing so far
+has managed.
