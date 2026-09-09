@@ -83,8 +83,9 @@ off during playback** `[PI3-FOUND-020]` costs no hardware but costs
 reachability, and an appliance unreachable while playing cannot be debugged in
 the state that matters.
 
-> **Partly vindicated, 2026-09-08, by a different mechanism** — see
-> `[PI3-FOUND-320]` below. The withdrawal above is still correct: those numbers
+> **Partly vindicated, 2026-09-08, by a different mechanism** — the placement
+> finding `[PI3-FOUND-320]` at the end of this document. The withdrawal above
+> is still correct: those numbers
 > measured the method, not the hardware, and Wi-Fi *association* was never
 > shown to drop the link. But the single shared antenna this section worried
 > about does matter, and measurably — resting the appliance on the speaker
