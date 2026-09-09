@@ -87,6 +87,37 @@ sudo systemctl restart zramswap
 
 > **Superseded 2026-09-02:** the `bluez-alsa` choice below was the pre-hardware plan. What was actually built and measured on the appliance is **PipeWire** — `pipewire pipewire-pulse wireplumber libspa-0.2-bluetooth`, with ALSA pointed at PipeWire rather than at `bluealsa` (`[PI2-KNOWN-010]`, [PI002](PI002-test-image-setup.md) §0) — carried through pairing, characterisation and MPD setup in [PI002](PI002-test-image-setup.md)–[PI007](PI007-mpd-on-the-appliance.md). The footprint reasoning below did not hold up against a real device; PipeWire's measured cost on the appliance is recorded in [PI006](PI006-appliance-characterisation.md). The `bluez-alsa` steps are kept for their history, not as current instructions.
 
+**`[IMPL-AUD-005]` What makes this a Bluetooth-only output player.** Recorded
+2026-09-09 because two documents had reasoned from it without anyone writing
+it down, and because it is the reason a whole class of fault is possible here
+`[PI3-FOUND-110]`: on this appliance there is **no audible output at all
+until a speaker connects**.
+
+Nothing configures that. It falls out of the hardware and one overlay:
+
+| | |
+|---|---|
+| **Board** | Raspberry Pi Zero 2 W — **no analog jack exists on this model**, so there is no headphone output to disable |
+| **`config.txt`** | `dtparam=audio=on` and `dtoverlay=vc4-kms-v3d`, both stock |
+| **Kernel command line** | `snd_bcm2835.enable_headphones=0 … enable_hdmi=1 enable_hdmi=0` — **emitted by the firmware**, not written in `cmdline.txt`; KMS takes HDMI audio from the legacy `bcm2835` path, so the later `=0` wins |
+| **Result** | ALSA has exactly one card, `vc4hdmi`; PipeWire sees the device but yields **no sink** with nothing plugged into HDMI |
+
+So a headless Zero 2 W with no display attached has precisely one route to a
+listener, and it arrives late — after BlueZ connects, seconds to a minute into
+the boot. **A player that starts before then has nowhere real to go**, which is
+why `vaino-wait-sink` exists and why its failure mode was invisible for so
+long: on a machine with a working analog or HDMI sink, a boot gate that
+released early would still have made a noise.
+
+Two consequences for anyone building another one. **Verify with `aplay -l`
+rather than assuming**: a Pi with a jack, or a Zero 2 W with a display
+attached, is *not* this profile — it has a real sink at boot, `vaino-wait-sink`
+passes on it immediately, and the player can bind to it and play to nobody,
+which makes `[PI3-FOUND-110]`'s fault *more* likely on better-equipped
+hardware. And **nothing here belongs in `cmdline.txt`**: these parameters are
+already correct, and on a board that does have a jack they would be the wrong
+thing to copy.
+
 **`[IMPL-AUD-010]`** Identify what exists first: `aplay -l`, and after setup `vaino --list-devices`.
 
 **`[IMPL-AUD-050]` A2DP needs a bridge into ALSA.** Vaino's `cpal` backend speaks ALSA, and BlueZ alone does not expose an A2DP sink as an ALSA PCM. This corrects the "no PulseAudio, ALSA directly" guidance elsewhere in this document — that holds for Profiles B–D, **not** for Bluetooth. *(As shipped, the bridge is PipeWire, not the `bluez-alsa` steps immediately below — see the superseded note above.)*
@@ -259,15 +290,16 @@ remedy actually needs. Verified by generating the units and comparing them
 byte-for-byte against the running appliance, and by exercising the installer's
 idempotence rather than assuming it.
 
-**Still not reproducible from the repository, and known:**
+**Per-instance state is deliberately not reproduced.** The databases and the
+BlueZ link keys in `/var/lib/bluetooth` are built fresh on each player — a new
+instance scans its own library and pairs its own speaker, and copying either
+between machines is how `speaker_address` went stale in the first place
+`[PI3-AIM-040]`.
 
-- **The kernel command line.** `snd_bcm2835.enable_hdmi=0` and
-  `enable_headphones=0` are why this machine has no hardware sink at all until
-  Bluetooth arrives — a fact [PI004 §1](PI004-speaker-operation.md) and PI009 both reason from — and they
-  are *observed* in those documents, never *prescribed* by any build step.
-  A rebuilt card would have those outputs enabled and behave differently.
-- **The databases.** `library.db` and `listener.db` are data, not
-  configuration; a rebuild needs them restored, and the listener store carries
-  the chosen speaker, the volume and the resume point.
-- **BlueZ pairings.** Link keys live in `/var/lib/bluetooth` and cannot be
-  reconstructed from anything here — a rebuilt card pairs again by hand.
+**Not a gap after all: the kernel command line.** An earlier draft of this
+section listed `snd_bcm2835.enable_hdmi=0` and `enable_headphones=0` as
+settings the repository failed to prescribe. They are not settings. The
+firmware derives them from the board and `config.txt`, so a rebuilt card gets
+them automatically and behaves identically — see
+`[IMPL-AUD-005]` in section 5, which records what actually makes this a
+Bluetooth-only player.

@@ -80,9 +80,12 @@ header, so the condition is true unconditionally. The gate reduced to its
 third clause alone, which passes whenever no sink is marked default.
 
 The consequence needed a machine with no hardware sink to become visible, and
-vainopi is one: `snd_bcm2835.enable_hdmi=0` and `enable_headphones=0` are both
-on its kernel command line, so until Bluetooth arrives it genuinely has
-nowhere audible to send audio. Measured on the 15:37 boot — *"real sink
+vainopi is one: a Zero 2 W has no analog jack, its only ALSA card is `vc4hdmi`,
+and with nothing plugged into HDMI that card yields no sink — so until
+Bluetooth arrives it genuinely has nowhere audible to send audio. (The
+`snd_bcm2835.enable_hdmi=0` / `enable_headphones=0` on its kernel command line
+are the firmware describing that hardware, not a choice anyone made; the
+profile is set out in [IMPL001 `[IMPL-AUD-005]`](IMPL001-appliance-setup.md).) Measured on the 15:37 boot — *"real sink
 present after 3s"*, thirty seconds before the speaker existed, releasing the
 player to open its output onto a dummy and stay there. Every layer above
 reported success, which is `[PI3-WHY-010]` arriving by a new road.
