@@ -880,3 +880,48 @@ what the listener asked for anyway; nobody presses "use this one" meaning
 is connected without a transport, so a speaker already carrying A2DP is left
 strictly alone rather than having the audio interrupted by the verb meant to
 deliver it.
+
+## 11. The answer, by substitution
+
+**`[PI3-FOUND-300]` The periodic stutters were the Middleton, not the
+appliance.** Every Pi-side instrument had been saying so for a while — the
+player's underrun counter stopped climbing while the listener still heard
+stutters, PipeWire reported zero xruns, the A2DP transport stayed `active`,
+and Wi-Fi settled to three scans a boot — but "everything I can measure looks
+fine" is not a diagnosis. Swapping the speaker is.
+
+The OontZ was made the chosen speaker and the appliance power-cycled. Result:
+
+```
+17.5s  vaino-db-recover: hot journal on listener.db, rolling back
+22.9s  vaino-wait-sink: real sink present after 2s (OontZ_Angle 3 U412)
+23.3s  session open: library 155ms ... (total 182ms)
+23.7s  .../sep1/fd0: fd(32) ready
+24.5s  session prime: 881ms -> resuming playback
+50.2s  director rebuild finished in 26464ms
+```
+
+**Audio at 24.5 s, and ninety seconds of listening with no audible stutter at
+all.**
+
+The decisive number is the comparison, not the absolute: that boot recorded
+**2.68 s of underrun and sounded clean**, against **1.64 s of underrun on a
+Middleton boot that stuttered throughout**. More missing samples, less audible
+trouble. Whatever the listener was hearing on the Middleton was therefore not
+Vaino's underruns — those are a couple of seconds during the Director rebuild,
+on any speaker, and they are inaudible.
+
+That closes a question this document has been circling since section 5. The
+appliance's own faults were real and are fixed — a boot that reached audio in
+88-95 s now does it in 24.5 s, a power cut that wedged the player into 23
+restarts now heals itself, and a speaker that could not reconnect after a
+power cycle now does. What remained after all of that belongs to the speaker,
+and no amount of work on this side will reach it.
+
+> **Method worth keeping.** Four separate causes were proposed for these
+> stutters and measured away — memory, swap, CPU starvation, and SD
+> contention — before substitution answered it in one power cycle. The
+> instrument that made the difference was `vaino-underruns`: not because its
+> number was high, but because it went *static while the symptom continued*,
+> which is what proved the fault was downstream of the player. A counter that
+> stops moving can be as informative as one that climbs.
