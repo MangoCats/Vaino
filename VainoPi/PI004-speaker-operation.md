@@ -743,3 +743,53 @@ any mystery that survives a reboot, and off again afterwards:
 It also captures the *user* journal, where WirePlumber logs live — a blind
 spot named in `[PI3-FOUND-030]`'s original investigation and not closed until
 now.
+
+## 9. Politeness that was not enforced, and a deadline cut on stale reasoning
+
+**`[PI3-FOUND-250]` `IOSchedulingClass=idle` did nothing, because the
+scheduler in use has no idea what it means.** The Director rebuild was made
+idle-class so it would yield the card to the decoder `[PI3-FOUND-220]`. It
+did not yield. Sampled at one-second resolution with nobody connected, its
+block-device reads run:
+
+```
+mono   read_kb        vaino_jiffies
+35.73   14516          28
+44.16  136468         502
+54.29  270824         997
+```
+
+**256 MB pulled off the SD card in about eighteen seconds — roughly 15 MB/s
+sustained — while using half a core**, straight through the start of
+playback, by a thread that was nominally at idle priority.
+
+The cause is the elevator: `/sys/block/mmcblk0/queue/scheduler` was
+`mq-deadline`, which implements deadlines and nothing else. **I/O priority
+classes are implemented by BFQ and by essentially nothing else in a modern
+kernel**, so `ioprio_set(IDLE)` on the rebuild thread was a request nobody
+was listening to. Switching the card to `bfq` is what makes "polite" mean
+anything at all here; without it, every I/O-priority change in this document
+is decoration.
+
+Set through `tmpfiles.d` alongside the 512 KB readahead, so it survives a
+reboot on an appliance that gets power-cut rather than shut down.
+
+**`[PI3-FOUND-260]` The boot gate's deadline was cut on reasoning that had
+already expired.** `[PI3-FOUND-150]` shortened it from 45 s to 15 s because
+the player took twenty seconds to start and the wait could hide inside that.
+Then `[PI3-FOUND-210]` established that the twenty seconds were never the
+player's own work — they were contention — and once `mpd` was made to yield,
+the same work measured 120 ms. The premise was gone; the change outlived it.
+
+What that cost, measured on the next boot: the speaker took 63 s to answer,
+having been taken by another device `[PI3-FOUND-090]`; the gate gave up at
+15 s; the player opened onto a dummy and played into it for twenty-seven
+seconds until `vaino-speaker` reconnected and asked for a reopen. That boot
+recorded **26.45 s of underrun, against 2.79 s** on a boot where the speaker
+was present before the player started.
+
+Restored to 60 s, with 45 s of first refusal for the chosen speaker. It exits
+the instant that sink appears — 0.14 s on a healthy boot — so the higher
+number costs nothing when things are well, and only stops the player
+committing to a dummy when they are not. Starting early buys nothing here and
+costs a reopen; starting late costs only silence that was silent anyway.

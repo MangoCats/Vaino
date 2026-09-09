@@ -35,19 +35,31 @@
 # ninety-five seconds to audio, of which about forty-five were spent
 # deliberately doing nothing.
 #
-# So the deadline is short now. It still catches the case it was written for
-# -- a warm restart, where the speaker's sink is already there and the answer
-# is instant -- and it still gives the chosen speaker first refusal. What it
-# no longer does is serialise a wait that the library load was going to cover
-# anyway. If the sink turns up late the player opens onto a dummy, which is
-# no longer the dead end it was when this gate was written: the path
-# supervisor notices and reopens `[SPEC-APS-060]`, and `vaino-speaker` sees
-# the routing disagree with the connected device and says so `[PI3-AIM-050]`.
-# Two mechanisms that did not exist then now cover the case this was holding
-# the whole boot still to prevent.
+# **`[PI3-FOUND-260]` That reasoning was true for about a day, and cutting the
+# deadline to 15 s on the strength of it was a mistake.** The twenty seconds
+# were never the library load: they were contention, and once `mpd` was made
+# to yield `[PI3-FOUND-210]` the same work measured 120 ms. So there is no
+# longer a slow start for a wait to hide inside -- the player is ready in
+# under two seconds, and every second this gate spends is simply a second of
+# waiting.
+#
+# But waiting is not what it costs. Measured on the boot after the cut: the
+# speaker took 63 s to answer (it had been taken by another device
+# `[PI3-FOUND-090]`), this gate gave up at 15 s, and the player opened onto a
+# dummy and played into it for twenty-seven seconds before `vaino-speaker`
+# reconnected and asked for a reopen. That boot recorded 26.45 s of underrun,
+# against 2.79 s on a boot where the speaker was present before the player
+# started. Starting early buys nothing and costs a reopen; starting late
+# costs only silence that was silent anyway.
+#
+# So the deadline goes back up. It still exits the instant the speaker's sink
+# appears -- which on a healthy boot is a few seconds -- and it still gives
+# that speaker first refusal over any other. It simply no longer gives up
+# early on a machine whose speaker is routinely slow to answer, which is this
+# one, by design `[PI3-FOUND-090]`.
 set -u
-DEADLINE=${VAINO_SINK_WAIT:-15}
-SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-10}
+DEADLINE=${VAINO_SINK_WAIT:-60}
+SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-45}
 DB="${VAINO_DB:-/srv/library/vaino.db}"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
