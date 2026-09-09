@@ -199,6 +199,47 @@ if [ -n "$CONNECTED" ]; then
         rm -f "$SEEN" 2>/dev/null
     fi
 
+    # **`[PI3-FOUND-380]` A link the speaker opened is worse than one we
+    # opened, and redialling it once fixes the boot.**
+    #
+    # Switching the speaker off cuts this appliance's power with it
+    # `[PI3-FOUND-090]`, so both cold-boot together and the speaker -- awake
+    # first -- reaches out to its last device. That inbound link measures
+    # identically to an outbound one in every respect that can be read: same
+    # SBC configuration (`ay 4 17 21 2 53`), same codec, same transport state,
+    # same volume. It simply sounds worse: stutters every fifteen seconds or
+    # so for around three minutes.
+    #
+    # Measured 2026-09-09 as a same-boot intervention, which is as controlled
+    # as this gets. A boot stuttering on schedule, link reading `>` (inbound);
+    # disconnected and reconnected outbound; link then read `<`, configuration
+    # unchanged, and the stuttering stopped -- underruns flat across the next
+    # sixty seconds and none heard. Nothing else was touched.
+    #
+    # Why an inbound link should differ is not established. The one visible
+    # correlate is that mode A also carries an AVDTP collision
+    # `[PI3-FOUND-360]` -- both ends reaching at once -- which an outbound
+    # redial resolves by making the negotiation single-sided.
+    #
+    # Once per boot, and only when the link came in: an outbound boot is left
+    # strictly alone, so mode B pays nothing. The cost where it does fire is
+    # one deliberate gap of a few seconds, in exchange for three minutes of
+    # stuttering, and the marker lives in the runtime directory so it clears
+    # itself on the next boot.
+    REDIAL="${XDG_RUNTIME_DIR:-/tmp}/vaino-speaker.redialled"
+    if [ "$CONNECTED" = "${SPEAKER:-}" ] && [ ! -f "$REDIAL" ] &&
+       hcitool con 2>/dev/null | grep -F "$SPEAKER" | grep -qE '^[[:space:]]*>'; then
+        # Marked before it is attempted, not after: a redial that fails must
+        # not become a redial that repeats every thirty seconds.
+        : > "$REDIAL" 2>/dev/null
+        echo "$SPEAKER opened this link inbound; redialling outbound once to renegotiate"
+        bluetoothctl disconnect "$SPEAKER" >/dev/null 2>&1
+        sleep 4
+        bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
+        sleep 6
+        curl -s -o /dev/null -X POST             "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
+    fi
+
     # **`[PI3-AIM-050]` Connected is not the same claim as playing.**
     # `[PI3-AIM-040]` stopped as soon as BlueZ showed a real device
     # connected, on the belief that audio must already be flowing -- true

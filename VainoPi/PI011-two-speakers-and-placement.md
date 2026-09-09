@@ -453,3 +453,38 @@ both modes do it identically.
 > fix. If they are identical, then a link that measures the same in every
 > respect sounds different, and the difference is inside the speaker where
 > nothing here can reach it.
+
+## 9. The fix: redial the link outbound, once
+
+**`[PI3-FOUND-380]` A link the speaker opened is worse than one we opened, and
+it measures identically.** Reading the mode A link immediately after a boot,
+against the mode B baseline of section 8:
+
+| | Mode B (clean) | Mode A (stuttering) |
+|---|---|---|
+| Configuration | `ay 4 17 21 2 53` | `ay 4 17 21 2 53` |
+| State / Codec / Volume | active / SBC / 127 | active / SBC / 127 |
+| **ACL direction** | **`<` outgoing** | **`>` incoming** |
+
+Every negotiated parameter is byte-identical. The one thing that differs is
+who opened the link: in mode A the cold-booting speaker reaches out to its
+last device; in mode B this appliance reaches out to a speaker already awake.
+
+**Tested as a same-boot intervention, which is as controlled as this gets.**
+On a boot stuttering on schedule, the link was disconnected and reconnected
+outbound — nothing else touched. The direction flipped `>` to `<`, the
+configuration did not change, **and the stuttering stopped**: none heard, and
+the underrun counter flat across the following sixty seconds.
+
+So `vaino-speaker` now redials once per boot when it finds an inbound link,
+and leaves an outbound one strictly alone — a mode B boot pays nothing. Where
+it fires the cost is one deliberate gap of a few seconds against roughly three
+minutes of stuttering.
+
+> **What this is not.** Why an inbound link should sound worse is *not*
+> established. The one visible correlate is the AVDTP collision of
+> `[PI3-FOUND-360]`, which an outbound redial resolves by making the
+> negotiation single-sided — but that is a plausible story, not a measurement,
+> and two plausible stories have already been withdrawn from this document.
+> What is established is narrower and worth stating exactly: **redialling
+> outbound stops it, once, reproducibly on the boot it was tried.** One trial.
