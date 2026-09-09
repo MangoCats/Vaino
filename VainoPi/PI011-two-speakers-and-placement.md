@@ -393,3 +393,63 @@ the player's counters observes that.
 > (PI010 §3), because the volatile default destroyed mode A's log the moment
 > mode B booted. Turn it on, repeat the pair, and compare the Bluetooth logs
 > rather than the Pi's own health.
+
+## 8. What the Bluetooth layer says about the two modes
+
+**`[PI3-FOUND-360]` One measurable difference, and it is a connection
+collision.** Both modes were captured with the persistent journal on. Filtered
+of endpoint registration noise, the whole of what `bluetoothd` has to say:
+
+```
+Mode A (stuttered)                         Mode B (clean)
+21.01 a2dp-sink connect failed:            20.87 a2dp-sink connect failed:
+      Protocol not available                     Protocol not available
+27.42 avdtp_connect_cb: Operation          (nothing)
+      already in progress (114)
+30.91 sep1/fd0: fd(29) ready               29.39 sep1/fd0: fd(29) ready
+(nothing further, ever)                    (nothing further, ever)
+```
+
+Counted across each entire boot: **one AVDTP collision in mode A, none in
+mode B**; one transport creation and one early profile failure in both.
+
+Two things follow, and the second is the awkward one.
+
+**The collision is real and mode-specific.** In mode A the speaker is
+cold-booting, so both ends reach for each other at once and one attempt lands
+on another already in flight — the same `Operation already in progress (114)`
+signature that an over-eager chase produced in `[PI3-FOUND-140]`, arriving
+this time from the speaker rather than from us.
+
+**But it happens once, at 27 s, before audio starts at 32 s — and then
+`bluetoothd` says nothing for the remaining three minutes** while the listener
+hears stutters at 40, 55, 72, 87, 94, 110 and 119 s. So the collision does not
+*cause* each stutter. The most it can be is the moment a link gets negotiated
+badly and stays that way, which is a hypothesis this document has not yet
+earned the right to state as fact.
+
+**`[PI3-FOUND-370]` The trusted auto-connect fires before the endpoints
+exist, in both modes.** `a2dp-sink profile connect failed ... Protocol not
+available` at ~21 s is BlueZ acting on `Trusted=true` `[PI3-FOUND-130]` and
+reaching for the speaker about two seconds *before* WirePlumber finishes
+registering its A2DP endpoints at ~23 s. It is harmless here — something
+reconnects later either way — but it means the trust-driven fast path, the one
+that exists to avoid the power-up race, currently never succeeds on its first
+attempt. Worth fixing on its own terms, and unrelated to the stutter, since
+both modes do it identically.
+
+**Baseline for the next comparison**, recorded from the clean mode B link:
+
+| | |
+|---|---|
+| Configuration | `ay 4 17 21 2 53` — SBC, 48 kHz, joint stereo, 16 blocks, 8 subbands, loudness, bitpool 2–53 |
+| State / Volume | `active` / 127 |
+| ACL role | **CENTRAL** (`<` outgoing — the Pi initiated) |
+| Underruns | 2.60 s |
+
+> **The test that would settle it.** Read those same four values immediately
+> after a mode A boot. If the negotiated configuration or the initiating role
+> differs, the collision has a lasting consequence and there is something to
+> fix. If they are identical, then a link that measures the same in every
+> respect sounds different, and the difference is inside the speaker where
+> nothing here can reach it.
