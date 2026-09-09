@@ -45,11 +45,18 @@ cycle); that the boot gate's wait should be shortened (`[PI3-FOUND-260]`); and
 that setting an idle I/O class made anything polite (`[PI3-FOUND-250]` — no
 scheduler in use honoured it).
 
-**If stutters return, check two things before reading any further:** where the
-appliance is physically sitting, and that
-`/etc/pipewire/pipewire.conf.d/10-vaino-quantum.conf` is still present
-(`pw-top` should show the Bluetooth sink at 2048, not 1024). Each of those
-alone brought the stuttering back. Diagnostic tools and how to switch them on:
+**If stutters return, check three things before reading any further.** Each of
+them alone has brought the stuttering back:
+
+1. **The link quality** — `awk 'NR==3{print $4, $9}' /proc/net/wireless`.
+   Around -50 with retries in single figures has sounded clean; -60 with
+   retries in the tens has stuttered `[PI3-FOUND-340]`. This is the fastest
+   check and the one that actually predicts it.
+2. **Where the appliance is sitting** — on the speaker ruins the link
+   `[PI3-FOUND-320]`, though it is the link, not the distance, that matters.
+3. **That `/etc/pipewire/pipewire.conf.d/10-vaino-quantum.conf` exists**
+   (`pw-top` should show the Bluetooth sink at 2048, not 1024)
+   `[PI3-FOUND-330]`. Diagnostic tools and how to switch them on:
 PI010 §3.
 
 ---

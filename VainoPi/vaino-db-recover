@@ -41,13 +41,20 @@ for db in "$DB" "$LIB" "$LISTENER"; do
     # when there is one, so the boot log carries the fact that an unclean
     # shutdown happened rather than leaving it to be deduced later.
     [ -f "$db-journal" ] && echo "vaino-db-recover: hot journal on $db, rolling back"
-    if sqlite3 "$db" 'PRAGMA user_version;' >/dev/null 2>&1; then
+    # stderr is CAPTURED, not discarded. The first version sent it to
+    # /dev/null and reported only "could not open", which is what it then did
+    # on a live boot -- announcing a hot journal it had failed to roll back and
+    # saying nothing about why, in a script whose entire purpose is recovering
+    # from that exact state. An instrument that reports a failure without its
+    # cause makes the next person guess, and this one had already cost that
+    # once `[PI3-FOUND-120]`.
+    if err="$(sqlite3 "$db" 'PRAGMA user_version;' 2>&1 >/dev/null)"; then
         [ -f "$db-journal" ] && echo "vaino-db-recover: $db still journalled after recovery" >&2
     else
         # Never fatal. A database this cannot open is a problem the player
         # itself will report far better than a pre-start script can, and
         # refusing to start is strictly worse than starting and saying so.
-        echo "vaino-db-recover: could not open $db" >&2
+        echo "vaino-db-recover: could not open $db: ${err:-no error text}" >&2
     fi
 done
 exit 0

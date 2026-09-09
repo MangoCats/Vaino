@@ -302,3 +302,39 @@ reopen, and around the Director rebuild -- but a dry ring during a routing
 change is inaudible, while a healthy ring feeding a degraded radio is not.
 Use it to tell "the player is starving" from "the player is fine", which is
 what it settled `[PI3-FOUND-200]`, and not as a measure of quality.
+
+## 6. Link quality is the predictor, and it is a number
+
+**`[PI3-FOUND-340]` Moving the box was never the fix; improving the link
+was.** Stuttering returned on 2026-09-09 with the appliance still eighteen
+inches clear of the speaker. Everything else was eliminated by measurement:
+the binary differed from the clean runs by a doc comment alone, the SBC
+negotiation was byte-identical (`ay 4 17 21 2 53`), the transport was
+`active`, AVRCP and sink volumes were at unity, the underrun counter was
+**static**, and audio captured off the sink was continuous.
+
+What differed was the radio, and it differs by a number worth writing down:
+
+| | signal | retry discards | stutters |
+|---|---|---|---|
+| Appliance resting on the speaker | -61 to -66 dBm | 69, later 267 | yes |
+| Eighteen inches clear, clean runs | **-50 dBm** | **8** | none |
+| Eighteen inches clear, stuttering again | **-59 to -60 dBm** | **55** | yes |
+
+Three points, and the symptom tracks the link rather than the distance. On
+the stuttering boot the appliance had also associated with the *other* access
+point of the pair `[PI3-FOUND-310]`'s roam-flap describes — same SSID,
+different radio, worse result — which is one way the same eighteen inches can
+buy a good link on Monday and a poor one on Tuesday.
+
+**So `[PI3-FOUND-320]` is refined, not withdrawn.** Sitting on the speaker
+reliably ruins the link and moving off it reliably helps, but neither is the
+mechanism: what matters is how much of the one shared antenna Bluetooth gets,
+and Wi-Fi conditions move that on their own.
+
+> **Check it before listening.** `awk 'NR==3{print $4, $9}' /proc/net/wireless`
+> gives level and retry discards in one line, needs no audio, and answers in a
+> second what an ear takes a minute to guess at. **Around -50 with retries in
+> single figures has always sounded clean here; -60 with retries in the tens
+> has always stuttered.** That is a working threshold from three data points,
+> not a specification — but it beats moving the box and hoping.
