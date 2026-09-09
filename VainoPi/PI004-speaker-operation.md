@@ -975,3 +975,52 @@ line and the caller's write.
 > `Trusted=true`, connected, `transport: "active"`, stream on MIDDLETON. A
 > keeper tick with the OontZ deliberately connected alongside left
 > `speaker_address` untouched.
+
+## 13. The stutters were where the appliance was sitting
+
+**`[PI3-FOUND-320]` The Pi was on top of the speaker.** Moving it about
+eighteen inches away — same cable, same speaker, same everything else —
+ended the periodic stuttering. Two power cycles, 240+ seconds of listening,
+none heard at all. The radio numbers say why:
+
+| | Pi resting on the speaker | Pi 18" away |
+|---|---|---|
+| Wi-Fi signal | -61 to -66 dBm | **-50 dBm** |
+| Wi-Fi retry discards | 69, later 267 | **8** |
+| audible stutter | every ~15 s | **none** |
+
+Eleven to sixteen decibels, and retries down roughly thirty-fold. The Zero 2W
+carries one PCB antenna shared by Wi-Fi and Bluetooth `[PI3-FOUND-010]`, and
+resting it on the speaker put that antenna against a magnet, a driver, a
+metal grille, and the speaker's own Bluetooth radio a couple of inches away.
+Two transmitters in each other's near field desensitise each other; the
+chassis detunes what is left.
+
+**This is why every instrument said the machine was healthy.** Loss on the
+air is invisible to all of them: the player's ring never missed a deadline
+(`underrun_samples` static while the listener heard stutters), PipeWire
+reported zero xruns, `MediaTransport1` stayed `active`, and the A2DP packets
+were being handed to a controller that was duly transmitting them into a
+degraded link. Nothing in software can see a packet that was sent and not
+heard.
+
+It also explains the substitution result in section 11 honestly. The OontZ
+was clean not because the Middleton's electronics are at fault, but because
+the OontZ was not being used as a shelf. **The conclusion in section 11 —
+"what remains belongs to the speaker" — is wrong, and this supersedes it.**
+What remained belonged to the geometry.
+
+> **A caution for whoever measures this next.** The appliance is powered from
+> the speaker's own USB port `[PI3-FOUND-090]`, by a cable short enough that
+> setting the Pi on the speaker is the obvious tidy thing to do. It is the
+> single worst place to put it. If stutters return, check where the box is
+> before touching anything in this document.
+
+**Underrun counts do not predict audibility, and should not be read as if
+they do.** This boot recorded 11.58 s of `underrun_samples` and sounded
+perfect; an earlier Middleton boot recorded 1.64 s and stuttered throughout.
+The counter is honest about the ring running dry -- which happens during a
+reopen, and around the Director rebuild -- but a dry ring during a routing
+change is inaudible, while a healthy ring feeding a degraded radio is not.
+Use it to tell "the player is starving" from "the player is fine", which is
+what it settled `[PI3-FOUND-200]`, and not as a measure of quality.
