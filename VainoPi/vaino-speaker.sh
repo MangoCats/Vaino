@@ -90,23 +90,26 @@ if [ -n "${SPEAKER:-}" ] && ! echo "$INFO" | grep -q 'Trusted: yes'; then
         echo "trusted $SPEAKER -- it was not, so it could not have reconnected on its own"
 fi
 
-# **Ground truth first, stored belief second** [PI3-AIM-040]. Recorded once,
-# live 2026-09-04: `speaker_address` had gone stale (still MIDDLETON, from
-# earlier testing) while the appliance was actually connected to and playing
-# through a different, real speaker (OontZ_Angle 3, paired straight through
-# bluetoothctl rather than the player's own `use` picker, which is the one
-# path that keeps this row honest). Every tick this ran, it paged MIDDLETON
-# -- unreachable, since nothing was asking it to be reachable -- which ties
-# up the one shared radio and stalled the speaker that WAS actually playing,
-# for several seconds, invisible to the output ring's own underrun counter.
-# Exactly the [PI3-AIM-020] fault recurring for a new reason: last time the
-# address was wrong because it was hard-coded, this time because it was
-# merely out of date. The fix generalises past "read the stored value" to
-# "believe whatever is actually connected over whatever is merely
-# remembered" -- if BlueZ already has a real, audio-capable device
-# connected, right now, that is the answer, whether or not it matches
-# `SPEAKER`, and there is nothing left to do: paging the stored address on
-# top of a working connection is the disruption, not the fix.
+# **Who is actually connected, which is not always who was chosen.**
+#
+# The history is worth keeping because it shaped everything below.
+# `[PI3-AIM-040]`, 2026-09-04: `speaker_address` had gone stale (still
+# MIDDLETON, from earlier testing) while the appliance was connected to and
+# playing through a different, real speaker. Every tick, this script paged the
+# stored address -- unreachable, since nothing was asking it to be reachable
+# -- tying up the one shared radio and stalling the speaker that WAS playing,
+# invisible to the output ring's own underrun counter. The conclusion drawn
+# then was "believe whatever is connected over whatever is merely remembered",
+# and this block adopted any connected audio device on the strength of it.
+#
+# **That conclusion no longer governs, and the code below no longer does it**
+# `[PI3-FOUND-310]`. The injury it was written against is prevented at source
+# by `[PI3-AIM-060]`: nothing is paged at all while audio reaches a real sink,
+# so a stale address can no longer stall anything. What adoption still did was
+# overwrite a choice the listener had just made in the settings panel, the
+# moment a second trusted speaker connected itself. So what is computed here
+# is only *who is connected*; what to do about it is decided below, and a
+# recorded choice wins.
 CONNECTED=""
 if [ -n "${SPEAKER:-}" ] &&
    echo "$INFO" | grep -q 'Connected: yes' &&
@@ -147,8 +150,30 @@ if [ -n "$CONNECTED" ]; then
     # when no speaker has been chosen at all. A recorded choice stands until
     # the listener changes it, and a device that shows up uninvited is
     # reported rather than promoted.
+    # Said once per interloper, not once per tick. This is a standing
+    # condition rather than an event: with `withdraw_others` taking the
+    # auto-connect away from everything but the chosen speaker, a different
+    # device connected at all means somebody connected it deliberately, and it
+    # may sit there for hours. Repeating it every thirty seconds would put
+    # ~2,880 identical lines a day into a journal this appliance deliberately
+    # keeps in RAM `[PI3-FOUND-120]`. The marker lives in `/run`, so it clears
+    # itself on the next boot and a genuinely new interloper is reported again.
+    # In the per-user runtime directory, not /run: this service runs as the
+    # login user (`User=pi`), which cannot write /run at all -- the first
+    # attempt failed with "Permission denied" every tick, leaking an error to
+    # the journal instead of suppressing a message. XDG_RUNTIME_DIR is
+    # exported above, is owned by that user, and is cleared on boot, which is
+    # exactly the lifetime wanted.
+    SEEN="${XDG_RUNTIME_DIR:-/tmp}/vaino-speaker.interloper"
     if [ -n "${SPEAKER:-}" ] && [ "$CONNECTED" != "$SPEAKER" ]; then
-        echo "$CONNECTED is connected but $SPEAKER is the chosen speaker -- leaving the choice alone"
+        if [ "$(cat "$SEEN" 2>/dev/null)" != "$CONNECTED" ]; then
+            # Says what is actually happening. The earlier wording -- "leaving
+            # the choice alone" -- read as though the listener's choice were
+            # being honoured, when what is being left alone is the device
+            # playing instead of it.
+            echo "$CONNECTED is connected and audio is going there; $SPEAKER is the chosen speaker and is not present. Not disturbing what is playing -- switch from the settings panel to change it."
+            echo "$CONNECTED" > "$SEEN" 2>/dev/null
+        fi
     elif [ "$CONNECTED" != "$SPEAKER" ]; then
         # Reality moved on from what Vaino remembers -- catch the
         # bookkeeping up to it, silently.
@@ -167,6 +192,11 @@ if [ -n "$CONNECTED" ]; then
                     && echo "adopted $CONNECTED as the speaker (was ${SPEAKER:-<none>})"
                 ;;
         esac
+    else
+        # The chosen speaker is the one connected, so any earlier interloper
+        # is gone: forget it, and a future one gets reported rather than
+        # silently matching a stale marker.
+        rm -f "$SEEN" 2>/dev/null
     fi
 
     # **`[PI3-AIM-050]` Connected is not the same claim as playing.**

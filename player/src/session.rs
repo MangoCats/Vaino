@@ -167,11 +167,17 @@ pub const RELOAD_MIN_QUEUE_MS: u64 = 180_000;
 /// nor anything else decided was how hard it should push once running. It ran
 /// at the same priority as the thread feeding the speaker.
 ///
-/// Measured on vainopi: with the queue deep enough for the gate to open, the
-/// listener heard stutters at 76 s, 89 s and 96 s after power-up, while every
-/// instrument said the machine was healthy -- and the rebuild left no log line
-/// to connect them to. Underruns confirmed the player, not the radio, was
-/// missing its deadline.
+/// Measured on vainopi: the rebuild pulls about 256 MB off the SD card at
+/// ~15 MB/s while using half a core, and it used to leave no log line at all
+/// to connect that to anything.
+///
+/// It was blamed at the time for stutters heard at 76 s, 89 s and 96 s after
+/// power-up. **That attribution was withdrawn** -- those were the appliance's
+/// antenna, not its scheduler `[PI3-FOUND-320]`. What survives is the direct
+/// measurement rather than the story: with this thread stepped aside, a full
+/// 10.3 s rebuild added exactly zero underruns (72,590 before, 72,590 after).
+/// Keeping the largest non-audio consumer on the machine out of the way at the
+/// moment audio starts is worth doing on its own evidence.
 ///
 /// Both calls are per-**thread** on Linux despite their names: `PRIO_PROCESS`
 /// and `IOPRIO_WHO_PROCESS` with a pid of `0` mean the calling thread. That is
