@@ -23,8 +23,15 @@ set -u
 OUT="${VAINO_SAMPLE_OUT:-/var/log/vaino-startup.log}"
 SECONDS_TO_RUN="${VAINO_SAMPLE_SECS:-240}"
 
-: > "$OUT" 2>/dev/null || exit 0
-echo "# mono load1 vaino_jiffies read_kb write_kb rchar_kb" >> "$OUT"
+# **Appended, not truncated.** Comparing two power-cycle modes -- speaker
+# switched off (which cuts the Pi's supply) against the Pi alone -- needs both
+# runs side by side, and truncating per boot forced a round trip between them.
+# Each boot opens with a marker carrying the wall clock, so runs stay
+# distinguishable even though this appliance has no RTC and its early
+# timestamps are wrong until NTP lands.
+touch "$OUT" 2>/dev/null || exit 0
+echo "# boot $(date 2>/dev/null) --------------------------------" >> "$OUT"
+echo "# mono load1 vaino_jiffies read_kb write_kb rchar_kb wifi_dbm" >> "$OUT"
 
 # Found once, not once a second. If the player restarts mid-sample the reads
 # below simply fail and the row carries -1, which is a truer record than
@@ -60,10 +67,11 @@ while [ "$i" -lt "$SECONDS_TO_RUN" ]; do
                  /^read_bytes:/  { r = $2 }
                  /^write_bytes:/ { w = $2 }
                  /^rchar:/       { c = $2 }
-                 END { printf "%d %d %d %d", j, r/1024, w/1024, c/1024 }' \
-            "/proc/$pid/stat" "/proc/$pid/io" 2>/dev/null)
+                 FILENAME ~ /wireless$/ && FNR==3 { lvl = $4 + 0 }
+                 END { printf "%d %d %d %d %d", j, r/1024, w/1024, c/1024, lvl }' \
+            "/proc/$pid/stat" "/proc/$pid/io" /proc/net/wireless 2>/dev/null)
 
-    echo "$mono $load ${stats:--1 -1 -1 -1}" >> "$OUT"
+    echo "$mono $load ${stats:--1 -1 -1 -1 -1}" >> "$OUT"
     i=$((i + 1))
     sleep 1
 done
