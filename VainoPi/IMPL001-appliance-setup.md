@@ -228,3 +228,46 @@ WantedBy=multi-user.target
 2. ~~**`[IMPL-OPN-040]`** bluez-alsa vs PipeWire~~ — **DECIDED (revised 2026-09-02): PipeWire**, built and measured on real hardware `[PI2-KNOWN-010]`, [PI006](PI006-appliance-characterisation.md). The original footprint-driven `bluez-alsa` decision below did not survive contact with the device — see §5's superseded note.
 2. **`[IMPL-OPN-020]`** Whether 64-bit is right at 512 MB. It matches the verified build, but 32-bit uses less memory for pointer-heavy work. Vaino's footprint is buffer-dominated, so the difference should be small — worth measuring both if the margin proves tight.
 3. **`[IMPL-OPN-030]`** Where the class-D export goes off-device `[SPEC-DF-094]`, since on-card backups die with the card.
+
+## 10. Rebuilding this appliance from the repository
+
+**`[PI3-REPRO-010]` Audited 2026-09-09, and it did not reproduce.** A fresh
+card built from this repository alone would have come up without the entire
+reconnection mechanism. `setup-vainopi.sh` installed six helpers and never
+mentioned `vaino-speaker`, its service, or its timer — so the appliance would
+not have re-asserted trust `[PI3-FOUND-130]`, would not have chased the
+speaker after a power cycle `[PI3-FOUND-090]`, and would not have noticed the
+player's stream sitting on the wrong sink `[PI3-AIM-050]`. Nothing would have
+reported the absence; it would simply never have reconnected.
+
+Four more pieces existed only on the SD card:
+
+| Missing | What its absence costs |
+|---|---|
+| `vaino.service.d/mpd-guest.conf` | The **real command line**. The base unit's argument is the pre-split single database, so the player would read the catalog as its listener store `[IMPL-DBSPLIT-025]` |
+| `vaino.service.d/20-vaino-io.conf` | The player's I/O precedence |
+| `mpd.service.d/10-vaino-polite.conf` | `mpd` competing for the card during startup — 19 s of it `[PI3-FOUND-210]` |
+| `/etc/tmpfiles.d/vaino-readahead.conf` | `bfq`, without which every I/O-priority setting here is inert `[PI3-FOUND-250]` |
+
+And two working tools, `vaino-rocker` and `vaino-radio-test`, existed nowhere
+but the card despite being the instruments behind `[PI3-ROCKER-010]` and the
+interference measurements in section 1.
+
+All of the above is now staged in `VainoPi/` and installed by
+`setup-vainopi.sh`, which also gained the `add-wants` that `[PI3-FOUND-030]`'s
+remedy actually needs. Verified by generating the units and comparing them
+byte-for-byte against the running appliance, and by exercising the installer's
+idempotence rather than assuming it.
+
+**Still not reproducible from the repository, and known:**
+
+- **The kernel command line.** `snd_bcm2835.enable_hdmi=0` and
+  `enable_headphones=0` are why this machine has no hardware sink at all until
+  Bluetooth arrives — a fact [PI004 §1](PI004-speaker-operation.md) and PI009 both reason from — and they
+  are *observed* in those documents, never *prescribed* by any build step.
+  A rebuilt card would have those outputs enabled and behave differently.
+- **The databases.** `library.db` and `listener.db` are data, not
+  configuration; a rebuild needs them restored, and the listener store carries
+  the chosen speaker, the volume and the resume point.
+- **BlueZ pairings.** Link keys live in `/var/lib/bluetooth` and cannot be
+  reconstructed from anything here — a rebuilt card pairs again by hand.

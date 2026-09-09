@@ -84,12 +84,26 @@ fi
 # Installing the package is not enough: upower.service ships disabled and
 # static, so D-Bus activation still finds no owner and the endpoint churn
 # continues with the package sitting there installed. It has to be enabled.
+#
+# **And enabling it is not enough either `[PI3-FOUND-030]`.** `upower.service`
+# ships `WantedBy=graphical.target`, and this appliance boots to
+# `multi-user.target` with no display, so `enable` creates a want that is
+# never reached. Measured 2026-09-08, weeks after the original fix was
+# recorded as done: every boot since had come up with upower *enabled* and
+# *inactive*, and WirePlumber logged `NameHasNoOwner` each time. `add-wants`
+# is the verb that actually holds on a headless machine.
 if [ "$(systemctl is-enabled upower 2>/dev/null)" != "enabled" ] \
    || ! systemctl is-active --quiet upower; then
     systemctl enable --now upower >/dev/null 2>&1
     did "enable upower"
 else
     ok "upower running"
+fi
+if [ ! -e /etc/systemd/system/multi-user.target.wants/upower.service ]; then
+    systemctl add-wants multi-user.target upower.service >/dev/null 2>&1
+    did "upower wanted by multi-user.target (it is not, by default)"
+else
+    ok "upower starts at boot"
 fi
 
 # The mirror image of upower above: the `dnsmasq` PACKAGE ships its own
@@ -301,7 +315,8 @@ fi
 # these verbs, with the device address validated before it reaches BlueZ.
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot vaino-wifi-revert; do
+for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
+         vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -330,6 +345,113 @@ if [ "$(cat "$SUDOERS" 2>/dev/null)" != "$WANT" ]; then
     fi
 else
     ok "sudoers rule"
+fi
+
+# ------------------------------------------------------------ speaker keeper
+# **The reconnect timer, and everything that had only ever lived on the card.**
+#
+# Audited 2026-09-09: none of this was installed by this script. `vaino-speaker`
+# is what reconnects the chosen speaker after a power cycle `[PI3-FOUND-090]`,
+# re-asserts the trust that lets the speaker reach back `[PI3-FOUND-130]`, and
+# notices when the player's stream is not where the speaker is `[PI3-AIM-050]`
+# -- the entire mechanism a day of work went into. A card rebuilt from this
+# repository would have come up without it, and without the drop-in carrying
+# the appliance's real command line, and nothing would have said so.
+echo "speaker keeper"
+HERE="${HERE:-$(cd "$(dirname "$0")" && pwd)}"
+
+# Named with a `.sh` in the repository and without one on the machine, because
+# the unit has always called it `vaino-speaker`.
+if [ -f "$HERE/vaino-speaker.sh" ]; then
+    if ! cmp -s "$HERE/vaino-speaker.sh" /usr/local/bin/vaino-speaker; then
+        install -m755 "$HERE/vaino-speaker.sh" /usr/local/bin/vaino-speaker
+        did "installed vaino-speaker"
+    else
+        ok "vaino-speaker current"
+    fi
+else
+    note "vaino-speaker" "ABSENT — stage it beside this script"
+fi
+
+# Every-30-seconds, oneshot, as the login user: it talks to the user session's
+# PipeWire through `GET /audio/sink`, and a root timer could not.
+install_unit() {   # install_unit <name> <<'EOF' ... EOF
+    local name="$1" tmp
+    tmp="$(mktemp)"
+    cat > "$tmp"
+    if ! cmp -s "$tmp" "/etc/systemd/system/$name"; then
+        install -m644 "$tmp" "/etc/systemd/system/$name" && did "unit $name"
+        NEED_RELOAD=1
+    else
+        ok "unit $name"
+    fi
+    rm -f "$tmp"
+}
+
+install_unit vaino-speaker.service <<EOF
+[Unit]
+Description=Keep the Vaino speaker connected
+After=bluetooth.target
+[Service]
+Type=oneshot
+User=$RUN_USER
+ExecStart=/usr/local/bin/vaino-speaker
+EOF
+
+install_unit vaino-speaker.timer <<'EOF'
+[Unit]
+Description=Check the Vaino speaker every half minute
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target
+EOF
+
+# Diagnostic, installed but NOT enabled: it costs a subprocess a second and an
+# idle appliance should not pay for an instrument nobody is reading
+# `[PI3-FOUND-240]`. Turn it on when something needs measuring.
+install_unit vaino-startup-sample.service <<'EOF'
+[Unit]
+Description=Sample load and the player's disk reads after boot (diagnostic)
+After=vaino.service
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vaino-startup-sample
+Nice=19
+IOSchedulingClass=idle
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Drop-ins and card tuning, all staged beside this script.
+for pair in \
+    "vaino-mpd-guest.conf:/etc/systemd/system/vaino.service.d/mpd-guest.conf" \
+    "vaino-io-priority.conf:/etc/systemd/system/vaino.service.d/20-vaino-io.conf" \
+    "mpd-polite.conf:/etc/systemd/system/mpd.service.d/10-vaino-polite.conf" \
+    "sd-tuning.conf:/etc/tmpfiles.d/vaino-readahead.conf" ; do
+    src="$HERE/${pair%%:*}"; dst="${pair#*:}"
+    [ -f "$src" ] || { note "${pair%%:*}" "ABSENT — stage it beside this script"; continue; }
+    mkdir -p "$(dirname "$dst")"
+    if ! cmp -s "$src" "$dst"; then
+        install -m644 "$src" "$dst" && did "installed $(basename "$dst")"
+        NEED_RELOAD=1
+    else
+        ok "$(basename "$dst") current"
+    fi
+done
+
+# `bfq` and the readahead take effect through tmpfiles at boot; apply them now
+# so a fresh install does not need a reboot to behave like a settled one.
+systemd-tmpfiles --create /etc/tmpfiles.d/vaino-readahead.conf >/dev/null 2>&1 || true
+
+[ "${NEED_RELOAD:-0}" = 1 ] && systemctl daemon-reload
+if ! systemctl is-enabled --quiet vaino-speaker.timer 2>/dev/null; then
+    systemctl enable --now vaino-speaker.timer >/dev/null 2>&1
+    did "enabled vaino-speaker.timer"
+else
+    ok "vaino-speaker.timer enabled"
 fi
 
 # ---------------------------------------------------------------- act led
