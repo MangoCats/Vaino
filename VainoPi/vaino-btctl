@@ -281,6 +281,40 @@ case "$VERB" in
         # `[PI3-FOUND-090]`.
         need_addr
         bluetoothctl trust "$ADDR" >/dev/null 2>&1
+
+        # **`[PI3-FOUND-290]` Free A2DP before asking for it.** The adapter
+        # carries one A2DP transport at a time. A second speaker connected
+        # beside the first does not fail -- it quietly negotiates HSP/HFP
+        # instead, which is mono over SCO and worthless for music. Measured:
+        # asked to use the OontZ with the Middleton still connected, the
+        # graph came up `output_MONO > OontZ:playback_MONO` with a capture
+        # source beside it (the giveaway: an A2DP sink has no microphone) and
+        # no MediaTransport for it at all. Volume full, nothing audible,
+        # every layer reporting success -- `[PI3-WHY-010]` wearing yet
+        # another hat.
+        #
+        # So using a speaker means leaving the other one, which is what the
+        # listener asked for anyway: nobody presses "use this one" meaning
+        # "and also keep the last".
+        for other in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
+            [ "$other" = "$ADDR" ] && continue
+            bluetoothctl info "$other" 2>/dev/null | grep -q 'UUID: Audio Sink' || continue
+            bluetoothctl disconnect "$other" >/dev/null 2>&1
+            sleep 2
+        done
+
+        # Freeing the transport is not enough on its own: a device that has
+        # already settled on the headset profile stays there, because nothing
+        # renegotiates a live connection. Only reconnected when it is in that
+        # state -- a speaker already carrying A2DP is left strictly alone,
+        # since disconnecting it would interrupt the audio this verb exists
+        # to deliver.
+        if bluetoothctl info "$ADDR" 2>/dev/null | grep -q 'Connected: yes' &&
+           [ "$(transport_state "$ADDR")" = none ]; then
+            bluetoothctl disconnect "$ADDR" >/dev/null 2>&1
+            sleep 3
+        fi
+
         conn="$(patient_connect "$ADDR" "${VAINO_GRAB_SECONDS:-45}")"
         # Make it the default sink. The caller must still reopen the player's
         # output: the stream does not dependably follow [PI3-WHY-020].

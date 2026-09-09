@@ -845,3 +845,38 @@ path when it does not, so one script serves a split appliance and an unsplit
 one without being told which it is on. Verified: the keeper falls silent on a
 tick after the speaker is changed, and the gate reports *"OontZ_Angle 3 U412
 present after 0s"*.
+
+**`[PI3-FOUND-290]` A second speaker does not fail to connect; it connects as
+a headset.** The adapter carries one A2DP transport at a time. Ask for a
+second speaker while the first is still connected and BlueZ does not refuse —
+it negotiates HSP/HFP instead, which is mono over SCO and worthless for
+music. Measured, having switched to the OontZ with the Middleton still
+connected:
+
+```
+51. output_MONO  >  OontZ_Angle 3 U412:playback_MONO   [active]
+55. OontZ_Angle 3 U412                                  ← a capture Source
+$ busctl ... MediaTransport1 State        → no transport for the OontZ at all
+```
+
+The giveaway is the microphone: an A2DP sink has no source. Volume full,
+nothing audible, and every layer reporting success — `[PI3-WHY-010]` wearing
+another hat, and the same shape of fault as the very first symptom in this
+document.
+
+Freeing the transport is not sufficient on its own. Disconnecting the
+Middleton left the OontZ exactly where it was, still mono with no transport,
+because nothing renegotiates a live connection. It took a disconnect and
+reconnect of the OontZ itself, after which:
+
+```
+dev_08_EB_ED_26_14_12/sep1/fd1  →  "active"
+55. output_FL > OontZ:playback_FL   56. output_FR > OontZ:playback_FR
+```
+
+`use` now disconnects any *other* connected audio device first — which is
+what the listener asked for anyway; nobody presses "use this one" meaning
+"and also keep the last" — and reconnects the requested device only when it
+is connected without a transport, so a speaker already carrying A2DP is left
+strictly alone rather than having the audio interrupted by the verb meant to
+deliver it.
