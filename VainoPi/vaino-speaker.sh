@@ -83,6 +83,18 @@ SPEAKER="${SPEAKER:-$(sqlite3 "$DB" \
 # information wanted is all in one `info` block, so it is fetched once and
 # read several times. The keeper polls; polling should cost as little as it
 # can while something is playing.
+# Does PipeWire actually offer a sink by this name? Parsed from the
+# numbered rows only, the same discipline as `vaino-wait-sink`
+# `[PI3-FOUND-110]`, so no header or box-drawing line can be mistaken for a
+# sink.
+sink_present() {
+    wpctl status 2>/dev/null |
+        sed -n '/Sinks:/,/Sink endpoints/p' |
+        sed -n 's/^[^0-9]*[0-9][0-9]*\.[[:space:]]*\(.*\)$/\1/p' |
+        sed 's/[[:space:]]*\[vol.*$//; s/[[:space:]]*$//' |
+        grep -qxF "$1"
+}
+
 INFO=$(bluetoothctl info "${SPEAKER:-none}" 2>/dev/null)
 
 if [ -n "${SPEAKER:-}" ] && ! echo "$INFO" | grep -q 'Trusted: yes'; then
@@ -164,7 +176,12 @@ if [ -n "$CONNECTED" ]; then
     # the journal instead of suppressing a message. XDG_RUNTIME_DIR is
     # exported above, is owned by that user, and is cleared on boot, which is
     # exactly the lifetime wanted.
-    SEEN="${XDG_RUNTIME_DIR:-/tmp}/vaino-speaker.interloper"
+    # Written where this user can actually write. $XDG_RUNTIME_DIR is *set*
+    # under a root run but names /run/user/0, which does not exist, so an
+    # empty-check is not enough -- the directory has to be tested.
+    RUNDIR="${XDG_RUNTIME_DIR:-/tmp}"
+    [ -d "$RUNDIR" ] && [ -w "$RUNDIR" ] || RUNDIR=/tmp
+    SEEN="$RUNDIR/vaino-speaker.interloper"
     if [ -n "${SPEAKER:-}" ] && [ "$CONNECTED" != "$SPEAKER" ]; then
         if [ "$(cat "$SEEN" 2>/dev/null)" != "$CONNECTED" ]; then
             # Says what is actually happening. The earlier wording -- "leaving
@@ -261,10 +278,21 @@ if [ -n "$CONNECTED" ]; then
     fi
     ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
         sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
-    if [ -n "$ALIAS" ] &&
+    # **`[PI3-FOUND-590]` Never ask for a reopen onto a sink that is not
+    # there.** `Connected: yes` means BlueZ has a link; it does not mean
+    # PipeWire has anywhere to send audio. Measured 2026-09-10 with both
+    # speakers powered: the Oontz held an ACL link while its PipeWire
+    # profile read `off`, so this check saw a mismatch it could never
+    # resolve and demanded a reopen every thirty seconds, forever, against
+    # a device that had no sink. The stream was already on the other
+    # speaker and playing. A reopen that cannot succeed is not a no-op --
+    # it is an instruction to abandon working audio.
+    if [ -n "$ALIAS" ] && sink_present "$ALIAS" &&
        [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
         curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
         echo "$CONNECTED is connected but the stream was on '${ROUTED:-nothing}', not '$ALIAS' -- asked the player to reopen"
+    elif [ -n "$ALIAS" ] && ! sink_present "$ALIAS"; then
+        echo "$CONNECTED has a link but no sink in PipeWire (profile off, or still negotiating) -- leaving the stream on '${ROUTED:-nothing}'"
     fi
     exit 0
 fi

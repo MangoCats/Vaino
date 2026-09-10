@@ -315,11 +315,10 @@ says a device is known. Caught by checking the candidate list against the real
 adapter rather than trusting the predicate: it returned one speaker where it
 should have returned two.
 
-**Not yet exercised end to end.** The candidate selection is verified on the
-appliance and returns both speakers. The connect path has not run, because it
-refuses to run while something is playing, and something has been playing
-every time it was tried. The first boot with the remembered speaker genuinely
-absent is the test.
+**Exercised for real, 2026-09-10.** The Oontz -- the remembered speaker -- was
+powered down while it was playing. The Middleton was untrusted, so nothing but
+this path could have done it, and audio was playing from the Middleton about
+forty seconds later with no intervention `[PI3-FOUND-590]`.
 
 **The gate change measured, on the boot of 2026-09-10 17:16.** The journal
 reads what it was built to read:

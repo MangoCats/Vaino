@@ -1190,6 +1190,71 @@ intervention like the redial `[PI3-FOUND-450]` that re-establishes the link
 after the speaker has been awake a while -- which, read in this light, is
 exactly what it was doing.
 
+### `[PI3-FOUND-590]` Both speakers powered: three results in one sequence
+
+The listener ran a mixed sequence on 2026-09-10 with both speakers in play.
+Three separate things came out of it.
+
+**1. The Middleton disturbs a link it is not part of.** At 5:32:01 the
+Middleton was powered on while the Oontz was connected and playing. The Oontz
+then stuttered -- small ones at 5:32:32, 5:32:49 and 5:33:13, a bigger one at
+5:33:45 -- and was smooth again by 5:34:45. The Middleton was not connected to
+anything during this; it was simply coming up.
+
+That is a Middleton cold start degrading a **different speaker's** link in the
+same room, and it corroborates `[PI3-FOUND-580]` from an angle the completeness
+map could not reach: the speaker is not merely fragile on its own link, it is
+an active disturbance in the band while it starts. It also fits the shape of
+the Mode A fault, where the Middleton's cold start overlaps the appliance's.
+
+**2. The fallback works, exercised for real.** The Oontz was powered down at
+5:34:45. `speaker_address` still named the Oontz, and the Middleton was
+untrusted -- so nothing but `[PI3-FOUND-560]` could have done it. Audio was
+playing smoothly from the Middleton by 5:35:25, about forty seconds later,
+with no intervention. First real exercise of the path that could not be tested
+when it was written, because it refuses to run while anything is audible.
+
+**3. Two connected audio devices, and silence from both.** At 5:35:45 the
+Oontz was powered back on. Within seconds the audio stopped, both speakers
+showed connected, and raising every volume did nothing. The diagnosis took one
+command:
+
+    < eSCO 08:EB:ED:26:14:12 handle 6 state 1 lm CENTRAL
+         48. output_MONO  > OontZ_Angle 3 U412:playback_MONO  [active]
+
+An eSCO link and a **MONO** port: the Oontz had been taken as an HSP/HFP
+headset rather than an A2DP sink, which is `[PI3-FOUND-290]` returning under a
+condition it was not found in. Zero `ACL Data TX` in five seconds confirmed
+nothing was reaching the air at all.
+
+**The recovery was a guess, and it is recorded as one.** `wpctl set-profile 53
+0` was issued without checking what index 0 meant; it means **off**. It
+restored audio only because PipeWire then fell back to the Middleton. It left
+the Oontz holding an ACL link with a dead profile, which produced the next
+finding, and a considered fix would have disconnected the device instead.
+
+**And that dead profile exposed a real defect.** With the Oontz holding a link
+but offering no sink, the keeper's routing check saw a mismatch it could never
+resolve and demanded a reopen **every thirty seconds, indefinitely**, against a
+device with nowhere to send audio -- while the stream was already playing
+happily on the other speaker:
+
+    17:39:34  08:EB:ED:26:14:12 is connected but the stream was on 'MIDDLETON' ... asked the player to reopen
+    17:40:08  (same)
+    17:40:41  (same)
+
+`Connected: yes` means BlueZ has a link. It does not mean PipeWire has anywhere
+to send audio. A reopen that cannot succeed is not a harmless no-op -- it is an
+instruction to abandon working audio. The check now requires the target sink to
+actually exist, and says so plainly when it does not. Verified under the
+service's own user: `MIDDLETON` present, `OontZ_Angle 3 U412` absent, a
+nonsense name absent.
+
+**A smaller one fixed alongside.** The interloper marker used
+`${XDG_RUNTIME_DIR:-/tmp}`, but that variable is *set* under a root run and
+names `/run/user/0`, which does not exist -- so the fallback never triggered
+and every write failed. It now tests the directory rather than the variable.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
