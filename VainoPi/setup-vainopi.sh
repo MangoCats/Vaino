@@ -317,7 +317,7 @@ echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
          vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample \
-         vaino-hci-capture vaino-linkstate vaino-afh-seed; do
+         vaino-hci-capture vaino-linkstate vaino-afh-seed vaino-vitals; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -422,6 +422,27 @@ Type=simple
 ExecStart=/usr/local/bin/vaino-startup-sample
 Nice=19
 IOSchedulingClass=idle
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Diagnostic, installed but NOT enabled `[PI3-FOUND-610]`. Samples vital signs
+# to a file rather than the journal, because on 2026-09-10 the journal was the
+# record that died first: the appliance stopped answering TCP for thirteen
+# minutes while still replying to ping, and journald stopped with the rest of
+# userspace. Forks nothing; five /proc reads per sample.
+install_unit vaino-vitals.service <<'EOF'
+[Unit]
+Description=Sample vital signs to a file that survives a wedge (diagnostic)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vaino-vitals
+Nice=19
+IOSchedulingClass=idle
+Restart=always
+
 [Install]
 WantedBy=multi-user.target
 EOF

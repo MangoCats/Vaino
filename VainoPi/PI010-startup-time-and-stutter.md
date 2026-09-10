@@ -336,10 +336,10 @@ worry answered on its own terms rather than argued away.
 
 ## 3. Diagnostic tools, and how to switch them back on
 
-Six tools were built during the 2026-09-08 investigation and the stutter hunt
-that followed -- five instruments and one intervention. Three are **off by
+Seven tools were built during the 2026-09-08 investigation and the stutter
+hunt that followed -- six instruments and one intervention. Four are **off by
 default** because they cost something to run or because they change behaviour;
-all six stay installed, because the expensive part was working out what to
+all seven stay installed, because the expensive part was working out what to
 measure, not writing it.
 
 **`vaino-underruns` — always available, costs nothing.** Prints the player's
@@ -445,6 +445,39 @@ strangely.
     sudo vaino-afh-seed save                       # while it sounds right
     sudo systemctl enable --now vaino-afh-seed     # on
     sudo systemctl disable --now vaino-afh-seed    # off
+
+**`[PI3-FOUND-620]` `vaino-vitals` — installed, disabled, and the answer to a
+record that died with the fault.** On 2026-09-10 the appliance stopped
+answering TCP for thirteen minutes while still replying to ping. The journal
+simply ends mid-sequence: no I/O error, no OOM, no hung task, no panic --
+because journald is userspace too and stopped with everything else
+`[PI3-FOUND-610]`.
+
+So this samples to a plain file on a fixed cadence, each line complete in
+itself, and **the gap where the lines stop is as informative as the lines**:
+
+    # mono load1 load5 run/total memavail_kB swapfree_kB iowait_d listen22 listen5720
+    212.42 0.26 0.35 1/190 270192 516928 11 1 1
+    217.44 0.24 0.34 1/190 271188 516928  2 1 1
+
+`load` rising against an idle CPU means blocked rather than busy; `iowait_d` is
+jiffies waiting on I/O since the last sample, which separates a stalled card
+from a busy one; and `listen22`/`listen5720` going 1 to 0 while the processes
+still exist would *be* the wedge, named. That last field is precisely what was
+not known during the incident.
+
+**It forks nothing.** Five small `/proc` reads per sample, in shell. The
+earlier sampler walked every process each pass, cost about 5% of a core, and
+had to be alibied out of the symptoms it was watching `[PI3-FOUND-240]`; this
+cannot produce a periodic symptom and never needs an alibi.
+
+Off by default and meant to be switched off for production -- it writes to the
+card every ten seconds, which an appliance that plays music should not do
+forever.
+
+    sudo systemctl enable --now vaino-vitals    # on
+    sudo systemctl disable --now vaino-vitals   # off
+    cat /var/log/vaino-vitals.log
 
 **Persistent journal — off, restored to `Storage=volatile`.** The appliance
 ships volatile deliberately: it is power-cut on every shutdown

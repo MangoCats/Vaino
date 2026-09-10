@@ -1331,6 +1331,48 @@ powered the Middleton on while the Oontz played, and heard four stutters over
 two minutes `[PI3-FOUND-590]`. A second device negotiating profiles in the
 band is not free, and at its worst -- a synchronous link -- it is total.
 
+### `[PI3-FOUND-610]` An untrusted speaker knocks forever, and the machine wedged
+
+The journal survived this one, because `Storage=persistent` had been left on
+from an earlier investigation. It is the first time in this whole record that
+a fault could be read after the fact rather than reconstructed.
+
+**What the Middleton was doing.** From the moment it was powered on, every nine
+seconds:
+
+    17:53:10  bluetoothd: Authentication attempt without agent
+    17:53:10  a2dp.c:auth_cb() Access denied: org.bluez.Error.Rejected
+    17:53:19  (same)   17:53:28  (same)   17:53:38  (same)
+
+**The mechanism is this appliance's own doing.** A trusted device is
+authorised automatically; an untrusted one needs an agent to approve it, and no
+agent is registered here. The Middleton read `Trusted: no` because the listener
+had switched to the Oontz and `withdraw_others` untrusts everything but the
+chosen speaker `[PI3-FOUND-130]`. So a powered-on, paired, untrusted speaker
+knocks on the door every nine seconds and is refused every nine seconds,
+indefinitely. Untrusting is not neutral: it converts a nearby speaker into a
+permanent source of connection attempts.
+
+**The one-speaker rule fired correctly, and could not win.** At 17:53:28 it did
+exactly what it was built to do -- and the device it disconnected simply came
+back on the next attempt.
+
+**Then the machine wedged.** The journal ends at 17:53:38, three seconds before
+the listener reported the Oontz going silent, and the appliance ran for
+thirteen minutes answering ping while refusing every TCP connection -- ssh and
+the web interface alike -- until it was power-cycled.
+
+**No cause was established, and none is claimed.** The kernel logged no I/O
+error, no OOM kill, no hung-task warning and no panic; ICMP is handled in the
+kernel and kept working, which places the fault in userspace. Three guesses
+were made during the incident -- WiFi interference, self-inflicted paging, and
+a marginal radio link -- and all three were wrong: the loss cleared to 0% while
+TCP stayed dead. **What actually stopped is unknown.**
+
+**Which is the point of what was built next.** Whatever happened, the record
+that would have shown the run-up was journald, and journald is userspace and
+died with everything else. `vaino-vitals` `[PI3-FOUND-620]` writes elsewhere.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
