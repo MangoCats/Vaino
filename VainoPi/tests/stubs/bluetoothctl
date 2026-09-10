@@ -1,0 +1,36 @@
+#!/bin/sh
+# Fake bluetoothctl. Answers from $VT_STATE, records every call.
+printf '%s\n' "bluetoothctl $*" >> "$VT_STATE/calls"
+case "$1" in
+    devices)
+        case "${2:-}" in
+            Connected) cat "$VT_STATE/connected" 2>/dev/null ;;
+            Paired)    cat "$VT_STATE/paired" 2>/dev/null ;;
+            *)         cat "$VT_STATE/paired" 2>/dev/null ;;
+        esac
+        ;;
+    info)
+        cat "$VT_STATE/info.$2" 2>/dev/null
+        ;;
+    connect)
+        # Connecting succeeds only for devices the fixture says are reachable.
+        if grep -qxF "$2" "$VT_STATE/reachable" 2>/dev/null; then
+            printf 'Device %s x\n' "$2" >> "$VT_STATE/connected"
+            sed -i 's/^\(\s*\)Connected: no/\1Connected: yes/' "$VT_STATE/info.$2" 2>/dev/null
+            echo "Connection successful"
+        else
+            echo "Failed to connect: br-connection-page-timeout" >&2
+            exit 1
+        fi
+        ;;
+    disconnect)
+        grep -v "$2" "$VT_STATE/connected" > "$VT_STATE/connected.new" 2>/dev/null
+        mv "$VT_STATE/connected.new" "$VT_STATE/connected" 2>/dev/null
+        sed -i 's/^\(\s*\)Connected: yes/\1Connected: no/' "$VT_STATE/info.$2" 2>/dev/null
+        ;;
+    trust)
+        sed -i 's/^\(\s*\)Trusted: no/\1Trusted: yes/' "$VT_STATE/info.$2" 2>/dev/null ;;
+    untrust)
+        sed -i 's/^\(\s*\)Trusted: yes/\1Trusted: no/' "$VT_STATE/info.$2" 2>/dev/null ;;
+esac
+exit 0

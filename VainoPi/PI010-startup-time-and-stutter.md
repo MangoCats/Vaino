@@ -424,6 +424,46 @@ Two fixes, because the budgets and the timeout answer different failures:
 
 A settled tick costs 0 s, measured; only the absent case spends anything.
 
+**`[PI3-AIM-100]` The appliance's shell helpers now have tests.** The player
+carries 467 test functions; the scripts that decide which speaker plays
+carried none, and on 2026-09-10 five real faults shipped from them in one
+evening. `VainoPi/tests/run` covers them: 39 assertions across the shared
+library, the keeper's whole policy, and the sink gate.
+
+**How it works.** These scripts reach the world through five commands --
+`bluetoothctl`, `wpctl`, `curl`, `sqlite3`, `hcitool`. `tests/stubs` holds
+fakes that answer from a fixture directory and record every invocation, and
+`PATH` puts them first. The assertions are about *decisions* -- what was
+connected, disconnected, trusted, written -- not about hardware, so it runs
+anywhere with no adapter and no speaker.
+
+    VainoPi/tests/run            # everything
+    VainoPi/tests/run speaker    # one group
+
+**Verified by breaking things on purpose.** A green suite proves nothing until
+it fails on real faults, so three of that evening's bugs were reintroduced into
+copies and the suite was re-run:
+
+| Reintroduced fault | Caught |
+| --- | --- |
+| the `exit 0` that made the chase unreachable | 4 failures |
+| adoption guarded only on emptiness `[PI3-FOUND-700]` | 2 failures |
+| the doubled backslash in the awk continuation | 6 failures |
+
+**The second one exposed a weak test rather than a strong one.** It passed at
+first: the `sqlite3` stub failed reads *and* writes together, while the real
+fault is a failed read followed by a perfectly good write that destroys the
+listener's choice. The stub now fails them independently. That is the same
+error as the agent's first selftest `[PI3-FOUND-660]` -- a fixture that shares
+the implementation's assumption -- caught this time by mutation rather than by
+a speaker.
+
+**What it cannot cover, and must not pretend to.** BlueZ's own semantics: a
+stub encodes what its author believed, and the belief that an agent is
+consulted for a trusted device is exactly what cost an evening
+`[PI3-FOUND-680]`. Whether audio is audible, and at what rate, stays with the
+listener's ear and `vaino-hci-capture`.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
 Seven tools were built during the 2026-09-08 investigation and the stutter

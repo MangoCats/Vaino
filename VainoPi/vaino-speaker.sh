@@ -181,7 +181,9 @@ trust_only() {
 # incumbent is still *connected*, nothing else may have the audio and nothing
 # else may stay connected. A missing sink is something to wait for, never a
 # reason to switch.
-INCUMBENT_DIR=/run/vaino
+# Overridable so the test harness can run the real policy without touching
+# the machine it runs on `[PI3-AIM-100]`.
+INCUMBENT_DIR="${VAINO_RUN_DIR:-/run/vaino}"
 INCUMBENT="$INCUMBENT_DIR/incumbent"
 
 # Every connected device that can actually play music, one address per line.
