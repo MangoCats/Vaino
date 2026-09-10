@@ -16,9 +16,11 @@ every reader working out which machine each paragraph was about.
 
 | | |
 | :--- | :--- |
-| [BOSE001](BOSE001-survey.md) | What is on `bose` today — measured, read-only |
+| [BOSE001](BOSE001-survey.md) | What was on `bose` before the build — measured, read-only |
 | [BOSE002](BOSE002-image-build.md) | The image design: what goes on which partition |
 | [BOSE003](BOSE003-build-procedure.md) | Where each phase runs, and in what order |
+| [BOSE004](BOSE004-operating-health.md) | What the deployment looks like **in service** — the health baseline to compare against, the false alarms, and what is still open |
+| [BOSE005](BOSE005-power-loss-test.md) | The first real power cut, 2026-09-10 — it passed, plus two findings only a boot could reveal |
 
 ## What is here to run
 
@@ -82,10 +84,13 @@ so `vaino` opened the Pi's own onboard jack instead of the DAC. Each was
 found by actually running the thing, fixed, and re-verified, not assumed
 fixed from reading the fix.
 
-**What's left:** a real hard power-loss test — `[PI-FS-050]`'s own open
-question, unresolved project-wide, not special to `bose`, and genuinely
-untouched by anything in this build (everything here has been graceful
-reboots, never a yanked cord). `attended-import.sh` (`[IMPL-BOS-150]`) and
+**What's left:** more power-loss trials. One real cut was taken 2026-09-10 and
+**passed cleanly** — no corruption, no `fsck`, no hand recovery, nothing lost
+— see [BOSE005](BOSE005-power-loss-test.md). `[PI-FS-050]` stays open anyway:
+it asks for a *frequency* over many cuts, and one trial is not a rate. That
+cut also produced two findings nothing else had surfaced — the ALSA cards
+renumber across boots `[BOS-PWR-050]`, and the clock boots four days stale
+because its restore file sits on read-only A `[BOS-PWR-060]`. `attended-import.sh` (`[IMPL-BOS-150]`) and
 the escape hatch (`[IMPL-BOS-160]`) are both proven and ready for whenever
 `bose`'s library needs to grow or its own `/etc` needs a fix, including via
 `[SPEC035]`'s mesh sync.

@@ -318,7 +318,7 @@ filesystems are built, not from Vaino running on a Pi — which has not
 happened `[PI-IMG-030]`. The honest test is a power-pull rig: write
 continuously, cut power at random, count how often the database survives and
 how often `fsck` is needed. Until that is run, this is a recommendation and
-not a finding.
+not a finding. **One such cut has now been taken** — `bose`, 2026-09-10, passed clean; see [BOSE005](../BosePi/BOSE005-power-loss-test.md). One trial is not the frequency this asks for, so this stays open.
 
 ---
 
