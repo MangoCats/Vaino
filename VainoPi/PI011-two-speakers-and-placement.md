@@ -848,6 +848,61 @@ stuttering*, which is narrower than reliably good. This was a different fault,
 not a stutter, but the single-observation caution recorded there was
 warranted.
 
+### `[PI3-FOUND-490]` Role and the hop map, the two things never read
+
+The question that produced this was the listener's: what is *this appliance*
+doing to the state of the speaker? Three things, all read off the live link on
+2026-09-10 with `vaino-linkstate`:
+
+| | Healthy outbound link |
+| --- | --- |
+| `role` | **CENTRAL** |
+| `direction` | outbound (`<`) |
+| `afh` | `000000f47ffcffffff3f` -- 48 of 79 channels |
+| `link_quality` / `rssi` / `tx_power` | 255 (max) / 0 (golden range) / 12 |
+| `supervision_timeout` | 20000 ms |
+| transport `State` / `Volume` / `Configuration` | active / **106** of 127 / `4 17 21 2 53` |
+| wifi | **channel 1, 2412 MHz, 20 MHz wide** |
+
+**What this appliance writes into the speaker.** The AVRCP absolute volume --
+106 here -- which the speaker keeps across a reboot of the Pi, and which is
+the first thing to read on a connected-but-silent fault `[PI3-FOUND-480]`. The
+SBC configuration, long since exonerated as identical in both modes. And, when
+it is CENTRAL, the AFH channel map.
+
+**`role` is not `direction`, and only `role` was never checked.** Section 9's
+mode comparison recorded `<` against `>` and section 8 called that "ACL role
+CENTRAL (`<` outgoing -- the Pi initiated)". Those are two different fields.
+Whoever initiates *starts* as CENTRAL, but either end may request a role
+switch afterwards and BlueZ commonly permits one, so a Mode A link may have
+been running with this Pi as PERIPHERAL on every boot with nobody looking.
+`[PI3-FOUND-390]` refuted *direction* as the mechanism; it did not touch role.
+
+**The hop map excludes exactly this Pi's WiFi channel.** Channels 0-25 are
+disabled, and at 2402 + k MHz that is a refusal to hop anywhere in 2402-2427.
+This Pi's WiFi sits on channel 1: 2412 MHz, 20 MHz wide, spanning 2402-2422.
+The map was also observed to change between two reads minutes apart (52
+channels, then 48), so the adaptation is live rather than fixed at connection.
+
+> **The hypothesis, stated so it can be killed.** The CENTRAL sets the hop
+> map. This Pi knows where its own WiFi radio is; the Middleton does not. So
+> when the Pi is CENTRAL the speaker is handed a map that avoids a transmitter
+> sitting inches away, and when the speaker is CENTRAL that protection does
+> not exist. That would predict mode dependence, a deficit present in the
+> first packets and never drifting `[PI3-FOUND-470]`, roughly three minutes of
+> settling as the speaker's own blind assessment learns the bad channels, no
+> correlation with any Pi-side metric, and physical separation appearing to
+> help before it was ruled confounded `[PI3-FOUND-320]`.
+>
+> **It is a hypothesis. Five have been withdrawn from this document.** Its
+> prediction is sharp: a stuttering Mode A boot reads `PERIPHERAL`, or shows
+> the low channels enabled, or both. **A stuttering boot that reads CENTRAL
+> with a 48-channel map excluding 2402-2427 kills it outright**, and that is
+> the outcome to hope for as much as any, because it is the first prediction
+> here that costs one command to test.
+
+Run `sudo vaino-linkstate` immediately after a boot in each mode and diff.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

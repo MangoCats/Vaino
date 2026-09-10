@@ -317,7 +317,7 @@ echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
          vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample \
-         vaino-hci-capture; do
+         vaino-hci-capture vaino-linkstate; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"

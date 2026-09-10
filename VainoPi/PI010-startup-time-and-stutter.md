@@ -246,9 +246,9 @@ rediscovered and quietly taken later.
 
 ## 3. Diagnostic tools, and how to switch them back on
 
-Four instruments were built during the 2026-09-08 investigation and the
+Five instruments were built during the 2026-09-08 investigation and the
 stutter hunt that followed. Three are **off by default** because they cost
-something to run; all four stay installed, because the expensive part was
+something to run; all five stay installed, because the expensive part was
 working out what to measure, not writing it.
 
 **`vaino-underruns` — always available, costs nothing.** Prints the player's
@@ -324,6 +324,20 @@ in that run and should not be relied on yet.
     sudo systemctl start vaino-hci-capture              # one window, this boot
     sudo systemctl enable vaino-hci-capture             # and on the next boot
     cat /var/log/vaino-hci.log                          # after the window closes
+
+**`vaino-linkstate` — always available, read-only, about a second.** One shot
+of everything Bluetooth will say about the link and the speaker at the far end
+of it: ACL role and direction as *separate* fields, the AFH hop map with a
+channel count, link quality, RSSI, transmit power, supervision timeout, and
+the transport's state, AVRCP volume and SBC configuration. Run it right after
+a boot in each power-cycle mode and diff the two.
+
+It exists because `vaino-hci-capture` says only whether audio is getting out,
+not what the link looks like while it is not. The two fields it was built for
+are `role`, which had never been read as distinct from direction, and `afh`,
+which had never been read at all `[PI3-FOUND-490]`.
+
+    sudo vaino-linkstate
 
 **Persistent journal — off, restored to `Storage=volatile`.** The appliance
 ships volatile deliberately: it is power-cut on every shutdown
