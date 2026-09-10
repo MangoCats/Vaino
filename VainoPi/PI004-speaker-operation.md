@@ -31,7 +31,7 @@ Current understanding, for a reader who needs only that:
 
 | Symptom | Cause | Where |
 |---|---|---|
-| Periodic stuttering for ~3 min after boot | **How it was power-cycled.** Switching the speaker off cuts the Pi's power with it, and a boot where both come up together stutters; cycling the Pi alone does not. Unfixed, and no longer mitigated -- the redial that stopped it was removed as too disruptive | `[PI3-FOUND-350]`, `[PI3-FOUND-450]`, PI011 §11 |
+| Periodic stuttering for ~3 min after boot | **How it was power-cycled**, and what the speaker remembers. Switching the speaker off cuts the Pi's power with it; both come up cold, the hop map starts naive, and the link spends minutes finding this room's interference. Cycling the Pi alone leaves the speaker holding its learned map and the link starts adapted. Unfixed and unmitigated | `[PI3-FOUND-350]`, `[PI3-FOUND-510]`, PI011 §11 |
 | Connected, progress bar advancing, no sound | **The speaker, not the appliance.** Confirmed by counting packets on the air while every appliance layer read healthy. Fixed by disconnect/reconnect | `[PI3-FOUND-480]` |
 | Player wedged after a power cut, 23 restarts | Hot SQLite journal, unrecoverable through a read-only attach | `[PI3-FOUND-120]`, PI009 |
 | Speaker never reconnects after a power cycle | The speaker powers the Pi, so the Pi is always late — and it had lost `Trusted` | `[PI3-FOUND-090]`/`-130`, PI009 |
@@ -61,8 +61,11 @@ above become the ones that matter.
 **If stutters return, the first question is how it was power-cycled**
 `[PI3-FOUND-350]`. Switching the speaker off cuts the Pi's supply, so both
 cold-boot together and the boot stutters for about three minutes; cycling the
-Pi alone, leaving the speaker powered, has been clean every time. **It is
-currently unmitigated.** A once-per-boot redial did stop it, 4 of 4, but was
+Pi alone, leaving the speaker powered, has been clean every time -- and the
+reason is now measured: the speaker keeps its adapted channel map across a
+Mode B restart and loses it across a Mode A one, so Mode A begins hopping
+blind into this room's interference `[PI3-FOUND-510]`. **It is currently
+unmitigated.** A once-per-boot redial did stop it, 4 of 4, but was
 removed on 2026-09-10 because it cost about half a minute of silence on every
 boot including the ones that would have been clean `[PI3-FOUND-450]`.
 

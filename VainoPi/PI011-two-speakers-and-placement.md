@@ -957,6 +957,56 @@ distinguishes the two cases. Combined with `[PI3-FOUND-480]`'s attributable
 silence, the evidence points inside the Middleton, where nothing here can
 reach.
 
+### `[PI3-FOUND-510]` The speaker remembers the band, and that is the difference
+
+The listener's hypothesis, tested 2026-09-10: the Middleton learns this
+room's interference, keeps it across a Mode B restart, and loses it across a
+Mode A one. Two boots, same sweep, `vaino-linkstate` every 9 s.
+
+| | Mode A (run 5) | Mode B (run 6) |
+| --- | --- | --- |
+| first sample with a link | 29.3 s, **79 channels, naive** | 32.7 s, **56 channels, low band already excluded** |
+| by ~40 s | 44 ch; 2430, 2450, 2466-67, 2472, 2480 excluded | 52 ch, **the settled pattern exactly** |
+| through ~220 s | wandering 41-50, up to ten upper exclusions | **stable 51-52, never more than one** |
+| throughput | 40199 B/s, 87.9% of clean | 45790 B/s, **100.1%** |
+| ear | stutters from +45, continuing | clean |
+| logs | `logs/linkstate-...160818Z-modeA.log` | `logs/linkstate-...-modeB.log` |
+
+**The Pi was power-cycled in both.** The listener confirmed it: power off,
+Middleton drop tone, power on. So this appliance's controller began with no
+channel assessment either way -- which run 5's naive 79-channel first sample
+shows directly. **Mode B's adapted map at its first sample therefore cannot
+have come from this machine.** The only other party on the link is the
+speaker, and the mechanism the specification provides is peripheral channel
+classification reporting, which a CENTRAL merges into the map it broadcasts.
+
+**Role and direction are both eliminated, definitively.** Both boots read
+CENTRAL at every sample. Direction came out the *opposite* way round from the
+association recorded in section 9 -- this Mode A was outbound and stuttered,
+this Mode B was inbound and was clean -- so a Mode B link can be inbound and
+perfect. `[PI3-FOUND-390]` refuted direction on one boot; this refutes it in
+the reverse configuration.
+
+**The ordering favours cause over symptom.** In Mode A the naive map is
+present at 29.3 s, before audio starts at about 38, and the deficit is in the
+first packets `[PI3-FOUND-470]`. Map first, deficit second. It remains possible
+that a bad link makes a controller blame channels, producing scatter as a
+symptom -- but that story does not explain a map that is *already adapted*
+before the audio begins.
+
+**A fix this suggests, and it is the first to come from evidence.** The host
+can write channel classification down to its controller
+(`HCI_Set_AFH_Host_Channel_Classification`). If this appliance persisted its
+settled map across reboots and applied it at startup, a Mode A boot could
+begin adapted instead of naive, without depending on the speaker's memory at
+all. Untried, and it should be treated as a hypothesis until a boot tests it.
+
+**Limits, stated plainly.** One boot per mode for the map comparison. The
+interference is environmental and varies, so a quiet stretch could flatter
+Mode B. The ZigBee reading of section `[PI3-FOUND-500]` is still unconfirmed:
+the network's channel is not presently known, and the exclusions that looked
+like ZigBee centres remain suggestive rather than established.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
