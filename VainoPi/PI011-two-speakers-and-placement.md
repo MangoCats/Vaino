@@ -1255,6 +1255,82 @@ nonsense name absent.
 names `/run/user/0`, which does not exist -- so the fallback never triggered
 and every write failed. It now tests the directory rather than the variable.
 
+### `[PI3-AIM-070]` The design: audio sticks, and one speaker at a time
+
+Stated by the listener on 2026-09-10, after a session with both speakers in
+play:
+
+> Once audio is established with one speaker, it should remain with that
+> speaker even as other recognised speakers become available. Other speakers
+> are only connected if the current one becomes unavailable.
+>
+> The user's selected speaker in the settings page would be the preferred
+> choice when starting with multiple speakers available.
+
+**What the keeper used to do instead.** The routing check compared the stream
+against whichever speaker was *connected* and moved the stream whenever they
+differed. So a chosen speaker returning mid-session would drag audio off a
+speaker that was playing perfectly well. That is the right rule for deciding
+where to send audio going nowhere, and the wrong one for audio already going
+somewhere.
+
+**Viability, not identity, is the question now.** A route is fine if it names a
+sink PipeWire still offers; only when it stops being one does anything move.
+Verified on the appliance: with the Middleton playing and the Oontz -- the
+*chosen* speaker -- reconnected, the keeper ran silently and left the stream
+where it was.
+
+**The preference gets exactly one chance.** Only while the chosen speaker is
+the connected one, only inside the first two minutes of uptime, and only once
+per boot. The chase already implements most of the preference by going after
+the chosen speaker first and falling back only once that fails
+`[PI3-FOUND-560]`; this covers the gap where another speaker's sink appears
+first and stickiness would then hold audio there all session. A preference
+able to fire at any time would be the mid-track switch stickiness exists to
+prevent.
+
+### `[PI3-FOUND-600]` Two connected speakers is not degraded audio, it is none
+
+Measured the same evening, with both powered and connected. Three five-second
+samples of `ACL Data TX` with the Oontz holding a link alongside the playing
+Middleton:
+
+    0   0   0
+
+Disconnect the Oontz, and the same measurement on the same link:
+
+    374   375   374
+
+Not degraded. **Stopped.** The listener's account matches to the second:
+*"Oontz is connected, but silent"*, then *"now Middleton is audible again"*.
+
+The link list says why:
+
+    < ACL  20:64:DE:CF:F3:AD   (Middleton, playing)
+    < ACL  08:EB:ED:26:14:12   (Oontz)
+    < eSCO 08:EB:ED:26:14:12   (Oontz -- HSP/HFP)
+
+The second device had taken an **eSCO** link as well as an ACL one -- the
+HSP/HFP headset profile `[PI3-FOUND-290]` -- and a synchronous link does not
+share the radio with A2DP, it pre-empts it.
+
+So the keeper now disconnects any speaker holding a link while another is
+playing, which `[PI3-AIM-070]` authorises directly. Guarded on the stream
+actually playing on a real sink, so it cannot fire during startup while sinks
+are still appearing, and it never targets the device the audio is going to --
+verified by dry run against the live adapter, which selected the playing
+Middleton as **KEEP** and nothing for disconnection.
+
+**Not yet exercised on a real second connection.** The Oontz declined to
+reconnect when the rule was deployed, so the disconnect branch has not fired
+in anger. The half that could do damage -- picking the wrong device -- is the
+half that was tested.
+
+**This also explains the earlier interference report.** At 5:32 the listener
+powered the Middleton on while the Oontz played, and heard four stutters over
+two minutes `[PI3-FOUND-590]`. A second device negotiating profiles in the
+band is not free, and at its worst -- a synchronous link -- it is total.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

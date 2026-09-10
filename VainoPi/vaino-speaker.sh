@@ -278,21 +278,94 @@ if [ -n "$CONNECTED" ]; then
     fi
     ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
         sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
-    # **`[PI3-FOUND-590]` Never ask for a reopen onto a sink that is not
-    # there.** `Connected: yes` means BlueZ has a link; it does not mean
-    # PipeWire has anywhere to send audio. Measured 2026-09-10 with both
-    # speakers powered: the Oontz held an ACL link while its PipeWire
-    # profile read `off`, so this check saw a mismatch it could never
-    # resolve and demanded a reopen every thirty seconds, forever, against
-    # a device that had no sink. The stream was already on the other
-    # speaker and playing. A reopen that cannot succeed is not a no-op --
-    # it is an instruction to abandon working audio.
-    if [ -n "$ALIAS" ] && sink_present "$ALIAS" &&
-       [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
+
+    # **`[PI3-AIM-070]` Audio that is already playing somewhere stays**
+    # **there.** Stated as the design by the listener on 2026-09-10: once
+    # audio is established with one speaker it remains with that speaker
+    # even as other recognised speakers become available, and another is
+    # connected only if the current one becomes unavailable.
+    #
+    # This check used to do the opposite. It compared the stream against
+    # the *connected* speaker and moved the stream whenever they differed,
+    # so a chosen speaker coming back mid-session would drag audio off a
+    # speaker that was playing perfectly well. That is the right rule for
+    # deciding where to send audio that is going nowhere, and the wrong
+    # one for audio that is already going somewhere.
+    #
+    # Viability, not identity, is the question now: a route is fine if it
+    # names a sink PipeWire still offers. `Connected: yes` means BlueZ has
+    # a link and says nothing about whether there is anywhere to send audio
+    # `[PI3-FOUND-590]`, so the sink is what gets checked at both ends --
+    # the one being kept and the one being moved to.
+    # And **the listener's selected speaker is the preferred one at start**,
+    # when several are available. Stated alongside the rule above. The chase
+    # already implements most of it -- it goes after the chosen speaker and
+    # only falls back once that has failed `[PI3-FOUND-560]` -- but there is
+    # a gap it does not cover: if another speaker's sink appears first, the
+    # stream lands there, and stickiness would then hold it there for the
+    # rest of the session against the listener's stated choice.
+    #
+    # So the preference gets exactly one chance, early, and never again:
+    # only while the chosen speaker is the connected one, only inside the
+    # first two minutes of uptime, and only once per boot. After that the
+    # rule above governs and nothing moves working audio. A preference that
+    # could fire at any time would be the mid-track switch stickiness exists
+    # to prevent.
+    PREFERRED="$RUNDIR/vaino-speaker.preferred"
+    UP=$(cut -d. -f1 /proc/uptime)
+    if [ -n "$ROUTED" ] && [ "$ROUTED" != "Dummy Output" ] &&
+       sink_present "$ROUTED"; then
+        if [ "$CONNECTED" = "${SPEAKER:-}" ] && [ ! -f "$PREFERRED" ] &&
+           [ "${UP:-999}" -lt 120 ] && [ -n "$ALIAS" ] && sink_present "$ALIAS" &&
+           [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
+            : > "$PREFERRED" 2>/dev/null
+            curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
+            echo "'$ALIAS' is the chosen speaker and is available -- moved the stream to it from '$ROUTED' (once, at start)"
+        fi
+        # Otherwise: playing, on something real. Nothing to do, and nothing
+        # said, because this is the steady state thirty seconds out of
+        # thirty.
+    elif [ -n "$ALIAS" ] && sink_present "$ALIAS"; then
+        : > "$PREFERRED" 2>/dev/null
         curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
-        echo "$CONNECTED is connected but the stream was on '${ROUTED:-nothing}', not '$ALIAS' -- asked the player to reopen"
-    elif [ -n "$ALIAS" ] && ! sink_present "$ALIAS"; then
+        echo "the stream was on '${ROUTED:-nothing}', which is not a sink any more -- moved it to '$ALIAS'"
+    elif [ -n "$ALIAS" ]; then
         echo "$CONNECTED has a link but no sink in PipeWire (profile off, or still negotiating) -- leaving the stream on '${ROUTED:-nothing}'"
+    fi
+
+    # **`[PI3-FOUND-600]` One speaker at a time, because two is silence.**
+    #
+    # Measured 2026-09-10, both speakers powered and connected. With the
+    # Oontz holding a link alongside the playing Middleton: **0, 0, 0**
+    # `ACL Data TX` packets across three five-second samples. Disconnect the
+    # Oontz and the same measurement reads **374, 375, 374**. Not degraded
+    # -- stopped.
+    #
+    # The link list says why. The second device had taken an **eSCO** link
+    # as well as an ACL one, which is the HSP/HFP headset profile
+    # `[PI3-FOUND-290]` -- and a synchronous link does not share the radio
+    # with A2DP, it pre-empts it. The listener heard exactly this: "Oontz is
+    # connected, but silent", then "now Middleton is audible again" the
+    # moment it was disconnected.
+    #
+    # The listener's design settles what to do: other speakers are connected
+    # only if the current one becomes unavailable `[PI3-AIM-070]`. So a
+    # speaker holding a link while another is playing is not a guest to be
+    # tolerated -- it is silence waiting to happen, and it goes.
+    #
+    # Guarded on the stream actually playing somewhere real, so this can
+    # never fire during startup while sinks are still appearing, and it
+    # never touches the device the audio is going to.
+    if [ -n "$ROUTED" ] && [ "$ROUTED" != "Dummy Output" ] &&
+       sink_present "$ROUTED"; then
+        for other in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
+            oinfo=$(bluetoothctl info "$other" 2>/dev/null)
+            echo "$oinfo" | grep -q 'UUID: Audio Sink' || continue
+            oalias=$(echo "$oinfo" | sed -n 's/^[[:space:]]*Alias: //p')
+            [ "$oalias" = "$ROUTED" ] && continue
+            echo "'$oalias' is holding a link while '$ROUTED' is playing -- disconnecting it, because two connected speakers is silence"
+            bluetoothctl disconnect "$other" >/dev/null 2>&1
+        done
     fi
     exit 0
 fi
