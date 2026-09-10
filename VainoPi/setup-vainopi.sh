@@ -317,7 +317,7 @@ echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
          vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample \
-         vaino-hci-capture vaino-linkstate; do
+         vaino-hci-capture vaino-linkstate vaino-afh-seed; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -422,6 +422,27 @@ Type=simple
 ExecStart=/usr/local/bin/vaino-startup-sample
 Nice=19
 IOSchedulingClass=idle
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Experiment, installed and NOT enabled `[PI3-FOUND-520]`. Hands the
+# controller a channel classification saved from a settled link, so a mode A
+# boot starts adapted instead of learning this room again from scratch. It is
+# a claim about one room: seeded somewhere else, or after the interference
+# moves, it excludes channels that were fine. Turn it on for the experiment,
+# and off again if the experiment fails.
+install_unit vaino-afh-seed.service <<'EOF'
+[Unit]
+Description=Seed the controller with this room's channel classification (experiment)
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/vaino-afh-seed boot
+
 [Install]
 WantedBy=multi-user.target
 EOF

@@ -1007,6 +1007,52 @@ Mode B. The ZigBee reading of section `[PI3-FOUND-500]` is still unconfirmed:
 the network's channel is not presently known, and the exclusions that looked
 like ZigBee centres remain suggestive rather than established.
 
+### `[PI3-FOUND-520]` Seeding the map: the experiment, armed 2026-09-10
+
+If the speaker's retained channel map is what makes a Mode B boot clean
+`[PI3-FOUND-510]`, then this appliance does not need to depend on the
+speaker's memory. The host can write its own classification down to its
+controller with `HCI_Set_AFH_Host_Channel_Classification` (OGF 0x03, OCF
+0x003F), and the controller ANDs that with what it learns. So: save a map
+once, while the link is settled and sounding right, and hand it back on every
+boot.
+
+`vaino-afh-seed` does that in three verbs -- `save`, `apply`, `show` -- plus a
+`boot` mode that applies seven times at ten-second intervals, because BlueZ
+powers the adapter up after the unit is ordered to start and a controller
+reset silently discards any classification written before it.
+
+Seeded from the settled link on 2026-09-10:
+
+    map 000000fcffffffffff3f -- 52 of 79 channels
+      excluded ch 0-25 = 2402-2427 MHz     (this Pi's WiFi, channel 1)
+      excluded ch 78-78 = 2480-2480 MHz
+
+Verified end to end on the appliance: saved, decoded, applied, controller
+accepted it, map unchanged afterwards as expected for a mask identical to the
+one already in use.
+
+> **The prediction, written before the run.** A Mode A power cycle with the
+> seed enabled reads **closer to 100% than to 88%** on `vaino-hci-capture`,
+> and the map's first sample shows the low band already excluded rather than
+> all 79 channels enabled. **If it stutters at ~88% anyway, the hop map was a
+> bystander and this comes back out.** Six theories have been withdrawn from
+> this document; the seventh gets no more faith than its evidence.
+
+**Two ways it could mislead, named in advance.** A quiet stretch of
+environmental interference would flatter any Mode A boot, so a single clean
+run is suggestive rather than conclusive -- the comparison that counts is
+against run 5's 87.9%, on the same speaker in the same room. And the seed
+cannot help with interference the saved map does not describe; if the ZigBee
+reading of `[PI3-FOUND-500]` is right and those transmitters move channel,
+a stale map is worth nothing.
+
+**The risk it carries.** A saved map is a claim about one room. Seeded
+elsewhere, or after the interference moves, it excludes channels that were
+fine and costs hop diversity for no benefit. Hence `save` refusing anything
+with fewer than the specification's 20 usable channels, `apply` re-validating
+before it writes, and the unit shipping disabled.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
