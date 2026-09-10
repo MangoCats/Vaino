@@ -237,10 +237,26 @@ rm -f "$INCUMBENT" 2>/dev/null
 # a real sink right now, something is audible and the old timidity is exactly
 # right. If it is on a dummy or on nothing, there is no audio to interrupt,
 # and the radio's time is better spent staying after the speaker than idle.
-ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
-    sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
+# **`[PI3-FOUND-670]` A tick must finish inside the timer's period.** The
+# chase had 22 s and the fallback another 20, so a tick where the chosen
+# speaker is switched off could spend 42 s in a service fired every 30 -- and
+# systemd will not start a tick while the last one is still running. Measured
+# 2026-09-10, when the listener powered down the speaker holding the audio:
+# the service sat in `activating` and no tick completed for minutes, while the
+# same work run by hand recovered the appliance in 25 seconds. The appliance
+# was not slow to recover; it was not running.
+#
+# So there is one budget for the tick, shared. The chase gets the larger part
+# because it is the common case, and the fallback keeps a share of its own: a
+# single shared deadline would let a chosen speaker that is switched off eat
+# the whole tick, every tick, and the fallback would never run at all.
+TICK_BUDGET="${VAINO_TICK_SECONDS:-25}"
+CHASE_BUDGET="${VAINO_CHASE_SECONDS:-15}"
+FALLBACK_BUDGET="${VAINO_FALLBACK_SECONDS:-$(( TICK_BUDGET - CHASE_BUDGET ))}"
+
+ROUTED=$(vaino_routed)
 case "${ROUTED:-none}" in
-    none|"Dummy Output") BUDGET="${VAINO_CHASE_SECONDS:-22}" ;;
+    none|"Dummy Output") BUDGET="$CHASE_BUDGET" ;;
     *)                   BUDGET=0 ;;
 esac
 
@@ -317,7 +333,7 @@ done
 # the next boot. This is a stand-in for a missing speaker, not a new decision
 # about which speaker this is.
 if [ "$BUDGET" -gt 0 ]; then
-    FALLBACK="${VAINO_FALLBACK_SECONDS:-20}"
+    FALLBACK="$FALLBACK_BUDGET"
     fstart=$(date +%s)
     for addr in $(bluetoothctl devices Paired 2>/dev/null |
                   sed -n 's/^Device \([0-9A-F:]*\) .*/\1/p'); do

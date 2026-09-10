@@ -410,6 +410,14 @@ After=bluetooth.target
 Type=oneshot
 User=$RUN_USER
 ExecStart=/usr/local/bin/vaino-speaker
+# **`[PI3-FOUND-670]` A oneshot has no start timeout unless it is given one.**
+# systemd defaults `TimeoutStartSec` to infinity for Type=oneshot, so a tick
+# that blocks inside `bluetoothctl` is never killed -- and the timer cannot
+# fire again while the last tick is still running. Measured 2026-09-10: the
+# service sat in `activating` for minutes after the speaker holding the audio
+# was switched off, and the appliance was not slow to recover, it was not
+# running at all. 45 s is comfortably past a healthy worst case of ~25 s.
+TimeoutStartSec=45
 EOF
 
 install_unit vaino-speaker.timer <<'EOF'

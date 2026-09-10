@@ -390,6 +390,35 @@ asks about `[PI3-FOUND-660]`. **A test that shares the implementation's blind
 spot tests nothing.** Verified by reintroducing that exact bug and confirming
 the test fails on it.
 
+**`[PI3-FOUND-670]` The keeper stopped running, and nothing said so.** The
+listener powered down the speaker holding the audio. Four minutes later
+nothing had reconnected, the incumbent file was stale, and the stream sat on
+`Dummy Output` -- while the same work run by hand recovered the appliance in
+25 seconds. **The appliance was not slow to recover. It was not running.**
+
+`systemctl` showed the service stuck in `activating`, and the cause is a
+default worth knowing: **systemd sets `TimeoutStartSec` to infinity for
+`Type=oneshot`.** A tick that blocks inside `bluetoothctl` is therefore never
+killed, and a timer cannot fire while the previous tick is still running -- so
+one blocked call silently stops every future tick. Every layer looked healthy:
+the timer was `active`, the service had not failed, and nothing was logged,
+because a process that is stuck logs nothing.
+
+Two fixes, because the budgets and the timeout answer different failures:
+
+- `TimeoutStartSec=45` on the service. systemd now kills an overrunning tick
+  and the next one proceeds. This is the one that matters -- no arrangement of
+  internal deadlines can bound a single call that never returns.
+- One budget for the tick, shared: 15 s for the chase and the remainder for
+  the fallback, 25 s total against a 30 s period. Previously they were
+  independent -- 22 s and 20 s -- so a healthy tick with the chosen speaker
+  switched off could legitimately want 42 s in a service fired every 30. The
+  two shares stay separate rather than sharing one deadline, because a chosen
+  speaker that is switched off would otherwise eat the whole tick every time
+  and the fallback would never run.
+
+A settled tick costs 0 s, measured; only the absent case spends anything.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
 Seven tools were built during the 2026-09-08 investigation and the stutter
