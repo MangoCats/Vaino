@@ -19,6 +19,9 @@ because it happens before a transport is handed over -- the keeper's
 disconnect could only ever clean up after the damage, and it lost that race
 `[PI3-FOUND-640]`.
 
+Run `vaino-bt-agent selftest` to check every profile against both callers
+without touching D-Bus or the running agent.
+
 Capability is NoInputNoOutput: this appliance has no keypad to type a passkey
 on, so pairing confirmations are accepted. Pairing still requires the listener
 to have put the speaker in pairing mode; the agent does not make the appliance
@@ -137,7 +140,77 @@ class Agent(dbus.service.Object):
         pass
 
 
+# **`[PI3-FOUND-660]` The cases are written out here, not read from the code
+# above.** The first version of this test fed each case a UUID taken from
+# `AUDIO_UUIDS` itself, so the test and the implementation agreed about which
+# profile names matter and were wrong together: five green results, and the
+# agent still waved through the umbrella UUID that BlueZ actually asks about.
+# A test that shares the implementation's blind spot tests nothing. These
+# strings are transcribed from the assigned-numbers list by hand, on purpose.
+SELFTEST = [
+    ("Advanced Audio Distribution", "0000110d-0000-1000-8000-00805f9b34fb", False),
+    ("A2DP sink",                   "0000110b-0000-1000-8000-00805f9b34fb", False),
+    ("A2DP source",                 "0000110a-0000-1000-8000-00805f9b34fb", False),
+    ("headset (HSP)",               "00001108-0000-1000-8000-00805f9b34fb", False),
+    ("headset audio gateway",       "00001112-0000-1000-8000-00805f9b34fb", False),
+    ("hands-free (HFP)",            "0000111e-0000-1000-8000-00805f9b34fb", False),
+    ("hands-free audio gateway",    "0000111f-0000-1000-8000-00805f9b34fb", False),
+    # Not audio: control channels the appliance has no reason to refuse.
+    ("A/V remote control",          "0000110e-0000-1000-8000-00805f9b34fb", True),
+    ("A/V remote control target",   "0000110c-0000-1000-8000-00805f9b34fb", True),
+]
+
+INCUMBENT_ADDR = "AA:BB:CC:DD:EE:01"
+INTRUDER_ADDR = "AA:BB:CC:DD:EE:02"
+
+
+def selftest():
+    """Check every profile against both callers, and against no incumbent."""
+    import tempfile
+
+    global INCUMBENT
+    failures = []
+
+    def path_for(addr):
+        return "/org/bluez/hci0/dev_" + addr.replace(":", "_")
+
+    def allowed(addr, uuid):
+        try:
+            Agent.AuthorizeService(None, path_for(addr), uuid)
+            return True
+        except Rejected:
+            return False
+
+    with tempfile.NamedTemporaryFile("w", suffix=".incumbent",
+                                     delete=False) as handle:
+        handle.write(INCUMBENT_ADDR + "\n")
+        held_file = handle.name
+
+    for held, label in ((held_file, "with an incumbent"), (None, "with none")):
+        INCUMBENT = held or "/nonexistent/incumbent"
+        for name, uuid, is_control in SELFTEST:
+            for addr, who in ((INCUMBENT_ADDR, "incumbent"),
+                              (INTRUDER_ADDR, "intruder")):
+                # Refused only when audio is held by somebody else.
+                expect = not (held and who == "intruder" and not is_control)
+                got = allowed(addr, uuid)
+                mark = "ok  " if got == expect else "FAIL"
+                if got != expect:
+                    failures.append(f"{name}/{who}/{label}")
+                print(f"  {mark} {label:18} {who:9} {name:28} "
+                      f"{'allowed' if got else 'refused'}")
+
+    os.unlink(held_file)
+    if failures:
+        print(f"\n{len(failures)} FAILURES: {', '.join(failures)}")
+        return 1
+    print(f"\nall {len(SELFTEST) * 4} cases pass")
+    return 0
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
+        return selftest()
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
     Agent(bus, AGENT_PATH)

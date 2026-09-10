@@ -1428,7 +1428,10 @@ authorisation calls: accept when there is no incumbent, accept when the caller
 reflexes -- authorise a trusted device automatically, refuse an untrusted one
 forever `[PI3-FOUND-610]` -- and neither is what this appliance wants.
 
-**It guards every audio profile, not just A2DP.** The first version refused
+**It guards every audio profile, not just A2DP.** *(Written before the first
+real test, and wrong: it missed the umbrella UUID that BlueZ actually asks
+about, and the table below is therefore incomplete rather than reassuring.
+See `[PI3-FOUND-660]`.)* The first version refused
 A2DP alone, which would have left open the door the last failure came through:
 the headset and hands-free profiles open a *synchronous* eSCO link, and a
 synchronous link pre-empts A2DP rather than sharing with it `[PI3-FOUND-600]`.
@@ -1445,6 +1448,13 @@ deployed agent:
 deployed agent and correct in all five cases, but no speaker has actually
 knocked since it was installed -- the Middleton was powered down. The first
 time two speakers are powered together is the real test.
+
+*(It was, and it failed `[PI3-FOUND-660]`. The five cases were correct and
+incomplete: each was fed a UUID drawn from the same list the code checks, so
+the test shared the implementation's blind spot. The agent now carries
+`vaino-bt-agent selftest`, whose UUIDs are transcribed by hand rather than read
+from the code, and which was itself verified by reintroducing the bug and
+watching it fail.)*
 
 ### `[PI3-FOUND-660]` The agent guarded the UUIDs nobody uses
 

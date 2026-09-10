@@ -376,6 +376,20 @@ Net across the review: `vaino-speaker.sh` 503 → 340 lines, `vaino-afh-seed`
 137 → 108, `vaino-linkstate` 102 → 93, `vaino-wait-sink` 145 → 130, against 137
 lines of shared library that replaced roughly twice that in copies.
 
+**`vaino-bt-agent selftest` — the one test this appliance ships.** Checks
+every Bluetooth audio and control profile against both an incumbent caller and
+an intruder, with and without an incumbent recorded: 36 cases, no D-Bus, no
+effect on the running agent.
+
+    vaino-bt-agent selftest
+
+Its UUIDs are transcribed by hand from the assigned-numbers list rather than
+read from the code they check, because the version that read from the code
+passed five cases while the agent waved through the profile BlueZ actually
+asks about `[PI3-FOUND-660]`. **A test that shares the implementation's blind
+spot tests nothing.** Verified by reintroducing that exact bug and confirming
+the test fails on it.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
 Seven tools were built during the 2026-09-08 investigation and the stutter
