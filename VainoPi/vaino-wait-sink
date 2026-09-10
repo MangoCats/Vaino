@@ -94,6 +94,17 @@ ADDR=$(sqlite3 "$DB" \
 [ -n "${ADDR:-}" ] && WANT=$(bluetoothctl info "$ADDR" 2>/dev/null |
     sed -n 's/^[[:space:]]*Alias: //p')
 
+# **`[PI3-FOUND-540]` Counted in seconds, not in passes.** This loop used to
+# increment a counter once per iteration and call that a second, but each pass
+# also runs `wpctl status`, which on a Pi Zero 2W during boot costs well over a
+# second on its own. Measured 2026-09-10 on a boot whose chosen speaker was
+# switched off: the gate reported "no real sink after 60s" after **143
+# seconds**, and since it is an `ExecStartPre` it held the web interface down
+# for all of it -- so the listener could not reach the page that would have let
+# them pick a speaker that was actually present. The deadline now measures
+# elapsed wall-clock time, which is what every comment here always claimed it
+# did.
+started=$(date +%s)
 i=0
 while [ "$i" -lt "$DEADLINE" ]; do
     sinks=$(real_sinks)
@@ -109,8 +120,8 @@ while [ "$i" -lt "$DEADLINE" ]; do
             exit 0
         fi
     fi
-    i=$((i + 1))
     sleep 1
+    i=$(( $(date +%s) - started ))
 done
 echo "vaino-wait-sink: no real sink after ${DEADLINE}s; starting anyway" >&2
 exit 0

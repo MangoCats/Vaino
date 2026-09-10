@@ -244,6 +244,35 @@ is the only way to reach it, so a pin that outlives the AP it names would
 cost far more than the stutters do. Recorded so the option is not
 rediscovered and quietly taken later.
 
+**`[PI3-FOUND-540]` The sink gate counted passes and called them seconds.**
+Measured 2026-09-10, on a boot whose chosen speaker had been switched off:
+`vaino.service` took 1 min 8 s, and the gate ran from 17:02:19 to 17:04:42
+before printing *"no real sink after 60s"*. It had waited **143 seconds**.
+
+The loop incremented a counter once per iteration and treated it as a second,
+but each pass also runs `wpctl status`, which on a Pi Zero 2W during boot costs
+well over a second by itself. So `DEADLINE=60` bought roughly 143 s of waiting,
+and every comment in the file describing the deadline in seconds was wrong --
+including the ones weighing 15 s against 45 s in `[PI3-FOUND-260]`, whose real
+figures were larger by the same factor.
+
+**What made it matter is where the gate sits.** It is an `ExecStartPre` for
+`vaino.service`, so it does not merely delay audio -- it holds the web
+interface down with it. On that boot the listener could not reach the page
+that would have let them choose a speaker that was actually present, for the
+entire time the appliance spent waiting for one that was not. A gate meant to
+protect the audio had taken the controls away.
+
+The deadline now measures elapsed wall-clock time, which is what the file
+always claimed. The fast path is unchanged and still exits the moment the
+speaker's sink appears -- verified on the appliance at 0 s with the speaker
+present.
+
+> **Worth revisiting separately.** Waiting is defensible while the chosen
+> speaker is *coming*; it is pure loss when that speaker is switched off, and
+> the appliance cannot tell the two apart. Nothing here changes that, and the
+> interface stays gated behind the audio wait.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
 Six tools were built during the 2026-09-08 investigation and the stutter hunt
