@@ -1104,6 +1104,46 @@ state is what makes Mode B sound clean.
 **Direction refuted a third time.** This Mode A came up **inbound**; run 5 was
 outbound. Both stuttered, both read CENTRAL throughout.
 
+### `[PI3-FOUND-570]` The Oontz sounds clean at the Middleton's stuttering rate
+
+First cold-boot capture of the second speaker, Mode B, 2026-09-10. Logs:
+`logs/hci-20260910T171700Z-oontz-modeB.log`,
+`logs/linkstate-20260910T171700Z-oontz-modeB.log`.
+
+| | Middleton | Oontz |
+| --- | --- | --- |
+| AFH channels | 41-50 | **20 -- the specification's minimum** |
+| link quality | 255 (max) throughout | **95**, then 255 |
+| SBC configuration | `4 17 21 2 53` | `4 17 21 2 45` |
+| AVRCP volume | 106 | **absent** |
+| throughput | 45750 clean / ~39900 stuttering | **39502** |
+| ear | stutters on Mode A | **no stutters** |
+
+**The absolute byte rate is not the predictor, and very nearly fooled me.**
+39502 B/s is a clean Oontz. 39770 and 40199 B/s were stuttering Middletons.
+The instrument measures a deficit *against that speaker's own baseline*, and a
+figure from one speaker says nothing about another. The Oontz's lower rate is
+explained by its codec, not by any fault: bitpool 45 against 53 predicts 84.9%
+of the Middleton's rate and 39502/45750 is 86.3%.
+
+**Flatness does not rescue it either.** Block-to-block variation was tried as a
+speaker-independent measure and does not separate: run 4, clean, sits at 5.4%
+while run 3, stuttering, sits at 6.8%. There is no absolute threshold and no
+variance threshold. **Every future reading needs a baseline captured from that
+speaker, sounding right.**
+
+**Two more mechanisms fall out.** The Oontz hops on **20 channels**, the
+fewest the specification permits, and sounds perfect -- so a restricted hop map
+does not cause this, independently confirming `[PI3-FOUND-530]`. And its
+controller reports link quality 95 where the Middleton reports a flawless 255
+while stuttering, which finishes link quality as a predictor: it reads *worse*
+on the speaker that works.
+
+**What this is not.** It is not the Middleton-versus-environment test. Mode A
+is defined by the speaker's power cut taking the Pi with it, which happens only
+because the Pi runs off the Middleton's USB port. The equivalent for the Oontz
+is deliberately cold-booting both together, and that has not been done.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

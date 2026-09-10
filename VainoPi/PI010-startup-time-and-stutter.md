@@ -321,6 +321,20 @@ refuses to run while something is playing, and something has been playing
 every time it was tried. The first boot with the remembered speaker genuinely
 absent is the test.
 
+**The gate change measured, on the boot of 2026-09-10 17:16.** The journal
+reads what it was built to read:
+
+    17:16:28  vaino-wait-sink: no real sink after 5s; starting anyway
+    17:16:28  Started vaino.service
+    17:16:29  connected 08:EB:ED:26:14:12 after 6s and asked the player to reopen
+
+`vaino.service` no longer appears in `systemd-analyze blame` at all, against
+1 min 8 s on the boot that prompted this. The gate released at five seconds,
+the keeper landed the speaker a second later and asked for the reopen, and the
+listener heard clean audio at +36 with no stutters -- **so the reopen this
+trade was expected to cost was not audible**. That is the `[PI3-FOUND-260]`
+worry answered on its own terms rather than argued away.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
 Six tools were built during the 2026-09-08 investigation and the stutter hunt
