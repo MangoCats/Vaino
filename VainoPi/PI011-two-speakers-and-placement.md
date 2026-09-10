@@ -1596,6 +1596,18 @@ invitation to a guess is the same mistake in a quieter form.
 Verified by pointing the keeper at a database that does not exist: no adoption,
 no trust changes, and the recorded choice untouched.
 
+**And that fix shipped with a regression that disabled the appliance.** The
+edit appended an `exit 0` after the trust handback, which returns before the
+chase and the fallback ever run -- so with nothing connected, nothing could
+ever connect. Found 78 seconds after the listener powered their speaker on and
+nothing happened.
+
+The verification run had already shown it and it was read as success. With both
+speakers off, the tick printed only the two trust lines and no *"did not answer
+in 15s"*; that missing line was the whole symptom. **A tick that does less than
+expected looks exactly like a tick with nothing to do**, which is why the check
+should have been "did the chase run", not "did anything look wrong".
+
 **The listener's choice is still wrong on this appliance** -- it reads the
 Oontz because of the overwrite above, and only the listener knows which speaker
 they meant. Picking one in the settings panel now sticks.

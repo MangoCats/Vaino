@@ -265,7 +265,6 @@ rm -f "$INCUMBENT" 2>/dev/null
 # entirely when the choice could not be read `[PI3-FOUND-700]` -- handing the
 # invitation to a guess is the same mistake in a quieter form.
 [ "$SPEAKER_KNOWN" = yes ] && trust_only "${SPEAKER:-}"
-exit 0
 
 # **Absent is a real answer, not an error.** Paging a device the shared
 # Bluetooth radio cannot reach stalls whatever the appliance IS playing for
