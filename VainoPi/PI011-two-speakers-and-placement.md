@@ -1097,9 +1097,9 @@ could not prevent the controller from generating it, the scatter looks like a
 controller marking channels bad because packets are failing on them -- a
 symptom -- rather than packets failing because channels went unmarked.
 
-`[PI3-FOUND-510]`'s measurement stands: the speaker does carry adapted state
-across a Mode B restart. What is withdrawn is the inference that this state is
-what makes Mode B sound clean.
+The measurement in `[PI3-FOUND-510]` stands: the speaker does carry adapted
+state across a Mode B restart. What is withdrawn is the inference that this
+state is what makes Mode B sound clean.
 
 **Direction refuted a third time.** This Mode A came up **inbound**; run 5 was
 outbound. Both stuttered, both read CENTRAL throughout.
