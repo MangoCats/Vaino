@@ -316,7 +316,8 @@ fi
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
-         vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample; do
+         vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample \
+         vaino-hci-capture; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -421,6 +422,24 @@ Type=simple
 ExecStart=/usr/local/bin/vaino-startup-sample
 Nice=19
 IOSchedulingClass=idle
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Diagnostic, installed but NOT enabled: it costs a `btmon` for its window and
+# is meant to be started by hand for one boot. It is root because `btmon` needs
+# the management socket, and it is the only instrument that sees the layer
+# between the SBC encoder and the antenna `[PI3-FOUND-420]`.
+install_unit vaino-hci-capture.service <<'EOF'
+[Unit]
+Description=Count HCI audio packets reaching the air (diagnostic)
+After=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vaino-hci-capture
+Nice=10
+
 [Install]
 WantedBy=multi-user.target
 EOF

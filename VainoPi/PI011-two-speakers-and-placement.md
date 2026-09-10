@@ -592,6 +592,17 @@ privileged and heavy enough to perturb what it measures, which has already
 happened twice here `[PI3-FOUND-170]`, `[PI3-FOUND-240]`, so it wants a
 bounded startup capture rather than a permanent watcher.
 
+That capture is now built: `vaino-hci-capture`, installed and disabled, one
+fixed window, filtered to two line types before a byte is stored, the raw
+stream kept in tmpfs, and aggregated only after the window closes. See PI010
+section 3. It has been run on the appliance against settled playback -- 75-77
+packets/s, flat -- and **has not yet run during a stuttering boot**. The
+reading, not the instrument, is what is still owed. What it decides is which side of the controller the loss sits on:
+a dip or a gap in the per-second count means the packets are not getting out,
+and a rate that stays flat through a stutter the listener can hear means the
+loss is past the controller and inside the speaker. Either answer is progress.
+This investigation has never had one.
+
 **Suspending the library load entirely.** The Director rebuild reads ~256 MB
 at ~15 MB/s while using half a core `[PI3-FOUND-250]`, overlapping exactly the
 window in which the stuttering happens. Making it *fully* wait — not merely

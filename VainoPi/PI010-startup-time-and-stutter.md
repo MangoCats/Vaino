@@ -246,10 +246,10 @@ rediscovered and quietly taken later.
 
 ## 3. Diagnostic tools, and how to switch them back on
 
-Three instruments were built during the 2026-09-08 investigation. Two are
-**off by default** because they cost something to run; all three stay
-installed, because the expensive part was working out what to measure, not
-writing it.
+Four instruments were built during the 2026-09-08 investigation and the
+stutter hunt that followed. Three are **off by default** because they cost
+something to run; all four stay installed, because the expensive part was
+working out what to measure, not writing it.
 
 **`vaino-underruns` — always available, costs nothing.** Prints the player's
 own `underrun_samples`: how many samples the output ring failed to supply.
@@ -282,6 +282,46 @@ instrument nobody is reading.
 
     sudo systemctl enable --now vaino-startup-sample    # on
     sudo systemctl disable --now vaino-startup-sample   # off
+
+**`vaino-hci-capture` — installed, disabled, and not yet read.** Counts what
+reaches the air. `btmon` is filtered down to two line types -- the ACL data
+packets handed to the controller, and the `Number of Completed Packets` flow
+control coming back -- and the result is one line a second: monotonic clock,
+packets out, completions in, bytes. Healthy playback measures about 75
+packets/s.
+
+It exists because nothing else here detects the symptom `[PI3-FOUND-420]`.
+The underrun counter does not correlate, PipeWire reports zero xruns either
+way, and a capture off the sink monitor is taken before the SBC encoder and is
+always continuous. Every other instrument sits before the loss; HCI is the one
+layer left between the encoder and the antenna. A dip or a gap during an
+audible stutter means the packets are not getting out. A rate that stays flat
+means the loss is past the controller, inside the speaker.
+
+Bounded on purpose: a fixed window (`VAINO_HCI_SECS`, default 180 s), grep
+applied before a byte is stored, the raw stream held in tmpfs so the card sees
+none of it, and the per-second aggregation done only once the window has
+closed, so no analysis competes with the audio it is watching. This
+investigation has been misled by its own instruments twice
+`[PI3-FOUND-170]`, `[PI3-FOUND-240]`, and `btmon` is the most invasive one
+yet.
+
+**Verified on the appliance, against settled playback, 2026-09-10.** Twenty
+seconds of healthy audio to the Middleton measured 75-77 packets/s at 612
+bytes each, dead flat, with completions running at half the transmit rate --
+the controller acknowledging in pairs. That is the baseline a stuttering boot
+has to be compared against; **it has not yet been run during one**, so nothing
+else in this document rests on it.
+
+    # boot ... -- hci capture, 20s window
+    # mono acl_tx completed bytes
+    861.34 75 38 45900
+    862.34 75 38 45900
+    863.35 76 37 46512
+
+    sudo systemctl start vaino-hci-capture              # one window, this boot
+    sudo systemctl enable vaino-hci-capture             # and on the next boot
+    cat /var/log/vaino-hci.log                          # after the window closes
 
 **Persistent journal — off, restored to `Storage=volatile`.** The appliance
 ships volatile deliberately: it is power-cut on every shutdown

@@ -1,0 +1,81 @@
+#!/bin/sh
+# Count what actually reaches the air, per second, for the first minutes of a boot.
+#
+# **Why this exists `[PI3-FOUND-420]`.** Nothing on this appliance detects the
+# stuttering. The player's underrun counter does not correlate -- 11.58 s of
+# underrun sounded perfect and 1.64 s stuttered throughout -- PipeWire reports
+# zero xruns either way, a capture off the sink monitor is taken *before* the
+# SBC encoder and is always continuous, and signal level and retry counts were
+# both tried and refuted. Every instrument sits before the loss. The listener's
+# ear has been the only detector, which is why five explanations were published
+# here and withdrawn: each rested on a handful of expensive, ear-measured
+# points.
+#
+# HCI is the one layer left between the encoder and the antenna. `btmon` sees
+# the ACL data packets actually handed to the controller and the controller's
+# own `Number of Completed Packets` flow control coming back. Healthy playback
+# measured about 75 packets/s. If a stutter is packets not getting out, it
+# should appear here as a dip or a gap; if the rate is flat through a stutter,
+# the loss is past the controller and inside the speaker, which is worth
+# knowing just as much.
+#
+# **It is bounded, and it is off by default.** btmon is privileged and sees
+# every HCI packet, and this investigation has twice been misled by its own
+# instruments `[PI3-FOUND-170]`, `[PI3-FOUND-240]`. So: a fixed window, output
+# filtered to two line types before anything is written, the raw stream kept in
+# tmpfs so the SD card sees none of it, and one summary line per second at the
+# end.
+set -u
+
+OUT="${VAINO_HCI_OUT:-/var/log/vaino-hci.log}"
+SECS="${VAINO_HCI_SECS:-180}"
+RAW="${TMPDIR:-/tmp}/vaino-hci-raw.$$"
+
+command -v btmon >/dev/null 2>&1 || {
+    echo "vaino-hci-capture: btmon not installed (apt-get install bluez-tools? it ships with bluez)" >&2
+    exit 0
+}
+
+cleanup() { rm -f "$RAW"; }
+trap cleanup EXIT INT TERM
+
+: > "$RAW" 2>/dev/null || exit 0
+
+# Filtered at the source. btmon's full text output is far more than is wanted
+# and formatting it all would be the perturbation this is trying to avoid;
+# `grep` reduces it to two line types before a byte is stored, and the store is
+# tmpfs, so the card is untouched.
+timeout "$SECS" btmon 2>/dev/null \
+    | grep --line-buffered -E 'ACL Data TX|Number of Completed Packets' >> "$RAW" &
+BTPID=$!
+
+# btmon's own timestamp format varies between versions, so the second boundary
+# is supplied here rather than parsed out of its output: one marker a second,
+# carrying the monotonic clock, appended to the same file. Appends this small
+# are atomic, so the two writers interleave safely.
+( while kill -0 "$BTPID" 2>/dev/null; do
+      printf '#T %s\n' "$(cut -d' ' -f1 /proc/uptime)" >> "$RAW"
+      sleep 1
+  done ) &
+TICKPID=$!
+
+wait "$BTPID" 2>/dev/null
+kill "$TICKPID" 2>/dev/null
+
+# Aggregated only once the window has closed, so no analysis competes with the
+# audio it is watching.
+{
+    printf '# boot %s -- hci capture, %ss window\n' "$(date 2>/dev/null)" "$SECS"
+    printf '# mono acl_tx completed bytes\n'
+    awk '
+        /^#T/ { if (t != "") printf "%s %d %d %d\n", t, tx, comp, bytes
+                t = $2; tx = 0; comp = 0; bytes = 0; next }
+        /ACL Data TX/ { tx++
+                        if (match($0, /dlen [0-9]+/))
+                            bytes += substr($0, RSTART + 5, RLENGTH - 5) + 0 }
+        /Number of Completed Packets/ { comp++ }
+        END { if (t != "") printf "%s %d %d %d\n", t, tx, comp, bytes }
+    ' "$RAW"
+} >> "$OUT" 2>/dev/null
+
+exit 0
