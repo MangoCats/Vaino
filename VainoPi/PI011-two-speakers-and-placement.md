@@ -1144,6 +1144,52 @@ is defined by the speaker's power cut taking the Pi with it, which happens only
 because the Pi runs off the Middleton's USB port. The equivalent for the Oontz
 is deliberately cold-booting both together, and that has not been done.
 
+### `[PI3-FOUND-580]` The completeness map: it is the Middleton
+
+The listener closed the grid on 2026-09-10 by cold-booting the Oontz and the
+Pi together -- the Mode A condition, reproduced deliberately for a speaker that
+does not power the appliance. Logs: `logs/hci-20260910T172457Z-oontz-modeA.log`,
+`logs/linkstate-20260910T172457Z-oontz-modeA.log`.
+
+| speaker | mode | % of that speaker's own baseline | ear |
+| --- | --- | --- | --- |
+| Middleton | A | 87.1, 87.9, 86.9 | **stutters, 3 of 3** |
+| Middleton | B | 100.1 | clean |
+| Oontz | B | 100 (the baseline) | clean |
+| **Oontz** | **A** | **100.2** | **clean** |
+
+Every Oontz Mode A block sits between 98.4% and 101.1%. One cell of four
+fails, and it fails every time.
+
+**What this exonerates.** The room, and the interference in it: a second
+speaker cold-booting in the same place at the same hour is flawless. The
+cold-boot-together condition itself, which is identical for both. And this
+appliance's own behaviour, which runs the same code path either way. Every
+Pi-side explanation is now excluded by a control rather than by argument.
+
+**What it implicates.** The Middleton, specifically, in how it comes up from
+cold. `[PI3-FOUND-350]` said the power-cycle mode decides it, which was true
+and incomplete: the mode decides it *for this speaker*.
+
+**And the hop map dies a third time, most clearly here.** The Oontz cold-booted
+to 54 channels and settled to 47 with scattered upper-band exclusions --
+`000080bcdddefffbff3f`, the pattern that had looked like the fault signature --
+and sounded perfect throughout. Scatter on a clean link is the cleanest
+possible refutation `[PI3-FOUND-530]`. Its tight 20-channel map from the Mode B
+run was an adapted state, not a property of the speaker.
+
+**Controller health metrics now point the wrong way, consistently.** The Oontz
+reported link quality 85-92 and RSSI -6 through clean audio; the Middleton
+reports 255, the maximum, while stuttering.
+
+**What this changes about the goal.** The stutter is a defect in one speaker's
+cold-start behaviour, not something this appliance is doing wrong and not
+something it can repair. The remaining choices are practical rather than
+diagnostic: use the Oontz, use the Middleton in Mode B, or reinstate an
+intervention like the redial `[PI3-FOUND-450]` that re-establishes the link
+after the speaker has been awake a while -- which, read in this light, is
+exactly what it was doing.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

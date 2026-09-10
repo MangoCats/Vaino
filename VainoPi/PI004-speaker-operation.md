@@ -31,7 +31,7 @@ Current understanding, for a reader who needs only that:
 
 | Symptom | Cause | Where |
 |---|---|---|
-| Periodic stuttering for ~3 min after boot | **How it was power-cycled.** Switching the speaker off cuts the Pi's power with it, and a boot where both come up together stutters; cycling the Pi alone does not. The speaker does keep adapted radio state across a Mode B restart, but seeding that state on a Mode A boot did not help, so it is not the cause. Unfixed and unmitigated | `[PI3-FOUND-350]`, `[PI3-FOUND-530]`, PI011 §11 |
+| Periodic stuttering for ~3 min after boot | **The Middleton, cold-starting.** Not the room and not this appliance: an Oontz cold-booted alongside the Pi in the same room ran at 100.2% of its own baseline and sounded clean, while the Middleton runs at 87% and stutters, 3 of 3. Unfixed here because it is not this appliance's to fix | `[PI3-FOUND-580]`, PI011 §11 |
 | Connected, progress bar advancing, no sound | **The speaker, not the appliance.** Confirmed by counting packets on the air while every appliance layer read healthy. Fixed by disconnect/reconnect | `[PI3-FOUND-480]` |
 | Player wedged after a power cut, 23 restarts | Hot SQLite journal, unrecoverable through a read-only attach | `[PI3-FOUND-120]`, PI009 |
 | Speaker never reconnects after a power cycle | The speaker powers the Pi, so the Pi is always late — and it had lost `Trusted` | `[PI3-FOUND-090]`/`-130`, PI009 |
@@ -61,11 +61,13 @@ above become the ones that matter.
 **If stutters return, the first question is how it was power-cycled**
 `[PI3-FOUND-350]`. Switching the speaker off cuts the Pi's supply, so both
 cold-boot together and the boot stutters for about three minutes; cycling the
-Pi alone, leaving the speaker powered, has been clean every time. The speaker
-does keep adapted channel state across a Mode B restart and lose it across a
-Mode A one `[PI3-FOUND-510]` -- but handing a Mode A boot that same state
-changed nothing `[PI3-FOUND-530]`, so it is a difference between the modes
-rather than the cause of the stutter. **It is currently unmitigated.** A once-per-boot redial did stop it, 4 of 4, but was
+Pi alone, leaving the speaker powered, has been clean every time. **And it is
+the Middleton, not the mode in general**: an Oontz cold-booted alongside the Pi
+in the same room, which is the same condition, ran at 100.2% of its own
+baseline and sounded clean `[PI3-FOUND-580]`. So the practical answers are to
+use the Oontz, to leave the Middleton powered when restarting the Pi, or to
+re-establish the link once the speaker has been awake a while. **It is
+currently unmitigated**, deliberately. A once-per-boot redial did stop it, 4 of 4, but was
 removed on 2026-09-10 because it cost about half a minute of silence on every
 boot including the ones that would have been clean `[PI3-FOUND-450]`.
 
