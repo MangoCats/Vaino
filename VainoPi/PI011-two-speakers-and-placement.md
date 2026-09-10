@@ -709,6 +709,57 @@ Removing it also buys the capture series something it wanted: a Mode A boot
 recorded from power-on with a full stutter train and nothing intervening in
 it.
 
+### `[PI3-FOUND-460]` A full train, captured whole, 2026-09-10
+
+The first Mode A boot recorded from power-on with nothing intervening -- the
+redial having been removed the same afternoon `[PI3-FOUND-450]`. Raw log:
+`logs/hci-20260910T140551Z.log`. Clean reference 45750 B/s / 74.8 pkt/s, from
+the two smooth stretches of the earlier runs.
+
+| region | % of clean | ear |
+| --- | --- | --- |
+| run 2 post-redial | 100.1 | smooth |
+| run 1 post-settle | 99.9 | smooth |
+| run 2 pre-redial | 94.7 | a couple of stutters |
+| **run 3, no redial, whole window** | **87.1** | continuous, every ~15 s |
+| run 1 stutter train | 83.4 | full train |
+
+**Severity tracks the ear across five regions and three boots, both ways.**
+
+**The deficit is present in the first packets and never clears.** Every
+20-second block runs 86-94% of clean from audio start to the end of the
+window. Over 170 s the appliance handed the controller 12.9% less audio than a
+healthy link -- about 22 seconds of audio missing. Nothing arrives partway
+through to cause it. **This is evidence against the library-load explanation**
+(the second future path below), which predicts onset at playback rather than a
+deficit already in place before the first note is audible. Not a refutation --
+the load also begins before audio -- but the experiment now has a prediction
+to fail.
+
+**The ear and the minima agree event by event.** Fitting the wall-clock offset
+against the listener's marks gives 4.0 s, which is firmware plus bootloader on
+a Pi Zero 2W, and at that offset **7 of 9 marks fall within 2 s of a measured
+throughput minimum**. Earlier runs agreed only on boundaries; this one agrees
+stutter by stutter. Mean period 14.7 s. The unmatched marks are +99 and one of
+the +136/140 pair; minima at 61, 75 and 179 fall in stretches the listener
+summarised as "roughly 15 second intervals" rather than listing.
+
+**The redial is confirmed by its absence.** With it: 45800 B/s flat, zero
+dips, 110 s. Without it, same speaker, same mode, same day: 39840 B/s, dips
+throughout, no recovery inside 180 s. That is as close to a controlled A/B as
+this appliance allows, and it means the removal was a real trade rather than a
+no-op.
+
+**The completions anomaly reproduced a third time**, onset 136.0, same
+signature -- one partial second then zero while TX stays healthy. Three for
+three, always in settled playback, never overlapping a stutter.
+
+**An arithmetic correction to the earlier figures.** Rates were being computed
+by dividing n+1 samples' bytes by n intervals, which biases every figure high
+-- most visibly a "105.7% of clean" tail block that was pure artifact. All
+numbers in these sections now exclude the first sample's bytes. The earlier
+findings move by under a percent and none of their conclusions change.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
