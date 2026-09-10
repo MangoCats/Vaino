@@ -582,6 +582,53 @@ here cost a three-minute listening test, why the data points are few and
 noisy, and why three explanations were published and withdrawn. Any future
 work on this should budget for that or build an instrument first.
 
+### `[PI3-FOUND-430]` The stutter has a signature, measured 2026-09-10
+
+A Mode A power cycle stuttered on the usual ~15 s spacing. `vaino-hci-capture`
+was started mid-train, at uptime 123.8, and ran 180 s -- so it covers a
+stuttering stretch and a clean stretch on the same link in the same boot,
+which is the control this investigation never had. Raw log:
+`logs/hci-20260910T135004Z.log`.
+
+| region (uptime) | ear | bytes/s | pkt/s |
+| --- | --- | --- | --- |
+| 124-137 | stuttering | 40994 | 65.6 |
+| 144-171 | stuttering | 38302 | 61.0 |
+| 180-221 | clean | 46120 | 75.6 |
+
+**The deficit is real.** Over 144-171 the host handed the controller 17% less
+audio than during clean playback: 4.4 seconds of audio missing out of 26.
+
+**It ends when the listener says it ends.** Throughput reaches a flat 75-77
+pkt/s at 179.3 and never dips again through the remaining 124 s. The listener
+reported clear from about 185-190. **This is the first instrument on this
+appliance whose reading correlates with the ear** `[PI3-FOUND-420]`, and it is
+the reason the five withdrawn theories above were expensive: every one of them
+was argued from ear-points alone.
+
+**The 15-second period is in the packet data.** Deepest dips at 129.8/131.9
+and 146.0/148.0 -- 16.1 s apart -- with shallower minima at 161-163 and 175.
+
+**What it does not settle.** The shortfall is visible at HCI TX, before the
+air, so the speaker is not the thing discarding audio. Whether the host is
+starving the encoder or the controller is refusing packets is **not
+distinguished here**, and the obvious-looking evidence is worthless: the
+completions column runs at exactly 0.500 of TX in both regimes across 98
+samples. That precision means the ratio is structural -- completions batched
+two packets at a time -- so it says nothing about credit availability. It is
+recorded here so that nobody later mistakes it for flow-control health.
+
+**An anomaly, flagged and not used.** From 222.6 the completions column reads
+zero for 80 consecutive seconds while TX stays at a healthy 75-77. A host
+cannot transmit indefinitely without credits returning, so this is almost
+certainly an artifact of the capture. The TX column is not implicated, but the
+completions column should not be trusted until a second run either reproduces
+this or does not.
+
+Single run. `btmon` was running during it, at `Nice=10`; the stutters preceded
+it and continued through it, so it did not cause them, but it cannot be ruled
+out of their depth.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
@@ -595,9 +642,10 @@ bounded startup capture rather than a permanent watcher.
 That capture is now built: `vaino-hci-capture`, installed and disabled, one
 fixed window, filtered to two line types before a byte is stored, the raw
 stream kept in tmpfs, and aggregated only after the window closes. See PI010
-section 3. It has been run on the appliance against settled playback -- 75-77
-packets/s, flat -- and **has not yet run during a stuttering boot**. The
-reading, not the instrument, is what is still owed. What it decides is which side of the controller the loss sits on:
+section 3. It has now been run during a stuttering boot and it worked: see
+`[PI3-FOUND-430]`. The path is no longer speculative, and the next reading
+owed is a second run, to settle the completions anomaly and to catch a train
+from boot rather than from the middle. What it decides is which side of the controller the loss sits on:
 a dip or a gap in the per-second count means the packets are not getting out,
 and a rate that stays flat through a stutter the listener can hear means the
 loss is past the controller and inside the speaker. Either answer is progress.

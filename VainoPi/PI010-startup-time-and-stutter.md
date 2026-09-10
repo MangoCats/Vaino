@@ -309,9 +309,11 @@ yet.
 **Verified on the appliance, against settled playback, 2026-09-10.** Twenty
 seconds of healthy audio to the Middleton measured 75-77 packets/s at 612
 bytes each, dead flat, with completions running at half the transmit rate --
-the controller acknowledging in pairs. That is the baseline a stuttering boot
-has to be compared against; **it has not yet been run during one**, so nothing
-else in this document rests on it.
+dead flat. That is the baseline a stuttering boot has to be compared against,
+and on the same day it was compared: a stutter train measured 61 pkt/s against
+it, a 17% shortfall, ending at the second the listener said the stutters
+stopped `[PI3-FOUND-430]`. The completions column has an unexplained anomaly
+in that run and should not be relied on yet.
 
     # boot ... -- hci capture, 20s window
     # mono acl_tx completed bytes
