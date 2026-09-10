@@ -84,10 +84,36 @@ SPEAKER="${SPEAKER:-$(sqlite3 "$DB" \
 # sink.
 INFO=$(bluetoothctl info "${SPEAKER:-none}" 2>/dev/null)
 
-if [ -n "${SPEAKER:-}" ] && ! echo "$INFO" | grep -q 'Trusted: yes'; then
-    bluetoothctl trust "$SPEAKER" >/dev/null 2>&1 &&
-        echo "trusted $SPEAKER -- it was not, so it could not have reconnected on its own"
-fi
+# **`[PI3-FOUND-680]` Trust is not a fact about the chosen speaker, it is the
+# enforcement.** This used to be asserted here, unconditionally, on the
+# listener's chosen speaker every tick -- and that is why the agent turned out
+# to be unreachable. BlueZ consults an agent only for an **untrusted** device;
+# a trusted one is authorised without anybody being asked. Measured
+# 2026-09-10: the Oontz was powered on while the Middleton held the audio,
+# both read `Trusted: yes`, the agent was never called at all, and the
+# incumbent went silent for thirty-five seconds until the keeper's backstop
+# disconnected the intruder.
+#
+# So trust now follows the audio. Asserted below, once the incumbent is known:
+# on the incumbent when there is one, on the chosen speaker when there is not,
+# so that a speaker which is nobody's incumbent yet can still reconnect to us
+# unprompted after a power cycle `[PI3-FOUND-130]` -- the one path that does
+# not have to win the power-up race.
+trust_only() {
+    _keep="$1"
+    [ -n "${_keep:-}" ] || return 0
+    bluetoothctl info "$_keep" 2>/dev/null | grep -q 'Trusted: yes' ||
+        { bluetoothctl trust "$_keep" >/dev/null 2>&1 &&
+              echo "trusted $(vaino_alias "$_keep") so it can reconnect on its own"; }
+    for _other in $(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}'); do
+        [ "$_other" = "$_keep" ] && continue
+        _oi=$(bluetoothctl info "$_other" 2>/dev/null)
+        echo "$_oi" | grep -q 'UUID: Audio Sink' || continue
+        echo "$_oi" | grep -q 'Trusted: yes' || continue
+        bluetoothctl untrust "$_other" >/dev/null 2>&1 &&
+            echo "untrusted $(vaino_alias "$_other") -- only the speaker holding the audio may let itself in"
+    done
+}
 
 # **Who is actually connected, which is not always who was chosen.**
 #
@@ -158,6 +184,10 @@ if [ -n "$CONNECTED" ]; then
         printf '%s\n' "$CONNECTED" > "$INCUMBENT" 2>/dev/null
     fi
 
+    # Trust follows the audio, so the agent is actually reachable for everyone
+    # else `[PI3-FOUND-680]`.
+    trust_only "$CONNECTED"
+
     # **Exactly one.** Anything else that has managed to connect is shown the
     # door, whatever the audio is currently doing -- a second speaker is not a
     # guest to be tolerated, it is the thing that breaks the first one
@@ -207,6 +237,10 @@ fi
 # freely. Cleared here rather than left to go stale, so a speaker that comes
 # back does not inherit a claim it no longer has.
 rm -f "$INCUMBENT" 2>/dev/null
+
+# Nobody holds the audio, so the listener's choice gets the standing invitation
+# back: it is the one path that does not have to win the power-up race.
+trust_only "${SPEAKER:-}"
 
 # **Absent is a real answer, not an error.** Paging a device the shared
 # Bluetooth radio cannot reach stalls whatever the appliance IS playing for
