@@ -481,10 +481,11 @@ outbound — nothing else touched. The direction flipped `>` to `<`, the
 configuration did not change, **and the stuttering stopped**: none heard, and
 the underrun counter flat across the following sixty seconds.
 
-So `vaino-speaker` now redials once per boot when it finds an inbound link,
-and leaves an outbound one strictly alone — a mode B boot pays nothing. Where
-it fires the cost is one deliberate gap of a few seconds against roughly three
-minutes of stuttering.
+So `vaino-speaker` redialled once per boot when it found an inbound link,
+leaving an outbound one alone. **That redial has since been removed entirely**
+`[PI3-FOUND-450]`: the gap it cost turned out to be half a minute rather than
+a few seconds, and it was paid on every boot. The paragraphs below are the
+record of what it did while it was there.
 
 > **What this is not.** Why an inbound link should sound worse is *not*
 > established. The one visible correlate is the AVDTP collision of
@@ -534,7 +535,9 @@ becomes the listener's own workaround — power-cycle the Pi, not the speaker.
 ## 11. Where this ended, and what is still owed
 
 **`[PI3-FOUND-400]` The redial works, three times out of three, and the cure
-is uncomfortable.** On every mode A power cycle since it was made
+is uncomfortable.** *(Superseded: a fourth trial agreed, `[PI3-FOUND-440]`
+measured what it did, and `[PI3-FOUND-450]` removed it for exactly the
+discomfort this section names.)* On every mode A power cycle since it was made
 unconditional, the boot comes up stuttering, the keeper redials at around 50 s,
 and the audio is smooth afterwards. But the listener's summary is the honest
 measure of it:
@@ -564,9 +567,11 @@ was not known to be a variable at the time:
   regardless. The quantum is left at 2048 because a wider margin is defensible
   on hardware this small, not because it is known to do anything.
 
-**`[PI3-FOUND-420]` There is no instrument for this symptom.** Every detector
-tried sits either before the loss or measures something that does not track
-it:
+**`[PI3-FOUND-420]` There is no instrument for this symptom.** *(True when
+written; closed on 2026-09-10 by `vaino-hci-capture`, which does track it
+`[PI3-FOUND-430]`. The table below remains accurate about everything above the
+HCI layer, and is why the search had to go below it.)* Every detector tried
+sits either before the loss or measures something that does not track it:
 
 | Instrument | Verdict |
 |---|---|
@@ -577,10 +582,13 @@ it:
 | `debugfs` `hci0` | Configuration knobs only; no throughput or error counters |
 | PipeWire `wchar` | Reads zero while playing; not a proxy |
 
-**The listener's ear is the only detector**, which is why every hypothesis
+**The listener's ear was the only detector**, which is why every hypothesis
 here cost a three-minute listening test, why the data points are few and
-noisy, and why three explanations were published and withdrawn. Any future
-work on this should budget for that or build an instrument first.
+noisy, and why five explanations were published and withdrawn. The advice that
+closed this section -- budget for that, or build an instrument first -- was
+taken: the instrument is `vaino-hci-capture` `[PI3-FOUND-430]`. The ear is
+still what says *when* a stutter happened; the capture is what says how much
+audio went missing while it did.
 
 ### `[PI3-FOUND-430]` The stutter has a signature, measured 2026-09-10
 
@@ -670,6 +678,36 @@ were 98.8 s and 135.1 s into their captures, both during settled playback,
 neither overlapping a stutter, so nothing above depends on it. It is
 repeatable behaviour of the capture or the stack, not noise, and reading the
 raw `btmon` output either side of that second is a cheap next experiment.
+
+### `[PI3-FOUND-450]` The redial is removed, on the listener's judgement
+
+It worked. Four Mode A cycles came up smooth once it had fired, and
+`[PI3-FOUND-440]` measured what it did: a flat 46057 B/s for 110 s with no
+dips. It is the only intervention in this investigation that demonstrably
+changed the symptom.
+
+It was removed anyway, on 2026-09-10, because the cure is more disruptive than
+the disease. It tears down working audio and rebuilds it, and the hole is not
+small -- 36.2 s on the captured boot, against the eleven seconds the first
+version was tuned down from -- and it is paid on every boot, including the
+Mode B boots that never stuttered at all. A stutter every fifteen seconds is
+irritating. Half a minute of silence in the middle of a track, every time, is
+worse. That is a judgement about how the appliance should feel to use, which
+is the listener's to make and not a measurement's.
+
+**This is not a finding about the stutter.** The stutter is unfixed and will
+return on Mode A boots. What is gone is a mitigation whose price was declined.
+
+Two things kept, so this is not relearned: the reasoning stays in
+`vaino-speaker.sh` where the code was, and anyone reinstating it must wait on
+the `MediaTransport1` state rather than `Connected: yes` -- the removed
+version posted `reopen-output` about 24 s before the speaker carried audio,
+and recovered by a later tick's routing check `[PI3-AIM-050]` rather than by
+design.
+
+Removing it also buys the capture series something it wanted: a Mode A boot
+recorded from power-on with a full stutter train and nothing intervening in
+it.
 
 ### Two paths worth taking, neither of them a fix
 

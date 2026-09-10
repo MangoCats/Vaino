@@ -199,72 +199,37 @@ if [ -n "$CONNECTED" ]; then
         rm -f "$SEEN" 2>/dev/null
     fi
 
-    # **`[PI3-FOUND-380]` A link the speaker opened is worse than one we
-    # opened, and redialling it once fixes the boot.**
+    # **`[PI3-FOUND-450]` The once-per-boot redial was here, it worked, and
+    # it has been removed anyway.**
     #
-    # Switching the speaker off cuts this appliance's power with it
-    # `[PI3-FOUND-090]`, so both cold-boot together and the speaker -- awake
-    # first -- reaches out to its last device. That inbound link measures
-    # identically to an outbound one in every respect that can be read: same
-    # SBC configuration (`ay 4 17 21 2 53`), same codec, same transport state,
-    # same volume. It simply sounds worse: stutters every fifteen seconds or
-    # so for around three minutes.
+    # What it did is not in doubt. Captured at the HCI layer on 2026-09-10
+    # `[PI3-FOUND-440]`: the link before it ran low with dips, the link after
+    # it ran 46057 B/s flat for 110 s with no dips at all, and four Mode A
+    # cycles in a row came up smooth once it had fired. It is the only
+    # intervention in this whole investigation that demonstrably changed the
+    # symptom.
     #
-    # Measured 2026-09-09 as a same-boot intervention, which is as controlled
-    # as this gets. A boot stuttering on schedule, link reading `>` (inbound);
-    # disconnected and reconnected outbound; link then read `<`, configuration
-    # unchanged, and the stuttering stopped -- underruns flat across the next
-    # sixty seconds and none heard. Nothing else was touched.
+    # It was removed on the listener's judgement, which is the right authority
+    # here: the cure is more disruptive than the disease. It tears down working
+    # audio and rebuilds it, and the hole is not small -- 36.2 s on the
+    # captured boot, against the eleven seconds the first version was tuned
+    # down from. A stutter every fifteen seconds is irritating; half a minute
+    # of silence in the middle of a track, on every single boot including the
+    # Mode B boots that never stuttered, is worse.
     #
-    # **Both explanations for that were then refuted `[PI3-FOUND-390]`.** The
-    # next mode A boot came up on an *outbound* link, with zero AVDTP
-    # collisions, and stuttered anyway -- so neither the direction nor the
-    # collision is the mechanism, and a redial conditioned on either would not
-    # have fired at all. Worse, the trial that appeared to prove the redial ran
-    # at 57 s and a second at 180 s, and mode A settles on its own by about
-    # 180 s: both were confounded by the very thing they were meant to measure.
+    # It also declared victory on the wrong signal. It polled `Connected: yes`
+    # -- the ACL link -- with a ten-second ceiling, so on that boot it posted
+    # `reopen-output` roughly 24 s before the speaker was carrying any audio.
+    # Recovery came from a later tick's routing check `[PI3-AIM-050]`, not
+    # from the redial. Anyone reinstating this must wait on the
+    # `MediaTransport1` state instead; `vaino-btctl` has `transport_state()`
+    # for it.
     #
-    # So this fires once per boot unconditionally, well before that settling
-    # point, for two reasons. It is the only remaining candidate that can be
-    # acted on at all, and firing it early is the only way to tell a redial
-    # that fixes something from a speaker that was going to settle anyway --
-    # if stuttering stops at ~50 s instead of ~180 s, that is an answer.
-    #
-    # It costs a mode B boot a few seconds of gap it did not previously pay.
-    # That is a real regression if the redial turns out to do nothing, and the
-    # reason this is written as an experiment with a date on it rather than as
-    # a fix.
-    REDIAL="${XDG_RUNTIME_DIR:-/tmp}/vaino-speaker.redialled"
-    if [ "$CONNECTED" = "${SPEAKER:-}" ] && [ ! -f "$REDIAL" ]; then
-        # Marked before it is attempted, not after: a redial that fails must
-        # not become a redial that repeats every thirty seconds.
-        : > "$REDIAL" 2>/dev/null
-        echo "redialling $SPEAKER once, to renegotiate the link the boot came up with"
-        # Polled rather than slept through. The first version spent a flat
-        # four seconds after the disconnect and six after the connect, and the
-        # listener heard the whole eleven-second hole; most of that was this
-        # script waiting on a clock rather than on the speaker. Each wait now
-        # ends the moment BlueZ agrees, with the fixed sleep kept only as the
-        # ceiling.
-        bluetoothctl disconnect "$SPEAKER" >/dev/null 2>&1
-        i=0
-        while [ "$i" -lt 4 ] &&
-              bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q 'Connected: yes'; do
-            sleep 1
-            i=$((i + 1))
-        done
-        bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
-        i=0
-        while [ "$i" -lt 10 ] &&
-              ! bluetoothctl info "$SPEAKER" 2>/dev/null | grep -q 'Connected: yes'; do
-            sleep 1
-            i=$((i + 1))
-        done
-        # One second for WirePlumber to publish the sink the reopen will look
-        # for; without it the player reopens onto whatever the old one was.
-        sleep 1
-        curl -s -o /dev/null -X POST             "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
-    fi
+    # **Do not read the removal as a finding about the stutter.** The stutter
+    # is unfixed and will return on Mode A boots. What is gone is a mitigation
+    # whose price the listener declined to keep paying, and removing it buys
+    # something the investigation wanted anyway: a clean Mode A capture of a
+    # full stutter train from boot, with nothing intervening.
 
     # **`[PI3-AIM-050]` Connected is not the same claim as playing.**
     # `[PI3-AIM-040]` stopped as soon as BlueZ showed a real device
