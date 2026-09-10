@@ -629,6 +629,48 @@ Single run. `btmon` was running during it, at `Nice=10`; the stutters preceded
 it and continued through it, so it did not cause them, but it cannot be ruled
 out of their depth.
 
+### `[PI3-FOUND-440]` What the redial does, in packets, measured 2026-09-10
+
+The second Mode A cycle captured from boot, so it holds the redial itself.
+Raw log: `logs/hci-20260910T135726Z.log`.
+
+| region (uptime) | ear | bytes/s | pkt/s |
+| --- | --- | --- | --- |
+| 30.9-51.1 pre-redial | a couple of stutters | 44635 | 73.5 |
+| 52.1-88.3 | silence | 0 | 0 |
+| 89.3-199.2 post-redial | smooth | 46057 | 75.5 |
+
+**The redial restores the full rate, and it holds.** 110 seconds after it, not
+one dip. Before it, the mean was only 3% down but with local dips to about
+36000 B/s at 49-51 -- which is what "a couple of stutters" looks like as
+packets. Against `[PI3-FOUND-430]`'s 17% over a full train, severity tracks
+the ear in both directions. `[PI3-FOUND-400]` was ear-only until now; it has a
+mechanism.
+
+**The redial waits on the wrong signal.** The gap was 36.2 s. `vaino-speaker.sh`
+polls for `Connected: yes` with a ten-iteration ceiling, sleeps one second and
+posts `reopen-output` -- so the reopen went out roughly 24 s before the
+speaker was carrying audio. Audio came back clean anyway, but by a later
+tick's routing check `[PI3-AIM-050]` rather than by design. What matters for
+audio is the `MediaTransport1` state, not the ACL link, and `vaino-btctl`
+already has `transport_state()` for it. **Not changed yet**: it would confound
+a capture series in progress.
+
+**Read rates as totals over elapsed time, never off one row.** In steady state
+the per-second rows alternate about 68 and 85. That is not a dip. The tick
+marker runs at 1.005-1.03 s rather than exactly 1 s, so counts alias across
+the boundary while the pair-sum stays at 76/s. Every figure in this section is
+total bytes divided by elapsed time.
+
+**The completions anomaly reproduced, and was wrongly dismissed.** It was
+called an artifact of a single capture when first seen. It appeared again here
+with the same signature -- one partial second (16, against 15 the first time)
+then zero for the rest of the run while TX stays at a healthy 75-77. Onsets
+were 98.8 s and 135.1 s into their captures, both during settled playback,
+neither overlapping a stutter, so nothing above depends on it. It is
+repeatable behaviour of the capture or the stack, not noise, and reading the
+raw `btmon` output either side of that second is a cheap next experiment.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

@@ -64,6 +64,13 @@ kill "$TICKPID" 2>/dev/null
 
 # Aggregated only once the window has closed, so no analysis competes with the
 # audio it is watching.
+#
+# **Read the output as totals over elapsed time, never row by row.** The tick
+# loop runs at 1.005-1.03 s rather than exactly 1 s, so in steady state the
+# per-second counts alternate around 68 and 85 while the pair-sum holds at
+# 76/s. That alternation is aliasing, not a stutter, and it has already been
+# available to mislead once `[PI3-FOUND-440]`. Divide summed bytes by the
+# difference of the first and last timestamps of the region you care about.
 {
     printf '# boot %s -- hci capture, %ss window\n' "$(date 2>/dev/null)" "$SECS"
     printf '# mono acl_tx completed bytes\n'
