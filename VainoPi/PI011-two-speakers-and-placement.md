@@ -1053,6 +1053,57 @@ fine and costs hop diversity for no benefit. Hence `save` refusing anything
 with fewer than the specification's 20 usable channels, `apply` re-validating
 before it writes, and the unit shipping disabled.
 
+**Ran the same evening. It failed its own test.** See `[PI3-FOUND-530]`.
+
+### `[PI3-FOUND-530]` The seed worked, the audio did not, and the map is a symptom
+
+The experiment armed in `[PI3-FOUND-520]` ran on a Mode A cycle the same
+evening. Logs: `logs/hci-20260910T165525Z-modeA-seeded.log`,
+`logs/linkstate-20260910T165525Z-modeA-seeded.log`.
+
+**The mechanism worked.** The journal shows the retry design earning itself:
+the first write at 16:55:16 was rejected because the adapter was not up yet,
+and the second at 16:55:26 succeeded. A single write at boot would have
+silently done nothing and the run would have proved nothing.
+
+**Half the prediction was met.** First sample, uptime 34.3: 47 channels with
+the low band already excluded, against run 5's naive 79.
+
+**The other half failed outright.** 39770 B/s, **86.9% of clean**, against run
+5's 87.9% and run 3's 87.1% -- statistically indistinguishable -- with stutters
+on the usual spacing from +65. The prediction was "closer to 100% than to 88%".
+**`[PI3-FOUND-520]` is withdrawn**, the seventh in this document, and
+`vaino-afh-seed` was disabled on the appliance the same hour, as the prediction
+required.
+
+**But it disconfirms something specific, which is why it was worth running.**
+Counting exclusion zones above channel 26:
+
+| | first sample | mean upper zones |
+| --- | --- | --- |
+| run 5, Mode A naive | 79 ch, 0 | **6.5** |
+| run 6, Mode B clean | 56 ch, 0 | **1.8** |
+| run 7, Mode A seeded | 47 ch, 5 | **4.2** |
+
+The seed supplied the **low** band. Within thirty seconds the controller had
+added five upper-band zones of its own, and it averaged 4.2 across the run.
+Mode B, sounding perfect, averaged 1.8.
+
+So the low-band difference between the modes was never the mechanism, and the
+causal reading of `[PI3-FOUND-510]` is disconfirmed: Mode A now starts with
+exactly the low-band exclusion Mode B had and sounds exactly as bad. What
+still separates the modes is the **upper**-band scatter, and since seeding
+could not prevent the controller from generating it, the scatter looks like a
+controller marking channels bad because packets are failing on them -- a
+symptom -- rather than packets failing because channels went unmarked.
+
+`[PI3-FOUND-510]`'s measurement stands: the speaker does carry adapted state
+across a Mode B restart. What is withdrawn is the inference that this state is
+what makes Mode B sound clean.
+
+**Direction refuted a third time.** This Mode A came up **inbound**; run 5 was
+outbound. Both stuttered, both read CENTRAL throughout.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
