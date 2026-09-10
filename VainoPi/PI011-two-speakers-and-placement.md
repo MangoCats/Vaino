@@ -903,6 +903,60 @@ channels, then 48), so the adaptation is live rather than fixed at connection.
 
 Run `sudo vaino-linkstate` immediately after a boot in each mode and diff.
 
+**Withdrawn the same evening, by the test it named.** See
+`[PI3-FOUND-500]` below.
+
+### `[PI3-FOUND-500]` The hop-map hypothesis, killed in one boot
+
+The hop-map hypothesis of `[PI3-FOUND-490]` predicted that a stuttering Mode A
+boot would read `PERIPHERAL`, or show the low channels enabled, or both, and
+said that a
+stuttering boot reading CENTRAL with the WiFi band excluded would kill it
+outright. That is exactly what happened, on the next Mode A cycle, 2026-09-10.
+
+Twenty-two samples of `vaino-linkstate` across 225 s, alongside
+`logs/hci-20260910T160818Z-modeA-linkstate.log`:
+
+| | |
+| --- | --- |
+| `role CENTRAL` | 22 of 22 |
+| channels 0-25 excluded (2402-2427 MHz) | 22 of 22 |
+| `link_quality` 255, the maximum | 22 of 22 |
+| `volume` 106 | unchanged throughout |
+| throughput | 40199 B/s, **87.9% of clean** |
+| ear | stutters from +45, continuing |
+
+The Pi never became PERIPHERAL, the WiFi band was excluded at every sample,
+and the audio was 12% short the whole time. **The hypothesis is withdrawn** --
+the sixth in this document, and the first to cost one boot and one command
+rather than a series of three-minute listening tests. That is the instrument
+earning its cost.
+
+**Three things the run gives us regardless.**
+
+*AFH adapts in about ten seconds, not three minutes.* All 79 channels at
+uptime 29.3, down to 44 by 38.6. Any story in which the three-minute settle is
+the speaker slowly learning bad channels is dead alongside the main
+hypothesis.
+
+*The map never converges.* It moved between 41 and 50 channels for the whole
+225 s -- `000000acbdfbdeffbc3f`, `000000ecefbbffffff3f`, `000000a4d7eb7dffff17`
+-- so the radio is continuously reclassifying the upper band while the
+stuttering continues regardless.
+
+*The controller thinks the link is perfect.* `link_quality` read 255, its
+maximum, at every sample, while 12% of the audio failed to get out. It joins
+the table in `[PI3-FOUND-420]`: another instrument that reports health through
+a fault the listener can hear.
+
+**Where that leaves it.** Role, direction, codec, configuration, volume,
+transport state, hop map, link quality, RSSI and transmit power have now all
+been read on both a stuttering and a clean link, and every one of them is
+either identical or reports perfect health. Nothing the Pi can see or set
+distinguishes the two cases. Combined with `[PI3-FOUND-480]`'s attributable
+silence, the evidence points inside the Middleton, where nothing here can
+reach.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
