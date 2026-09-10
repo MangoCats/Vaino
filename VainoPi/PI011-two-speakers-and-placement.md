@@ -1568,6 +1568,38 @@ answered. It is persistent state, and a speaker left blocked by a crash stays
 blocked, so it wants care rather than a quick edit. **Not done, and recorded
 as the next thing rather than a defect** -- the audio is protected either way.
 
+### `[PI3-FOUND-700]` "Nobody chose" and "I could not ask" are different answers
+
+From the appliance's own log, 2026-09-10 19:35:14:
+
+    adopted 08:EB:ED:26:14:12 as the speaker (none was chosen)
+
+One very much was. Adoption was guarded on `SPEAKER` being empty, and that
+conflates two different facts: a query matching no rows returns an empty
+string, and **so does a query that could not run** -- a locked database, a
+moment's contention with the player writing listener state. The appliance then
+concluded nobody had ever chosen a speaker and wrote whatever happened to be
+connected over the listener's choice.
+
+This is the `[PI3-FOUND-310]` failure occurring *through* the guard built to
+prevent it, and it is quiet: nothing is audible, nothing fails, and the only
+symptom is that the appliance prefers a different speaker at every future boot.
+It explains an earlier puzzle in this session -- `speaker_address` changing
+from the Oontz to the Middleton with nobody having touched the settings panel.
+
+`sqlite3` returns 0 for a query that matches no rows and non-zero when it could
+not ask, which is exactly the distinction needed, so the read's exit status is
+now kept. Adoption requires a read that succeeded **and** came back empty. A
+failed read also skips the trust handback, since handing the standing
+invitation to a guess is the same mistake in a quieter form.
+
+Verified by pointing the keeper at a database that does not exist: no adoption,
+no trust changes, and the recorded choice untouched.
+
+**The listener's choice is still wrong on this appliance** -- it reads the
+Oontz because of the overwrite above, and only the listener knows which speaker
+they meant. Picking one in the settings panel now sticks.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

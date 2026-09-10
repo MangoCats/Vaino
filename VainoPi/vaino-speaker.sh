@@ -38,8 +38,30 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 # on any appliance, without editing this file or its unit. `SPEAKER` still
 # overrides it, for a library with no player-chosen speaker yet, or a
 # deliberate manual pin.
-SPEAKER="${SPEAKER:-$(sqlite3 "$DB" \
-    "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null)}"
+# **`[PI3-FOUND-700]` "No speaker chosen" and "could not read the choice" are
+# not the same answer, and one of them must never be acted on.** Adoption was
+# guarded on `SPEAKER` being empty, which conflates the two: a query that fails
+# -- a locked database, a moment's contention with the player -- also yields an
+# empty string, and the appliance then decides nobody ever chose a speaker and
+# writes whatever happens to be connected over the listener's choice.
+#
+# Measured 2026-09-10 19:35:14, from the appliance's own log: *"adopted
+# 08:EB:ED:26:14:12 as the speaker (none was chosen)"* -- while one very much
+# was. That is the `[PI3-FOUND-310]` failure happening through the guard built
+# to prevent it, and it silently changed which speaker the appliance prefers at
+# every future boot.
+#
+# So the read's exit status is kept. `sqlite3` returns 0 for a query that
+# matches no rows and non-zero when it could not ask, which is exactly the
+# distinction needed.
+if [ -n "${SPEAKER:-}" ]; then
+    SPEAKER_KNOWN=yes
+elif SPEAKER=$(vaino_speaker); then
+    SPEAKER_KNOWN=yes
+else
+    SPEAKER=""
+    SPEAKER_KNOWN=no
+fi
 
 # **`[PI3-FOUND-130]` Trust is what lets the speaker reconnect to US**, and it
 # is the first thing a recovery throws away.
@@ -203,7 +225,7 @@ if [ -n "$CONNECTED" ]; then
     # Bookkeeping, only where it cannot contradict anybody: adopt into the
     # database when no speaker was ever chosen. A recorded choice stands until
     # the listener changes it `[PI3-FOUND-310]`.
-    if [ -z "${SPEAKER:-}" ]; then
+    if [ "$SPEAKER_KNOWN" = yes ] && [ -z "${SPEAKER:-}" ]; then
         case "$CONNECTED" in
             ??:??:??:??:??:??)
                 sqlite3 "$DB" "INSERT INTO player_settings (key, value, updated_at) \
@@ -239,8 +261,11 @@ fi
 rm -f "$INCUMBENT" 2>/dev/null
 
 # Nobody holds the audio, so the listener's choice gets the standing invitation
-# back: it is the one path that does not have to win the power-up race.
-trust_only "${SPEAKER:-}"
+# back: it is the one path that does not have to win the power-up race. Skipped
+# entirely when the choice could not be read `[PI3-FOUND-700]` -- handing the
+# invitation to a guess is the same mistake in a quieter form.
+[ "$SPEAKER_KNOWN" = yes ] && trust_only "${SPEAKER:-}"
+exit 0
 
 # **Absent is a real answer, not an error.** Paging a device the shared
 # Bluetooth radio cannot reach stalls whatever the appliance IS playing for
