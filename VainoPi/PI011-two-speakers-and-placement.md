@@ -808,6 +808,46 @@ cold-booting alongside the Pi. The modes differ in more than one variable,
 which is why the packet rate is the comparison that counts and the timings are
 not.
 
+### `[PI3-FOUND-480]` A silence that could be attributed, 2026-09-10
+
+The Mode B cycle after `[PI3-FOUND-470]` connected and then played nothing.
+Power on 2:23:45, connect tone 2:24:16, still silent at 2:25:25 with the
+progress bar advancing and volume raised at both ends.
+
+Every layer on the appliance reported success, which is the `[PI3-FOUND-030]`
+signature exactly:
+
+| Check | Reading |
+| --- | --- |
+| `wpctl` sink | MIDDLETON, vol 0.83 |
+| `wpctl` streams | both channels linked to MIDDLETON playback, active |
+| player `/audio/sink` | `{"sink":"MIDDLETON","dummy":false,"known":true}` |
+| BlueZ | Connected: yes, Trusted: yes, codec SBC |
+| connected devices | MIDDLETON only -- no interloper `[PI3-FOUND-090]` |
+
+**And this time there was one more question to ask.** 373 `ACL Data TX`
+packets in 5 s -- 74.6/s, indistinguishable from the clean Mode B run. The air
+was carrying a healthy stream and the speaker was not making sound. **The
+fault was in the speaker**, and no work on the Pi would have fixed it.
+
+That attribution had never been possible before. PI009's silence had every
+layer reporting success and no way to separate a truthful report from a lie;
+the whole appliance-side supervisor exists because of it. A five-second packet
+count now answers the question those five layers could not.
+
+Recovery was a manual disconnect and reconnect -- both returned in under a
+second -- followed by `reopen-output`. Audio returned immediately, and the
+rate after was 375 packets in 5 s.
+
+**Two honest limits on this entry.** The fault state was destroyed before the
+transport's `State` and SBC `Configuration` were read: a path-extraction query
+failed and restoring the listener's audio was chosen over digging. If it
+recurs, those two properties are the first to capture, before touching
+anything. And it revises `[PI3-FOUND-470]`: Mode B is reliably *not
+stuttering*, which is narrower than reliably good. This was a different fault,
+not a stutter, but the single-observation caution recorded there was
+warranted.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

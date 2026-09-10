@@ -32,6 +32,7 @@ Current understanding, for a reader who needs only that:
 | Symptom | Cause | Where |
 |---|---|---|
 | Periodic stuttering for ~3 min after boot | **How it was power-cycled.** Switching the speaker off cuts the Pi's power with it, and a boot where both come up together stutters; cycling the Pi alone does not. Unfixed, and no longer mitigated -- the redial that stopped it was removed as too disruptive | `[PI3-FOUND-350]`, `[PI3-FOUND-450]`, PI011 §11 |
+| Connected, progress bar advancing, no sound | **The speaker, not the appliance.** Confirmed by counting packets on the air while every appliance layer read healthy. Fixed by disconnect/reconnect | `[PI3-FOUND-480]` |
 | Player wedged after a power cut, 23 restarts | Hot SQLite journal, unrecoverable through a read-only attach | `[PI3-FOUND-120]`, PI009 |
 | Speaker never reconnects after a power cycle | The speaker powers the Pi, so the Pi is always late — and it had lost `Trusted` | `[PI3-FOUND-090]`/`-130`, PI009 |
 | ~19 s of startup that was not work | Contention with `mpd`, which now yields | `[PI3-FOUND-210]`, PI010 §2 |
@@ -44,6 +45,18 @@ one somebody else would reach for: that the 15-second stutter period matched
 cycle); that the boot gate's wait should be shortened (`[PI3-FOUND-260]`); and
 that setting an idle I/O class made anything polite (`[PI3-FOUND-250]` — no
 scheduler in use honoured it).
+
+**If it is connected and silent, count the packets before touching
+anything** `[PI3-FOUND-480]`. Five seconds answers whether the appliance is
+transmitting, which is the one thing the sink, the stream, the player and
+BlueZ can all report wrongly at once:
+
+    sudo timeout 5 btmon | grep -c 'ACL Data TX'
+
+About 370 means the air is carrying a healthy stream and the fault is in the
+speaker -- reconnect it, and if that fails the speaker needs its own attention.
+Near zero means the fault is on this side, and the sink and routing checks
+above become the ones that matter.
 
 **If stutters return, the first question is how it was power-cycled**
 `[PI3-FOUND-350]`. Switching the speaker off cuts the Pi's supply, so both
