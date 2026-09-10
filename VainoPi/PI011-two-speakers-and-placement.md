@@ -1398,7 +1398,7 @@ breaking the thing it is competing with. Incumbency is an identity, not a
 condition: a speaker whose sink was knocked out has not become unavailable, it
 has been attacked.
 
-**The policy is now one sentence `[PI3-AIM-080]`.**
+**`[PI3-AIM-080]` The policy is now one sentence.**
 
 > There is at most one speaker connected at a time. It is chosen when none is
 > connected -- the listener's speaker first, then any other known one -- and it
@@ -1420,7 +1420,7 @@ interactions that produced the inversion:
 
 `vaino-speaker.sh` went from 503 lines to 366 with no loss of behaviour.
 
-**And the race is closed at the source `[PI3-FOUND-630]`.** A keeper running
+**`[PI3-FOUND-630]` The race is closed at the source.** A keeper running
 every thirty seconds cannot win against damage that takes five, so the refusal
 now happens before a transport is handed over. `vaino-bt-agent` answers BlueZ's
 authorisation calls: accept when there is no incumbent, accept when the caller
