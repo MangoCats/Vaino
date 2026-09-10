@@ -313,6 +313,18 @@ fi
 # The privileged helper for speaker selection [PI-SET-030]. A narrow sudoers
 # rule rather than broader rights for the player: the web process gets exactly
 # these verbs, with the device address validated before it reaches BlueZ.
+# The shared shell library, before the helpers that source it. One copy of
+# where the database lives, how to read the chosen speaker, how to parse a sink
+# name and how to decode an AFH map `[PI3-AIM-090]`.
+HERE="${HERE:-$(cd "$(dirname "$0")" && pwd)}"
+if [ -f "$HERE/vaino-common.sh" ]; then
+    install -d /usr/local/lib
+    if ! cmp -s "$HERE/vaino-common.sh" /usr/local/lib/vaino-common.sh; then
+        install -m644 "$HERE/vaino-common.sh" /usr/local/lib/vaino-common.sh &&
+            did "installed vaino-common.sh"
+    fi
+fi
+
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \

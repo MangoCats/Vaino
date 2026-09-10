@@ -197,16 +197,6 @@ report() {
 # Withdraw the standing invitation from every audio device but this one
 # `[PI3-FOUND-310]`. Paired is left intact -- only the auto-connect is taken
 # away, so any of them is one `use` away from coming back.
-withdraw_others() {
-    local keep="$1" other
-    for other in $(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}'); do
-        [ "$other" = "$keep" ] && continue
-        bluetoothctl info "$other" 2>/dev/null | grep -q 'UUID: Audio Sink' || continue
-        bluetoothctl info "$other" 2>/dev/null | grep -q 'Trusted: yes' || continue
-        bluetoothctl untrust "$other" >/dev/null 2>&1 &&
-            echo "untrusted $other so it stops auto-connecting over the chosen speaker" >&2
-    done
-}
 
 json_devices() {
     local first=1 mac name
@@ -306,11 +296,21 @@ case "$VERB" in
         # it, the Middleton dropped, and the boot finished playing through the
         # speaker they had just navigated away from.
         #
-        # Choosing a speaker therefore withdraws that standing invitation
-        # from the others -- see `withdraw_others`, called at the end of this
-        # verb rather than here. They stay PAIRED: the link key is untouched
-        # and `use` reconnects any of them on demand in seconds; they simply
-        # stop letting themselves in `[PI3-WHY-040]`.
+        # **`[PI3-FOUND-650]` That invitation is no longer withdrawn, and the
+        # untrusting that did it has been removed.** It untrusted every other
+        # speaker so none could let itself in over the chosen one. Two things
+        # retired it. The agent now refuses any audio profile from anything
+        # that is not holding the audio `[PI3-FOUND-630]`, so an auto-connect
+        # from another speaker is answered rather than prevented -- which is
+        # the same outcome without the side effects. And untrusting had a
+        # sharp one: a paired but untrusted speaker, powered on nearby, was
+        # refused for want of an agent and knocked every nine seconds for as
+        # long as it stayed on `[PI3-FOUND-610]`.
+        #
+        # It also forced a subtlety on the keeper's fallback, which had to
+        # test `Paired` rather than `Trusted` precisely because this code had
+        # untrusted the speaker it needed to reach `[PI3-FOUND-560]`. One rule
+        # removed, one gotcha removed with it.
 
         # **`[PI3-FOUND-290]` Free A2DP before asking for it.** The adapter
         # carries one A2DP transport at a time. A second speaker connected
@@ -392,11 +392,6 @@ case "$VERB" in
         # address is *stored*, and the store still names the old speaker until
         # the caller records this one -- which it does only once this verb
         # returns ok. Done at the top, a keeper tick landing mid-connect
-        # re-trusted the speaker just withdrawn, and it was still auto-
-        # connecting on the next boot. Observed exactly once, then fixed by
-        # moving it here, where the remaining window is the microseconds
-        # between this line and the caller's write.
-        withdraw_others "$ADDR"
         report "$(state_of "$ADDR")" "connected" \
                ",\"sink_node\":\"${node:-none}\",\"reach\":\"$conn\",\"transport\":\"$(transport_state "$ADDR")\""
         ;;

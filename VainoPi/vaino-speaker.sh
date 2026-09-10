@@ -27,14 +27,9 @@ set -u
 #
 # Chosen by what exists rather than by a build-time flag, so one script serves
 # a split appliance and an unsplit one without being told which it is on.
-DB="${VAINO_DB:-}"
-if [ -z "$DB" ]; then
-    if [ -f /var/vaino/listener.db ]; then
-        DB=/var/vaino/listener.db
-    else
-        DB=/srv/library/vaino.db
-    fi
-fi
+. "${VAINO_COMMON:-/usr/local/lib/vaino-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/vaino-common.sh"
+DB=$(vaino_db)
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 # The address is whatever the player last recorded through `use`/`pair`
@@ -87,14 +82,6 @@ SPEAKER="${SPEAKER:-$(sqlite3 "$DB" \
 # numbered rows only, the same discipline as `vaino-wait-sink`
 # `[PI3-FOUND-110]`, so no header or box-drawing line can be mistaken for a
 # sink.
-sink_present() {
-    wpctl status 2>/dev/null |
-        sed -n '/Sinks:/,/Sink endpoints/p' |
-        sed -n 's/^[^0-9]*[0-9][0-9]*\.[[:space:]]*\(.*\)$/\1/p' |
-        sed 's/[[:space:]]*\[vol.*$//; s/[[:space:]]*$//' |
-        grep -qxF "$1"
-}
-
 INFO=$(bluetoothctl info "${SPEAKER:-none}" 2>/dev/null)
 
 if [ -n "${SPEAKER:-}" ] && ! echo "$INFO" | grep -q 'Trusted: yes'; then
@@ -150,18 +137,7 @@ INCUMBENT_DIR=/run/vaino
 INCUMBENT="$INCUMBENT_DIR/incumbent"
 
 # Every connected device that can actually play music, one address per line.
-connected_speakers() {
-    for addr in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
-        bluetoothctl info "$addr" 2>/dev/null | grep -q 'UUID: Audio Sink' &&
-            printf '%s\n' "$addr"
-    done
-}
-
-alias_of() {
-    bluetoothctl info "$1" 2>/dev/null | sed -n 's/^[[:space:]]*Alias: //p'
-}
-
-SPEAKERS=$(connected_speakers)
+SPEAKERS=$(vaino_connected_speakers)
 HELD=$(cat "$INCUMBENT" 2>/dev/null)
 
 # Who holds the audio. The recorded incumbent keeps it for as long as it is
@@ -190,7 +166,7 @@ if [ -n "$CONNECTED" ]; then
     printf '%s\n' "$SPEAKERS" | while read -r other; do
         [ -n "$other" ] || continue
         [ "$other" = "$CONNECTED" ] && continue
-        echo "$(alias_of "$other") connected while $(alias_of "$CONNECTED") holds the audio -- disconnecting it"
+        echo "$(vaino_alias "$other") connected while $(vaino_alias "$CONNECTED") holds the audio -- disconnecting it"
         bluetoothctl disconnect "$other" >/dev/null 2>&1
     done
 
@@ -215,14 +191,13 @@ if [ -n "$CONNECTED" ]; then
     # nothing about whether PipeWire has anywhere to send audio
     # `[PI3-FOUND-590]`, and a reopen aimed at a sink that does not exist is an
     # instruction to abandon working audio.
-    ALIAS=$(alias_of "$CONNECTED")
-    ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
-        sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
-    if [ -n "$ALIAS" ] && sink_present "$ALIAS" &&
+    ALIAS=$(vaino_alias "$CONNECTED")
+    ROUTED=$(vaino_routed)
+    if [ -n "$ALIAS" ] && vaino_sink_present "$ALIAS" &&
        [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
-        curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
+        vaino_reopen
         echo "moved the stream from '${ROUTED:-nothing}' to '$ALIAS', which holds the audio"
-    elif [ -n "$ALIAS" ] && ! sink_present "$ALIAS"; then
+    elif [ -n "$ALIAS" ] && ! vaino_sink_present "$ALIAS"; then
         echo "'$ALIAS' holds the audio but has no sink in PipeWire yet -- waiting, not switching"
     fi
     exit 0
@@ -302,8 +277,7 @@ while :; do
         # sink [PI3-WHY-020], so the player is told explicitly -- and only
         # after a connection actually succeeded, so a reopen is never spent on
         # nothing.
-        curl -s -o /dev/null -X POST \
-            "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
+        vaino_reopen
         echo "connected $SPEAKER after $(( $(date +%s) - started ))s and asked the player to reopen"
         exit 0
     fi

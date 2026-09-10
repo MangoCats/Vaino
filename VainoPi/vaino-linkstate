@@ -31,13 +31,9 @@
 # settles it.
 set -u
 
-DB="${VAINO_DB:-}"
-if [ -z "$DB" ]; then
-    if [ -f /var/vaino/listener.db ]; then DB=/var/vaino/listener.db
-    else DB=/srv/library/vaino.db; fi
-fi
-S="${1:-$(sqlite3 "$DB" \
-    "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null)}"
+. "${VAINO_COMMON:-/usr/local/lib/vaino-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/vaino-common.sh"
+S="${1:-$(vaino_speaker)}"
 [ -n "${S:-}" ] || { echo "vaino-linkstate: no speaker address" >&2; exit 1; }
 
 printf 'uptime %s\n' "$(cut -d' ' -f1 /proc/uptime)"
@@ -65,16 +61,7 @@ printf 'afh %s\n' "${AFH:-none}"
 if [ -n "${AFH:-}" ]; then
     # Hex parsed by hand: strtonum is a gawk extension and this appliance
     # runs mawk, where it returns nothing at all rather than failing loudly.
-    printf 'afh_channels %s\n' "$(printf '%s' "$AFH" | awk '{
-        h = "0123456789abcdef"
-        n = 0
-        for (i = 1; i <= 20; i += 2) {
-            b = (index(h, substr($0, i, 1)) - 1) * 16 \
-              + (index(h, substr($0, i + 1, 1)) - 1)
-            for (k = 0; k < 8; k++) if (int(b / 2^k) % 2) n++
-        }
-        print n
-    }')"
+    printf 'afh_channels %s\n' "$(vaino_afh_channels "$AFH")"
 fi
 
 # Controller-side quality. Link quality is a BER-derived figure, not a level,

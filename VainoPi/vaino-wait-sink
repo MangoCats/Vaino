@@ -82,35 +82,20 @@ SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-3}
 # speaker this gate waits for is whichever the listener last chose, and that
 # choice is recorded in `listener.db` since `[IMPL-DBSPLIT-025]`. Reading the
 # old path here meant waiting for the speaker they used to have.
-DB="${VAINO_DB:-}"
-if [ -z "$DB" ]; then
-    if [ -f /var/vaino/listener.db ]; then
-        DB=/var/vaino/listener.db
-    else
-        DB=/srv/library/vaino.db
-    fi
-fi
+. "${VAINO_COMMON:-/usr/local/lib/vaino-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/vaino-common.sh"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 # Every sink PipeWire currently offers, one name per line, dummy excluded.
 # Parsed from the numbered rows only, so no header or box-drawing line can be
 # mistaken for a sink -- the whole of `[PI3-FOUND-110]`.
-real_sinks() {
-    wpctl status 2>/dev/null |
-        sed -n '/Sinks:/,/Sink endpoints/p' |
-        sed -n 's/^[^0-9]*[0-9][0-9]*\.[[:space:]]*\(.*\)$/\1/p' |
-        sed 's/[[:space:]]*\[vol.*$//; s/[[:space:]]*$//' |
-        grep -v '^Dummy Output$'
-}
 
 # The speaker the listener chose, by the name PipeWire will give its sink
 # [PI3-AIM-020]. Absent is fine and common: it just means anything real will
 # do.
 WANT=""
-ADDR=$(sqlite3 "$DB" \
-    "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null)
-[ -n "${ADDR:-}" ] && WANT=$(bluetoothctl info "$ADDR" 2>/dev/null |
-    sed -n 's/^[[:space:]]*Alias: //p')
+ADDR=$(vaino_speaker)
+[ -n "${ADDR:-}" ] && WANT=$(vaino_alias "$ADDR")
 
 # **`[PI3-FOUND-540]` Counted in seconds, not in passes.** This loop used to
 # increment a counter once per iteration and call that a second, but each pass
@@ -125,7 +110,7 @@ ADDR=$(sqlite3 "$DB" \
 started=$(date +%s)
 i=0
 while [ "$i" -lt "$DEADLINE" ]; do
-    sinks=$(real_sinks)
+    sinks=$(vaino_sinks)
     if [ -n "$sinks" ]; then
         if [ -n "$WANT" ] && echo "$sinks" | grep -qxF "$WANT"; then
             echo "vaino-wait-sink: $WANT present after ${i}s"

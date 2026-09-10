@@ -32,31 +32,20 @@
 # anything degenerate, `apply` re-validating before it writes, and the whole
 # thing being a unit that is off unless somebody turns it on.
 set -u
+. "${VAINO_COMMON:-/usr/local/lib/vaino-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/vaino-common.sh"
 
 MAP_FILE="${VAINO_AFH_MAP:-/var/vaino/afh-map}"
 # The specification requires at least 20 channels left usable; a controller
 # will reject anything tighter, and a map that tight is a bug upstream of here.
 MIN_CHANNELS=20
 
-count_bits() {
-    printf '%s' "$1" | awk '{
-        h = "0123456789abcdef"
-        n = 0
-        for (i = 1; i <= 20; i += 2) {
-            b = (index(h, substr($0, i, 1)) - 1) * 16 \
-              + (index(h, substr($0, i + 1, 1)) - 1)
-            for (k = 0; k < 8; k++) if (int(b / 2^k) % 2) n++
-        }
-        print n
-    }'
-}
-
 valid() {
     case "$1" in
         [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
         *) echo "vaino-afh-seed: not a 10-octet map: '$1'" >&2; return 1 ;;
     esac
-    n=$(count_bits "$1")
+    n=$(vaino_afh_channels "$1")
     if [ "$n" -lt "$MIN_CHANNELS" ]; then
         echo "vaino-afh-seed: only $n channels usable, need $MIN_CHANNELS" >&2
         return 1
@@ -64,26 +53,16 @@ valid() {
     return 0
 }
 
-speaker() {
-    DB="${VAINO_DB:-}"
-    if [ -z "$DB" ]; then
-        if [ -f /var/vaino/listener.db ]; then DB=/var/vaino/listener.db
-        else DB=/srv/library/vaino.db; fi
-    fi
-    sqlite3 "$DB" \
-        "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null
-}
-
 case "${1:-}" in
 save)
-    S="${2:-$(speaker)}"
+    S="${2:-$(vaino_speaker)}"
     [ -n "${S:-}" ] || { echo "vaino-afh-seed: no speaker address" >&2; exit 1; }
     MAP=$(hcitool afh "$S" 2>/dev/null | sed -n 's/^AFH map: 0x//p')
     [ -n "${MAP:-}" ] || { echo "vaino-afh-seed: no live link to read" >&2; exit 1; }
     valid "$MAP" || exit 1
     mkdir -p "$(dirname "$MAP_FILE")" 2>/dev/null
     printf '%s\n' "$MAP" > "$MAP_FILE" || exit 1
-    echo "saved $MAP ($(count_bits "$MAP") channels) to $MAP_FILE"
+    echo "saved $MAP ($(vaino_afh_channels "$MAP") channels) to $MAP_FILE"
     ;;
 apply)
     [ -f "$MAP_FILE" ] || { echo "vaino-afh-seed: nothing saved yet" >&2; exit 0; }
@@ -91,18 +70,10 @@ apply)
     valid "$MAP" || exit 1
     # Octet 9's top bit is reserved and must be zero, so it is cleared here
     # rather than trusted to have been zero in whatever was saved.
-    BYTES=$(printf '%s' "$MAP" | awk '{
-        h = "0123456789abcdef"
-        for (i = 1; i <= 20; i += 2) {
-            b = (index(h, substr($0, i, 1)) - 1) * 16 \
-              + (index(h, substr($0, i + 1, 1)) - 1)
-            if (i == 19) b = b % 128
-            printf "0x%02x ", b
-        }
-    }')
+    BYTES=$(vaino_afh_bytes "$MAP")
     # OGF 0x03 OCF 0x003f: HCI_Set_AFH_Host_Channel_Classification.
     if hcitool cmd 0x03 0x003f $BYTES >/dev/null 2>&1; then
-        echo "applied $MAP ($(count_bits "$MAP") channels)"
+        echo "applied $MAP ($(vaino_afh_channels "$MAP") channels)"
     else
         echo "vaino-afh-seed: controller rejected the classification" >&2
         exit 1
@@ -126,24 +97,8 @@ boot)
 show)
     [ -f "$MAP_FILE" ] || { echo "nothing saved"; exit 0; }
     MAP=$(tr -d ' \n\r' < "$MAP_FILE")
-    echo "map $MAP -- $(count_bits "$MAP") of 79 channels"
-    printf '%s' "$MAP" | awk '{
-        h = "0123456789abcdef"
-        for (i = 1; i <= 20; i += 2) {
-            b = (index(h, substr($0, i, 1)) - 1) * 16 \
-              + (index(h, substr($0, i + 1, 1)) - 1)
-            for (k = 0; k < 8; k++) ch[(i - 1) / 2 * 8 + k] = int(b / 2^k) % 2
-        }
-        start = -1
-        for (c = 0; c < 79; c++) {
-            if (!ch[c] && start < 0) start = c
-            if ((ch[c] || c == 78) && start >= 0) {
-                last = ch[c] ? c - 1 : c
-                printf "  excluded ch %d-%d = %d-%d MHz\n", start, last, 2402 + start, 2402 + last
-                start = -1
-            }
-        }
-    }'
+    echo "map $MAP -- $(vaino_afh_channels "$MAP") of 79 channels"
+    vaino_afh_excluded "$MAP"
     ;;
 *)
     echo "usage: vaino-afh-seed save|apply|boot|show" >&2

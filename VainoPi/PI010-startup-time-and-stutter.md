@@ -334,6 +334,48 @@ listener heard clean audio at +36 with no stutters -- **so the reopen this
 trade was expected to cost was not audible**. That is the `[PI3-FOUND-260]`
 worry answered on its own terms rather than argued away.
 
+**`[PI3-AIM-090]` One copy of each fact, in `vaino-common.sh`.** Reviewed
+against the one-sentence policy of `[PI3-AIM-080]` on 2026-09-10. Five things
+had been written out four and five times over:
+
+| Duplicated | Copies | Now |
+| --- | --- | --- |
+| where the listener's database lives | 5 | `vaino_db` |
+| reading `speaker_address` out of it | 4 | `vaino_speaker` |
+| parsing a sink name from `wpctl status` | 4 | `vaino_sinks`, `vaino_sink_present` |
+| a device's alias | 3 | `vaino_alias` |
+| decoding an AFH map | 2, in three forms | `vaino_afh_channels`, `_bytes`, `_excluded` |
+
+**Why it mattered rather than merely offended.** The sink parser was wrong
+once, in a way that let the player open onto a dummy and report success
+`[PI3-FOUND-110]`; the fix then had to be carried by hand into everything that
+had copied it. And a helper reading the pre-split database tells the listener
+about the speaker they used to have `[PI3-FOUND-280]` -- a failure that has
+happened here, and the kind that only happens to duplicated knowledge.
+
+Sourced, not executed:
+
+    . "${VAINO_COMMON:-/usr/local/lib/vaino-common.sh}" 2>/dev/null ||
+        . "$(dirname "$0")/vaino-common.sh"
+
+**`[PI3-FOUND-650]` And one rule was deleted outright, not moved.**
+`vaino-btctl`'s `withdraw_others` untrusted every speaker but the chosen one,
+so none could let itself in over it. The agent now refuses any audio profile
+from anything that is not holding the audio `[PI3-FOUND-630]`, which reaches
+the same outcome by answering rather than by pre-emption -- and untrusting had
+a sharp side effect: a paired but untrusted speaker, powered on nearby, was
+refused for want of an agent and knocked every nine seconds for as long as it
+stayed on `[PI3-FOUND-610]`.
+
+It had also forced a subtlety on the keeper's fallback, which tested `Paired`
+rather than `Trusted` precisely because this code untrusted the speaker it
+needed to reach `[PI3-FOUND-560]`. **One rule removed, one gotcha removed with
+it, and the thing it was protecting against still handled.**
+
+Net across the review: `vaino-speaker.sh` 503 → 340 lines, `vaino-afh-seed`
+137 → 108, `vaino-linkstate` 102 → 93, `vaino-wait-sink` 145 → 130, against 137
+lines of shared library that replaced roughly twice that in copies.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
 Seven tools were built during the 2026-09-08 investigation and the stutter
