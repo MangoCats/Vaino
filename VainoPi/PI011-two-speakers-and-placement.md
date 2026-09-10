@@ -1530,6 +1530,44 @@ show `REFUSE` in the agent's log within a second and no silence at all. Two
 mechanisms have been fixed on the way to that, so it would be premature to
 assume the third attempt is the one that works.
 
+### `[PI3-FOUND-690]` The agent refused, and the audio did not move
+
+Third real test, 2026-09-10 19:33, and the first that the agent decided. The
+Oontz held the audio and was trusted; the Middleton was untrusted; the
+Middleton was powered on.
+
+    19:33:26  vaino-bt-agent: REFUSE 20:64:DE:CF:F3:AD:
+                              '08:EB:ED:26:14:12' already has the audio
+    19:33:26  bluetoothd: auth_cb() Access denied:
+                          another speaker already has the audio
+
+The appliance's own sentence, handed to BlueZ and logged back by it. **The
+Oontz held throughout at 312 packets per five seconds -- its full baseline rate
+`[PI3-FOUND-570]`, with no dip and no silence.** Against the same test three
+attempts earlier, which cost thirty-five seconds of silence from both speakers
+`[PI3-FOUND-680]`.
+
+It took three tries to get here, and the first two failed in ways worth
+keeping: the guard listed UUIDs nobody asks for `[PI3-FOUND-660]`, and then
+the agent was never consulted at all because trust had already answered for it
+`[PI3-FOUND-680]`. Both times the keeper's backstop cleaned up and the outcome
+looked acceptable from the outside, which is exactly why "the outcome was
+correct" is not the same as "the mechanism works".
+
+**What is left is churn, not silence.** The Middleton keeps an ACL link and
+re-offers its audio profiles every ten seconds for as long as it is powered
+on, each offer cleanly refused. The keeper's backstop also disconnects the
+baseband link when it sees it, and the speaker reconnects. Nothing is audible
+and the packet rate is untouched, but a device is knocking on a door that will
+never open, indefinitely -- the shape of `[PI3-FOUND-610]` with a polite answer
+instead of a blank one.
+
+`Blocked` is the quieter instrument: BlueZ will refuse the connection at the
+adapter rather than at the profile, so the knocking stops instead of being
+answered. It is persistent state, and a speaker left blocked by a crash stays
+blocked, so it wants care rather than a quick edit. **Not done, and recorded
+as the next thing rather than a defect** -- the audio is protected either way.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
