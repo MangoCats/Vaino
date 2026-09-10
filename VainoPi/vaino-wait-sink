@@ -57,9 +57,27 @@
 # that speaker first refusal over any other. It simply no longer gives up
 # early on a machine whose speaker is routinely slow to answer, which is this
 # one, by design `[PI3-FOUND-090]`.
+#
+# **`[PI3-FOUND-550]` Five seconds, because the gate holds the controls too.**
+# The deadline was 60 s on the reasoning of `[PI3-FOUND-260]`: starting before
+# the speaker exists costs a reopen and 26 s of underrun, starting after costs
+# only silence that was silent anyway. That reasoning is still true about
+# *audio*, and it was the wrong thing to optimise. This runs as an
+# `ExecStartPre`, so every second it waits is a second the listener cannot
+# reach the web interface -- including the interface's speaker picker, which is
+# the one control that could resolve the situation the appliance is stuck in
+# `[PI3-FOUND-540]`. On 2026-09-10 that cost 143 s with the chosen speaker
+# switched off, and the listener's judgement was direct: five seconds is
+# acceptable, 140 is not.
+#
+# So the gate now buys a fast start when the speaker is already there and gets
+# out of the way when it is not. The audio is no longer its problem: the
+# keeper connects the speaker and asks the player to reopen, and if the
+# remembered speaker never answers it falls back to another known one
+# `[PI3-FOUND-560]`.
 set -u
-DEADLINE=${VAINO_SINK_WAIT:-60}
-SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-45}
+DEADLINE=${VAINO_SINK_WAIT:-5}
+SPEAKER_GRACE=${VAINO_SPEAKER_WAIT:-3}
 # The listener-side file, not the pre-split one `[PI3-FOUND-280]`: the
 # speaker this gate waits for is whichever the listener last chose, and that
 # choice is recorded in `listener.db` since `[IMPL-DBSPLIT-025]`. Reading the

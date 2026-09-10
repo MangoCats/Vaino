@@ -273,6 +273,54 @@ present.
 > the appliance cannot tell the two apart. Nothing here changes that, and the
 > interface stays gated behind the audio wait.
 
+**`[PI3-FOUND-550]` The gate now waits five seconds, not sixty.** The 60 s
+deadline came from `[PI3-FOUND-260]`, which measured that starting before the
+speaker exists costs a reopen and 26 s of underrun while starting after costs
+only silence that was silent anyway. That is still true about *audio*, and it
+was the wrong thing to optimise: the gate is an `ExecStartPre`, so it was
+buying quieter audio with the listener's access to the controls
+`[PI3-FOUND-540]`. The listener's judgement settled it -- five seconds is
+acceptable, 140 is not.
+
+The fast path is unchanged: a speaker already present releases the gate
+immediately, measured at 0 s. What changes is the failure case, which now
+costs five seconds instead of over two minutes. The audio is no longer the
+gate's problem; the keeper connects the speaker and asks the player to reopen.
+
+**`[PI3-FOUND-560]` And a missing speaker no longer means silence.** Asked for
+directly after the same boot: the appliance sat waiting on a speaker that had
+been switched off while a second, known speaker was awake in the same room. It
+had everything it needed to make sound and made none.
+
+`vaino-speaker` now tries the other known speakers when the remembered one
+does not answer. Deliberately narrow:
+
+- Only after the chase has already failed, and only when `BUDGET` is non-zero
+  -- which means nothing is currently audible. It can never interrupt playback
+  to go hunting, which was the injury behind `[PI3-AIM-060]`.
+- Only devices that are **paired and advertise an Audio Sink**. Something
+  deliberately introduced to this appliance, never something merely in range.
+- Bounded at 20 s total, three seconds per candidate.
+- **It does not rewrite `speaker_address`.** The listener's choice still stands
+  and is preferred again on the next boot. This is a stand-in for a missing
+  speaker, not a new decision about which speaker this is.
+
+**Trust was the obvious test and it was the wrong one.** The first version
+required `Trusted: yes` and would have skipped exactly the speaker it existed
+to reach: this appliance untrusts every speaker but the chosen one, so that
+only the chosen one may reconnect to *us* unasked `[PI3-FOUND-130]`, and the
+Middleton read `Trusted: no` the moment the listener switched to the Oontz.
+Trust governs an inbound connection; this one is outbound, and a bond is what
+says a device is known. Caught by checking the candidate list against the real
+adapter rather than trusting the predicate: it returned one speaker where it
+should have returned two.
+
+**Not yet exercised end to end.** The candidate selection is verified on the
+appliance and returns both speakers. The connect path has not run, because it
+refuses to run while something is playing, and something has been playing
+every time it was tried. The first boot with the remembered speaker genuinely
+absent is the test.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
 Six tools were built during the 2026-09-08 investigation and the stutter hunt

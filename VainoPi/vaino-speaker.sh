@@ -346,8 +346,57 @@ while :; do
     [ $(( $(date +%s) - started )) -lt "$BUDGET" ] || break
 done
 
-# Not reached. Said once per tick, and only when there was nothing to lose by
-# trying, so the log shows a speaker being waited for rather than an appliance
-# repeating that it has failed.
+# Said once per tick, and only when there was nothing to lose by trying, so the
+# log shows a speaker being waited for rather than an appliance repeating that
+# it has failed.
 [ "$BUDGET" -gt 0 ] && echo "$SPEAKER did not answer in ${BUDGET}s (held by another device, or asleep)"
+
+# **`[PI3-FOUND-560]` A remembered speaker that is switched off should not
+# leave the appliance silent when another one is sitting there paired.**
+#
+# Asked for directly by the listener, after a boot spent waiting on a speaker
+# that had been powered down while a second, known speaker was awake in the
+# same room `[PI3-FOUND-540]`. The appliance had everything it needed to make
+# sound and made none.
+#
+# Deliberately narrow. It runs only when the chase has already failed and only
+# when `BUDGET` is non-zero, which means nothing is currently audible -- so it
+# can never interrupt playback to go hunting, which is the injury of
+# `[PI3-AIM-060]`. It considers only devices that are **paired and advertise
+# an Audio Sink**: things somebody deliberately introduced to this
+# appliance, never something merely in range.
+#
+# **Not trusted, deliberately.** Trust was the obvious test and it is the
+# wrong one. This appliance untrusts every speaker but the chosen one, so
+# that only the chosen one may reconnect to *us* unasked `[PI3-FOUND-130]`,
+# and the Middleton duly read `Trusted: no` the moment the listener
+# switched to the Oontz. Requiring trust here would have skipped precisely
+# the speaker this exists to fall back to. Trust governs an inbound
+# connection; this one is outbound, and a bond is what says it is known.
+#
+# It does not rewrite the listener's choice. `speaker_address` still names the
+# speaker they picked, so when that one comes back it is preferred again on
+# the next boot. This is a stand-in for a missing speaker, not a new decision
+# about which speaker this is.
+if [ "$BUDGET" -gt 0 ]; then
+    FALLBACK="${VAINO_FALLBACK_SECONDS:-20}"
+    fstart=$(date +%s)
+    for addr in $(bluetoothctl devices Paired 2>/dev/null |
+                  sed -n 's/^Device \([0-9A-F:]*\) .*/\1/p'); do
+        [ "$addr" = "$SPEAKER" ] && continue
+        [ $(( $(date +%s) - fstart )) -lt "$FALLBACK" ] || break
+        cand=$(bluetoothctl info "$addr" 2>/dev/null)
+        echo "$cand" | grep -q 'Audio Sink' || continue
+        echo "$cand" | grep -qE 'Paired: yes|Bonded: yes' || continue
+        echo "$SPEAKER is absent; trying known speaker $addr"
+        bluetoothctl connect "$addr" >/dev/null 2>&1
+        sleep 3
+        if bluetoothctl info "$addr" 2>/dev/null | grep -qi 'Connected: yes'; then
+            curl -s -o /dev/null -X POST \
+                "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
+            echo "connected known speaker $addr instead, and asked the player to reopen"
+            exit 0
+        fi
+    done
+fi
 exit 0
