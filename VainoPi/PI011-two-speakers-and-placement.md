@@ -1446,6 +1446,36 @@ deployed agent and correct in all five cases, but no speaker has actually
 knocked since it was installed -- the Middleton was powered down. The first
 time two speakers are powered together is the real test.
 
+### `[PI3-FOUND-660]` The agent guarded the UUIDs nobody uses
+
+First real test, 2026-09-10 19:11. The Oontz held the audio; the Middleton was
+powered on. The agent was consulted and **allowed it**:
+
+    19:11:09  authorise 20:64:DE:CF:F3:AD for 0000110d (not audio, allowing)
+    19:11:31  keeper: MIDDLETON connected while OontZ_Angle 3 U412 holds the
+              audio -- disconnecting it
+
+`0000110d` is Advanced Audio Distribution -- the umbrella profile UUID, and the
+one BlueZ actually authorises against. The guard listed `...110b` (A2DP sink)
+and `...110a` (A2DP source), which are the names nobody asks for. **The agent
+was useless in precisely the case it was written for**, and the keeper's
+backstop cleaned up twenty seconds later.
+
+The outcome was still correct -- the Oontz kept the audio and the listener
+heard no interruption -- but by the slow path the agent exists to remove.
+
+**Why the unit test did not catch it.** Every case was fed a UUID chosen from
+the same list the code checks, so the test agreed with the code about which
+names matter and both were wrong together. The five green results at
+`[PI3-FOUND-640]` were real and meaningless. What caught it was one line of
+journal from a speaker actually knocking, which is why *"not yet exercised in
+anger"* was worth writing down rather than glossing.
+
+Fixed by adding the umbrella UUID, retested, and the refusal path now covers
+umbrella, sink, headset and hands-free while leaving remote control alone.
+**Still not exercised in anger** -- the corrected agent has not yet met a real
+knock either.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

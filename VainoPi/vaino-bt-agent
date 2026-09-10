@@ -46,6 +46,13 @@ INCUMBENT = os.environ.get("VAINO_INCUMBENT",
 # `[PI3-FOUND-600]`. Refusing A2DP alone would leave the intruder the very door
 # it came through last time.
 AUDIO_UUIDS = {
+    # **The umbrella UUID is the one BlueZ actually asks about**, and leaving
+    # it out made the first version useless in exactly the case it was written
+    # for: on 2026-09-10 the Middleton asked for `...110d`, was allowed, and
+    # the keeper's backstop had to clean up twenty seconds later
+    # `[PI3-FOUND-660]`. Guarding the sink and source UUIDs alone guards the
+    # names nobody uses.
+    "0000110d-0000-1000-8000-00805f9b34fb",  # Advanced Audio Distribution
     "0000110b-0000-1000-8000-00805f9b34fb",  # A2DP sink
     "0000110a-0000-1000-8000-00805f9b34fb",  # A2DP source
     "00001108-0000-1000-8000-00805f9b34fb",  # headset (HSP)
