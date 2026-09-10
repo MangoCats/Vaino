@@ -1486,6 +1486,50 @@ umbrella, sink, headset and hands-free while leaving remote control alone.
 **Still not exercised in anger** -- the corrected agent has not yet met a real
 knock either.
 
+### `[PI3-FOUND-680]` The agent was unreachable, because trust is the enforcement
+
+Second real test, 2026-09-10 19:22. The Middleton held the audio; the Oontz
+was powered on. It connected at 19:22:18, **both speakers went silent**, and
+the Middleton recovered at 19:22:53 when the keeper's backstop disconnected the
+intruder -- thirty-five seconds of silence.
+
+**The agent was never called.** Not refused, not consulted: BlueZ asks an agent
+only about an **untrusted** device. A trusted one is authorised without anybody
+being asked, and both speakers read `Trusted: yes`.
+
+So the agent could never have worked as built, and the reasoning that removed
+`withdraw_others` was backwards. `[PI3-FOUND-650]` called it redundant because
+"the agent now refuses any audio profile from anything that is not holding the
+audio". It cannot. **Trust is the enforcement; the agent only supplements it,
+for the devices trust has already excluded.** Removing the untrusting removed
+the mechanism and left the supplement addressing nobody.
+
+**The correction is not simply to put it back.** The old version untrusted
+everything but the *chosen* speaker, which is how a Mode A boot could find the
+Middleton untrusted while it was the one playing. Trust now follows the
+**audio**:
+
+- the incumbent is trusted, so it may let itself back in;
+- every other known speaker is untrusted, so its attempts reach the agent,
+  which refuses them because it is not the incumbent;
+- when nothing holds the audio, the listener's chosen speaker is trusted
+  instead -- the one path that does not have to win the power-up race
+  `[PI3-FOUND-130]`.
+
+Verified on the appliance immediately after deploying: with the Middleton
+playing, the tick logged *"untrusted OontZ_Angle 3 U412 -- only the speaker
+holding the audio may let itself in"*, the two devices then read `Trusted: no`
+and `Trusted: yes` respectively, and audio was undisturbed at 375 packets per
+five seconds.
+
+**Still unproven where it counts.** The agent has yet to refuse anything: the
+first test found the wrong UUID list `[PI3-FOUND-660]`, the second found it was
+never consulted, and both times the keeper's backstop did the work. A third
+test -- powering a non-incumbent speaker on while another plays -- should now
+show `REFUSE` in the agent's log within a second and no silence at all. Two
+mechanisms have been fixed on the way to that, so it would be premature to
+assume the third attempt is the one that works.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

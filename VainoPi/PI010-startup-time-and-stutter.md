@@ -359,6 +359,11 @@ Sourced, not executed:
         . "$(dirname "$0")/vaino-common.sh"
 
 **`[PI3-FOUND-650]` And one rule was deleted outright, not moved.**
+*(Reversed the same evening by `[PI3-FOUND-680]`. Calling it redundant assumed
+the agent could refuse a trusted device; BlueZ never asks an agent about one,
+so removing the untrusting made the agent unreachable rather than redundant.
+It is back, keyed to whoever holds the audio rather than to the chosen
+speaker.)*
 `vaino-btctl`'s `withdraw_others` untrusted every speaker but the chosen one,
 so none could let itself in over it. The agent now refuses any audio profile
 from anything that is not holding the audio `[PI3-FOUND-630]`, which reaches
