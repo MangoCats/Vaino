@@ -760,6 +760,54 @@ by dividing n+1 samples' bytes by n intervals, which biases every figure high
 numbers in these sections now exclude the first sample's bytes. The earlier
 findings move by under a percent and none of their conclusions change.
 
+### `[PI3-FOUND-470]` Mode B measured, and the pair is matched
+
+Mode B captured the same afternoon as `[PI3-FOUND-460]`, same speaker, same
+code, no redial in either. Raw log: `logs/hci-20260910T141610Z-modeB.log`.
+
+| | Mode A (run 3) | Mode B (run 4) |
+| --- | --- | --- |
+| whole window | 39840 B/s, 87.1% of clean | 45803 B/s, 100.1% |
+| 20 s blocks | 86-94% throughout | 99.4-100.6% throughout |
+| dips under 40000 B/s | every ~14.7 s | none |
+| audio missing | ~22 s in 170 | none |
+| ear | stuttering to +171 at least | smooth |
+
+**The mode decides it, measured rather than heard.** That was the claim of
+`[PI3-FOUND-350]`, argued from listening; the separation here is total rather
+than marginal.
+
+**The deficit and the audible stutter are one phenomenon.** It was worth
+asking whether Mode B might carry dips the listener could not hear -- that
+would have meant two things were being conflated. It carries none.
+
+**It is decided at connection and does not change.** Mode B's first block is
+already at 100.5%; Mode A's first block is already deficient; neither drifts
+across 180 s. Whatever differs is established while the link is being set up
+and then held. That is why every "something arrives later and disturbs it"
+theory has failed to predict anything, the library load included.
+
+**The completions anomaly is an instrument defect with a signature.** Across
+the three captures that recorded from boot, its onset varies by 41 s of wall
+clock and by 1.5% of cumulative packets:
+
+    run 2   uptime 155.89   6541 packets transmitted
+    run 3   uptime 135.99   6639 packets
+    run 4   uptime 114.68   6577 packets
+
+It fires at about 6600 packets, not at a time -- a counter filling or wrapping,
+almost certainly in `btmon` or the monitor socket rather than in the
+controller. Run 1 looked arbitrary only because its capture began mid-playback
+and its count started from an unknown offset. Nothing in these findings rests
+on the completions column, and now nothing needs to: what it measures is the
+capture, not the link.
+
+**Timing, for the record.** Mode B connected at +29 and audio began at +34,
+against +35 and +39 for Mode A -- the speaker being already awake rather than
+cold-booting alongside the Pi. The modes differ in more than one variable,
+which is why the packet rate is the comparison that counts and the timings are
+not.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's

@@ -54,9 +54,11 @@ removed on 2026-09-10 because it cost about half a minute of silence on every
 boot including the ones that would have been clean `[PI3-FOUND-450]`.
 
 **One instrument now detects it: `vaino-hci-capture`** `[PI3-FOUND-430]`. A
-stutter train reads as a throughput deficit at the HCI layer -- 17% below the
-clean rate on a bad boot, ending at the second the listener said the stutters
-stopped. Severity tracks the ear in both directions. Everything *above* that
+stutter train reads as a throughput deficit at the HCI layer, and a matched
+pair captured on 2026-09-10 settles the mode question in packets: Mode A ran
+at 87.1% of the clean rate with a dip every ~15 s, Mode B at 100.1% with none
+`[PI3-FOUND-470]`. Severity tracks the ear in both directions, and the link is
+either good or bad from its first packets -- it does not degrade. Everything *above* that
 layer is still blind: signal level, load and disk I/O all measured *better* on
 boots that stuttered, and the player's own underrun counter does not correlate
 at all `[PI3-FOUND-420]`. Budget for that before forming a theory -- five have
