@@ -69,7 +69,7 @@ NEED=""
 # diagnostic reason on every appliance, not just the one it was checked on.
 for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
          bluez libasound2 alsa-utils sqlite3 upower evtest ffmpeg \
-         dnsmasq iw; do
+         dnsmasq iw python3-dbus python3-gi; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then
@@ -317,7 +317,8 @@ echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
          vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample \
-         vaino-hci-capture vaino-linkstate vaino-afh-seed vaino-vitals; do
+         vaino-hci-capture vaino-linkstate vaino-afh-seed vaino-vitals \
+         vaino-bt-agent; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -425,6 +426,29 @@ IOSchedulingClass=idle
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# The agent, and it IS enabled: without one, BlueZ has only two reflexes and
+# neither is wanted -- a trusted device barges in and takes the transport, an
+# untrusted one is refused forever and knocks every nine seconds
+# `[PI3-FOUND-610]`. This turns both into a decision `[PI3-FOUND-630]`.
+echo 'd /run/vaino 0755 pi pi -' > /etc/tmpfiles.d/vaino.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/vaino.conf 2>/dev/null || true
+install_unit vaino-bt-agent.service <<'EOF'
+[Unit]
+Description=Answer BlueZ authorisation, so the appliance decides who connects
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vaino-bt-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable vaino-bt-agent >/dev/null 2>&1 && did "enabled vaino-bt-agent"
 
 # Diagnostic, installed but NOT enabled `[PI3-FOUND-610]`. Samples vital signs
 # to a file rather than the journal, because on 2026-09-10 the journal was the

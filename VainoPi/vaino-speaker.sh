@@ -122,83 +122,82 @@ fi
 # moment a second trusted speaker connected itself. So what is computed here
 # is only *who is connected*; what to do about it is decided below, and a
 # recorded choice wins.
+# **`[PI3-AIM-080]` The whole policy, in one sentence.**
+#
+# *There is at most one speaker connected at a time. It is chosen when none is
+# connected -- the listener's speaker first, then any other known one -- and it
+# is replaced only when it goes away.*
+#
+# That sentence replaces four rules that had grown separately and had begun to
+# fight each other: a stickiness test, a viability test, a startup preference
+# and a disconnect-the-others sweep. On 2026-09-10 they inverted themselves
+# `[PI3-FOUND-640]` -- the sweep correctly kicked an intruder off a playing
+# Middleton, the intruder reconnected and broke the Middleton's sink, the
+# viability test then read the broken sink as licence to move the audio, and
+# the next sweep kicked the Middleton instead. Every rule did what it said.
+#
+# The error was making *viability* the test for keeping audio where it is,
+# because that hands victory to any intruder able to break the incumbent --
+# which, on one adapter with one A2DP transport, is all of them. Incumbency is
+# an identity, not a condition. A speaker whose sink was knocked out has not
+# become unavailable; it has been attacked.
+#
+# So: whoever holds the audio is the incumbent, recorded by address. While the
+# incumbent is still *connected*, nothing else may have the audio and nothing
+# else may stay connected. A missing sink is something to wait for, never a
+# reason to switch.
+INCUMBENT_DIR=/run/vaino
+INCUMBENT="$INCUMBENT_DIR/incumbent"
+
+# Every connected device that can actually play music, one address per line.
+connected_speakers() {
+    for addr in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
+        bluetoothctl info "$addr" 2>/dev/null | grep -q 'UUID: Audio Sink' &&
+            printf '%s\n' "$addr"
+    done
+}
+
+alias_of() {
+    bluetoothctl info "$1" 2>/dev/null | sed -n 's/^[[:space:]]*Alias: //p'
+}
+
+SPEAKERS=$(connected_speakers)
+HELD=$(cat "$INCUMBENT" 2>/dev/null)
+
+# Who holds the audio. The recorded incumbent keeps it for as long as it is
+# connected -- that is the whole point. Only when it is gone does anything else
+# become eligible, and then the listener's choice is preferred.
 CONNECTED=""
-if [ -n "${SPEAKER:-}" ] &&
-   echo "$INFO" | grep -q 'Connected: yes' &&
-   echo "$INFO" | grep -q 'UUID: Audio Sink'; then
-    # The overwhelmingly common case, and it is already answered: the speaker
-    # on record is the one connected `[PI3-FOUND-230]`. Asking BlueZ for the
-    # connected list here would be asking a question whose answer is in hand.
+if [ -n "${HELD:-}" ] && printf '%s\n' "$SPEAKERS" | grep -qxF "$HELD"; then
+    CONNECTED="$HELD"
+elif [ -n "${SPEAKER:-}" ] && printf '%s\n' "$SPEAKERS" | grep -qxF "$SPEAKER"; then
     CONNECTED="$SPEAKER"
 else
-    # Reality may have moved on -- a different speaker, or none. Only now is
-    # it worth the extra round trips to find out which.
-    for addr in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
-        bluetoothctl info "$addr" 2>/dev/null | grep -q 'UUID: Audio Sink' || continue
-        CONNECTED="$addr"
-        break
-    done
+    CONNECTED=$(printf '%s\n' "$SPEAKERS" | head -1)
 fi
 
 if [ -n "$CONNECTED" ]; then
-    # **`[PI3-FOUND-310]` A choice the listener made outranks whatever turned
-    # up.** `[PI3-AIM-040]` had this adopt any connected audio device over the
-    # stored address, and was right to: a stale address was being paged every
-    # thirty seconds, stalling the speaker that was actually playing. But
-    # `[PI3-AIM-060]` later fixed that injury at its source -- nothing is
-    # paged at all while audio is reaching a real sink -- which leaves
-    # adoption doing only harm.
-    #
-    # Measured: the listener chose the Middleton in the settings panel and
-    # power-cycled. The keeper connected it at 30 s, the OontZ auto-connected
-    # behind it (still trusted, so BlueZ reaches for it unprompted), took the
-    # one A2DP transport `[PI3-FOUND-290]`, and the Middleton dropped. At
-    # 50 s this adopted the OontZ and overwrote the stored address -- and the
-    # appliance spent the rest of the boot playing through the speaker the
-    # listener had just navigated away from, with the record of their choice
-    # destroyed.
-    #
-    # So adoption now happens only where it cannot contradict anybody:
-    # when no speaker has been chosen at all. A recorded choice stands until
-    # the listener changes it, and a device that shows up uninvited is
-    # reported rather than promoted.
-    # Said once per interloper, not once per tick. This is a standing
-    # condition rather than an event: with `withdraw_others` taking the
-    # auto-connect away from everything but the chosen speaker, a different
-    # device connected at all means somebody connected it deliberately, and it
-    # may sit there for hours. Repeating it every thirty seconds would put
-    # ~2,880 identical lines a day into a journal this appliance deliberately
-    # keeps in RAM `[PI3-FOUND-120]`. The marker lives in `/run`, so it clears
-    # itself on the next boot and a genuinely new interloper is reported again.
-    # In the per-user runtime directory, not /run: this service runs as the
-    # login user (`User=pi`), which cannot write /run at all -- the first
-    # attempt failed with "Permission denied" every tick, leaking an error to
-    # the journal instead of suppressing a message. XDG_RUNTIME_DIR is
-    # exported above, is owned by that user, and is cleared on boot, which is
-    # exactly the lifetime wanted.
-    # Written where this user can actually write. $XDG_RUNTIME_DIR is *set*
-    # under a root run but names /run/user/0, which does not exist, so an
-    # empty-check is not enough -- the directory has to be tested.
-    RUNDIR="${XDG_RUNTIME_DIR:-/tmp}"
-    [ -d "$RUNDIR" ] && [ -w "$RUNDIR" ] || RUNDIR=/tmp
-    SEEN="$RUNDIR/vaino-speaker.interloper"
-    if [ -n "${SPEAKER:-}" ] && [ "$CONNECTED" != "$SPEAKER" ]; then
-        if [ "$(cat "$SEEN" 2>/dev/null)" != "$CONNECTED" ]; then
-            # Says what is actually happening. The earlier wording -- "leaving
-            # the choice alone" -- read as though the listener's choice were
-            # being honoured, when what is being left alone is the device
-            # playing instead of it.
-            echo "$CONNECTED is connected and audio is going there; $SPEAKER is the chosen speaker and is not present. Not disturbing what is playing -- switch from the settings panel to change it."
-            echo "$CONNECTED" > "$SEEN" 2>/dev/null
-        fi
-    elif [ "$CONNECTED" != "$SPEAKER" ]; then
-        # Reality moved on from what Vaino remembers -- catch the
-        # bookkeeping up to it, silently.
-        # Shape-checked before it reaches SQL, the same discipline
-        # `bluetooth.rs::is_address` applies to an address arriving from a
-        # browser -- this one arrives from bluetoothctl's own output instead
-        # of a request, but "about to become a value written to the
-        # database" is the same property either way.
+    if [ "$CONNECTED" != "${HELD:-}" ]; then
+        mkdir -p "$INCUMBENT_DIR" 2>/dev/null
+        printf '%s\n' "$CONNECTED" > "$INCUMBENT" 2>/dev/null
+    fi
+
+    # **Exactly one.** Anything else that has managed to connect is shown the
+    # door, whatever the audio is currently doing -- a second speaker is not a
+    # guest to be tolerated, it is the thing that breaks the first one
+    # `[PI3-FOUND-600]`. The agent `[PI3-FOUND-630]` should have refused it
+    # before it got this far; this is the tidy-up for the ones that slip past.
+    printf '%s\n' "$SPEAKERS" | while read -r other; do
+        [ -n "$other" ] || continue
+        [ "$other" = "$CONNECTED" ] && continue
+        echo "$(alias_of "$other") connected while $(alias_of "$CONNECTED") holds the audio -- disconnecting it"
+        bluetoothctl disconnect "$other" >/dev/null 2>&1
+    done
+
+    # Bookkeeping, only where it cannot contradict anybody: adopt into the
+    # database when no speaker was ever chosen. A recorded choice stands until
+    # the listener changes it `[PI3-FOUND-310]`.
+    if [ -z "${SPEAKER:-}" ]; then
         case "$CONNECTED" in
             ??:??:??:??:??:??)
                 sqlite3 "$DB" "INSERT INTO player_settings (key, value, updated_at) \
@@ -206,169 +205,33 @@ if [ -n "$CONNECTED" ]; then
                      ON CONFLICT(key) DO UPDATE SET \
                          value = excluded.value, updated_at = excluded.updated_at" \
                     2>/dev/null \
-                    && echo "adopted $CONNECTED as the speaker (was ${SPEAKER:-<none>})"
+                    && echo "adopted $CONNECTED as the speaker (none was chosen)"
                 ;;
         esac
-    else
-        # The chosen speaker is the one connected, so any earlier interloper
-        # is gone: forget it, and a future one gets reported rather than
-        # silently matching a stale marker.
-        rm -f "$SEEN" 2>/dev/null
     fi
 
-    # **`[PI3-FOUND-450]` The once-per-boot redial was here, it worked, and
-    # it has been removed anyway.**
-    #
-    # What it did is not in doubt. Captured at the HCI layer on 2026-09-10
-    # `[PI3-FOUND-440]`: the link before it ran low with dips, the link after
-    # it ran 46057 B/s flat for 110 s with no dips at all, and four Mode A
-    # cycles in a row came up smooth once it had fired. It is the only
-    # intervention in this whole investigation that demonstrably changed the
-    # symptom.
-    #
-    # It was removed on the listener's judgement, which is the right authority
-    # here: the cure is more disruptive than the disease. It tears down working
-    # audio and rebuilds it, and the hole is not small -- 36.2 s on the
-    # captured boot, against the eleven seconds the first version was tuned
-    # down from. A stutter every fifteen seconds is irritating; half a minute
-    # of silence in the middle of a track, on every single boot including the
-    # Mode B boots that never stuttered, is worse.
-    #
-    # It also declared victory on the wrong signal. It polled `Connected: yes`
-    # -- the ACL link -- with a ten-second ceiling, so on that boot it posted
-    # `reopen-output` roughly 24 s before the speaker was carrying any audio.
-    # Recovery came from a later tick's routing check `[PI3-AIM-050]`, not
-    # from the redial. Anyone reinstating this must wait on the
-    # `MediaTransport1` state instead; `vaino-btctl` has `transport_state()`
-    # for it.
-    #
-    # **Do not read the removal as a finding about the stutter.** The stutter
-    # is unfixed and will return on Mode A boots. What is gone is a mitigation
-    # whose price the listener declined to keep paying, and removing it buys
-    # something the investigation wanted anyway: a clean Mode A capture of a
-    # full stutter train from boot, with nothing intervening.
-
-    # **`[PI3-AIM-050]` Connected is not the same claim as playing.**
-    # `[PI3-AIM-040]` stopped as soon as BlueZ showed a real device
-    # connected, on the belief that audio must already be flowing -- true
-    # only when this script itself put the connection there. It is false
-    # whenever the player's own stream got bound before this device did:
-    # `vaino-wait-sink` releases the player on the first *any* real sink it
-    # sees, which on this hardware can be the onboard HDMI output, seconds
-    # before Middleton's A2DP transport actually comes up. It is equally
-    # false mid-session, when BlueZ reconnects a trusted device entirely on
-    # its own -- which it does -- with nobody having asked this script to do
-    # anything. Either way the device link is fine and the player is simply
-    # talking to the wrong sink, which is indistinguishable from "can't
-    # connect to Middleton" to anyone listening. So ground truth is checked
-    # one layer further in than `[PI3-AIM-040]` did: not just "is the device
-    # connected" but "is the player's stream actually linked to it"
-    # `[PI3-WHY-020]` -- the same question `GET /audio/sink` already answers
-    # for the settings panel `[SPEC-APS-060]`. `wpctl` names a PipeWire sink
-    # node after the alias BlueZ reports for the device, so the two are
-    # compared as text; a mismatch, including "nothing" or "Dummy Output",
-    # is the one case a reopen is actually for.
-    # From the block already in hand when it is the speaker on record, which
-    # is the case that runs every thirty seconds forever `[PI3-FOUND-230]`.
-    if [ "$CONNECTED" = "${SPEAKER:-}" ]; then
-        ALIAS=$(echo "$INFO" | sed -n 's/^[[:space:]]*Alias: //p')
-    else
-        ALIAS=$(bluetoothctl info "$CONNECTED" 2>/dev/null |
-            sed -n 's/^[[:space:]]*Alias: //p')
-    fi
+    # Route the audio at the incumbent, and at nothing else. A sink that is not
+    # there yet is waited for: `Connected: yes` means BlueZ has a link and says
+    # nothing about whether PipeWire has anywhere to send audio
+    # `[PI3-FOUND-590]`, and a reopen aimed at a sink that does not exist is an
+    # instruction to abandon working audio.
+    ALIAS=$(alias_of "$CONNECTED")
     ROUTED=$(curl -s "http://localhost:${VAINO_PORT:-5720}/audio/sink" 2>/dev/null |
         sed -n 's/.*"sink":"\([^"]*\)".*/\1/p')
-
-    # **`[PI3-AIM-070]` Audio that is already playing somewhere stays**
-    # **there.** Stated as the design by the listener on 2026-09-10: once
-    # audio is established with one speaker it remains with that speaker
-    # even as other recognised speakers become available, and another is
-    # connected only if the current one becomes unavailable.
-    #
-    # This check used to do the opposite. It compared the stream against
-    # the *connected* speaker and moved the stream whenever they differed,
-    # so a chosen speaker coming back mid-session would drag audio off a
-    # speaker that was playing perfectly well. That is the right rule for
-    # deciding where to send audio that is going nowhere, and the wrong
-    # one for audio that is already going somewhere.
-    #
-    # Viability, not identity, is the question now: a route is fine if it
-    # names a sink PipeWire still offers. `Connected: yes` means BlueZ has
-    # a link and says nothing about whether there is anywhere to send audio
-    # `[PI3-FOUND-590]`, so the sink is what gets checked at both ends --
-    # the one being kept and the one being moved to.
-    # And **the listener's selected speaker is the preferred one at start**,
-    # when several are available. Stated alongside the rule above. The chase
-    # already implements most of it -- it goes after the chosen speaker and
-    # only falls back once that has failed `[PI3-FOUND-560]` -- but there is
-    # a gap it does not cover: if another speaker's sink appears first, the
-    # stream lands there, and stickiness would then hold it there for the
-    # rest of the session against the listener's stated choice.
-    #
-    # So the preference gets exactly one chance, early, and never again:
-    # only while the chosen speaker is the connected one, only inside the
-    # first two minutes of uptime, and only once per boot. After that the
-    # rule above governs and nothing moves working audio. A preference that
-    # could fire at any time would be the mid-track switch stickiness exists
-    # to prevent.
-    PREFERRED="$RUNDIR/vaino-speaker.preferred"
-    UP=$(cut -d. -f1 /proc/uptime)
-    if [ -n "$ROUTED" ] && [ "$ROUTED" != "Dummy Output" ] &&
-       sink_present "$ROUTED"; then
-        if [ "$CONNECTED" = "${SPEAKER:-}" ] && [ ! -f "$PREFERRED" ] &&
-           [ "${UP:-999}" -lt 120 ] && [ -n "$ALIAS" ] && sink_present "$ALIAS" &&
-           [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
-            : > "$PREFERRED" 2>/dev/null
-            curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
-            echo "'$ALIAS' is the chosen speaker and is available -- moved the stream to it from '$ROUTED' (once, at start)"
-        fi
-        # Otherwise: playing, on something real. Nothing to do, and nothing
-        # said, because this is the steady state thirty seconds out of
-        # thirty.
-    elif [ -n "$ALIAS" ] && sink_present "$ALIAS"; then
-        : > "$PREFERRED" 2>/dev/null
+    if [ -n "$ALIAS" ] && sink_present "$ALIAS" &&
+       [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
         curl -s -o /dev/null -X POST "http://localhost:${VAINO_PORT:-5720}/command/reopen-output"
-        echo "the stream was on '${ROUTED:-nothing}', which is not a sink any more -- moved it to '$ALIAS'"
-    elif [ -n "$ALIAS" ]; then
-        echo "$CONNECTED has a link but no sink in PipeWire (profile off, or still negotiating) -- leaving the stream on '${ROUTED:-nothing}'"
-    fi
-
-    # **`[PI3-FOUND-600]` One speaker at a time, because two is silence.**
-    #
-    # Measured 2026-09-10, both speakers powered and connected. With the
-    # Oontz holding a link alongside the playing Middleton: **0, 0, 0**
-    # `ACL Data TX` packets across three five-second samples. Disconnect the
-    # Oontz and the same measurement reads **374, 375, 374**. Not degraded
-    # -- stopped.
-    #
-    # The link list says why. The second device had taken an **eSCO** link
-    # as well as an ACL one, which is the HSP/HFP headset profile
-    # `[PI3-FOUND-290]` -- and a synchronous link does not share the radio
-    # with A2DP, it pre-empts it. The listener heard exactly this: "Oontz is
-    # connected, but silent", then "now Middleton is audible again" the
-    # moment it was disconnected.
-    #
-    # The listener's design settles what to do: other speakers are connected
-    # only if the current one becomes unavailable `[PI3-AIM-070]`. So a
-    # speaker holding a link while another is playing is not a guest to be
-    # tolerated -- it is silence waiting to happen, and it goes.
-    #
-    # Guarded on the stream actually playing somewhere real, so this can
-    # never fire during startup while sinks are still appearing, and it
-    # never touches the device the audio is going to.
-    if [ -n "$ROUTED" ] && [ "$ROUTED" != "Dummy Output" ] &&
-       sink_present "$ROUTED"; then
-        for other in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
-            oinfo=$(bluetoothctl info "$other" 2>/dev/null)
-            echo "$oinfo" | grep -q 'UUID: Audio Sink' || continue
-            oalias=$(echo "$oinfo" | sed -n 's/^[[:space:]]*Alias: //p')
-            [ "$oalias" = "$ROUTED" ] && continue
-            echo "'$oalias' is holding a link while '$ROUTED' is playing -- disconnecting it, because two connected speakers is silence"
-            bluetoothctl disconnect "$other" >/dev/null 2>&1
-        done
+        echo "moved the stream from '${ROUTED:-nothing}' to '$ALIAS', which holds the audio"
+    elif [ -n "$ALIAS" ] && ! sink_present "$ALIAS"; then
+        echo "'$ALIAS' holds the audio but has no sink in PipeWire yet -- waiting, not switching"
     fi
     exit 0
 fi
+
+# Nothing connected, so the incumbency is over and the next tick may pick
+# freely. Cleared here rather than left to go stale, so a speaker that comes
+# back does not inherit a claim it no longer has.
+rm -f "$INCUMBENT" 2>/dev/null
 
 # **Absent is a real answer, not an error.** Paging a device the shared
 # Bluetooth radio cannot reach stalls whatever the appliance IS playing for

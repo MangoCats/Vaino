@@ -1373,6 +1373,79 @@ TCP stayed dead. **What actually stopped is unknown.**
 that would have shown the run-up was journald, and journald is userspace and
 died with everything else. `vaino-vitals` `[PI3-FOUND-620]` writes elsewhere.
 
+### `[PI3-FOUND-640]` The rules inverted themselves, and the policy got shorter
+
+**What happened.** The Middleton was playing. The Oontz was powered on at
+18:24. The journal:
+
+    18:24:08  'OontZ_Angle 3 U412' is holding a link while 'MIDDLETON' is
+              playing -- disconnecting it
+    18:24:15  bluetoothd: a2dp_select_capabilities() Unable to select SEP
+    18:24:41  'MIDDLETON' is holding a link while 'OontZ_Angle 3 U412' is
+              playing -- disconnecting it
+
+The rule fired correctly first, kicking the intruder off a playing incumbent.
+The Oontz -- trusted, so it reconnects unprompted -- came straight back, A2DP
+negotiation failed, and the Middleton's sink died with it. On the next tick the
+viability test read the dead sink as licence to move the audio to the Oontz,
+and the same rule then kicked the Middleton. **Every rule did exactly what it
+said, and together they did the opposite of the design.**
+
+**The error, precisely.** Making *viability* the test for keeping audio where
+it is hands victory to any intruder capable of breaking the incumbent -- which,
+on one adapter with one A2DP transport, is all of them. The aggressor wins by
+breaking the thing it is competing with. Incumbency is an identity, not a
+condition: a speaker whose sink was knocked out has not become unavailable, it
+has been attacked.
+
+**The policy is now one sentence `[PI3-AIM-080]`.**
+
+> There is at most one speaker connected at a time. It is chosen when none is
+> connected -- the listener's speaker first, then any other known one -- and it
+> is replaced only when it goes away.
+
+That sentence replaced four rules which had grown separately and had begun to
+fight: a stickiness test, a viability test, a startup preference with its
+once-per-boot marker, and a disconnect-the-others sweep. It is not a weaker
+statement -- it produces the same intended behaviour, and it removes the
+interactions that produced the inversion:
+
+| Old rule | Where it went |
+| --- | --- |
+| stickiness | falls out: there is only ever one candidate |
+| viability as licence to switch | deleted: a missing sink is waited for |
+| startup preference, once-per-boot marker | falls out: preference applies when picking, which only happens when none is connected |
+| disconnect-the-others sweep | kept, but as *enforce exactly one*, not as a reaction to what is playing |
+| interloper reporting | deleted: an interloper is disconnected, not narrated |
+
+`vaino-speaker.sh` went from 503 lines to 366 with no loss of behaviour.
+
+**And the race is closed at the source `[PI3-FOUND-630]`.** A keeper running
+every thirty seconds cannot win against damage that takes five, so the refusal
+now happens before a transport is handed over. `vaino-bt-agent` answers BlueZ's
+authorisation calls: accept when there is no incumbent, accept when the caller
+*is* the incumbent, refuse otherwise. Without an agent BlueZ has only two
+reflexes -- authorise a trusted device automatically, refuse an untrusted one
+forever `[PI3-FOUND-610]` -- and neither is what this appliance wants.
+
+**It guards every audio profile, not just A2DP.** The first version refused
+A2DP alone, which would have left open the door the last failure came through:
+the headset and hands-free profiles open a *synchronous* eSCO link, and a
+synchronous link pre-empts A2DP rather than sharing with it `[PI3-FOUND-600]`.
+Caught by testing the decision rather than assuming it. Verified against the
+deployed agent:
+
+    incumbent, a2dp .............. ALLOWED
+    intruder, a2dp ............... REFUSED
+    intruder, hands-free ......... REFUSED
+    intruder, headset ............ REFUSED
+    intruder, remote control ..... ALLOWED
+
+**Not yet exercised in anger.** The refusal path is unit-tested against the
+deployed agent and correct in all five cases, but no speaker has actually
+knocked since it was installed -- the Middleton was powered down. The first
+time two speakers are powered together is the real test.
+
 ### Two paths worth taking, neither of them a fix
 
 **The HCI layer.** `btmon` sees actual ACL data packets and the controller's
