@@ -208,6 +208,34 @@ def _deny_shadows(conn, peer_alias: str):
     conn.set_authorizer(guard)
 
 
+def tables(conn) -> set[str]:
+    """Every table visible on this connection, across **all** attached
+    schemas.
+
+    The second hazard, after the shadow one. `sqlite_master` is per-schema,
+    so the near-universal existence check
+
+        have = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+
+    silently answers only for `main` -- on a split pair it reports half the
+    database missing, and the caller then does whatever it does when a
+    table is genuinely absent. Ten scripts in `tools/` use that shape,
+    `console.py` five times in one file, and every one of them means "is
+    this table anywhere I can see". This is that question, asked properly.
+    """
+    names: set[str] = set()
+    for _seq, schema, _file in conn.execute("PRAGMA database_list"):
+        names |= {r[0] for r in conn.execute(
+            f"SELECT name FROM \"{schema}\".sqlite_master WHERE type='table'")}
+    return names
+
+
+def has_table(conn, name: str) -> bool:
+    """Whether `name` is reachable on this connection, in either half."""
+    return name in tables(conn)
+
+
 def shadows(conn, peer_alias: str) -> set[str]:
     """Table names present in both halves and not meant to be.
 
@@ -219,7 +247,8 @@ def shadows(conn, peer_alias: str) -> set[str]:
 
 
 def connect(path: str, role: str, *, writable: bool = False,
-            peer: str | None = None, peer_writable: bool = False):
+            peer: str | None = None, peer_writable: bool = False,
+            check_same_thread: bool = True):
     """Open `path`, attaching the other half when there is one.
 
     `role` is the half this script owns -- the one it writes and creates
@@ -232,6 +261,12 @@ def connect(path: str, role: str, *, writable: bool = False,
     Raises `SplitError` rather than guessing when the peer cannot be found:
     a script that silently ran against half a database would produce
     answers that look fine and are wrong.
+
+    `check_same_thread` is passed straight through, defaulting to
+    `sqlite3`'s own `True`. `console.py` serves from a thread pool and
+    needs `False`; that had been on its own `sqlite3.connect` call and was
+    lost in the first migration here, which is the kind of thing only
+    actually starting the server finds.
     """
     if role not in (ROLE_LIBRARY, ROLE_LISTENER):
         raise ValueError(f"role must be {ROLE_LIBRARY!r} or {ROLE_LISTENER!r}, got {role!r}")
@@ -239,7 +274,7 @@ def connect(path: str, role: str, *, writable: bool = False,
     this = shape(path)
     if this == EMPTY:
         return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
-                               uri=not writable)
+                               uri=not writable, check_same_thread=check_same_thread)
 
     if this == WHOLE:
         # Both markers: either a genuine single-file installation, or a
@@ -249,7 +284,7 @@ def connect(path: str, role: str, *, writable: bool = False,
                      or find_peer(path, ROLE_LIBRARY, peer))
         if not candidate or os.path.samefile(candidate, path):
             return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
-                                   uri=not writable)
+                                   uri=not writable, check_same_thread=check_same_thread)
         # A peer exists AND this file carries both markers -- one of them is
         # a shadow. Fall through so the shadow check below names it.
         peer_lib, _ = markers(candidate)
@@ -273,7 +308,8 @@ def connect(path: str, role: str, *, writable: bool = False,
         main_writable, attach_writable = peer_writable, writable
 
     conn = sqlite3.connect(
-        f"file:{main_path}" + ("" if main_writable else "?mode=ro"), uri=True)
+        f"file:{main_path}" + ("" if main_writable else "?mode=ro"), uri=True,
+        check_same_thread=check_same_thread)
     other = ROLE_LIBRARY if role == ROLE_LISTENER else ROLE_LISTENER
     alias = ALIAS[other]
     conn.execute(

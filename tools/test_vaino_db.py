@@ -175,6 +175,24 @@ def main() -> int:
         check("recordings" in str(e), f"the error must name the offending table, got {e}")
 
     print()
+    print("tables(): existence answered across both halves, not just main")
+    conn = vd.connect(lis, vd.ROLE_LISTENER)
+    naive = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    check("recordings" not in naive,
+          "the naive check must be shown to MISS the attached half -- that is the bug")
+    check(vd.has_table(conn, "recordings"),
+          "a catalogue table must be found from the listener half")
+    check(vd.has_table(conn, "listener_play_history"),
+          "and a listener table must still be found")
+    check(not vd.has_table(conn, "no_such_table"), "and a real absence must still read absent")
+    conn.close()
+    # ...and the same answers with the roles reversed.
+    conn = vd.connect(lib, vd.ROLE_LIBRARY)
+    check(vd.has_table(conn, "listener_play_history") and vd.has_table(conn, "recordings"),
+          "both halves must be visible whichever is main")
+    conn.close()
+
+    print()
     print("a table shared on purpose is not a shadow")
     shared = os.path.join(tmp, "shared")
     os.makedirs(shared, exist_ok=True)

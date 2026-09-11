@@ -41,6 +41,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from ingest_folder import AUDIO  # noqa: E402  -- one list of what counts as audio
 import jobs as jobmod  # noqa: E402
 import vaino_control  # noqa: E402  -- process/network side of the handoff
@@ -66,8 +67,20 @@ STATE = {"db": None, "path": None, "roots": [], "scan": None, "scanned_at": 0, "
 # ---------------------------------------------------------------- database ---
 
 def ro(db: str) -> sqlite3.Connection:
-    """Read-only, and it must stay that way `[IMPL-SUI-040]`."""
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, check_same_thread=False)
+    """Read-only, and it must stay that way `[IMPL-SUI-040]`.
+
+    Split or not `[IMPL-DBSPLIT-025]`: `vaino_db.connect` opens the
+    catalogue as `main` -- this console is overwhelmingly a library browser
+    -- and attaches the listener half for the history, flag and preference
+    views that need it. On an unsplit installation it is the same
+    `sqlite3.connect` this always was, with nothing attached.
+
+    `role=ROLE_LIBRARY` is not arbitrary: the catalogue is the half this
+    page bootstraps nothing in but reads most of, and putting it in `main`
+    means a stray `CREATE` here could only ever shadow a *listener* table,
+    which this file never writes. The authorizer refuses that too.
+    """
+    conn = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -78,7 +91,7 @@ def totals(conn) -> dict:
     # library nothing has ever fingerprinted has no such table at all, and a
     # query naming a missing table fails outright rather than finding nothing
     # `[REQ-LIB-165]`. "Never checked" must not crash the page that would say so.
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     return {
         "files": q("SELECT count(*) FROM files"),
         "passages": q("SELECT count(*) FROM passages"),
@@ -156,7 +169,7 @@ def flags(conn) -> list:
     carrying this feature has ever opened; that is "nothing flagged yet",
     not a broken page `[REQ-LIB-165]`.
     """
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     if "listener_flags" not in have:
         return []
 
@@ -217,7 +230,7 @@ def pending_counts(conn) -> dict:
     before it can even be pushed anywhere `[SPEC021 §2]`. Zero for any table
     this library predates -- absence is "nothing pending," not an error.
     """
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     counts = {}
     for kind, table in (("id", "id_reviews"), ("boundary", "boundary_reviews"),
                         ("artist", "artist_reviews")):
@@ -286,7 +299,7 @@ def profile(conn, pid: int) -> dict:
 
 
 def _pending_for_passage(conn, pid: int, mbids: list) -> dict:
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     out = {}
     if "id_reviews" in have:
         row = conn.execute(
@@ -393,7 +406,7 @@ def passage_flag_subjects(conn, pid: int) -> list:
 
 
 def passage_flagged_locally(conn, subjects: list) -> bool:
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     if "listener_flags" not in have:
         return False
     return any(

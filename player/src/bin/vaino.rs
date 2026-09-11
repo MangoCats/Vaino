@@ -361,18 +361,18 @@ fn engine_thread(
         // two places.** A setting with a route and no entry here is a checkbox
         // that persists and does nothing; one with an entry and no route cannot
         // be asked for. Change either and change both.
-        run_generation(&db, &controls_for_switch, "cue sheets", "sheets",
+        run_generation(&library, &controls_for_switch, "cue sheets", "sheets",
             |c| c.cue_requested.take(), |c, s| c.cue_status = Some(s),
             |conn| vaino_player::cue::generate(conn, false).map(|r| (r, "cue sheet")));
-        run_generation(&db, &controls_for_switch, "cover art", "covers",
+        run_generation(&library, &controls_for_switch, "cover art", "covers",
             |c| c.covers_requested.take(), |c, s| c.covers_status = Some(s),
             |conn| vaino_player::covers::generate(conn, false).map(|r| (r, "cover")));
-        run_generation(&db, &controls_for_switch, "lyrics sidecar", "files",
+        run_generation(&library, &controls_for_switch, "lyrics sidecar", "files",
             |c| c.sidecar_requested.take(), |c, s| c.sidecar_status = Some(s),
             |conn| vaino_player::lyrics_sidecar::generate(conn, false).map(|r| (r, "file")));
         // The odd one out: it writes into a client's cache rather than the
         // music folder, so it has somewhere to fail to find.
-        run_generation(&db, &controls_for_switch, "lyrics cache", "files",
+        run_generation(&library, &controls_for_switch, "lyrics cache", "files",
             |c| c.lyrics_requested.take(), |c, s| c.lyrics_status = Some(s),
             |conn| match vaino_player::lyrics_cache::cache_dir() {
                 // Not a failure: a machine the client has never run on has
@@ -477,6 +477,22 @@ fn engine_thread(
 /// **Turning one off leaves what was written.** Deleting files from someone's
 /// music folder is a larger act than declining to add more, and is not what
 /// unticking a box asked for; `off_noun` names what stays.
+/// The four folder-writing generators `[REQ-VIS-205]`, `[REQ-VIS-210]`,
+/// `[REQ-VIS-215]`, `[REQ-VIS-220]`.
+///
+/// **`library`, not the listener database.** Every one of the four reads
+/// catalogue tables and nothing else -- `files`, `passages`,
+/// `passage_recordings`, `recordings`, `artists`, `recording_artists`,
+/// `file_tags`, `cover_art`, `release_recordings`, `lyrics` -- all of them
+/// on the catalogue side of a split `[IMPL-DBSPLIT-025]`. This opened the
+/// path the player was *started* with, which on a split installation is the
+/// listener half, so every one of them failed on the first statement with
+/// "no such table: passages". Found on `vainopi` 2026-09-11, where `covers`
+/// and `cue_sheets` were both switched on and had been failing since that
+/// appliance split; it would have started failing here the moment the local
+/// database split too.
+///
+/// Unsplit, the two paths are the same file and nothing about this changes.
 fn run_generation(
     db: &std::path::Path,
     controls: &SharedControls,
