@@ -126,8 +126,8 @@ databases.
    `[PI3-FOUND-120]`, and this machine is cut from a speaker's switch.
 4. Add `ExecStartPre=/usr/local/bin/vaino-db-recover` and change `ExecStart`
    to the two-path form; `systemctl daemon-reload`.
-5. `systemctl start vaino`, then **hear it play** before calling it done
-   `[IMPL-BOS-120]`.
+5. `systemctl start vaino`, then **hear it play** before calling it done,
+   which is `[IMPL-BOS-120]`'s own rule and not a new one.
 
 **`[BOS-RUN-065]` A power cut mid-split is survivable at every point**,
 which is worth stating on a machine that is switched off by having its power
