@@ -81,6 +81,31 @@ INHERITED_DIR = os.path.join("docs", "inherited")
 DOC_TARGET = 250
 DOC_LIMIT = 300
 
+# **`[GOV-DOC-010]` is a MUST, and was being reported as a note.** Every
+# document over the hard limit produced a warning indistinguishable from the
+# advisory ones, `--strict` exited 0 on warnings, and CI passed: fourteen
+# breaches of a mandatory rule were invisible in a list of fifty-two notes.
+#
+# So a breach is now an error, and the documents already over it on 2026-09-10
+# are listed here. A NEW breach fails immediately; a listed one is reported as
+# a breach still outstanding. **This set only shrinks.** When it empties, the
+# entries below and this comment go with it, and the rule enforces itself.
+GOV_DOC_010_OUTSTANDING = {
+    "docs/spec/REQ002-functional-requirements.md",
+    "docs/spec/SPEC005-flavor-distance.md",
+    "docs/spec/SPEC009-program-director.md",
+    "docs/spec/SPEC015-mpd-director.md",
+    "docs/spec/SPEC035-mesh-library-sync.md",
+    "docs/spec/SPEC036-framebuffer-touch-ui.md",
+    "VainoPi/IMPL001-appliance-setup.md",
+    "VainoPi/IMPL002-database-split.md",
+    "VainoPi/PI001-image-and-partitions.md",
+    "VainoPi/PI003-choosing-a-speaker.md",
+    "VainoPi/PI004-speaker-operation.md",
+    "BosePi/BOSE002-image-build.md",
+    "BosePi/BOSE003-build-procedure.md",
+}
+
 # Known, accepted tag collisions. Each entry is debt with a stated retirement
 # condition -- NOT a way to silence the check. A collision absent from this list
 # is an error. Adding an entry requires a reason and a condition for removal.
@@ -371,14 +396,35 @@ def main():
     # every line over it look like a breach, so a document that had earned new
     # measured content could only keep it by cutting older reasoning. The band
     # says which is which: over TARGET is a note, over LIMIT is the split.
+    breaches = []
     for p in vaino_docs():
         n = sum(1 for _ in open(p, encoding="utf-8"))
         if n > DOC_LIMIT:
-            warnings.append(f"[GOV-DOC-010] {p} is {n} lines, over the {DOC_LIMIT}-line "
-                            f"limit; split it")
+            key = p.replace(os.sep, "/")
+            breaches.append((n, key))
+            if key in GOV_DOC_010_OUTSTANDING:
+                warnings.append(f"[GOV-DOC-010] {p} is {n} lines, over the "
+                                f"{DOC_LIMIT}-line limit; outstanding breach, split it")
+            else:
+                errors.append(f"[GOV-DOC-010] {p} is {n} lines, over the "
+                              f"{DOC_LIMIT}-line HARD LIMIT; split it")
         elif n > DOC_TARGET:
             warnings.append(f"[GOV-DOC-010] {p} is {n} lines, over the {DOC_TARGET}-line "
                             f"target, under the {DOC_LIMIT}-line limit; no split required")
+
+    # Surfaced separately, because a MUST buried among advisory notes is a MUST
+    # nobody acts on -- which is how fourteen of them accumulated.
+    if breaches:
+        print(f"[GOV-DOC-010] {len(breaches)} document(s) over the "
+              f"{DOC_LIMIT}-line hard limit:")
+        for n, key in sorted(breaches, reverse=True):
+            state = ("outstanding" if key in GOV_DOC_010_OUTSTANDING
+                     else "NEW BREACH")
+            print(f"    {n:5d}  {key}  [{state}]")
+        stale = GOV_DOC_010_OUTSTANDING - {k for _, k in breaches}
+        for key in sorted(stale):
+            print(f"    fixed, remove from GOV_DOC_010_OUTSTANDING: {key}")
+        print()
 
     for w in warnings:
         print(f"WARN  {w}")

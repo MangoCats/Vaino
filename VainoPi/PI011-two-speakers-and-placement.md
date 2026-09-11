@@ -93,7 +93,7 @@ the player's counters observes that.
 > `bluetoothd`'s own view — transport state changes, AVDTP negotiation, and
 > whether anything else attaches to the speaker while it boots. Capturing that
 > across both modes needs the persistent journal turned back on
-> (PI010 §3), because the volatile default destroyed mode A's log the moment
+> ([PI020](PI020-diagnostic-tools.md)), because the volatile default destroyed mode A's log the moment
 > mode B booted. Turn it on, repeat the pair, and compare the Bluetooth logs
 > rather than the Pi's own health.
 

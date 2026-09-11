@@ -92,7 +92,7 @@ all the harmless power-cycle mode) and the graph quantum `[PI3-FOUND-330]`
 the Pi on the speaker still costs 11-16 dB of signal and is worth avoiding on
 its own terms.
 
-Diagnostic tools, and how to switch them on: PI010 §3.
+Diagnostic tools, and how to switch them on: [PI020](PI020-diagnostic-tools.md).
 
 ---
 
