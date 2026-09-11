@@ -939,6 +939,38 @@ mod tests {
         }
     }
 
+    /// Every skin says what a registered press looks like `[REQ-VIS-185]`.
+    ///
+    /// `core.js` raises `.acked` the moment the pointer lands on a queue edit
+    /// and `.failed` if the request comes back refused, but it deliberately
+    /// carries no colours of its own -- a skin owns its palette. A skin that
+    /// styles neither class still *works*, and that is exactly the failure
+    /// worth catching here: the press would be taken and the listener would
+    /// have no way to know, which is the complaint all of this answers.
+    #[test]
+    fn every_skin_says_what_a_registered_press_looks_like() {
+        assert!(
+            CORE.contains(".acked") || CORE.contains("'acked'"),
+            "core.js no longer raises the acknowledgement class these skins style"
+        );
+        for skin in SKINS {
+            for state in ["button.acked", "button.failed"] {
+                assert!(
+                    skin.css.contains(&format!(".qedit {state}")),
+                    "{} does not style .qedit {state}, so a press it takes looks                      exactly like one it drops",
+                    skin.name
+                );
+            }
+            // The ends of the queue clamp, so those verbs come up disabled and
+            // must not merely look live-but-dim by accident.
+            assert!(
+                skin.css.contains(".qedit button:disabled"),
+                "{} does not style a disabled queue verb",
+                skin.name
+            );
+        }
+    }
+
     /// `guide.js` only ever asks for routes the router serves, and only ever
     /// reads tier keys the router's own `guide_content` actually emits --
     /// the same drift `the_snapshot_keeps_the_field_names_the_skins_read`

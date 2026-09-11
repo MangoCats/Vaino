@@ -111,6 +111,17 @@ body { background: #101014; color: #d8d8dc;
 .qedit button { font: inherit; font-size: 10px; line-height: 1; width: 16px;
                 height: 16px; min-width: 0; padding: 0; color: var(--lcd);
                 background: transparent; border: 1px solid #143d19; }
+/* The press, acknowledged. This skin already flips its bevel while a button is
+   held -- but that is the browser reporting a finger, not the player reporting
+   a command, and the two looked identical while the command was being dropped.
+   The LCD lighting up is the panel's own idiom for "this registered", and it
+   clears when the snapshot carrying the change rebuilds the row rather than on
+   a timer. Refused, or never answered, goes amber -- the one warning colour
+   that reads against green without pretending to be part of the display. */
+.qedit button.acked { background: var(--lcd); color: var(--lcd-bg); border-color: var(--lcd); }
+.qedit button.failed { background: #b06000; color: #1a0d00; border-color: #ffa030; }
+/* Nowhere to go: the first entry cannot move sooner, nor the last later. */
+.qedit button:disabled { opacity: .3; cursor: default; }
 
 .wa select {
   font: inherit; font-size: 10px; background: var(--chassis); color: #d8d8dc;

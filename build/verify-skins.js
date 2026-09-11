@@ -127,8 +127,12 @@ async function run(skin) {
   };
 
   const posted = [];
+  let refuse = false;                    // make the POST stub answer as refused
   window.fetch = (url, opts) => {
-    if (opts && opts.method === 'POST') { posted.push(url); return Promise.resolve({ ok: true }); }
+    if (opts && opts.method === 'POST') {
+      posted.push(url);
+      return Promise.resolve({ ok: !refuse, status: refuse ? 404 : 204 });
+    }
     if (url === '/skins') {
       return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
     }
@@ -449,6 +453,16 @@ async function run(skin) {
     // the buttons being rebuilt, and reaching for a property no button carries
     // any more would test nothing at all. This is the path a listener uses.
     const fire = b => b.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    // The press is acknowledged the moment the pointer lands, before the
+    // request goes anywhere and before any snapshot could come back. That is
+    // the point of raising it there: it is the one signal that cannot be lost
+    // to a rebuild or held up by a round trip.
+    const first = qp.querySelectorAll('button')[0];
+    first.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+    check(first.classList.contains('acked'),
+          'a pointer landing on a queue verb must acknowledge it at once');
+
     fire(qp.querySelectorAll('button')[0]);
     // The ENTRY's id, not the passage's `[REQ-VIS-186]`. The fixture gives them
     // different values precisely so a control still addressing the passage
@@ -482,6 +496,16 @@ async function run(skin) {
           'the first queued entry cannot be moved sooner, and must say so');
     check(verbs[2] && !verbs[2].disabled,
           'it can still be moved later, so that verb must stay live');
+
+    // A refused request must not look like a taken one. The engine answers 404
+    // for an entry that has already left the queue, which is exactly the race a
+    // listener runs into by pressing twice.
+    refuse = true;
+    fire(verbs[2]);
+    await new Promise(r => setTimeout(r, 20));
+    check(!verbs[2].classList.contains('acked') && verbs[2].classList.contains('failed'),
+          'a refused queue edit must say so rather than fading out like a success');
+    refuse = false;
 
     nowrow.onclick();
     await new Promise(r => setTimeout(r, 20));
@@ -535,9 +559,10 @@ async function run(skin) {
   // `+1` when a history panel exists: the flag-checkbox toggle above posts
   // once, on top of whatever this skin's other controls already send
   // `[REQ-VIS-265]`.
-  // The shared-control skin sends its remove twice: once on the first press,
-  // and once more to prove the buttons still work after a snapshot.
-  const expectedPosts = (gear ? (nowrow ? 6 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
+  // The shared-control skin sends three: a remove, the same remove again to
+  // prove the buttons still work after a snapshot, and a shift the stub
+  // refuses so the failed state has something to report.
+  const expectedPosts = (gear ? (nowrow ? 7 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;

@@ -323,13 +323,64 @@ const Vaino = (() => {
   function delegateQueueEdits() {
     if (editsDelegated) return;
     editsDelegated = true;
+    // The receipt goes up when the pointer lands, not when the round trip
+    // finishes: it is the half a listener needs to see at once, and the half
+    // that must not wait on anything to appear.
+    document.addEventListener('pointerdown', e => {
+      const b = editButton(e.target);
+      if (b) ack(b);
+    }, true);
     document.addEventListener('click', e => {
-      const b = e.target.closest && e.target.closest('.qedit button[data-qid]');
-      if (!b || b.disabled) return;
+      const b = editButton(e.target);
+      if (!b) return;
       // The row itself may do something else entirely.
       e.stopPropagation();
-      post(`/queue/${b.dataset.qid}/${b.dataset.action}`);
+      // Keyboard activation sends no pointerdown, so the receipt is raised
+      // here as well rather than only there.
+      ack(b);
+      post(`/queue/${b.dataset.qid}/${b.dataset.action}`)
+        .then(r => { if (!r || r.ok === false) ackFailed(b); })
+        .catch(() => ackFailed(b));
     }, true);
+  }
+
+  const editButton = t => {
+    const b = t && t.closest ? t.closest('.qedit button[data-qid]') : null;
+    return b && !b.disabled ? b : null;
+  };
+
+  // ---- acknowledging a press ---------------------------------------------
+  // A queue edit is fire-and-forget and its result arrives with the next
+  // snapshot, so between the press and the confirmation there was nothing at
+  // all to see -- and nothing to tell a press that had been taken from one
+  // that had been dropped.
+  //
+  // A class, not a style: each skin says what "registered" looks like in its
+  // own palette, the way it already says what every other state looks like.
+  //
+  // Confirmation needs no timer in the ordinary case. The snapshot carrying
+  // the change rebuilds the row and the mark goes with it, which is why this
+  // is honest rather than decorative: the flash ends when the engine agrees,
+  // not on a fixed schedule. `ACK_HOLD_MS` is only the floor, for a press that
+  // changes nothing the listener can see.
+  const ACK_HOLD_MS = 700;
+  const ACK_FAIL_MS = 1200;
+
+  function ack(b) {
+    b.classList.remove('failed');
+    b.classList.add('acked');
+    clearTimeout(b.ackTimer);
+    b.ackTimer = setTimeout(() => b.classList.remove('acked'), ACK_HOLD_MS);
+  }
+
+  // Refused, or never answered. In practice the button is still on screen to
+  // wear this: the row is rebuilt only when the queue actually changes, which
+  // is the case where the request did NOT fail.
+  function ackFailed(b) {
+    clearTimeout(b.ackTimer);
+    b.classList.remove('acked');
+    b.classList.add('failed');
+    b.ackTimer = setTimeout(() => b.classList.remove('failed'), ACK_FAIL_MS);
   }
 
   // ---- binders -----------------------------------------------------------

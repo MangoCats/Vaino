@@ -174,6 +174,17 @@ body { background-color: black; color: #ccc; }
                 min-height: 2rem; padding: 0; cursor: pointer;
                 background-color: #2010a0; color: #ccc;
                 border: 2px solid #402080; border-radius: 8px; }
+/* The press, acknowledged. Gold on black is what this skin already says "this
+   one is on" with -- the transport and the stations both -- so a registered
+   press borrows the signal the page has already taught rather than
+   introducing a fourth colour to learn. It clears when the engine's next
+   snapshot rebuilds the row, so the flash ends on the change, not on a timer.
+   Refused, or never answered, goes red instead of quietly going back to blue. */
+.qedit button.acked { background-color: #d0a000; color: #111111; border-color: #ffd24d; }
+.qedit button.failed { background-color: #7a1010; color: #ffdede; border-color: #c03030; }
+/* Nowhere to go: the first entry cannot move sooner, nor the last later. Said
+   here rather than left looking live and doing nothing. */
+.qedit button:disabled { opacity: .3; cursor: default; }
 
 hr { border: none; border-top: 1px solid #333; margin: 1.2rem 0; }
 

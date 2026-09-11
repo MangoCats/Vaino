@@ -119,6 +119,19 @@
                   min-width: 1.8rem; min-height: 1.8rem; padding: 0;
                   border-radius: 4px; opacity: .55; }
   .qedit button:hover { opacity: 1; }
+  /* The press, acknowledged. An inversion rather than a colour: this skin has
+     no accent to spend, and ink-on-paper becoming paper-on-ink is the loudest
+     thing it can say without acquiring one. Both themes get it for free, since
+     the two tokens simply trade places. It clears when the snapshot carrying
+     the change rebuilds the row -- so the flash ends on the engine agreeing,
+     not on a timer -- and turns red if the request was refused. */
+  .qedit button.acked { opacity: 1; background: var(--fg); color: var(--bg);
+                        border-color: var(--fg); }
+  .qedit button.failed { opacity: 1; background: #9b2226; color: #fff;
+                         border-color: #9b2226; }
+  /* Nowhere to go: the first entry cannot move sooner, nor the last later. */
+  .qedit button:disabled { opacity: .18; cursor: default; }
+  .qedit button:disabled:hover { opacity: .18; border-color: var(--line); }
 
 /* The listener-preference panel [REQ-VIS-285], [REQ-VIS-290] -- an in-page
    block, not a dialog, styled the same way `.setting`'s own rows already
