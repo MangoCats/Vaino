@@ -31,15 +31,15 @@ Current understanding, for a reader who needs only that:
 
 | Symptom | Cause | Where |
 |---|---|---|
-| Periodic stuttering for ~3 min after boot | **The Middleton, cold-starting.** Not the room and not this appliance: an Oontz cold-booted alongside the Pi in the same room ran at 100.2% of its own baseline and sounded clean, while the Middleton runs at 87% and stutters, 3 of 3. Unfixed here because it is not this appliance's to fix | `[PI3-FOUND-580]`, PI011 §11 |
+| Periodic stuttering for ~3 min after boot | **The Middleton, cold-starting.** Not the room and not this appliance: an Oontz cold-booted alongside the Pi in the same room ran at 100.2% of its own baseline and sounded clean, while the Middleton runs at 87% and stutters, 3 of 3. Unfixed here because it is not this appliance's to fix | `[PI3-FOUND-580]`, [PI011](PI011-two-speakers-and-placement.md) |
 | A second speaker steals the audio | **Fixed.** The policy is one speaker at a time, held by whoever has the audio until it goes away, and an agent refuses every audio profile from anyone else before a transport is handed over | `[PI3-AIM-080]`, `[PI3-FOUND-630]` |
 | Two speakers connected, silence from both | **The second one took an HSP/HFP link**, and a synchronous link pre-empts A2DP rather than sharing with it: 0 packets against 375 with it disconnected. The keeper now disconnects a speaker holding a link while another plays | `[PI3-FOUND-600]` |
 | Connected, progress bar advancing, no sound | **The speaker, not the appliance.** Confirmed by counting packets on the air while every appliance layer read healthy. Fixed by disconnect/reconnect | `[PI3-FOUND-480]` |
 | Player wedged after a power cut, 23 restarts | Hot SQLite journal, unrecoverable through a read-only attach | `[PI3-FOUND-120]`, PI009 |
 | Speaker never reconnects after a power cycle | The speaker powers the Pi, so the Pi is always late — and it had lost `Trusted` | `[PI3-FOUND-090]`/`-130`, PI009 |
 | ~19 s of startup that was not work | Contention with `mpd`, which now yields | `[PI3-FOUND-210]`, PI010 §2 |
-| Second speaker silent at full volume | It connected as an HSP headset, not A2DP | `[PI3-FOUND-290]`, PI011 §2 |
-| Chosen speaker replaced by another | The keeper adopted any connected device | `[PI3-FOUND-310]`, PI011 §4 |
+| Second speaker silent at full volume | It connected as an HSP headset, not A2DP | `[PI3-FOUND-290]`, [PI014](PI014-two-speakers-and-the-choice.md) |
+| Chosen speaker replaced by another | The keeper adopted any connected device | `[PI3-FOUND-310]`, [PI014](PI014-two-speakers-and-the-choice.md) |
 
 **Three theories cost real time and are kept rather than deleted**, each being
 one somebody else would reach for: that the 15-second stutter period matched
@@ -132,7 +132,7 @@ playing cannot be debugged in the state that matters.
 
 > **Partly vindicated, 2026-09-08, by a different mechanism** — the placement
 > finding `[PI3-FOUND-320]`, in
-> [PI011 §5](PI011-two-speakers-and-placement.md). The withdrawal above
+> [PI013](PI013-theories-withdrawn.md). The withdrawal above
 > is still correct: those numbers
 > measured the method, not the hardware, and Wi-Fi *association* was never
 > shown to drop the link. But the single shared antenna this section worried
