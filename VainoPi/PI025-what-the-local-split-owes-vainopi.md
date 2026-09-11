@@ -213,6 +213,13 @@ the one this work produced: `bose` has no `sqlite3`, so every tool built on
 `remote_peek` reported it unreachable until that gained a `python3`
 fallback.
 
+That plan now recommends **splitting** `bose` — reversing its own first
+draft, which had argued the opposite from `bose`'s storage rather than from
+the ecosystem's maintenance cost. The deciding argument is this register's
+own `[PI-OWE-010]`: three installations in two shapes means every procedure
+carries a fork, and the forked branch is the one that goes untested until it
+fails.
+
 **`[PI-OWE-100]` `[PI-OWE-030]`'s WAL change broke `vaino-db-recover`'s
 reporting, and I did not notice at the time.** That script detects an
 unclean stop by `[ -f "$db-journal" ]`, which under WAL can never be true

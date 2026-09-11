@@ -2,6 +2,16 @@
 
 **Implementation Guide — the plan, and the budget it is held to**
 
+> **Revised 2026-09-11, twice wrong in its first draft.** That draft held
+> this plan to the Pi Zero 2W's 512 MB and called `bose`'s root overlay a
+> RAM overlay. `bose` is a **Pi 4 Model B with 1,889 MB** and its overlay is
+> **disk-backed**, both of which [BOSE001 §1](BOSE001-survey.md) already
+> states — its opening line is literally "`bose` is not a smaller
+> `vainopi`". The draft was written without reading it. §1 and §4 are
+> corrected below, and §4's recommendation is **reversed**: the first draft
+> advised against splitting `bose`, which was the wrong answer to the
+> question actually being asked.
+
 `bose` runs an older build, is unsplit, carries none of the specials data,
 and cannot be reached by half the `tools/` directory. This is what to change
 and, more usefully, what not to.
@@ -22,20 +32,29 @@ why.
 
 ## 1. The budget
 
-**`[BOS-IMG-010]` The Pi Zero 2W has 512 MB and no fan, and that is the
-whole constraint.** `[REQ-HW-140]` already treats every crate as a memory
-decision; the same discipline applies to every package. So each item here is
-judged on **resident cost**, not disk: a command-line tool that runs for
+**`[BOS-IMG-010]` `bose` is a Pi 4 Model B with 1,889 MiB — four times
+`vainopi`'s 475 MiB — and the budget here is its own, not the Zero's.**
+`[REQ-HW-140]`'s "every crate is a memory decision" was written for a Pi
+Zero 2W, and quoting it at `bose` overstates the constraint by a factor of
+four. Read from the running machine 2026-09-11, as
+[BOSE001 §1](BOSE001-survey.md) also records.
+
+So the test applied below is not "does it fit" — almost anything fits. It
+is **resident cost against usefulness**: a command-line tool that runs for
 200 ms during maintenance and is absent from RAM the rest of the time is
-nearly free, and a daemon is not.
+nearly free whatever the board, and a daemon is a permanent tenant whatever
+the board. That argument survives the correction intact, which is why §2 and
+§3 stand; it just is not a memory-scarcity argument, and presenting it as
+one on a 2 GB machine would not have survived contact with anyone who
+checked.
 
-That distinction does most of the work below. It is why one package is
-recommended and every daemon-shaped suggestion is refused.
-
-**`[BOS-IMG-015]` Measured, not assumed.** `bose` currently has 922 MB free
-on `/` and an apt cache from 2026-09-06 with working network. Whatever is
-added here is small against that; the argument is never "it fits" but "it
-earns its place while resident, which it is not".
+**`[BOS-IMG-015]` Measured, not assumed — and the first draft assumed.**
+`bose`: 922 MB free on `/`, apt cache current to 2026-09-06, network
+reachable, root on a **disk-backed** overlay (`upperdir=/media/root-rw/overlay`,
+not tmpfs), so package installs and `/usr/local/bin` writes persist across a
+reboot. Confirmed rather than argued: `/usr/local/bin/vaino` is dated
+2026-09-06 16:56, the machine booted at 17:35, and the binary is still
+there.
 
 ## 2. Add: `sqlite3` (557 KB, no daemon, no resident cost)
 
@@ -91,8 +110,28 @@ maintenance cost on the machine that has 32 GB.
 
 ## 4. The split, and what it would oblige
 
-**`[BOS-IMG-040]` `bose` is unsplit, and therefore does not need
-`vaino-db-recover` today.** Checked rather than assumed, and the reason is
+**`[BOS-IMG-038]` Split it — reversing this document's first draft.**
+That draft argued `bose` has no read-only catalogue partition and therefore
+no reason to split, which is true and is the wrong question. It reasons
+about `bose` in isolation; the goal this plan is held to is **the cost of
+maintaining the ecosystem**, and against that goal the database shape is the
+single largest remaining difference between the two appliances.
+
+Unsplit, every `tools/` invocation takes a different argument shape on
+`bose` than on `vainopi`, `vaino-db-recover` is mandatory on one and
+meaningless on the other, and the two `ExecStart` lines cannot be read as
+the same procedure. That is `[PI-OWE-010]`'s "a path only one machine takes
+is a path that rots", stated about a machine instead of a code path — and it
+is the same argument that decided the desktop split. Applying it to the
+desktop and refusing it for `bose` was inconsistent, and the inconsistency
+was mine.
+
+The cost is low on this board: the three obligations in `[BOS-IMG-045]` are
+one package, one script and one unit line, and `sqlite3` is recommended
+anyway by §2.
+
+**`[BOS-IMG-040]` `bose` is unsplit today, and therefore does not need
+`vaino-db-recover` yet.** Checked rather than assumed, and the reason is
 structural: the recovery script exists because a *split* player attaches
 `library.db` `mode=ro`, and a read-only connection cannot roll back the hot
 journal it is required to roll back — which on `vainopi` turned one power
@@ -114,12 +153,17 @@ they are a package, not a menu:
 Do fewer than three and the split is a trap that springs on the next power
 cut rather than at the moment it is made.
 
-**`[BOS-IMG-050]` There is no urgency to split `bose` at all.** The reason
-`vainopi` is split is a read-only catalogue partition `[PI023]`; the reason
-the desktop was split is that the split shape needed to be the one exercised
-daily. Neither argument reaches `bose`, which has one writable filesystem
-and runs no tools. Split it when there is a reason, and take §4's three
-steps together when that day comes.
+**`[BOS-IMG-050]` The reason is homogeneity, not `bose`'s own storage.**
+`vainopi` is split because its catalogue lives on a read-only partition
+`[PI023]`; the desktop is split because the split shape had to be the one
+exercised daily. `bose` needs neither — it has one writable filesystem and
+runs no Sampo tools — and that is exactly why the first draft said no.
+
+What it does need is to be *the same machine to maintain*. Three
+installations in two shapes means every procedure, every document and every
+tool invocation carries a fork, and the forked branch is the one that goes
+untested until it fails. One shape everywhere is worth more than `bose`
+saving a file.
 
 ## 5. The data `bose` is missing
 
@@ -139,12 +183,67 @@ It also needs a current build: it is running a player that predates the
 specials panel entirely, so the data would sit unread until
 `VainoPi/deploy.sh <tag> pi@bose` follows.
 
+## 6. The diagnostic helpers `bose` does not have
+
+**`[BOS-IMG-062]` `vainopi` carries fifteen `/usr/local/bin/vaino-*`
+helpers and `bose` carries none.** Most are genuinely `vainopi`'s and should
+stay there — but four are hardware-neutral, and their absence is why
+diagnosing `bose` means improvising each time.
+
+| Helper | Port to `bose`? | Why |
+| :--- | :--- | :--- |
+| `vaino-vitals` | **yes** | Samples vital signs to a file that survives a wedge — needed most on the machine you cannot see |
+| `vaino-underruns` | **yes** | Reads the player's own underrun counters `[PI3-FOUND-200]`; underruns are an audio-path fact, not a Bluetooth one |
+| `vaino-startup-sample` | **yes** | Records what the player does for the first minutes after boot; boots are boots |
+| `vaino-wifi-revert` | **yes** | Both appliances are on `wlan0`; locking yourself out of a wireless box is not a `vainopi` privilege |
+| `vaino-db-recover` | **on split** | `[BOS-IMG-045]`'s obligation, not optional once split |
+| `vaino-wait-sink` | no | Blocks until **PipeWire** has a sink; `bose` has no PipeWire and goes straight to ALSA via the HiFiBerry |
+| `vaino-btctl`, `-bt-agent`, `-hci-capture`, `-linkstate`, `-afh-seed`, `-radio-test`, `-speaker` | no | All Bluetooth. `bose`'s output is an I²S DAC |
+| `vaino-led-boot` | no | Status-LED hardware `[PI3-LED-010]` |
+| `vaino-rocker` | no | Not in the repository; `vainopi`-local |
+
+**`[BOS-IMG-065]`** These are `/bin/sh` and `python3` and cost nothing
+resident — they run when invoked and exit. The rule in `[BOS-IMG-035]`
+admits them precisely: they are what a person needs to diagnose the machine
+when it will not play.
+
+## 7. What stays different, even after all of this
+
+**`[BOS-IMG-068]` The two appliances will not be homogeneous, and should not
+all be forced to be.** Asked directly whether everything but the audio
+device converges once this plan is executed, the answer is no. What remains,
+read from both machines 2026-09-11:
+
+| | `vainopi` | `bose` |
+| :--- | :--- | :--- |
+| Board / memory | Pi Zero 2W, 475 MiB | Pi 4 Model B, 1,889 MiB |
+| OS / kernel | Debian 12 bookworm, 6.12 | Debian 13 trixie, 6.18 |
+| Root filesystem | plain ext4 | disk-backed `overlayroot` |
+| Partitions | 3 | 6, `/srv/library` a separate `ro` ext4 |
+| Audio path | Bluetooth via PipeWire | HiFiBerry I²S via ALSA |
+
+The first two rows are hardware and distribution generation: converging them
+means re-imaging a working appliance to an older Debian on slower silicon,
+which trades a real machine for a tidy table. The filesystem and partition
+rows follow from the hardware and from `[BOS-*]`'s own build. The audio row
+is the one the question already excepted — and it is what drags the seven
+Bluetooth helpers and `wait-sink` with it, so that exception is wider than
+it first looks.
+
+**`[BOS-IMG-069]` What this plan does converge is everything that a
+*procedure* touches**: database shape, the tools that can reach the box, the
+build, the specials data, and the diagnostic helpers. After it, a
+maintenance instruction can be written once and run on either appliance,
+which is the whole of what "homogeneous for maintenance" needs to mean. The
+differences left over are ones no runbook has to mention.
+
 ---
 
-## 6. Open
+## 8. Open
 
-**`[BOS-IMG-070]`** None of this is applied. §2 and §5 are independent and
-can be done in any order; §4 is a package to be taken whole or not at all.
+**`[BOS-IMG-070]`** None of this is applied. §2, §5 and §6 are independent
+and can be done in any order; §4 is a package to be taken whole or not at
+all.
 
 **`[BOS-IMG-075]`** The `python3` fallback in `remote_peek` will have no
 regular exerciser once `bose` has `sqlite3`. It is pinned by shape in
@@ -155,7 +254,9 @@ and is the honest price of keeping a second path at all.
 
 ---
 
-**Traceability:** `[BOS-IMG-010..075]` · holds `[REQ-HW-140]`'s memory
+**Traceability:** `[BOS-IMG-010..075]` · revised 2026-09-11 after
+[BOSE001](BOSE001-survey.md) was read and two of its own premises were found
+wrong · holds `[REQ-HW-140]`'s memory
 discipline over package choice · depends on `[PI3-FOUND-120]`'s crash loop
 for §4's reasoning and `[BOS-PWR-*]`'s passed power cut for why it does not
 apply yet · proposes one addition to [IMPL001](../VainoPi/IMPL001-appliance-setup.md)'s
