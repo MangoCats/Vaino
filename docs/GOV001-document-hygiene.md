@@ -106,6 +106,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `MPD` — The Director as an MPD client: leverage, extension via stickers, mapping
 - `SPIN` — Sendspin protocol: interfacing Vaino/Sampo with the Sendspin multi-room ecosystem, see [sendspin/SPIN001-protocol-and-integration-analysis.md](../sendspin/SPIN001-protocol-and-integration-analysis.md)
 - `MSA` — Music Assistant: where Vaino/Sampo might fit in that ecosystem, see [sendspin/SPIN003-music-assistant-ecosystem-fit.md](../sendspin/SPIN003-music-assistant-ecosystem-fit.md)
+- `DEP` — Deploy scripts: what each acts on, what its name should say, and the signposting that makes a wrong assumption visible, see [GUIDE011](GUIDE011-deploy-script-naming.md)
 - `ECHO` — Echo playback: two or more instances playing the same passage at the same moment from their own local files, see [GUIDE008](GUIDE008-echo-playback-investigation.md) (the investigation) and [GUIDE009](GUIDE009-echo-playback-plan.md) (the development plan)
 - `SMT` — `smartboardpc` ("Smart"), the x86_64 node that is both a build host and an intended playback target, see [SmartPC/SMART001](../SmartPC/SMART001-survey.md). Per-machine like `BOS`, and in its own folder for the same reason — but not an appliance
 
