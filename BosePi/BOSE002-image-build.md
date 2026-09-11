@@ -22,6 +22,8 @@ measurement) remain exactly that — untouched by this build, still open.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-2 and §4 in [BOSE002](BOSE002-image-build.md), §3 in [BOSE006](BOSE006-what-lands-where.md).
+
 ## 1. What is different from PI001, and why
 
 PI001 designed A/B/C against a 464 MB Pi driving a Bluetooth speaker. `bose` is

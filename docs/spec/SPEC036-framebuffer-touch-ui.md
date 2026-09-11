@@ -24,6 +24,8 @@ in full.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-3 in [SPEC036](SPEC036-framebuffer-touch-ui.md), §4-7 in [SPEC041](SPEC041-framebuffer-constraints.md), §8-9 in [SPEC042](SPEC042-framebuffer-implementation-plan.md).
+
 ## 1. Why not a browser — the review that led here
 
 Asked directly, before any design work: is a lightweight kiosk browser

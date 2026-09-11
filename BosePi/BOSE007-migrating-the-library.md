@@ -10,6 +10,8 @@ reached 340 lines against `[GOV-DOC-010]`'s 300-line limit.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-2 in [BOSE003](BOSE003-build-procedure.md), §3-4 in [BOSE007](BOSE007-migrating-the-library.md).
+
 ## 3. Migrating the library
 
 **`[IMPL-BOS-085]` Superseded 2026-09-06 — the local library was already

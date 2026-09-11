@@ -8,6 +8,8 @@ Split from [PI001](PI001-image-and-partitions.md) on 2026-09-10, which had reach
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-4 and §6-7 in [PI001](PI001-image-and-partitions.md), §5 and §5a in [PI023](PI023-the-database-split-on-disk.md), §5b in [PI024](PI024-appliance-settings.md).
+
 ## 5b. Appliance settings
 
 > **Superseded 2026-09-06, mechanism only — the principles held.** This

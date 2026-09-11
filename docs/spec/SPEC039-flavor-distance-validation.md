@@ -9,6 +9,8 @@ reached 351 lines against `[GOV-DOC-010]`'s 300-line limit.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §4 in [SPEC039](SPEC039-flavor-distance-validation.md), the rest in [SPEC005](SPEC005-flavor-distance.md).
+
 ## 4. Validation
 
 **`[SPEC-FD-060]`** Metric designs compared by retrieval: given submission 0 of a recording as the query, how well does each metric rank submission 1 of the *same* recording against 499 random distractors? 1,500 queries.

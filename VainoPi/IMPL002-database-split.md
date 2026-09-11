@@ -18,6 +18,8 @@ backup, and MPD turned up.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-5 in [IMPL002](IMPL002-database-split.md), §6/§8/§9 in [IMPL010](IMPL010-database-split-review.md), §7 in [IMPL009](IMPL009-database-split-plan.md), §10-19 in [IMPL011](IMPL011-database-split-built.md).
+
 > **Split on 2026-09-10.** The plan is now
 > [IMPL009](IMPL009-database-split-plan.md), the scope and the corrected
 > procedure [IMPL010](IMPL010-database-split-review.md), and what was built

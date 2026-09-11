@@ -9,6 +9,8 @@ reached 356 lines against `[GOV-DOC-010]`'s 300-line limit.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §7 and §7a in [SPEC040](SPEC040-peer-registry-and-review-ui.md), the rest in [SPEC035](SPEC035-mesh-library-sync.md).
+
 ## 7. A prerequisite this design depends on, resolved here
 
 **`[SPEC-MESH-080]` Closes `[SPEC-SUI-180]` — "re-importing the same bundle is

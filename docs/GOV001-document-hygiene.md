@@ -140,11 +140,11 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-BK-*]` | Moving a session between Vaino's engine and MPD without stopping | [SPEC018-switching-backends.md](spec/SPEC018-switching-backends.md), [SPEC020-the-handoff.md](spec/SPEC020-the-handoff.md) |
 | `[SPEC-LYR-*]` | Lyrics, and what a guest protocol will not carry | [SPEC019-lyrics.md](spec/SPEC019-lyrics.md) |
 | `[SPEC-VOC-*]`, `[ENT-FILE-*]`, `[ENT-PASSAGE-*]`, `[ENT-RECORDING-*]`, `[ENT-RELEASE-*]`, `[ENT-ALBUM-*]`, `[ENT-ARTIST-*]`, `[ENT-TRACK-*]` | Domain vocabulary: file/passage/recording/release/album/artist/track, precisely | [SPEC023-domain-vocabulary.md](spec/SPEC023-domain-vocabulary.md) |
-| `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
+| `[IMPL-*]` | Pi Zero 2W appliance setup procedure; the rebuild-from-repository audit is IMPL012, and the database split runs IMPL002 (design) -> IMPL009 (plan) -> IMPL010 (review) -> IMPL011 (built) | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
 | `[IMPL-MPD-*]` | MPD Director prototype: build order, riskiest part first | [IMPL004-mpd-prototype.md](IMPL004-mpd-prototype.md) |
-| `[PI3-*]` | Speaker link: design and the player's contract | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md) |
-| `[PI3-FOUND-*]`, `[PI3-ROCKER-*]`, `[PI3-LED-*]` | What operating the speaker taught | [PI004-speaker-operation.md](../VainoPi/PI004-speaker-operation.md) |
+| `[PI3-*]` | Speaker link: what it must survive (PI003) and what the player owes in return (PI022) | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md), [PI022-the-players-speaker-contract.md](../VainoPi/PI022-the-players-speaker-contract.md) |
+| `[PI3-FOUND-*]`, `[PI3-ROCKER-*]`, `[PI3-LED-*]` | What operating the speaker taught. PI004 is the operating record; the stutter investigation is split by genre behind [PI011](../VainoPi/PI011-two-speakers-and-placement.md), which is its front door and says which files to trust | [PI004-speaker-operation.md](../VainoPi/PI004-speaker-operation.md) |
 | `[PI5-LIB-*]` | Getting the real library onto the appliance, and its cost | [PI005-appliance-library.md](../VainoPi/PI005-appliance-library.md) |
 | `[PI2-RUN-*]`, `[PI3-OPEN-010]`, `[PI5-DEP-*]`, `[PI5-PRIV-*]` | Dated bring-up findings, consolidated out of PI002/PI003/PI005 per `[GOV-DOC-050]` | [PI008-appliance-bringup-history.md](../VainoPi/PI008-appliance-bringup-history.md) |
 | `[PI-CHR-*]` | What the player costs on the appliance: CPU, memory, thermals, latency | [PI006-appliance-characterisation.md](../VainoPi/PI006-appliance-characterisation.md) |
@@ -157,7 +157,7 @@ grep -rn "SPEC-PD" docs/
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
-| `[REQ-*]` (AUD/PD/VIS/LIB/PORT/HW) | Functional requirements — supersedes REQ001 | [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md) |
+| `[REQ-*]` (AUD/PD/VIS/LIB/PORT/HW) | Functional requirements -- supersedes REQ001. REQ002 indexes them and holds PD/LIB/PORT/HW; `[REQ-AUD-*]` is REQ003; `[REQ-VIS-*]` is REQ004 (provenance), REQ005 (the listening surface) and REQ006 (words) | [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md) |
 | `[SPEC-DIR-100]` | Frequency vs character orthogonality | [SPEC009-program-director.md](spec/SPEC009-program-director.md#1-the-governing-idea) |
 | `[SPEC-DIR-150]` | Where Like/Dislike Taste enters selection | [SPEC009-program-director.md](spec/SPEC009-program-director.md#4-stage-b--pool-shaping) |
 | `[SPEC-SC-030]` | Identity spine: files / recordings / passages DDL | [SPEC008-database-schema.md](spec/SPEC008-database-schema.md#2-identity-spine) |

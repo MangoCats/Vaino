@@ -19,6 +19,8 @@ an Ubuntu laptop) joining a family that already has a desktop, `vainopi`, and
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §7 and §7a in [SPEC040](SPEC040-peer-registry-and-review-ui.md), the rest in [SPEC035](SPEC035-mesh-library-sync.md).
+
 ## 1. What's already true, restated so this document doesn't relitigate it
 
 **`[SPEC-MESH-005]`** Nothing here changes [SPEC006 §3](SPEC006-data-flow-and-portability.md#3-what-travels-and-what-must-not)'s

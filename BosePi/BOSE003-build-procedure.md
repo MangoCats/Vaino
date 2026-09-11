@@ -84,6 +84,8 @@ only encode a manual sequence that worked.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-2 in [BOSE003](BOSE003-build-procedure.md), §3-4 in [BOSE007](BOSE007-migrating-the-library.md).
+
 ## 1. Where the build actually runs
 
 **`[IMPL-BOS-100]` There is no single machine that can do all of it, because a

@@ -10,6 +10,8 @@ largest stage of the pipeline and the one with the most rules of its own.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §3 in [SPEC037](SPEC037-eligibility-and-frequency.md), the rest in [SPEC009](SPEC009-program-director.md).
+
 ## 3. Stage A — Eligibility & Frequency
 
 **`[SPEC-DIR-110]` Log-scale time encoding.** `seconds(v) = 10^v × 3600`. One float spans four orders of magnitude: `-1.0` → 6 min, `0.0` → 1 h, `2.0` → 4.2 days, `3.0` → 41 days.

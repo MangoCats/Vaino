@@ -10,6 +10,8 @@ Split from [BOSE002](BOSE002-image-build.md) on 2026-09-10, which had reached
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-2 and §4 in [BOSE002](BOSE002-image-build.md), §3 in [BOSE006](BOSE006-what-lands-where.md).
+
 ## 3. What lands where
 
 **A — system, read-only.** Kernel, Bookworm Lite, `vaino` binary and unit,

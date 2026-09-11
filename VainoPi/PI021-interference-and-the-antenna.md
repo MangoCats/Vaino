@@ -12,6 +12,8 @@ measured background it fails against.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §0 and §2-3 in [PI004](PI004-speaker-operation.md), §1 in [PI021](PI021-interference-and-the-antenna.md).
+
 ## 1. Interference, and what shares the antenna
 
 **`[PI3-FOUND-010]` Interference is the cause.** Measured 2026-08-16 with the

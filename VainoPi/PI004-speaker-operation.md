@@ -16,6 +16,8 @@ Everything here is dated and measured. Nothing here is a plan.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §0 and §2-3 in [PI004](PI004-speaker-operation.md), §1 in [PI021](PI021-interference-and-the-antenna.md).
+
 ## 0. Where this stands, and where the rest of it lives
 
 This document is the **operating record**: what the speaker link does, how it

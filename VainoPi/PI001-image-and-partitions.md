@@ -18,6 +18,8 @@ REQ002 states the outcome and leaves the mechanism to this document.)*
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-4 and §6-7 in [PI001](PI001-image-and-partitions.md), §5 and §5a in [PI023](PI023-the-database-split-on-disk.md), §5b in [PI024](PI024-appliance-settings.md).
+
 ## 1. The problem being solved
 
 An appliance has no shutdown button anybody uses. It is switched off at the

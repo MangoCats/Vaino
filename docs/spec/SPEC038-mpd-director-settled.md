@@ -10,6 +10,8 @@ reached 320 lines against `[GOV-DOC-010]`'s 300-line limit.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §7 in [SPEC038](SPEC038-mpd-director-settled.md), the rest in [SPEC015](SPEC015-mpd-director.md).
+
 ## 7. Settled
 
 **`[SPEC-MPD-090]` A play is a play by the rule every path shares: half the

@@ -8,6 +8,8 @@ Split from [REQ002](REQ002-functional-requirements.md) on 2026-09-10, which had 
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1 in [REQ003](REQ003-audio-playback.md), §3 in [REQ004](REQ004-visibility-provenance.md), [REQ005](REQ005-visibility-listening-surface.md) and [REQ006](REQ006-visibility-words-and-the-rest.md), §2 and §4-8 in [REQ002](REQ002-functional-requirements.md).
+
 **`[REQ-VIS-260]` The chosen speaker is remembered by Vaino, not guessed by a
 script.** *(Fixed 2026-08-27.)* `use`/`pair` now write the address to
 `player_settings`; the appliance's own reconnect timer (`vaino-speaker`,

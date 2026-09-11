@@ -8,6 +8,8 @@ Defines how the distance between two Musical Flavor vectors is computed. This me
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §4 in [SPEC039](SPEC039-flavor-distance-validation.md), the rest in [SPEC005](SPEC005-flavor-distance.md).
+
 ## 1. The Problem With Naive Euclidean Distance
 
 **`[SPEC-FD-010]`** A flavor vector is not 71 independent numbers. It is **18 characteristics**, each a probability distribution over its own classes summing to 1.0:

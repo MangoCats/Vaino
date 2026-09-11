@@ -12,6 +12,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1 in [REQ003](REQ003-audio-playback.md), §3 in [REQ004](REQ004-visibility-provenance.md), [REQ005](REQ005-visibility-listening-surface.md) and [REQ006](REQ006-visibility-words-and-the-rest.md), §2 and §4-8 in [REQ002](REQ002-functional-requirements.md).
+
 > **Split on 2026-09-10.** Audio playback is now
 > [REQ003](REQ003-audio-playback.md), and visibility -- which alone ran to
 > 562 lines -- is [REQ004](REQ004-visibility-provenance.md),

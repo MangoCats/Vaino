@@ -18,6 +18,8 @@ How Vaino's Program Director `[SPEC009]` reaches the MPD ecosystem: what MPD alr
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §7 in [SPEC038](SPEC038-mpd-director-settled.md), the rest in [SPEC015](SPEC015-mpd-director.md).
+
 ## 1. Shape
 
 **`[SPEC-MPD-010]` It is a client, because MPD has no seam for anything else.** The protocol documentation is explicit that there is no plugin interface for deciding what plays next; queue order is a client's business, and `prio`/`prioid` only reorder within random mode. So the Director sits beside MPD and feeds it.

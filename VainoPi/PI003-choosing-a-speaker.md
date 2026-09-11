@@ -10,6 +10,8 @@ why the obvious implementation of that is broken.
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-2 in [PI003](PI003-choosing-a-speaker.md), §3-5 in [PI022](PI022-the-players-speaker-contract.md).
+
 ## 1. What this has to survive
 
 Every requirement below is the residue of a specific failure on real hardware,

@@ -8,6 +8,8 @@ How Vaino chooses the next passage. Reproduces MuLibPlay's six-years-proven sele
 
 ---
 
+> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §3 in [SPEC037](SPEC037-eligibility-and-frequency.md), the rest in [SPEC009](SPEC009-program-director.md).
+
 ## 1. The Governing Idea
 
 **`[SPEC-DIR-100]` Two orthogonal mechanisms, kept orthogonal.** This is why MuLibPlay works, and the single most important thing not to break:
