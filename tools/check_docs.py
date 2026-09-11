@@ -81,23 +81,16 @@ INHERITED_DIR = os.path.join("docs", "inherited")
 DOC_TARGET = 250
 DOC_LIMIT = 300
 
-# **`[GOV-DOC-010]` is a MUST, and was being reported as a note.** Every
-# document over the hard limit produced a warning indistinguishable from the
-# advisory ones, `--strict` exited 0 on warnings, and CI passed: fourteen
-# breaches of a mandatory rule were invisible in a list of fifty-two notes.
+# **`[GOV-DOC-010]` is a MUST, and enforced as one.** It used to be reported
+# as a warning indistinguishable from the advisory ones, `--strict` exited 0
+# on warnings, and CI passed: fourteen breaches of a mandatory rule sat
+# unnoticed in a list of fifty-two notes. They were split on 2026-09-10 and
+# this set emptied, which is what it was for -- it held the backlog while the
+# backlog was being cleared, and never grew.
 #
-# So a breach is now an error, and the documents already over it on 2026-09-10
-# are listed here. A NEW breach fails immediately; a listed one is reported as
-# a breach still outstanding. **This set only shrinks.** When it empties, the
-# entries below and this comment go with it, and the rule enforces itself.
-GOV_DOC_010_OUTSTANDING = {
-    "docs/spec/REQ002-functional-requirements.md",
-    "docs/spec/SPEC005-flavor-distance.md",
-    "docs/spec/SPEC009-program-director.md",
-    "docs/spec/SPEC015-mpd-director.md",
-    "docs/spec/SPEC035-mesh-library-sync.md",
-    "docs/spec/SPEC036-framebuffer-touch-ui.md",
-}
+# It stays, empty, so a document that goes over again is named as an
+# outstanding breach by a deliberate act rather than by accident.
+GOV_DOC_010_OUTSTANDING = set()
 
 # Known, accepted tag collisions. Each entry is debt with a stated retirement
 # condition -- NOT a way to silence the check. A collision absent from this list

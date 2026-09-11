@@ -254,4 +254,4 @@ WantedBy=multi-user.target
 ---
 
 > **Split on 2026-09-10.** The open questions and the rebuild-from-repository
-> audit are now [IMPL006](IMPL006-rebuilding-from-the-repository.md).
+> audit are now [IMPL012](IMPL012-rebuilding-from-the-repository.md).

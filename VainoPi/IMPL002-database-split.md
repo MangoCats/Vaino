@@ -19,9 +19,9 @@ backup, and MPD turned up.
 ---
 
 > **Split on 2026-09-10.** The plan is now
-> [IMPL003](IMPL003-database-split-plan.md), the scope and the corrected
-> procedure [IMPL004](IMPL004-database-split-review.md), and what was built
-> and proven [IMPL005](IMPL005-database-split-built.md). This document keeps
+> [IMPL009](IMPL009-database-split-plan.md), the scope and the corrected
+> procedure [IMPL010](IMPL010-database-split-review.md), and what was built
+> and proven [IMPL011](IMPL011-database-split-built.md). This document keeps
 > the design and the original migration.
 ## 1. Why now, and why vainopi first
 
