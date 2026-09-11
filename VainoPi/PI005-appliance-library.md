@@ -21,6 +21,12 @@ beside it as `vaino-new.db`, untouched since 17 August. The unit names its path
 outright — `ExecStart=… /srv/library/vaino.db` — so no power cycle was ever
 going to change that.
 
+> `vaino-new.db` was **deleted 2026-09-11**: it had been the staging copy for
+> this swap and nothing had touched it since, three weeks after the swap it
+> staged `[PI-PRE-098]`. The name survives in `BosePi/seed-library.sh`, which
+> uses it as a staging path of its own on `bose` — that is a live filename
+> there, unrelated to this dead one.
+
 The test library's own listening was discarded deliberately: 252 plays made
 against 31 files during testing, against 37,237 that describe six years of real
 listening. A straight copy was therefore right, where `[SPEC-SUI-100]`'s

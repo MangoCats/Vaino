@@ -230,8 +230,9 @@ Executed against vainopi for real, 2026-09-07, following `[§8]`'s runbook
 exactly: stopped `vaino`/`mpd`, confirmed the WAL was already clean (the
 service's own shutdown had checkpointed it — `PRAGMA wal_checkpoint(TRUNCATE)`
 afterward reported zero pages, confirming rather than assuming), made a
-timestamped on-device copy (`vaino.db.pre-split-20260907`, kept, not
-deleted), ran `split_database.py --commit` against that copy on vainopi's
+timestamped on-device copy (`vaino.db.pre-split-20260907` — kept then,
+**deleted 2026-09-11** once the split had four days in service and the live
+halves were verified to hold everything it did `[PI-PRE-098]`), ran `split_database.py --commit` against that copy on vainopi's
 own hardware (1,065,361 catalog rows, 44,337 listener rows — identical to
 the dev-host rehearsal, verification passed), deployed the cross-compiled
 binary, updated the systemd override's `ExecStart` to the two new paths,

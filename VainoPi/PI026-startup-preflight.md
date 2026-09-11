@@ -182,18 +182,51 @@ and the `-shm` files that looked like evidence of them turned out to be
 thirty seconds old — created by the read-only queries run to investigate.
 The change is worth making on cost alone; it did not need the worse story.
 
-**`[PI-PRE-098]`** So `vainopi` keeps two full copies of the same superseded
-database, 2.3 GB together, where one dated backup would do. Not deleted here:
-that is a judgement about how long a rollback stays useful, and disk is not
-scarce on that machine — 170 GB free.
+**`[PI-PRE-098]` Deleted, all of them, 2026-09-11.** Two copies of the same
+superseded database was the finding; the answer given was that one is already
+excessive. Looking properly then found six, not two — 5.3 GB of the same
+database's history stacked up on `vainopi`:
+
+| removed | size | what it was |
+| :--- | ---: | :--- |
+| `vaino.db` | 1.08 GB | the pre-split original |
+| `vaino.db.pre-split-20260907` | 1.08 GB | identical content, dated copy |
+| `vaino.db.pre-lyrics-import` | 1.08 GB | pre-migration, the import 5 days in service |
+| `vaino.db.bak-pre-mulib-art` | 1.02 GB | pre-migration, 19 days old |
+| `vaino-new.db` | 1.00 GB | staging copy, never touched after the swap it staged |
+| `…pre-fade-migration-20260831.bak-journal` | 1 KB | orphan; its `.bak` was already gone |
+
+`vaino-testlib-20260820.db` (29 MB) was kept — a test library is not a backup
+of the live one, and it is a different thing to have.
+
+**`[PI-PRE-099]` What was checked first, because deletion is the one step with
+no rollback.** Not "it looks superseded": `integrity_check` on both live
+halves (`ok`, and it takes minutes on a Pi Zero 2W — the cost this script
+refuses to pay at boot); catalogue parity table-for-table (8,152 recordings,
+16,409 passages, 5,709 files — identical); and every listener table confirmed
+a **superset** in the live half, including `listener_characteristics`, which
+exists only there. A tree-wide search then found the two documents that
+recorded these files as deliberately kept, so the claim and the fact were
+corrected together rather than one of them being left to rot.
+
+`vainopi` went from 54 GB used to 48 GB. And the skip line from
+`[PI-PRE-090]` has now stopped on its own, exactly as intended — the file it
+named is gone.
 
 ## 7. Open
 
 **`[PI-PRE-080]`** `vainopi`'s unit template in `setup-vainopi.sh` still names
 the pre-split `/srv/library/vaino.db` in its base `ExecStart`; the live
-machine is correct only because `mpd-guest.conf` overrides it. Re-running the
-installer is safe while that drop-in exists, and silently wrong if it is ever
-removed.
+machine is correct only because `mpd-guest.conf` overrides it.
+
+`[PI-PRE-098]` improved this by accident, and the direction is worth noting.
+While that file existed, losing the drop-in meant the player would open a
+database four days stale and **run**, reporting nothing wrong — plays going
+into a file nobody reads. Now the file is gone, so the same mistake is a
+refusal to start: loud, immediate, and obvious. Deleting the fallback made
+the failure mode better, which is the usual shape of it. Still worth fixing
+properly by naming the halves in the template, once the fresh-install path —
+which has no split to name — is settled.
 
 **`[PI-PRE-085]` Closed** by `[PI-PRE-090]` on the same day it was raised.
 `vaino-db-recover` no longer opens the pre-split original once the split
