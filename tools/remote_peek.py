@@ -153,6 +153,29 @@ def parse_rows(output: str) -> list:
     return json.loads(text)
 
 
+# The same query, run by python3 instead, emitting exactly what
+# `sqlite3 -json` would. `bose` carries no `sqlite3` CLI -- a minimal
+# appliance image has no reason to -- but every Vaino appliance has python3
+# with the `sqlite3` module, because the tooling already assumes it.
+#
+# Kept to one expression passed with `-c` so nothing has to be installed,
+# copied or left behind on the far side. Read-only and immutable, matching
+# the posture every caller here already has: this file never writes a
+# remote.
+_PY_FALLBACK = (
+    "import sqlite3,json,sys;"
+    "c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True);"
+    "c.row_factory=sqlite3.Row;"
+    "r=[dict(x) for x in c.execute(sys.argv[2])];"
+    "print(json.dumps(r) if r else '')"
+)
+
+
+def _python_cmd(path: str, sql: str) -> str:
+    return (f"python3 -c {shlex.quote(_PY_FALLBACK)} "
+            f"{shlex.quote(path)} {shlex.quote(sql)}")
+
+
 def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dict:
     """The one round trip everything in this file, and `remote_flags.py`,
     is built on: `ssh <host> sqlite3 -json <path> "<sql>"`, `sql` already
@@ -166,6 +189,14 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
 
     Returns `{"ok": True, "rows": [...]}"` (an empty list for zero matches,
     itself informative, not a failure) or `{"ok": False, "error": "..."}`.
+
+    **A host with no `sqlite3` CLI is retried through python3**, which emits
+    the identical JSON. `bose` is such a host -- a minimal image has no
+    reason to carry the command-line shell for a library it never uses from
+    the shell -- and without this every remote tool reports that appliance
+    unreachable when it is merely differently equipped. Only that one
+    failure is retried; every other stays what it was, so a genuinely
+    unreachable host still fails fast.
     """
     host, sep, path = remote.partition(":")
     if not sep or not path:
@@ -180,7 +211,21 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
     except OSError as e:
         return {"ok": False, "error": f"could not run ssh: {e}"}
     if r.returncode != 0:
-        return {"ok": False, "error": (r.stderr or r.stdout or f"ssh exited {r.returncode}").strip()[:300]}
+        err = (r.stderr or r.stdout or f"ssh exited {r.returncode}").strip()
+        if "sqlite3: command not found" in err or "sqlite3: not found" in err:
+            argv_py = ["ssh", "-o", f"ConnectTimeout={CONNECT_TIMEOUT}", "-o", "BatchMode=yes",
+                       host, _python_cmd(path, sql)]
+            try:
+                r = subprocess.run(argv_py, capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error": f"no answer from {host} within {timeout}s"}
+            except OSError as e:
+                return {"ok": False, "error": f"could not run ssh: {e}"}
+            if r.returncode != 0:
+                return {"ok": False,
+                        "error": (r.stderr or r.stdout or f"ssh exited {r.returncode}").strip()[:300]}
+        else:
+            return {"ok": False, "error": err[:300]}
     try:
         rows = parse_rows(r.stdout)
     except json.JSONDecodeError as e:

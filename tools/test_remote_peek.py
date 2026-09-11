@@ -297,7 +297,27 @@ def test_peek_error_handling() -> None:
         rp.subprocess.run = real_run
 
 
+def test_python_fallback_command_shape():
+    """The python3 fallback must ask for the same thing `sqlite3 -json` does.
+
+    Not run against a host here -- that is `bose`'s job, and it is exercised
+    live -- but the command is built from `shlex.quote`d parts and a
+    read-only URI, and both of those are worth pinning: a fallback that
+    quietly opened a remote read-write would be a much worse bug than the
+    missing binary it works around.
+    """
+    cmd = rp._python_cmd("/var/vaino/vaino.db", "SELECT 1")
+    check("python3 -c" in cmd, f"must invoke python3, got {cmd}")
+    check("mode=ro" in rp._PY_FALLBACK, "the fallback must open the remote READ-ONLY")
+    check("/var/vaino/vaino.db" in cmd and "SELECT 1" in cmd,
+          f"path and sql must both reach it, got {cmd}")
+    tricky = rp._python_cmd("/a b/c.db", "SELECT 'x';DROP TABLE t")
+    check("'/a b/c.db'" in tricky or '"/a b/c.db"' in tricky,
+          f"a path with a space must be quoted, got {tricky}")
+
+
 def main() -> int:
+    test_python_fallback_command_shape()
     with tempfile.TemporaryDirectory() as tmp:
         test_sql_mirrors_apply_changes(tmp)
         test_passage_flag_sql(tmp)
