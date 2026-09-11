@@ -1,6 +1,7 @@
 #!/bin/bash
-# Rebuild and redeploy the player everywhere it runs: this desktop, vainopi,
-# and bose. Written after the targets were left to drift more than once --
+# Rebuild and redeploy the player everywhere it runs or is built: this desktop,
+# the vainopi and bose appliances, and the teacherslounge and smartboardpc
+# source hosts. Written after the targets were left to drift more than once --
 # code committed and pushed, but only actually running on some of them,
 # discovered later by Vaino's own staleness check firing rather than by
 # anyone remembering to look [SPEC-SUI-227].
@@ -49,7 +50,15 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 APPLIANCES="pi@vainopi pi@bose"
 # `host:path` -- a source host needs its checkout named, since unlike an
 # appliance's `/usr/local/bin/vaino` there is no conventional location.
-SOURCES="sw@teacherslounge:/home/sw/Dev/Vaino"
+#
+# `smartboardpc` is a source host today because that is what it actually is:
+# x86_64, its own toolchain, a checkout, and no service. It is intended to
+# play audio as well `[GDE-ECHO-075]`, which will eventually make it the first
+# target that is BOTH -- built from source here and verified by a running
+# player like an appliance. It is not that yet, and pretending otherwise
+# would mean verifying against a process that is not there.
+SOURCES="sw@teacherslounge:/home/sw/Dev/Vaino
+mango@smartboardpc:/home/mango/Dev/Vaino"
 
 # Where a named host sends its work. A host named on the command line is
 # looked up here, so `-- sw@teacherslounge` reaches the source-host leg with

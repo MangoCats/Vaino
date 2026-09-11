@@ -56,8 +56,8 @@ CODESPAN_INNER = re.compile(r"`([^`\n]*)`")
 # deliberately narrow: a prefix like `src/` or `go/` would also match paths
 # GUIDE001/GUIDE002 cite *about a predecessor repository on its own disposal
 # path*, where "does not exist here" is the point being made, not an error.
-PATH_PREFIXES = ("player", "tools", "sql", "VainoPi", "BosePi", "sendspin",
-                  "docs", "build")
+PATH_PREFIXES = ("player", "tools", "sql", "VainoPi", "BosePi", "SmartPC",
+                  "sendspin", "docs", "build")
 CODE_PATH = re.compile(r"\b(?:%s)(?:/[\w.\-]+)+" % "|".join(PATH_PREFIXES))
 
 
@@ -199,9 +199,14 @@ def vaino_docs():
     # its tags are reported as dangling from everywhere that cites them.
     # sendspin/ is the same shape again, one folder for one external
     # ecosystem under investigation rather than one appliance.
+    #
+    # SmartPC/ is the third machine folder. It is NOT an appliance -- x86_64,
+    # no image, no overlay -- but the rule that earned this list is about
+    # per-machine material having one home, not about what kind of machine it
+    # describes.
     out = (glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")
            + glob.glob("VainoPi/*.md") + glob.glob("BosePi/*.md")
-           + glob.glob("sendspin/*.md"))
+           + glob.glob("SmartPC/*.md") + glob.glob("sendspin/*.md"))
     out = [p for p in out if INHERITED_DIR not in p]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
