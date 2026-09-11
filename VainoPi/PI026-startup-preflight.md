@@ -169,23 +169,21 @@ vaino-db-recover: not recovering /srv/library/vaino.db, superseded by the split 
 vaino-db-recover: un-checkpointed WAL on /var/vaino/listener.db, replaying
 ```
 
-**`[PI-PRE-095]` What that file is, measured rather than assumed.** Its
-contents are frozen at the split — 38,554 plays, the last at 2026-09-07
-02:34 — against 39,037 in the live listener half. It is also byte-for-byte
-different from its own dated backup, `vaino.db.pre-split-20260907`, despite
-being logically identical to it.
+**`[PI-PRE-095]` What that file was, measured rather than assumed.** Frozen at
+the split — 38,554 plays, last at 2026-09-07 02:34, against 39,037 live — and
+byte-for-byte different from its own dated backup despite being logically
+identical to it.
 
-A first draft of this blamed that divergence on the boot-time opens. Wrong,
-and checking took one command: the file's mtime has not moved since
-2026-09-08, across every boot since. The opens were wasted work, not damage,
-and the `-shm` files that looked like evidence of them turned out to be
-thirty seconds old — created by the read-only queries run to investigate.
-The change is worth making on cost alone; it did not need the worse story.
+A first draft blamed that divergence on the boot-time opens. Wrong, and
+checking took one command: the mtime had not moved since 2026-09-08, across
+every boot since. The opens were wasted work, not damage, and the `-shm` files
+that looked like evidence were thirty seconds old — created by the read-only
+queries run to investigate. The change was worth making on cost alone; it did
+not need the worse story.
 
-**`[PI-PRE-098]` Deleted, all of them, 2026-09-11.** Two copies of the same
-superseded database was the finding; the answer given was that one is already
-excessive. Looking properly then found six, not two — 5.3 GB of the same
-database's history stacked up on `vainopi`:
+**`[PI-PRE-098]` Deleted, all of them, 2026-09-11.** Two copies was the
+finding; the answer given was that one is already excessive. Looking properly
+then found six — 5.3 GB of one database's history stacked up on `vainopi`:
 
 | removed | size | what it was |
 | :--- | ---: | :--- |
@@ -198,6 +196,19 @@ database's history stacked up on `vainopi`:
 
 `vaino-testlib-20260820.db` (29 MB) was kept — a test library is not a backup
 of the live one, and it is a different thing to have.
+
+**`[PI-PRE-097]` `bose` mattered more, for a reason `vainopi` does not have.**
+Its pre-split original was 1.10 GB on the **4 GB f2fs partition that absorbs
+every write the appliance makes** — the one storage constraint here that is
+real rather than theoretical. `vainopi` had 170 GB free and lost only clutter;
+`bose` went from 37% of C to 10%. Verified the same way first: 8,185
+recordings both sides, and 39,329 plays live against 39,294 in the copy, so
+the live half was ahead rather than merely equal.
+
+Deleting it orphaned `vaino.db-shm` and `vaino.db-wal` beside nothing — the
+same shape as the `pre-fade-migration` journal above. Both removed, and both
+machines then audited for the class rather than the instance. Neither has
+another.
 
 **`[PI-PRE-099]` What was checked first, because deletion is the one step with
 no rollback.** Not "it looks superseded": `integrity_check` on both live
