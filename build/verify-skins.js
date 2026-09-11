@@ -443,12 +443,45 @@ async function run(skin) {
     check(/Next One/.test(window.document.getElementById('whotitle').textContent),
           'the heading must name the passage being explained');
     // And they must act on the picked passage, not on whatever was first.
-    qp.querySelectorAll('button')[0].onclick(new window.Event('click'));
+    //
+    // A real dispatched click, not a direct `onclick()` call: the handler is
+    // delegated to the document in the capture phase precisely so it survives
+    // the buttons being rebuilt, and reaching for a property no button carries
+    // any more would test nothing at all. This is the path a listener uses.
+    const fire = b => b.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    fire(qp.querySelectorAll('button')[0]);
     // The ENTRY's id, not the passage's `[REQ-VIS-186]`. The fixture gives them
     // different values precisely so a control still addressing the passage
     // fails here rather than passing by coincidence.
     check(posted.some(u => u === '/queue/101/remove'),
           `the shared controls must act on the picked entry, posted ${JSON.stringify(posted)}`);
+
+    // The fault all of this exists to close: the control set was emptied and
+    // refilled on every snapshot, twice a second, so a press whose mousedown
+    // and mouseup fell either side of one was never delivered as a click at
+    // all -- which is what made these controls feel intermittent. Push the
+    // same snapshot twice: the queue has not changed, so the buttons must be
+    // the same objects afterwards, and must still act.
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    await new Promise(r => setTimeout(r, 20));
+    const held = qp.querySelectorAll('button')[0];
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    await new Promise(r => setTimeout(r, 20));
+    check(qp.querySelectorAll('button')[0] === held,
+          'a snapshot that does not change the queue must not replace the controls');
+    fire(qp.querySelectorAll('button')[0]);
+    check(posted.filter(u => u === '/queue/101/remove').length === 2,
+          `a control must still act after a snapshot, posted ${JSON.stringify(posted)}`);
+
+    // A shift that the engine would clamp answers 204 like any other, so a
+    // live-looking button at the end of the queue is one that can never do
+    // anything `[REQ-VIS-185]`. The picked entry is first, so `sooner` is the
+    // one with nowhere to go.
+    const verbs = [...qp.querySelectorAll('button')];
+    check(verbs[1] && verbs[1].disabled,
+          'the first queued entry cannot be moved sooner, and must say so');
+    check(verbs[2] && !verbs[2].disabled,
+          'it can still be moved later, so that verb must stay live');
 
     nowrow.onclick();
     await new Promise(r => setTimeout(r, 20));
@@ -476,10 +509,35 @@ async function run(skin) {
     check(dev.hidden, 'and clear again when it goes off');
   }
 
+  // The same guarantee for the skins that put a control set on every row
+  // rather than one beside the picked one. A queue that has not changed must
+  // come through a snapshot as the very same rows: rebuilding them regardless
+  // is what dropped presses that spanned a push.
+  const qlist = window.document.getElementById('queue');
+  if (qlist && qlist.firstElementChild) {
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    await new Promise(r => setTimeout(r, 20));
+    const firstRow = qlist.firstElementChild;
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    await new Promise(r => setTimeout(r, 20));
+    check(qlist.firstElementChild === firstRow,
+          'a snapshot that does not change the queue must not rebuild its rows');
+    // And a queue that HAS changed must still be redrawn -- a guard that never
+    // lets go is the same bug wearing the opposite coat.
+    sock.onmessage({ data: JSON.stringify({ ...RICH, queue: RICH.queue.slice(1) }) });
+    await new Promise(r => setTimeout(r, 20));
+    check(qlist.children.length === 1,
+          `a changed queue must redraw, got ${qlist.children.length} rows`);
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    await new Promise(r => setTimeout(r, 20));
+  }
+
   // `+1` when a history panel exists: the flag-checkbox toggle above posts
   // once, on top of whatever this skin's other controls already send
   // `[REQ-VIS-265]`.
-  const expectedPosts = (gear ? (nowrow ? 5 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
+  // The shared-control skin sends its remove twice: once on the first press,
+  // and once more to prove the buttons still work after a snapshot.
+  const expectedPosts = (gear ? (nowrow ? 6 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;

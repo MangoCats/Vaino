@@ -437,6 +437,12 @@
   }
 
   // The explanation panel, and the one control set that goes with it.
+  //
+  // `qpickSig` is the same guard `bindQueue` keeps, for the same reason: this
+  // box was emptied and refilled on every snapshot, so its buttons were
+  // replaced twice a second, and a press that spanned a replacement was never
+  // delivered as a click at all.
+  let qpickSig = null;
   function renderPick(s) {
     // A pinned passage that has since started playing, or left the queue
     // entirely, falls back to following the current passage rather than
@@ -455,10 +461,20 @@
     // dropped, which is why picking it hides them rather than disabling them.
     const box = $('qpick');
     box.hidden = !on;
-    if (on) {
-      box.textContent = '';
-      box.appendChild(Vaino.queueControls(on.qid, on.editable));
+    if (!on) {
+      qpickSig = null;
+      return;
     }
+    // Which shift verbs can do anything from where this entry sits, so the
+    // ones that cannot come up disabled rather than answering silently.
+    const items = s.queue || [];
+    const at = items.indexOf(on);
+    const ends = { first: at === 0, last: at === items.length - 1 };
+    const sig = JSON.stringify([on.qid, on.editable, ends]);
+    if (sig === qpickSig) return;
+    qpickSig = sig;
+    box.textContent = '';
+    box.appendChild(Vaino.queueControls(on.qid, on.editable, ends));
   }
 
   // ------------------------------------------------------------- speakers

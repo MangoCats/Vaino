@@ -267,9 +267,14 @@ const Vaino = (() => {
   // queued twice; those are two entries naming one recording, and addressing
   // them by passage meant removing one removed both and moving one moved
   // whichever happened to come first.
-  function queueControls(qid, editable = true) {
+  // `ends` marks a row that is already first or last. The engine clamps a
+  // shift at both ends and answers 204 either way `[REQ-VIS-185]`, so the
+  // button that cannot move anything looked exactly like one that could and
+  // was indistinguishable from a control that had failed. Disabled instead.
+  function queueControls(qid, editable = true, ends = {}) {
       const box = document.createElement('span');
       box.className = 'qedit';
+      delegateQueueEdits();
       // Remove first and furthest left, then sooner, then later. Fixed
       // order and fixed widths so the controls line up as columns down the
       // queue: a column of identical buttons is one target to learn, where
@@ -279,20 +284,52 @@ const Vaino = (() => {
           b.type = 'button';
           b.textContent = label;
           b.title = title;
+          // What the delegated listener reads, since it has no closure to
+          // read from. The entry, not the passage `[REQ-VIS-186]`.
+          b.dataset.qid = qid;
+          b.dataset.action = action;
           if (editable === false) {
               // Already in the mixer, so its audio is partly in the ring:
               // the control would report success and change nothing.
               b.disabled = true;
               b.title = 'already playing into the buffer';
+          } else if (action === 'sooner' && ends.first) {
+              b.disabled = true;
+              b.title = 'already first in the queue';
+          } else if (action === 'later' && ends.last) {
+              b.disabled = true;
+              b.title = 'already last in the queue';
           }
-          b.onclick = e => {
-              // The row itself may do something else entirely.
-              e.stopPropagation();
-              post(`/queue/${qid}/${action}`);
-          };
           box.appendChild(b);
       }
       return box;
+  }
+
+  // One listener, on the document, in the capture phase -- not one per button.
+  //
+  // A handler bound to a button dies with the button, and these buttons are
+  // rebuilt whenever the queue changes underneath them. Worse, a press whose
+  // mousedown and mouseup land either side of a rebuild never becomes a click
+  // at all: the browser dispatches one only when both resolve to the same live
+  // element, so the press registered visually and then did nothing. That is
+  // what made these controls feel intermittent. A listener on a node that is
+  // never replaced cannot be lost this way.
+  //
+  // Capture rather than bubble because a skin may also have a click handler on
+  // the row -- Vaino picks the passage -- and capture runs from the document
+  // down, before the row's own handler, which is what lets a control's click be
+  // stopped from counting as a pick as well.
+  let editsDelegated = false;
+  function delegateQueueEdits() {
+    if (editsDelegated) return;
+    editsDelegated = true;
+    document.addEventListener('click', e => {
+      const b = e.target.closest && e.target.closest('.qedit button[data-qid]');
+      if (!b || b.disabled) return;
+      // The row itself may do something else entirely.
+      e.stopPropagation();
+      post(`/queue/${b.dataset.qid}/${b.dataset.action}`);
+    }, true);
   }
 
   // ---- binders -----------------------------------------------------------
@@ -370,7 +407,7 @@ const Vaino = (() => {
     // set on every row. Both are honest arrangements; which suits depends on
     // whether the skin has a notion of a selected track.
     if (opts.controls !== false) {
-      row.appendChild(queueControls(item.qid, item.editable));
+      row.appendChild(queueControls(item.qid, item.editable, opts.ends));
     }
     const title = document.createElement('span');
     title.className = 'qtitle';
@@ -394,10 +431,31 @@ const Vaino = (() => {
 
   // The whole list, including the empty case, which every skin got wrong in
   // its own way before this.
+  //
+  // Rebuilt only when the list it draws has actually changed. A snapshot
+  // arrives twice a second and the queue does not change twice a second, so
+  // wiping and rebuilding on every push meant the edit buttons were replaced
+  // under the listener's own finger -- and a press that spans a rebuild is
+  // never delivered as a click at all. The same guard `bindProgram` above
+  // already keeps, for the same shape of reason: a render that throws away
+  // live DOM costs more than the comparison that avoids it.
+  //
+  // `QueueItem` carries nothing that moves with the clock -- no position, no
+  // countdown -- so the whole list serialises to a stable signature, and one
+  // that cannot go stale when a field is added to it later.
   function bindQueue(container, label, tag = 'li', empty = 'nothing queued', opts = {}) {
+    let signature = null;
     return s => {
-      container.textContent = '';
       const items = s.queue || [];
+      // Read per render, not per bind: the rows are rebuilt on every snapshot
+      // and the selection changes between them, so a value captured when the
+      // binder was made would mark the wrong row for ever. A function is
+      // accepted for exactly that reason.
+      const sel = typeof opts.selected === 'function' ? opts.selected() : opts.selected;
+      const sig = JSON.stringify([sel, items]);
+      if (sig === signature) return;
+      signature = sig;
+      container.textContent = '';
       if (!items.length) {
         const none = document.createElement(tag);
         none.className = 'empty';
@@ -405,13 +463,12 @@ const Vaino = (() => {
         container.appendChild(none);
         return;
       }
-      // Read per render, not per bind: the rows are rebuilt on every snapshot
-      // and the selection changes between them, so a value captured when the
-      // binder was made would mark the wrong row for ever. A function is
-      // accepted for exactly that reason.
-      const sel = typeof opts.selected === 'function' ? opts.selected() : opts.selected;
-      for (const q of items) {
-        const row = queueRow(q, label, tag, opts);
+      for (let i = 0; i < items.length; i++) {
+        const q = items[i];
+        // Which shift verbs can do anything from here, so the ones that
+        // cannot say so rather than answering silently.
+        const ends = { first: i === 0, last: i === items.length - 1 };
+        const row = queueRow(q, label, tag, { ...opts, ends });
         // Selection is the skin's idea; the row only reports the click and
         // wears the mark the skin asks for.
         // The entry, so a skin can tell two copies of one passage apart; the
