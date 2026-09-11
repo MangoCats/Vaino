@@ -155,11 +155,21 @@ they are a package, not a menu:
 Do fewer than three and the split is a trap that springs on the next power
 cut rather than at the moment it is made.
 
-**`[BOS-IMG-050]` The reason is homogeneity, not `bose`'s own storage.**
+**`[BOS-IMG-048]` Corrected: `bose` does not have "one writable
+filesystem".** It has B (`/srv/library`, 105 GB, genuinely `ro` after
+`[BOSE003]` step 10) and C (`/var/vaino`, 4 GB f2fs, `rw`) — a cleaner
+separation than `vainopi` manages, whose equivalent partition simply stays
+`rw` forever. So the catalogue half belongs on B per `[IMPL-BOS-078]`, and
+`bose` *does* have the read-only-catalogue situation that makes
+`vaino-db-recover` load-bearing. Found while executing; see
+`[BOS-RUN-080]`.
+
+**`[BOS-IMG-050]` The reason is homogeneity, and `bose`'s own storage agrees.**
 `vainopi` is split because its catalogue lives on a read-only partition
 `[PI023]`; the desktop is split because the split shape had to be the one
-exercised daily. `bose` needs neither — it has one writable filesystem and
-runs no Sampo tools — and that is exactly why the first draft said no.
+exercised daily. `bose` runs no Sampo tools, which is why the first draft said no — but
+its storage posture is B-read-only/C-writable, which is `vainopi`'s design
+rather than an exception to it `[BOS-IMG-048]`.
 
 What it does need is to be *the same machine to maintain*. Three
 installations in two shapes means every procedure, every document and every

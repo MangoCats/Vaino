@@ -10,6 +10,12 @@ reasons are worth keeping rather than quietly fixing.
 Asked directly: *will we end with a working system?* Yes, if executed in the
 order below. Not if executed as `BOSE008` originally read.
 
+> **Executed 2026-09-11, and it does.** `bose` runs `5272e3f`, split, both
+> halves WAL and integrity-clean, playing. §2's three corrections were all
+> real. Executing it found two more the review had missed — `[BOS-RUN-080]`
+> and `[BOS-RUN-085]` — which is the argument for doing this with the
+> service stopped and one step at a time rather than as a script.
+
 > **Related:** [BOSE008](BOSE008-image-update-plan.md) for the decisions this
 > executes · [PI025 `[PI-OWE-040]`](../VainoPi/PI025-what-the-local-split-owes-vainopi.md)
 > for the ordering trap this inherits · [BOSE005](BOSE005-power-loss-test.md)
@@ -105,7 +111,7 @@ any of them is safe.
 | 2 | `VainoPi/deploy.sh <tag> pi@bose` | `sudo cp /usr/local/bin/vaino.prev /usr/local/bin/vaino && systemctl restart vaino` |
 | 3 | Stop `vaino`; ship and run `load_occasions.py`; apply `profanity.sql`; start `vaino` | restore the step-0 backup |
 | 4 | Install the three neutral helpers (`vitals`, `underruns`, `startup-sample`) | delete them; nothing references them |
-| 5 | **Split**, as one transaction — see §4 | point the unit back at `vaino.db`, which is untouched |
+| 5 | **Split**, as one transaction — see §4 | point the unit back at `vaino.db`, which is untouched; `vaino.service.pre-split` is kept beside the unit |
 
 **`[BOS-RUN-055]`** Steps 1–4 are independent and individually reversible.
 Step 5 is the only one that changes how the appliance is *shaped*, and it is
@@ -118,9 +124,19 @@ second and the fifth, `bose` is a machine whose unit does not match its
 databases.
 
 1. `systemctl stop vaino`
-2. `split_database.py /var/vaino/vaino.db --library-out … --listener-out … --commit`
-   — needs `sqlite3`? No: it is stdlib Python, so it runs wherever python3
-   is, which `bose` has. **Keep `vaino.db`**; it is the rollback.
+2. Split **inside an attended window**, because the halves do not land on the
+   same partition — `[BOS-RUN-080]`:
+
+   ```
+   bash BosePi/attended-import.sh --check -- ssh pi@bose \
+       "python3 /tmp/split_database.py /var/vaino/vaino.db \
+        --library-out /srv/library/library.db \
+        --listener-out /var/vaino/listener.db --commit"
+   ```
+
+   then the same with `--go --no-mpd-update`. `split_database.py` is stdlib
+   Python and runs wherever python3 is. **Keep `vaino.db`**; it is the
+   rollback.
 3. `install -m755 vaino-db-recover /usr/local/bin/` — mandatory, not
    optional: without it the first power cut after the split is a crash loop
    `[PI3-FOUND-120]`, and this machine is cut from a speaker's switch.
@@ -136,12 +152,62 @@ removed. Before step 4 the unit still names `vaino.db`, which
 before. After step 4 it names the two new files, which exist and verified
 clean. The window where neither is true does not exist.
 
-## 5. Open
+## 5. What executing it found that reviewing it did not
 
-**`[BOS-RUN-070]`** Not executed. The answer to "will we end with a working
-system" is yes **in this order**, and the ordering is the whole of the
-answer — `[BOS-RUN-035]` alone would have produced a `bose` quietly
-manufacturing shadow tables on every boot.
+**`[BOS-RUN-080]` The two halves do not go on the same partition, and the
+runbook's own §4 had them doing so.** `[IMPL-BOS-078]` settled this before
+either document existed: `vaino.db` sits on C *"until the split is built"*,
+and the catalogue belongs on B. That is not a preference — C is a 4 GB f2fs
+partition with 2.6 GB free, and `library.db` is 1.17 GB, so putting both
+halves there alongside the retained original would have left roughly 200 MB
+on the partition that takes every write this appliance makes. B has 56 GB.
+
+B is also genuinely `ro`, which C is not, so writing it needs
+`BosePi/attended-import.sh` — the remount-run-restore window
+`[IMPL-BOS-150]` already built. Used with `--check` first, as that script
+insists.
+
+This also quietly corrects `BOSE008 [BOS-IMG-050]`'s claim that `bose` "has
+one writable filesystem". It has two partitions with different postures, and
+that is closer to `vainopi`'s intent than `vainopi` itself manages — B here
+really is read-only, where `vainopi`'s equivalent just stays `rw` forever.
+
+**`[BOS-RUN-085]` Two of the three helpers are inert without their units.**
+`vaino-vitals` and `vaino-startup-sample` each have a
+`/etc/systemd/system/*.service` on `vainopi`; installed as bare scripts they
+are exactly the half-a-mechanism mistake `[BOS-RUN-045]` had just caught
+with `vaino-wifi-revert`, and the review made it again one paragraph later.
+Both units are now on `bose` with `vainopi`'s own enablement: `startup-sample`
+**enabled** (bounded — it samples the first minutes after a boot),
+`vaino-vitals` **disabled** (an infinite sampler, started by hand when
+something is being investigated). `vaino-underruns` genuinely is standalone
+and needs no unit.
+
+**`[BOS-RUN-090]` A WAL catalogue on read-only media is safe only while it
+is clean.** `library.db` is WAL, inherited from the source by
+`split_database.py`, and it now lives on a partition that is `ro` in normal
+operation. Measured: a cleanly-closed WAL database removes its sidecars and
+opens read-only without them, and `bose`'s `library.db-wal` is 0 bytes, so
+the current state is sound.
+
+The narrow risk is an attended window that closes with frames still
+un-checkpointed: B would go `ro` carrying a dirty `-wal` that no read-only
+open can replay. `attended-import.sh` `sync`s, which is not the same as a
+checkpoint. Any future window that writes `library.db` should end with
+`PRAGMA wal_checkpoint(TRUNCATE)` before B closes — noted in §6 rather than
+built, since nothing writes that file today.
+
+## 6. Open
+
+**`[BOS-RUN-070]` Executed 2026-09-11.** The ordering was the whole of the
+answer: `[BOS-RUN-035]` alone would have produced a `bose` quietly
+manufacturing shadow tables on every boot, and the post-split check found
+none.
+
+**`[BOS-RUN-078]` `attended-import.sh` should checkpoint before closing B**
+`[BOS-RUN-090]`. Not built: nothing writes `library.db` today, and the one
+window that did leave it clean. It becomes real the first time an import
+touches the catalogue rather than only the audio.
 
 **`[BOS-RUN-075]`** `[BOS-RUN-010]`'s glibc floor is undefended: nothing
 fails at build time if `build/Dockerfile.aarch64` is bumped past bookworm,
