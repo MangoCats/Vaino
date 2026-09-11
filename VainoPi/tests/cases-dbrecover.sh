@@ -71,6 +71,36 @@ else
     rm -f "$D/good.db-journal"
 fi
 
+# **WAL, which is what these databases actually are since `[PI-OWE-030]`.**
+# The recovery act is identical -- one read-write open -- but the evidence
+# is not, and the script's reporting is the half that had to change. Without
+# these cases the WAL fix is a claim.
+PATH="$REALPATH" sqlite3 "$D/wal.db" \
+    "PRAGMA journal_mode=WAL; CREATE TABLE t (x); INSERT INTO t VALUES (1);" >/dev/null
+
+# A WAL database at rest, cleanly closed: its `-wal` is gone or empty, and
+# that is ORDINARY. Announcing it would cry wolf on every single boot, which
+# is worse than silence because it trains the reader to ignore the log.
+OUT=$(recover "$D/wal.db" "$D/absent.db" "$D/absent2.db")
+assert_eq "$OUT" "" "says nothing about a cleanly-closed WAL database"
+
+# An EMPTY `-wal` beside it is still ordinary -- a WAL database in use has
+# one, and after a clean close it may be left behind at zero length. This is
+# the case a naive `[ -f "$db-wal" ]` would have got wrong, announcing an
+# unclean stop on a healthy machine.
+: > "$D/wal.db-wal"
+OUT=$(recover "$D/wal.db" "$D/absent.db" "$D/absent2.db")
+assert_eq "$OUT" "" "says nothing about an EMPTY -wal, which is not evidence of anything"
+rm -f "$D/wal.db-wal"
+
+# A NON-EMPTY `-wal` at this point in boot, with nothing holding the database
+# open, means frames that were never checkpointed -- the WAL equivalent of a
+# hot journal, and worth saying out loud.
+printf 'not really a wal, but it is not empty\n' > "$D/wal.db-wal"
+OUT=$(recover "$D/wal.db" "$D/absent.db" "$D/absent2.db")
+assert_in "$OUT" "un-checkpointed WAL" "announces a non-empty -wal as an unclean stop"
+rm -f "$D/wal.db-wal" "$D/wal.db-shm"
+
 # Opening read-write is the whole point: the read-only attach that this
 # replaced could not roll anything back `[PI3-FOUND-120]`.
 printf 'this is not a database at all\n' > "$D/broken.db"

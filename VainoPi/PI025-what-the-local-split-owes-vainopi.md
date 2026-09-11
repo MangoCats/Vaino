@@ -206,11 +206,30 @@ peer column, and `[SPEC-PREF-140]`'s specials sync all working at once,
 against real hardware rather than a fixture.
 
 **`[PI-OWE-090]`** `bose` is not split and is therefore untouched by all of
-it — but `[PI-OWE-010]`'s pattern is what it will meet on the day it is,
-and this register is the list to re-run against it then. It also still
-carries none of the specials data: `tools/load_occasions.py` and
-`tools/backfill_profanity.py` have never been run against it, and being
-unsplit it needs neither `--library` nor a patch file to do so.
+it — but `[PI-OWE-010]`'s pattern is what it will meet on the day it is.
+Planned out in [BOSE008](../BosePi/BOSE008-image-update-plan.md), which
+carries this register's findings into a decision about that image and adds
+the one this work produced: `bose` has no `sqlite3`, so every tool built on
+`remote_peek` reported it unreachable until that gained a `python3`
+fallback.
+
+**`[PI-OWE-100]` `[PI-OWE-030]`'s WAL change broke `vaino-db-recover`'s
+reporting, and I did not notice at the time.** That script detects an
+unclean stop by `[ -f "$db-journal" ]`, which under WAL can never be true
+again — so the two lines that tell a boot log an unclean shutdown happened
+were silently dead from the moment the mode changed. Recovery itself was
+never affected: the script opens each database read-write regardless, and
+that one open replays a WAL exactly as it rolls back a journal.
+
+Fixed 2026-09-11 and deployed: `-journal` still means an unclean stop
+outright, while a `-wal` must be **non-empty** to mean the same thing,
+because an ordinary WAL database in use has one and announcing that on
+every boot would train the reader to ignore the log. Three cases added to
+`tests/cases-dbrecover.sh`, run against real SQLite **on the appliance**
+because this desktop has no `sqlite3` either and skips the whole group. The
+first restart after installing it said
+`un-checkpointed WAL on /var/vaino/listener.db, replaying` — a line the old
+script could not have produced.
 
 ---
 

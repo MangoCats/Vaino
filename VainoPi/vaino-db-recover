@@ -8,9 +8,20 @@
 # have been one. That is not misuse -- it is the only way the hardware can be
 # switched off -- so it has to be a supported event rather than an accident.
 #
-# What it leaves behind is a hot rollback journal: `listener.db-journal`,
-# beside the database, holding the pages of a transaction that never
-# committed. SQLite's contract is that the next connection to open that
+# What it leaves behind depends on the journal mode, and BOTH shapes matter
+# here since `[PI-OWE-030]` put these databases into WAL on 2026-09-11:
+#
+#   `delete` mode  a hot rollback journal, `listener.db-journal`, holding the
+#                  pages of a transaction that never committed.
+#   WAL            a `listener.db-wal` with frames never checkpointed into the
+#                  database, and a `-shm` index that may need rebuilding.
+#
+# The recovery is the same act for both -- one read-write open -- but the
+# EVIDENCE is not, and that difference is the whole of this script's
+# reporting. A `-journal` beside a database means an unclean stop and nothing
+# else. A `-wal` is an ordinary part of a WAL database in use, so its mere
+# presence proves nothing; a NON-EMPTY one at `ExecStartPre`, before anything
+# has opened the database, is the equivalent signal. SQLite's contract is that the next connection to open that
 # database rolls it back. The catch is that rolling back is a WRITE, and
 # Vaino attaches its databases `mode=ro` -- deliberately, so the player
 # cannot corrupt the library `[IMPL-DBSPLIT-025]`. A read-only connection
@@ -25,8 +36,9 @@
 # someone with an ssh key.
 #
 # `PRAGMA user_version` and not `integrity_check`: the rollback happens when
-# a read-write connection first reads the database and notices the journal,
-# so the cheapest possible read is enough. A real check of a 1.1 GB library
+# a read-write connection first reads the database and notices the journal --
+# and a WAL replay happens on that same first open, for the same reason -- so
+# the cheapest possible read is enough. A real check of a 1.1 GB library
 # on a Pi Zero 2W would add minutes to every boot to answer a question that
 # was not asked.
 set -u
@@ -37,10 +49,20 @@ LISTENER="${VAINO_LISTENER_DB:-/var/vaino/listener.db}"
 
 for db in "$DB" "$LIB" "$LISTENER"; do
     [ -f "$db" ] || continue
-    # A journal beside the database is the whole reason this runs; say so
-    # when there is one, so the boot log carries the fact that an unclean
-    # shutdown happened rather than leaving it to be deduced later.
-    [ -f "$db-journal" ] && echo "vaino-db-recover: hot journal on $db, rolling back"
+    # Evidence of an unclean stop is the whole reason this runs; say so when
+    # there is some, so the boot log carries the fact rather than leaving it
+    # to be deduced later.
+    #
+    # Two forms, and they are not equally strong. A `-journal` existing at all
+    # is conclusive. A `-wal` existing is not -- that is what a WAL database
+    # in use looks like -- so it has to be non-empty (`-s`), which at this
+    # point in boot, with nothing yet holding the database open, means frames
+    # that were never checkpointed.
+    if [ -f "$db-journal" ]; then
+        echo "vaino-db-recover: hot journal on $db, rolling back"
+    elif [ -s "$db-wal" ]; then
+        echo "vaino-db-recover: un-checkpointed WAL on $db, replaying"
+    fi
     # stderr is CAPTURED, not discarded. The first version sent it to
     # /dev/null and reported only "could not open", which is what it then did
     # on a live boot -- announcing a hot journal it had failed to roll back and
@@ -49,7 +71,16 @@ for db in "$DB" "$LIB" "$LISTENER"; do
     # cause makes the next person guess, and this one had already cost that
     # once `[PI3-FOUND-120]`.
     if err="$(sqlite3 "$db" 'PRAGMA user_version;' 2>&1 >/dev/null)"; then
-        [ -f "$db-journal" ] && echo "vaino-db-recover: $db still journalled after recovery" >&2
+        # The same asymmetry on the way out. A surviving `-journal` is worth
+        # reporting; a surviving `-wal` is only worth reporting if it still
+        # holds frames, since the last connection to close a WAL database
+        # checkpoints and removes it, and an empty one left behind is
+        # ordinary rather than a failure.
+        if [ -f "$db-journal" ]; then
+            echo "vaino-db-recover: $db still journalled after recovery" >&2
+        elif [ -s "$db-wal" ]; then
+            echo "vaino-db-recover: $db still has un-checkpointed WAL after recovery" >&2
+        fi
     else
         # Never fatal. A database this cannot open is a problem the player
         # itself will report far better than a pre-start script can, and
