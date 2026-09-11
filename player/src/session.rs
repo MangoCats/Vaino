@@ -269,6 +269,12 @@ pub struct Session {
     /// the running one keeps answering selections throughout, and there is
     /// never a window with none.
     rebuild: Option<std::sync::mpsc::Receiver<Result<Box<Director>, String>>>,
+    /// The queue as last written to `player_queue` `[SPEC-DIR-225]`, so a
+    /// refill that changed nothing does not write. Empty at open rather than
+    /// primed from the database: the first refill then reconciles whatever
+    /// the restore could not rebuild, instead of leaving the table naming
+    /// passages that are not queued.
+    saved_queue: Vec<i64>,
 }
 
 impl Session {
@@ -363,6 +369,7 @@ impl Session {
             db: db.to_path_buf(),
             library: library.to_path_buf(),
             rebuild: None,
+            saved_queue: Vec::new(),
         })
     }
 
@@ -544,6 +551,8 @@ impl Session {
         if let Some(s) = self.store.take() {
             engine.attach_store(s);
         }
+        // Read before the `take` below, for the duplicate check after it.
+        let resumed = self.resume_id;
         if let Some(id) = self.resume_id.take() {
             match self.lib.passage(id) {
                 Ok(mut e) => {
@@ -554,6 +563,38 @@ impl Session {
                 }
                 // The library was rebuilt and the passage renumbered away.
                 Err(_) => eprintln!("saved passage {id} is no longer in the library"),
+            }
+        }
+        // The queue as it stood `[SPEC-DIR-225]`, and **before** the refill
+        // below. The Director is built on its own thread and is not here yet
+        // `[IMPL-SUI-075]`, so the only selector this refill would have is the
+        // uniform-random fallback -- which is stated behaviour for a live
+        // rebuild, where the queue is full and it cannot fire, and quite
+        // another thing at startup, where the queue is empty and it fills
+        // every slot. Restoring first leaves it nothing to fill.
+        //
+        // Entries arrive with `selected_by` at its `Library::passage` default
+        // of `None`, which already means "no selection event to report at all
+        // -- a resumed or reconstructed entry". Nothing new to say.
+        let remembered: Vec<i64> =
+            self.decisions.as_ref().map(|s| s.load_queue()).unwrap_or_default();
+        for id in remembered {
+            // The head can be named here as well as in `player_state`, if the
+            // process stopped between a passage being admitted and the next
+            // refill writing the queue without it. Resumed above and queued
+            // again here, it would play twice.
+            if Some(id) == resumed {
+                continue;
+            }
+            match self.lib.passage(id) {
+                Ok(mut e) => {
+                    Self::describe(&self.lib, &mut e);
+                    engine.enqueue(e);
+                }
+                // Renumbered away by a rescan `[SPEC-SC-095]`. One passage
+                // short is a gap the refill below closes; refusing the rest of
+                // the queue over it would not be.
+                Err(_) => eprintln!("queued passage {id} is no longer in the library"),
             }
         }
         let suppress = engine.snapshot_suppress_h();
@@ -621,6 +662,7 @@ impl Session {
 
         let short = engine.shortfall();
         if short == 0 {
+            self.remember_queue(&*engine);
             return;
         }
         let mut chosen: Vec<i64> = engine.queued_ids();
@@ -739,6 +781,34 @@ impl Session {
                 Err(e) => eprintln!("refill: {e}"),
             }
         }
+        self.remember_queue(&*engine);
+    }
+
+    /// Write the queue down when it has changed `[SPEC-DIR-225]`.
+    ///
+    /// Called from **both** of `refill`'s exits, not only the one that queued
+    /// something: a passage the listener added or removed by hand changes the
+    /// queue with no shortfall to notice it, and a queue remembered only when
+    /// the Director touches it would forget exactly the entries chosen by a
+    /// person.
+    ///
+    /// Gated on the ids actually differing, the way `Engine::persist` gates
+    /// the resume point: `refill` runs every tick, and a write per tick would
+    /// dominate a loop that is otherwise sub-millisecond.
+    ///
+    /// Best-effort. Failing to remember the queue costs a restart its place;
+    /// interrupting the music over it would cost more.
+    fn remember_queue(&mut self, engine: &dyn Playback) {
+        let ids = engine.queued_ids();
+        if ids == self.saved_queue {
+            return;
+        }
+        let Some(store) = &self.decisions else { return };
+        if let Err(e) = store.save_queue(&ids) {
+            eprintln!("save queue: {e}");
+            return;
+        }
+        self.saved_queue = ids;
     }
 
     /// Move the session to the other backend, carrying the queue `[SPEC-BK-030]`.
@@ -885,5 +955,122 @@ impl Session {
 
     pub fn depth(&self) -> usize {
         self.depth
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Engine;
+    use crate::path::PathHandle;
+
+    /// A library with enough radio passages that a uniform draw reproducing a
+    /// given order is not something a test could mistake for a restore: six
+    /// passages give 120 possible orderings of any three.
+    fn library_on_disk(name: &str) -> std::path::PathBuf {
+        let tmp = std::env::temp_dir()
+            .join(format!("vaino-sess-{name}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let c = rusqlite::Connection::open(&tmp).unwrap();
+        c.execute_batch(
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT NOT NULL,
+                 size_bytes INTEGER, mtime REAL, format TEXT, duration_ms INTEGER,
+                 first_seen TEXT, last_seen TEXT);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,
+                 kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+                 lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT,
+                 fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
+                 fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
+                 fade_out_curve TEXT NOT NULL DEFAULT 'exponential');
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT,
+                 weight REAL DEFAULT 1.0, source TEXT);",
+        )
+        .unwrap();
+        for id in 1..=6i64 {
+            c.execute(
+                "INSERT INTO files VALUES (?1,'md5',?2,1,1.0,'mp3',300000,'t','t')",
+                rusqlite::params![id, format!("/m/{id}.mp3")],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src)
+                 VALUES (?1, ?1, 'radio', 0, 300000, 'src')",
+                [id],
+            )
+            .unwrap();
+        }
+        drop(c);
+        // Opened once so the listener-side tables exist, exactly as they do on
+        // a real installation before a session is ever started.
+        drop(PlayerStore::open(&tmp).unwrap());
+        tmp
+    }
+
+    /// **The startup bypass, in a test** `[SPEC-DIR-225]`.
+    ///
+    /// The Director is built on its own thread and is not there yet when
+    /// `prime` runs `[IMPL-SUI-075]`, so without a remembered queue the only
+    /// selector available is the uniform-random fallback -- which is how 149
+    /// children's passages, excluded from every weighted selection, reached
+    /// the appliance's speakers anyway. The remembered queue is what that
+    /// fallback must no longer be reached to supply.
+    #[test]
+    fn a_remembered_queue_is_restored_rather_than_drawn_at_random() {
+        let tmp = library_on_disk("restore");
+        PlayerStore::open(&tmp).unwrap().save_queue(&[5, 2, 6]).unwrap();
+
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let (mut engine, _h) = Engine::new(PathHandle::silent(), 5);
+        session.prime(&mut engine);
+
+        let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
+        assert_eq!(
+            &queued[..3],
+            &[5, 2, 6],
+            "the remembered queue comes back in play order, ahead of any refill"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The fallback is still the answer when there is nothing to restore --
+    /// a fresh image, or a library rescan that renumbered every saved id
+    /// `[SPEC-DIR-230]`. Silence would be the worse answer `[REQ-PD-100]`.
+    #[test]
+    fn a_session_with_nothing_remembered_still_fills_its_queue() {
+        let tmp = library_on_disk("empty");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let (mut engine, _h) = Engine::new(PathHandle::silent(), 5);
+        session.prime(&mut engine);
+        assert_eq!(engine.queued().count(), 5, "a station with no memory still plays");
+
+        // And what it filled is written down, so the *next* start has
+        // something to restore -- the save half of `[SPEC-DIR-225]`, which the
+        // refill at the end of `prime` is responsible for.
+        let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
+        assert_eq!(
+            PlayerStore::open(&tmp).unwrap().load_queue(),
+            queued,
+            "the queue is remembered as it stands, not as it was asked for"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A passage renumbered away by a rescan `[SPEC-SC-095]` costs its own
+    /// slot and nothing else: the rest of the remembered order survives, and
+    /// the refill closes the gap.
+    #[test]
+    fn a_renumbered_passage_is_skipped_not_fatal() {
+        let tmp = library_on_disk("gone");
+        PlayerStore::open(&tmp).unwrap().save_queue(&[4, 999, 1]).unwrap();
+
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let (mut engine, _h) = Engine::new(PathHandle::silent(), 5);
+        session.prime(&mut engine);
+
+        let queued: Vec<i64> = engine.queued().map(|e| e.passage_id).collect();
+        assert_eq!(&queued[..2], &[4, 1], "the survivors keep their order");
+        assert!(!queued.contains(&999));
+        assert_eq!(queued.len(), 5, "and the refill makes the count up");
+        let _ = std::fs::remove_file(&tmp);
     }
 }

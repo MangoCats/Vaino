@@ -53,6 +53,10 @@ pub const LISTENER_TABLES: &[&str] = &[
     "listener_characteristics",
     "listener_settings",
     "player_state",
+    // The rest of "where you were" `[SPEC-DIR-225]`: `player_state` is the
+    // passage sounding, this is the handful waiting behind it. Restored
+    // together or the resume is half a resume.
+    "player_queue",
 ];
 
 /// How far back each tier reaches `[REQ-LIB-160]`.

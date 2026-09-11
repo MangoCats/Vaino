@@ -724,6 +724,24 @@ impl PlayerStore {
                  updated_at TEXT NOT NULL);",
         )
         .map_err(|e| DbError::Open(e.to_string()))?;
+        // The queue as it stood, so a restart resumes the listening rather
+        // than starting a new one `[SPEC-DIR-225]`. Beside `player_state` and
+        // not inside it: that row is the passage *sounding*, this is what is
+        // *waiting*, and `hand_over_seamless` already keeps the two apart for
+        // the same reason `[SPEC-BK-030]`.
+        //
+        // Passage ids and their order, and nothing else. A queue entry is
+        // rebuilt from its id by `Library::passage`, exactly as the backend
+        // handoff rebuilds one on arrival rather than carrying it -- spans,
+        // fades and naming all belong to the passage, not to whoever last
+        // held it queued.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS player_queue (
+                 position   INTEGER PRIMARY KEY,
+                 passage_id INTEGER NOT NULL,
+                 updated_at TEXT NOT NULL);",
+        )
+        .map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
@@ -1749,6 +1767,53 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// Write the queue down, in play order `[SPEC-DIR-225]`.
+    ///
+    /// Replaces the whole list rather than diffing it: it is at most a handful
+    /// of ids, and a queue that half-updated would name an order that was
+    /// never played. One transaction for the same reason `restore` uses one.
+    ///
+    /// Best-effort at the call site, like every other write on this path --
+    /// failing to remember the queue must never interrupt the music.
+    pub fn save_queue(&self, ids: &[i64]) -> Result<(), DbError> {
+        let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(q)?;
+        let done = || -> Result<(), DbError> {
+            self.conn.execute("DELETE FROM player_queue", []).map_err(q)?;
+            for (position, passage_id) in ids.iter().enumerate() {
+                self.conn
+                    .execute(
+                        "INSERT INTO player_queue (position, passage_id, updated_at)
+                         VALUES (?1, ?2, datetime('now'))",
+                        rusqlite::params![position as i64, passage_id],
+                    )
+                    .map_err(q)?;
+            }
+            Ok(())
+        }();
+        let end = if done.is_ok() { "COMMIT" } else { "ROLLBACK" };
+        let _ = self.conn.execute_batch(end);
+        done
+    }
+
+    /// The queue as it was last written, in play order `[SPEC-DIR-225]`.
+    ///
+    /// An empty list is the honest answer to every failure here -- a missing
+    /// table, an unreadable row, a database written by a player that predates
+    /// this. The caller's next step either way is to fill what is short, so a
+    /// `Result` would buy it nothing it could act on.
+    pub fn load_queue(&self) -> Vec<i64> {
+        let Ok(mut q) =
+            self.conn.prepare("SELECT passage_id FROM player_queue ORDER BY position")
+        else {
+            return Vec::new();
+        };
+        let Ok(rows) = q.query_map([], |r| r.get::<_, i64>(0)) else {
+            return Vec::new();
+        };
+        rows.flatten().collect()
+    }
+
     /// The durable record of one selection `[SPEC-DIR-190]`.
     ///
     /// `detail` is the full decomposition as JSON. A failure here must never
@@ -2357,6 +2422,32 @@ mod tests {
 
     /// Changing a decision already folded into `passages` would corrupt the
     /// baseline `[SPEC-DF-102]` sync depends on, the same reason
+    /// The queue round-trips in play order, and each save replaces the whole
+    /// list `[SPEC-DIR-225]`. A merge would leave a shortened queue with a
+    /// tail of passages that are no longer waiting for anything.
+    #[test]
+    fn the_queue_is_remembered_in_order_and_replaced_whole() {
+        let tmp = std::env::temp_dir().join(format!("vaino-queue-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let store = PlayerStore::open(&tmp).unwrap();
+
+        // Never written is an empty queue, not a failure -- the same posture
+        // `load_settings` takes, for a caller whose next step is to fill
+        // whatever is short either way.
+        assert!(store.load_queue().is_empty());
+
+        store.save_queue(&[7, 3, 11, 3]).unwrap();
+        assert_eq!(store.load_queue(), vec![7, 3, 11, 3],
+                   "play order is the whole of what is stored, and a repeat is legal");
+
+        store.save_queue(&[5]).unwrap();
+        assert_eq!(store.load_queue(), vec![5], "a shorter queue leaves no tail");
+
+        store.save_queue(&[]).unwrap();
+        assert!(store.load_queue().is_empty(), "an emptied queue is emptied");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     /// `record_review` refuses the equivalent case for a reassignment.
     #[cfg(feature = "sampo-support")]
     #[test]
