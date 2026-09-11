@@ -76,11 +76,25 @@ import sqlite3
 ROLE_LIBRARY = "library"
 ROLE_LISTENER = "listener"
 
-# One table apiece, enough to tell the shapes apart. `recordings` and
-# `listener_play_history` are in every installation of their side that has
-# ever been written to, and neither has ever lived on the other half.
-LIBRARY_MARKER = "recordings"
-LISTENER_MARKER = "listener_play_history"
+# A SET per side, not one table apiece. The first version of this used a
+# single marker each and got it wrong: `test_jobs_remote_pull.py` builds a
+# perfectly whole fixture that happens to have no `listener_play_history`,
+# and one marker read that as "the library half of a split pair", went
+# looking for a peer, and refused to open a database that was fine.
+#
+# With sets, a half is recognised by having **none** of the other side's
+# tables, which is what a real half actually looks like -- `split_database.py`
+# puts every listener table on one side and every catalogue table on the
+# other. A database merely missing some tables still shows the ones it has,
+# and reads as whole.
+#
+# Chosen to be tables no bootstrap path ever creates on the wrong side:
+# notably NOT `file_tags` or `cover_art`, which vainopi has empty copies of
+# in its listener half `[PI-OWE-040]` and which would therefore make that
+# half look like a catalogue.
+LIBRARY_MARKERS = {"recordings", "files", "passages", "flavor"}
+LISTENER_MARKERS = {"listener_play_history", "listener_flags",
+                    "listener_preferences", "listener_settings", "player_state"}
 
 # The alias each half is attached under. Named for the half rather than
 # something positional, so a query that *does* qualify reads the same
@@ -109,13 +123,13 @@ def _tables(conn, schema="main") -> set[str]:
 
 
 def markers(path: str) -> tuple[bool, bool]:
-    """`(has_library_marker, has_listener_marker)` for one file."""
+    """`(has_any_library_table, has_any_listener_table)` for one file."""
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         names = _tables(conn)
     finally:
         conn.close()
-    return LIBRARY_MARKER in names, LISTENER_MARKER in names
+    return bool(names & LIBRARY_MARKERS), bool(names & LISTENER_MARKERS)
 
 
 def shape(path: str) -> str:
@@ -125,8 +139,8 @@ def shape(path: str) -> str:
     called `vaino.db` may be either shape, and `[IMPL011]` is emphatic that
     the deployed schema and the source's idea of it are not the same thing.
     `EMPTY` is the bootstrap case -- a database just created from
-    `schema.sql` has both markers, so only a genuinely empty file lands
-    here.
+    `schema.sql` has tables from both sides, so only a file with nothing
+    recognisable from either lands here.
 
     **A half carrying a shadow reports `WHOLE` here, and that is why
     `connect()` does not decide on this alone.** A listener half with a

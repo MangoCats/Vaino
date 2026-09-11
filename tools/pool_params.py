@@ -22,6 +22,10 @@ from __future__ import annotations
 import sqlite3
 import statistics as st
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from pathlib import Path
 
 EXCL_POOL = 1000
@@ -90,7 +94,9 @@ def main() -> int:
     if not args:
         print(__doc__)
         return 2
-    loc = sqlite3.connect(args[0])
+    # Read-only across both halves: programme seeds are listener-side,
+    # the flavor vectors they are profiled against are not.
+    loc = vaino_db.connect(args[0], vaino_db.ROLE_LIBRARY)
     seeds_by_prog: dict[int, list[str]] = {}
     for pid, m in loc.execute("SELECT program_id, mbid FROM listener_program_seeds"):
         seeds_by_prog.setdefault(pid, []).append(m)
@@ -103,7 +109,9 @@ def main() -> int:
         print()
 
     if len(args) > 1:
-        inh = sqlite3.connect(args[1])
+        # The inherited database is a whole MuLibPlay-era file, not a half
+        # of anything -- opened plainly, on purpose.
+        inh = sqlite3.connect(f"file:{args[1]}?mode=ro", uri=True)
         iv, ic = load(inh, False)
         print(f"inherited: {len(iv)} recordings\n")
         for pid in sorted(seeds_by_prog)[:3]:

@@ -60,16 +60,54 @@ def say(text: str) -> None:
     print(text.encode(enc, "replace").decode(enc), flush=True)
 
 
-def fetch_flags(remote: str, hostname: str, timeout: float = rp.TOTAL_TIMEOUT) -> dict:
+def attached(sql: str, listener: str | None) -> str:
+    """`sql` with the peer's listener half ATTACHed in front of it.
+
+    `run_remote_sql` runs `sqlite3 -json <path> "<sql>"`, and one path
+    cannot serve both halves of a split installation `[IMPL002 §7.4]`. It
+    can, however, run more than one statement: attaching first and then
+    selecting leaves the unqualified `listener_flags` to resolve through
+    the attach chain, exactly as it does locally.
+
+    The positional `remote` stays the peer's **catalogue**, which is what
+    `sync_remote` means for every tool that reaches a peer -- `passages` and
+    `files` are the two tables this query joins, and `mesh_diff.py` wants
+    that path and only that.
+    """
+    if not listener:
+        return sql
+    return f"ATTACH DATABASE {rp.literal(listener)} AS lis; {sql}"
+
+
+def fetch_flags(remote: str, hostname: str, timeout: float = rp.TOTAL_TIMEOUT,
+                listener: str | None = None) -> dict:
     """`{"ok": True, "flags": [...]}` in the exact shape `export_flags.py`'s
     own `export_flags()` produces, or `{"ok": False, "error": "..."}`.
+
+    `listener` is the peer's listener-half path where it has one. Without
+    it, against a split peer, this tool answers wrongly in both directions:
+    pointed at the listener half it fails on `passages`, and pointed at the
+    catalogue half it fails on `listener_flags` -- where the guard below
+    then reports "nothing flagged" for an installation that has plenty.
+    Measured against `pi@vainopi` 2026-09-11.
     """
-    result = rp.run_remote_sql(remote, FLAGS_SQL, timeout=timeout)
+    result = rp.run_remote_sql(remote, attached(FLAGS_SQL, listener), timeout=timeout)
     if not result["ok"] and "no such column" in result["error"].lower() and "origin" in result["error"].lower():
-        result = rp.run_remote_sql(remote, FLAGS_SQL_NO_ORIGIN, timeout=timeout)
+        result = rp.run_remote_sql(remote, attached(FLAGS_SQL_NO_ORIGIN, listener), timeout=timeout)
     if not result["ok"] and "no such table" in result["error"].lower() and "listener_flags" in result["error"].lower():
         # No version of Vaino carrying `[REQ-VIS-265]` has opened this
         # library yet -- nothing flagged there is not a failure to report.
+        #
+        # **Only when this peer is not split.** On a split one the table is
+        # absent from the *catalogue file* while being perfectly present in
+        # the installation, and answering "nothing flagged" to that is the
+        # absent-vs-unknown confusion `[SPEC-PREF-150]` names, in a
+        # different disguise. With a listener path given, the attach above
+        # has already made the table reachable, so reaching here means it
+        # genuinely is not there.
+        if listener:
+            return {"ok": False, "error":
+                    f"listener_flags is missing from {listener} on this peer"}
         return {"ok": True, "flags": []}
     if not result["ok"]:
         return result
@@ -98,13 +136,18 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("remote", help="user@host:/path/to/vaino.db")
     ap.add_argument("-o", "--out", required=True)
+    # The peer's listener half, where it has one `[IMPL002 §7.4]`. Path
+    # only: the host comes from `remote`.
+    ap.add_argument("--remote-listener",
+                    help="path to the peer's listener.db, if it is split")
     ap.add_argument("--timeout", type=float, default=rp.TOTAL_TIMEOUT)
     ap.add_argument("--json", action="store_true",
                      help="also print one final JSON summary line, for a caller "
                           "(the Sampo console's remote-pull job) rather than a person")
     args = ap.parse_args()
 
-    result = fetch_flags(args.remote, socket.gethostname(), timeout=args.timeout)
+    result = fetch_flags(args.remote, socket.gethostname(), timeout=args.timeout,
+                         listener=args.remote_listener)
     if not result["ok"]:
         say(f"could not reach {args.remote}: {result['error']}")
         if args.json:

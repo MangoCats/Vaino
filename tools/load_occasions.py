@@ -34,6 +34,10 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from pathlib import Path
 
 # MuLibPlay's `kidSongWeight`, whose shipped default is 0.000001 — an effective
@@ -117,10 +121,14 @@ def main() -> int:
     spiritual = (float(args[args.index("--spiritual") + 1]) if "--spiritual" in args
                  else SPIRITUAL_DEFAULT)
 
-    con = sqlite3.connect(db)
-    # Read-only, and a different file once split: this only ever counts, and
-    # the catalogue is not this tool's to write.
-    reach = con if library == db else sqlite3.connect(f"file:{library}?mode=ro", uri=True)
+    # Writes the occasion registry, which is listener-side, and counts
+    # reach over `passages`/`flavor`, which are not. One connection sees
+    # both `[IMPL-DBSPLIT-025]`; `--library` still names the catalogue
+    # explicitly for an installation whose halves are not siblings, which
+    # is how vainopi is laid out.
+    con = vaino_db.connect(db, vaino_db.ROLE_LISTENER, writable=True,
+                           peer=(str(library) if library != db else None))
+    reach = con
     # The label column post-dates the table `[SPEC-PREF-080]`. The player adds
     # it too, at startup, but this tool has to be able to run against a
     # database the player has not opened since.

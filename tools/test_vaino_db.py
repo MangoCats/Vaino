@@ -64,6 +64,21 @@ def make_whole(path):
     c.close()
 
 
+def make_partial(path):
+    """Whole, but missing the table an earlier version used as THE listener
+    marker. `test_jobs_remote_pull.py` builds exactly this, and a
+    single-marker `shape()` called it the library half of a split pair and
+    refused to open it."""
+    c = sqlite3.connect(path)
+    c.executescript("""
+        CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+        CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT);
+        CREATE TABLE listener_flags (subject_kind TEXT, subject_id TEXT);
+    """)
+    c.commit()
+    c.close()
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="vaino-db-test-")
     lib = os.path.join(tmp, "library.db")
@@ -107,6 +122,18 @@ def main() -> int:
     empty = os.path.join(tmp, "empty.db")
     sqlite3.connect(empty).close()
     check(vd.shape(empty) == vd.EMPTY, f"got {vd.shape(empty)}")
+    # A database missing some listener tables is still whole. Regression
+    # test for a real break: this shape sits in `tools/` fixtures and the
+    # first marker scheme refused to open it at all.
+    partial = os.path.join(tmp, "partial", "library.db")
+    os.makedirs(os.path.dirname(partial), exist_ok=True)
+    make_partial(partial)
+    check(vd.shape(partial) == vd.WHOLE,
+          f"a whole database missing listener_play_history must read WHOLE, got {vd.shape(partial)}")
+    conn = vd.connect(partial, vd.ROLE_LISTENER, writable=True)
+    check([r[0] for r in conn.execute("PRAGMA database_list")] == [0],
+          "and must open with nothing attached")
+    conn.close()
 
     print()
     print("a whole database is opened exactly as before -- no attach, no authorizer")

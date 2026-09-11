@@ -83,6 +83,9 @@ CASES = [
     # at the time of writing), not from a fixture.
     ("apply_reviews.py", [], False),
     ("apply_boundary_reviews.py", [], False),
+    # Cross-half by construction: the registry it lists is listener-side,
+    # the reach counts beside it join `passages` and `flavor`.
+    ("load_occasions.py", [], False),
     ("audit_split_readiness.py", [], False),
 ]
 

@@ -91,6 +91,25 @@ stale that nothing reads. Nothing is owed *to* vainopi here — the fix and
 the misconfiguration were both on this side — recorded so the appliance is
 not suspected of it later.
 
+**`[PI-OWE-055]` Pulling flags from vainopi reported "nothing flagged" for
+a peer with 19.** `remote_flags.py` is the third script `[IMPL002 §7.4]`
+named, and the last to be fixed. Against a split peer it failed in both
+directions: pointed at the listener half, `no such table: passages`;
+pointed at the catalogue half, `no such table: listener_flags` — which its
+own guard, written for "no Vaino carrying `[REQ-VIS-265]` has opened this
+library yet", turned into a cheerful empty result.
+
+Fixed by attaching the peer's listener half in front of the query, the one
+thing `run_remote_sql` can do with a second path since `sqlite3` takes more
+than one statement. Measured against `pi@vainopi` 2026-09-11: 0 flags
+before, **19 after**, matching what the appliance actually holds. The guard
+now fires only when no listener path was given, so "absent from this file"
+can no longer masquerade as "absent from this installation".
+
+Nothing is owed *to* vainopi — the defect was on this side — but it is the
+clearest instance yet of `[PI-OWE-010]`'s pattern, and the reason that
+pattern is stated as a pattern.
+
 ## 3. Not owed, checked anyway
 
 **`[PI-OWE-060]` The cascade replacement is not needed on vainopi.**

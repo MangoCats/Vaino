@@ -495,8 +495,14 @@ class Runner:
         flags_json = os.path.join(work, "flags.json")
 
         self._emit(job_id, "stage", "fetch-flags", stage="fetch-flags")
-        code, _ = self._spawn(job_id, "fetch-flags", [
-            sys.executable, os.path.join(tools, "remote_flags.py"), target, "-o", flags_json])
+        fetch = [sys.executable, os.path.join(tools, "remote_flags.py"), target, "-o", flags_json]
+        # `[IMPL002 §7.4]`'s second path, for the second of the three tools
+        # that needed it. Against a split peer without this, `remote_flags.py`
+        # reports "nothing flagged" from the catalogue half -- vainopi has 19.
+        listener = self.get_remote_listener()
+        if listener:
+            fetch += ["--remote-listener", listener.partition(":")[2] or listener]
+        code, _ = self._spawn(job_id, "fetch-flags", fetch)
         if code != 0:
             return self._finish(job_id, "failed")
         self._emit(job_id, "stage", "import", stage="import")

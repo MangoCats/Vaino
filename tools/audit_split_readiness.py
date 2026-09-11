@@ -51,11 +51,19 @@ LISTENER = {"listener_play_history", "listener_rejections", "listener_flags",
             "id_reviews", "boundary_reviews", "artist_reviews",
             "selection_decisions"}
 
-# Scripts with no database of their own to open: they drive a remote, build
-# a scratch file, or are pure helpers imported by others.
+# Scripts with no local half to open, and why -- printed rather than
+# silently skipped, because an exclusion is a claim and a claim should be
+# visible. A script listed here for the wrong reason is how a real gap
+# hides.
 NOT_APPLICABLE = {
-    "vaino_db.py", "audit_split_readiness.py", "split_database.py",
-    "remote_peek.py", "passage_orphans.py", "migrate_mulib.py",
+    "vaino_db.py": "is the opener",
+    "audit_split_readiness.py": "reads the tree, not a database",
+    "split_database.py": "makes the halves; opens the source read-only",
+    "remote_peek.py": "one ssh round trip; never opens a local file",
+    "passage_orphans.py": "takes both paths itself, by design",
+    "migrate_mulib.py": "builds a whole database from MuLibPlay, pre-split",
+    "remote_flags.py": "remote only; split peers handled by --remote-listener",
+    "remote_snapshot.py": "builds a standalone snapshot file, not a half",
 }
 
 TABLE_RE = re.compile(r"\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_][a-z0-9_]*)", re.I)
@@ -123,6 +131,10 @@ def main() -> int:
     print()
     print(f"ready: {len(ready)}    to migrate: {len(todo)}    "
           f"of which touch both halves: {len(both)}")
+    print(f"not applicable: {len(NOT_APPLICABLE)}")
+    if verbose:
+        for name, why in sorted(NOT_APPLICABLE.items()):
+            print(f"    {name:<32} {why}")
     if both:
         print("  both halves (migrate these with care -- `role` is a real choice):")
         for n in both:
