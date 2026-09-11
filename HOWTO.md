@@ -89,15 +89,71 @@ python tools/fingerprint_ids.py vaino.db --merge
 
 ---
 
+## 3b. One database or two
+
+A library can be one file or two, and everything here works either way.
+
+**One file** is the simple case and the default: `vaino.db` holds the
+catalogue (files, passages, recordings, flavor) and the listener's own
+state (play history, preferences, programmes) together. Nothing below needs
+a second path.
+
+**Two files** separate them — `library.db` for the catalogue, `listener.db`
+for everything the listener created. The appliance needs this because it
+keeps the catalogue on a read-only partition `[PI023]`; the desktop was
+split on 2026-09-11 so that the split shape is the one being exercised
+daily, rather than a shape only the Pi ever runs and only the Pi ever finds
+bugs in.
+
+```
+python tools/split_database.py vaino.db \
+    --library-out library.db --listener-out listener.db          # rehearse
+python tools/split_database.py vaino.db \
+    --library-out library.db --listener-out listener.db --commit
+```
+
+It never modifies the source, refuses to overwrite an existing output, and
+verifies row counts table-for-table, `integrity_check` and every index
+before reporting success. Keep the original: it is the rollback.
+
+Afterwards, **Sampo's tools take either path and find the other one**, so
+long as the two sit in the same directory under those names. Where they do
+not — the appliance keeps them on separate mounts — name the second one:
+
+```
+python tools/load_occasions.py listener.db --library /srv/library/library.db
+VAINO_LIBRARY=/srv/library/library.db python tools/export_flags.py listener.db -o flags.json
+```
+
+**Sampo's console keeps a sidecar beside whichever database it was given**
+— `<name>.console.db`, holding job history and the remote-peer
+configuration. Splitting changes the name, so the sidecar has to come with
+it, or the console starts with an empty job list and no configured peer and
+nothing says why:
+
+```
+cp vaino.console.db library.console.db
+```
+
+`python tools/audit_split_readiness.py` lists every script and whether it
+goes through the shared opener; `python tools/test_split_parity.py --pair
+DIR --whole vaino.db` runs the read-only ones against both shapes and
+compares the answers.
+
+---
+
 ## 4. Run Vaino
 
 ```
-player/target/release/vaino vaino.db --port 5720
+player/target/release/vaino vaino.db --port 5720                      # one file
+player/target/release/vaino listener.db --library library.db --port 5720   # two
 ```
 
 Open `http://127.0.0.1:5720/` for the player UI. `--port` defaults to
 `5720` if omitted; `--device NAME` picks an output device by a
 case-insensitive substring match if the default one isn't what you want.
+`--library` is the catalogue half where the database has been split; the
+player attaches it read-only and writes only the listener half.
 
 ---
 
@@ -106,8 +162,12 @@ case-insensitive substring match if the default one isn't what you want.
 Sampo's console is a plain Python script, no build step:
 
 ```
-python tools/console.py vaino.db --root "/path/to/your/Music"
+python tools/console.py vaino.db --root "/path/to/your/Music"       # one file
+python tools/console.py library.db --root "/path/to/your/Music"    # two
 ```
+
+Given either half of a split library it finds the other beside it, so there
+is no second path to pass here.
 
 Open `http://127.0.0.1:5730/`. `--port` defaults to `5730`. `--root` is
 repeatable and points at the audio folder(s) the "folder" view compares

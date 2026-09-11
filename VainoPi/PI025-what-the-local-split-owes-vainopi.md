@@ -2,9 +2,10 @@
 
 **Appliance Record — a running register, opened 2026-09-11**
 
-Splitting the *local* database is turning up defects that vainopi already
-has, because vainopi split first and nothing swept the rest of the system
-afterwards. Each one is found on the desktop, fixed on the desktop, and
+Splitting the *local* database turned up defects that vainopi already has,
+because vainopi split first and nothing swept the rest of the system
+afterwards. The local split completed on 2026-09-11; this register is what
+it owes the appliance. Each one is found on the desktop, fixed on the desktop, and
 then owed to the appliance — which is running today and is not going to be
 disturbed for every one of them individually.
 
@@ -75,7 +76,26 @@ either resolves to the empty copy.
 Harmless **today**: `library.rs` qualifies every catalogue table with
 `__LIB__.`, so nothing reads them. It is a loaded gun rather than a wound,
 and the two generators in `[PI-OWE-020]` are what a pulled trigger looks
-like. Drop both from the listener half; nothing there should own them.
+like.
+
+**And they are not left over from an older build — the player recreates
+them on every start.** Found by splitting the local database and having
+`tools/vaino_db.py`'s own shadow check refuse to open the brand-new pair:
+the same two tables, on a pair minutes old. Dropped them, started the
+player, and both came back; dropped them again, applied the fix below,
+started it again, and they stayed gone.
+
+The cause is two lines in `player/src/bin/vaino.rs` that read a setting and
+attach a guest store through `PlayerStore::open(&db)`. `open(p)` is
+`open_split(p, p)`, which tells the connection the listener half is the
+whole database: the alias becomes `main`,
+`ensure_library_tables_if_owned` concludes this connection owns the
+catalogue, and it creates empty `file_tags` and `cover_art` in the listener
+half. Both now use `open_split(&db, &library)`.
+
+So dropping the two tables on vainopi is not enough on its own — they will
+be back on the next restart until the build carrying this fix is deployed.
+Do the drop and the deploy together, or just the deploy and then the drop.
 
 `schema_meta` is in both halves **on purpose** (`split_database.py`'s own
 `BOTH` list) and must not be dropped — the distinction is real and
@@ -137,9 +157,17 @@ deliberate `schema_meta`.
 
 ## 4. Open
 
-**`[PI-OWE-080]`** None of the above has been applied to vainopi. Three of
-the four are `sqlite3` one-liners; `[PI-OWE-020]` needs a build and a
-deploy. Doing them together, once, is the point of this document.
+**`[PI-OWE-080]`** None of the above has been applied to vainopi. The WAL
+change is a `sqlite3` one-liner; `[PI-OWE-020]` and `[PI-OWE-040]` both need
+the build, and `[PI-OWE-040]`'s drop must come *after* that deploy or the
+next restart simply recreates what was dropped. Doing them together, once,
+is the point of this document.
+
+**`[PI-OWE-085]` The local database was split on 2026-09-11**, which is what
+found `[PI-OWE-040]`'s real cause and `[PI-OWE-020]` before it. Both halves
+are WAL, the shadow check passes, and the player and console both run
+against the pair — so everything owed above has now been exercised on a
+real split installation rather than only reasoned about.
 
 **`[PI-OWE-090]`** `bose` is not split and is therefore untouched by all of
 it — but `[PI-OWE-010]`'s pattern is what it will meet on the day it is,

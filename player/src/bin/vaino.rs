@@ -264,7 +264,15 @@ fn engine_thread(
     // The suppression windows are read from the published state rather than
     // from the engine, because the engine is about to stop being reachable by
     // name. They are the listener's settings and the same whoever plays.
-    let saved_cue = vaino_player::db::PlayerStore::open(&db)
+    // `open_split`, not `open`. `PlayerStore::open(p)` is `open_split(p, p)`,
+    // which makes the listener half look like the whole database: the alias
+    // is then `main`, `ensure_library_tables_if_owned` decides this
+    // connection owns the catalogue, and it creates empty `file_tags` and
+    // `cover_art` in the LISTENER half -- shadows that mask the real ones
+    // `[IMPL-DBSPLIT-025]`. Reproduced here 2026-09-11: dropped both, started
+    // the player, and both came back. This is where vainopi's own pair came
+    // from `[PI-OWE-040]`, on every start, not from some older build.
+    let saved_cue = vaino_player::db::PlayerStore::open_split(&db, &library)
         .ok()
         .and_then(|s| s.load_settings())
         .map(|s| s.cue_sheets)
@@ -307,7 +315,8 @@ fn engine_thread(
                         }
                     }
                 }
-                if let Ok(st) = vaino_player::db::PlayerStore::open(&db) {
+                // `open_split` for the same reason as `saved_cue` above.
+                if let Ok(st) = vaino_player::db::PlayerStore::open_split(&db, &library) {
                     guest.attach_store(st);
                 }
                 backend.attach_guest(Box::new(guest));
