@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
+#
+# !! DO NOT USE THIS TO INSTALL SOFTWARE. Use `overlayroot-chroot` instead:
+# !!
+# !!     ssh pi@bose sudo overlayroot-chroot apt-get install -y <pkg>
+# !!
+# !! That writes through to A persistently, with NO reboot. The unlock cycle
+# !! is not needed for it, and on this machine the cycle does not even leave
+# !! A writable: it clears cmdline.txt's overlayroot token but NOT fstab's
+# !! `ro` on A, and [IMPL-BOS-170] made the one service that would remount /
+# !! rw a no-op. A then boots read-only with no tmpfs upper layer, and since
+# !! bose is wireless [PI-BOS-020], NetworkManager cannot write
+# !! /var/lib/NetworkManager, so it comes up with no Wi-Fi and no way in.
+# !!
+# !! Done on 2026-09-11 to install chrony. bose did not come back; recovery
+# !! took a card and a reader -- the exact outcome this hatch exists to
+# !! avoid. See [IMPL-BOS-175] / [IMPL-BOS-180] in BOSE006.
+#
 # The human-facing half of the lock-in escape hatch [IMPL-BOS-160]. Writes
 # the C-side marker over SSH and reboots -- the boot-partition marker is for
 # when SSH itself is what's broken, and is written by hand from a reader,

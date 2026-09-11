@@ -48,13 +48,17 @@ the *time* without disciplining the *frequency*, which is precisely the half
 `[GDE-ECHO-100]` needs. A node left on timesyncd satisfies the wall-clock
 requirement and silently fails the frequency one.
 
-Both x86 nodes shipped that way. **`teacherslounge` was moved to chrony on
-2026-09-11** — installing it deactivates timesyncd automatically — and within a
-minute reported `System time 0.000007303 seconds fast of NTP time`, frequency
-0.556 ppm fast, residual −16.08 ppm still settling. That residual is the figure
-to watch: it is what Phase 1 would otherwise mistake for DAC drift.
-**`smartboardpc` is still on timesyncd** and is not yet a candidate for any
-measurement that depends on frequency.
+Every node shipped that way. **Three moved to chrony on 2026-09-11, with
+`smartboardpc` serving the LAN** (`allow`, plus `local stratum 10` so it keeps
+serving through a WAN outage). `teacherslounge` and `vainopi` `prefer` it and
+carry an identical, non-leap-smearing fallback set, so a Smart outage degrades
+the fleet together rather than splitting it: one shared server makes its own
+error **common-mode**, and common-mode cancels in the node-to-node comparison
+that is the only one echo depends on. Differential error does not.
+
+**`bose` is outstanding.** The attempt to add it is `[IMPL-BOS-175]`: the
+lock-in escape hatch does not leave A writable and took the appliance off the
+network. `overlayroot-chroot` `[IMPL-BOS-180]` is the correct instrument.
 
 **`[GDE-ECHO-305]` The timebase precedes the measurement, and an earlier
 revision of this plan had that backwards.** It listed measurement as Phase 0 and

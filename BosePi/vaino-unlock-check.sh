@@ -10,6 +10,16 @@
 # overlay disabled first -- exactly what this script exists to do, so it
 # cannot be its own bootstrap.
 #
+# KNOWN DEFECT [IMPL-BOS-175], found 2026-09-11: removing the cmdline token
+# is only half the lock. BOSE003 step 10 also sets `ro` in fstab for A, which
+# this script cannot touch (see the scope note below), and [IMPL-BOS-170]
+# no-op'd systemd-remount-fs. So A comes back read-only with no upper layer
+# -- worse than locked -- and on a wireless machine NetworkManager cannot
+# write /var/lib/NetworkManager, so it never rejoins the network. For
+# persistent changes to a locked card use `overlayroot-chroot` instead
+# [IMPL-BOS-180]; it needs no reboot. Treat this hatch as unusable until it
+# restores fstab too.
+#
 # Status: found broken on its first real test against an actual lock-in
 # (2026-09-06). Originally called `raspi-config nonint do_overlayfs 1`;
 # that function's own disable_overlayfs() does `sed

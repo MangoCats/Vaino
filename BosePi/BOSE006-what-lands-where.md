@@ -130,6 +130,65 @@ as today. It does not touch B's temporary-reopen case at all; that is
 `attended-import.sh`'s job, needs no reboot, and was already solved before
 this existed.
 
+**`[IMPL-BOS-175]` The paragraph above is wrong as built: the hatch does NOT
+leave A writable, and on this machine it strands it off the network. Do not
+use it to install software — use `overlayroot-chroot`. Found 2026-09-11 by
+using it.** `bose` was unlocked in order to `apt-get install chrony`, and did
+not come back: no SSH, no ping, and `ip neigh` on a LAN peer reporting
+`FAILED` — nothing at layer 2 claiming the address. Recovery took a card and
+a reader, which is precisely the situation this hatch exists to avoid.
+
+The mechanism is two locks and one key. `[BOSE003]` step 10 sets **both** the
+overlay on A *and* `ro` in `fstab` for A. The hatch removes only the
+`overlayroot=` token from `cmdline.txt`; `fstab`'s `ro` survives it, and the
+one service that would otherwise remount `/` read-write was deliberately made
+a no-op by `[IMPL-BOS-170]` because that remount always failed against an
+overlay root. So A comes up **read-only with no tmpfs upper layer to absorb
+writes** — strictly worse than the locked state, where every write at least
+succeeded in RAM until the next reboot.
+
+That is fatal here rather than merely awkward, because `bose` is wireless
+`[PI-BOS-020]` and NetworkManager needs a writable `/var/lib/NetworkManager`
+to associate. No writable `/var`, no Wi-Fi, no way in.
+
+**`[IMPL-BOS-180]` `overlayroot-chroot` is the right tool for any persistent
+change to a locked card, and it needs no reboot at all.** `[BOSE003]` already
+said so — *"writes the same drop-in through to A's real lower filesystem
+without needing the full unlock/reboot/relock cycle"* — but said it inside a
+paragraph about swap, where nobody looking for "how do I install a package"
+would find it. Stated here plainly instead:
+
+```bash
+sudo overlayroot-chroot apt-get install -y <pkg>     # persists on A
+```
+
+For something that must also take effect *now*, write twice — through the
+chroot for A, and to the live overlay — the same treatment `[IMPL-BOS-170]`'s
+own two fixes used on 2026-09-07.
+
+Worked example, the chrony install that `[IMPL-BOS-175]` got wrong, done the
+right way once `bose` is back — `[GDE-ECHO-300]` wants every node on one LAN
+reference, which is `smartboardpc` at 192.168.67.93:
+
+```bash
+ssh pi@bose sudo overlayroot-chroot apt-get install -y chrony
+# the fleet source file, written to A and to the live overlay both
+printf '%s
+' 'server 192.168.67.93 iburst prefer minpoll 4 maxpoll 6'   'pool us.pool.ntp.org iburst maxsources 3' 'server time.nist.gov iburst'   | ssh pi@bose 'sudo overlayroot-chroot tee /etc/chrony/sources.d/vaino-fleet.sources'
+ssh pi@bose sudo systemctl restart chrony   # live half; no reboot needed
+```
+
+Verify with `chronyc sources` showing `^* smartboardpc.lan`, then confirm it
+survived by checking again after the next ordinary reboot — `[IMPL-BOS-165]`'s
+standing lesson is that the file, not the exit code, is the evidence.
+
+**Until the hatch sets `fstab` back to `rw` as well, treat it as unusable.**
+It cannot edit `fstab` from inside the overlay — that is why the scope was
+narrowed in the first place — so the honest repair is to drop the
+`systemd-remount-fs` no-op and set A's `fstab` entry `rw`, or to retire the
+hatch in favour of `overlayroot-chroot` and keep the card reader as the only
+rescue.
+
 **`[IMPL-BOS-166]` The first version called `raspi-config nonint
 do_overlayfs 1` instead, and it silently did nothing — found on the first
 real test of the actual enabled-to-disabled transition, 2026-09-06.**
