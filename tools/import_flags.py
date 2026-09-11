@@ -26,6 +26,10 @@ import json
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 from apply_changes import resolve_passage
 
 
@@ -78,7 +82,10 @@ def main() -> int:
         doc = json.load(f)
     flags = doc.get("flags", [])
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Writes `listener_flags`, and reads the catalogue to check a flag
+    # names something real -- so the listener half is `main` and the
+    # catalogue rides along read-only.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LISTENER, writable=True)
     conn.execute("PRAGMA busy_timeout = 60000")
     ensure_flags_table(conn)
     conn.commit()

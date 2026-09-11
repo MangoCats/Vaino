@@ -185,6 +185,11 @@ def main() -> int:
     check(vd.has_table(conn, "listener_play_history"),
           "and a listener table must still be found")
     check(not vd.has_table(conn, "no_such_table"), "and a real absence must still read absent")
+    # PRAGMA table_info DOES resolve through the attach chain, unlike
+    # sqlite_master. Pinned because `has_column`-style helpers all over
+    # tools/ rely on it and would need rewriting if it were not true.
+    check(len(conn.execute("PRAGMA table_info(recordings)").fetchall()) > 0,
+          "PRAGMA table_info must resolve across the attach, or every has_column() breaks")
     conn.close()
     # ...and the same answers with the roles reversed.
     conn = vd.connect(lib, vd.ROLE_LIBRARY)

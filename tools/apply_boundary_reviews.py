@@ -22,6 +22,10 @@ import json
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 
 def say(text: str) -> None:
     enc = sys.stdout.encoding or "utf-8"
@@ -37,12 +41,17 @@ def main() -> int:
                           "(the Sampo console's apply-reviews job) rather than a person")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Writes the catalogue (passages/recordings/artists) and stamps a
+    # listener-side review table to say the decision landed. Catalogue
+    # as `main` because that is what it creates and rewrites;
+    # `peer_writable` because the stamp is a genuine second-half write,
+    # and saying so at the call site is the point `[IMPL-DBSPLIT-025]`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY,
+                            writable=True, peer_writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
 
-    have = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     if "boundary_reviews" not in have:
         say("no boundary edits recorded yet")
         if args.json:
@@ -85,6 +94,7 @@ def main() -> int:
             WHERE b.applied_at IS NULL
             ORDER BY b.passage_id""").fetchall()
 
+    to_stamp: list[int] = []
     say(f"{len(pending)} boundary edit(s) to apply")
     if not pending:
         if args.json:
@@ -156,9 +166,12 @@ def main() -> int:
             # Stamped so the decision is known to have reached the library.
             # `boundary_reviews`'s own page refuses to touch this row once it
             # is set, for the same reason `id_reviews.applied_at` does.
-            conn.execute(
-                "UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
-                (passage_id,))
+            #
+            # **Collected, not written here** -- see the two-phase commit
+            # below. The stamp is a listener-side write and the edit above is
+            # a catalogue one, and on a split installation those are two
+            # separate files `[IMPL-DBSPLIT-025]`.
+            to_stamp.append(passage_id)
             if moved:
                 span_moved += 1
         applied += 1
@@ -170,6 +183,31 @@ def main() -> int:
             say(f"  passage {passage_id}: {reason}")
 
     if args.commit:
+        # **Two commits, catalogue first, and the order is the whole point.**
+        # SQLite documents a transaction spanning attached databases as
+        # atomic only when the journal mode is not WAL, and both halves of a
+        # split made from this database are WAL. So one `commit()` across the
+        # two is not indivisible, and the question becomes which half is
+        # safer to have landed on its own.
+        #
+        # Catalogue first: the edit is applied but not stamped, so a re-run
+        # finds it still pending and applies it again -- harmless, because
+        # `moved` is computed against the *live* passage row, so the second
+        # pass sees old == new, skips the `lowlevel_cache` delete, and
+        # rewrites identical values. Read that path to confirm it rather than
+        # assuming it.
+        #
+        # The other order loses work silently: stamped applied while the edit
+        # never landed closes the review forever over a passage nothing
+        # changed, and nothing would ever say so.
+        #
+        # Unsplit, both commits go to one file and this is simply two
+        # transactions where there was one.
+        conn.commit()
+        for passage_id in to_stamp:
+            conn.execute(
+                "UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
+                (passage_id,))
         conn.commit()
         say(f"\napplied {applied}; {span_moved} moved a span, "
             f"dropped {cache_dropped} stale lowlevel_cache row(s)")

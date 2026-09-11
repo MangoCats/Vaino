@@ -101,6 +101,14 @@ across all three of `listener_play_history`, `selection_decisions` and
 `player_state`. `tools/passage_orphans.py` is worth keeping as a
 diagnostic there, not as scheduled work.
 
+**`[PI-OWE-065]` The two-phase commit in the `apply_*` scripts is desktop-only
+for the same reason.** Those three write the catalogue and then stamp a
+listener-side review table, which on a split pair is two files and — under
+WAL — not one atomic act. They now commit catalogue-first so the only
+survivable half-failure is one a re-run repairs. vainopi runs none of them,
+so it inherits nothing here; recorded because the *reasoning* applies to
+anything that ever writes both halves there, and nothing does yet.
+
 **`[PI-OWE-070]` No catalogue table is missing from vainopi's catalogue
 half, and no listener table has strayed into it.** Checked the same day,
 both directions. The only duplicates are the two in `[PI-OWE-040]` and the

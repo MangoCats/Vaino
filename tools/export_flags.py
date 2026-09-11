@@ -24,6 +24,10 @@ import socket
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 
 def say(text: str) -> None:
     enc = sys.stdout.encoding or "utf-8"
@@ -41,7 +45,7 @@ def export_flags(conn: sqlite3.Connection, hostname: str) -> list:
     against, via the same JOIN `apply_changes.py`'s `resolve_passage()` reads
     back out the other way.
     """
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     if "listener_flags" not in have:
         return []
 
@@ -79,7 +83,10 @@ def main() -> int:
     ap.add_argument("-o", "--out", required=True)
     args = ap.parse_args()
 
-    conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    # Read-only, and it joins `listener_flags` to `recordings`/`passages`
+    # -- both halves. Catalogue as `main`, which is the bulk of what it
+    # reads and the half it could never accidentally write here.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY)
     flags = export_flags(conn, socket.gethostname())
 
     with open(args.out, "w", encoding="utf-8") as f:

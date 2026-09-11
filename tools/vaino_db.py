@@ -248,7 +248,7 @@ def shadows(conn, peer_alias: str) -> set[str]:
 
 def connect(path: str, role: str, *, writable: bool = False,
             peer: str | None = None, peer_writable: bool = False,
-            check_same_thread: bool = True):
+            check_same_thread: bool = True, timeout: float | None = None):
     """Open `path`, attaching the other half when there is one.
 
     `role` is the half this script owns -- the one it writes and creates
@@ -262,6 +262,9 @@ def connect(path: str, role: str, *, writable: bool = False,
     a script that silently ran against half a database would produce
     answers that look fine and are wrong.
 
+    `timeout` is passed through where given -- the `apply_*` scripts use
+    60 seconds because they run while a player may hold the database.
+
     `check_same_thread` is passed straight through, defaulting to
     `sqlite3`'s own `True`. `console.py` serves from a thread pool and
     needs `False`; that had been on its own `sqlite3.connect` call and was
@@ -274,7 +277,8 @@ def connect(path: str, role: str, *, writable: bool = False,
     this = shape(path)
     if this == EMPTY:
         return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
-                               uri=not writable, check_same_thread=check_same_thread)
+                               uri=not writable, check_same_thread=check_same_thread,
+                               **({} if timeout is None else {"timeout": timeout}))
 
     if this == WHOLE:
         # Both markers: either a genuine single-file installation, or a
@@ -284,7 +288,8 @@ def connect(path: str, role: str, *, writable: bool = False,
                      or find_peer(path, ROLE_LIBRARY, peer))
         if not candidate or os.path.samefile(candidate, path):
             return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
-                                   uri=not writable, check_same_thread=check_same_thread)
+                                   uri=not writable, check_same_thread=check_same_thread,
+                                   **({} if timeout is None else {"timeout": timeout}))
         # A peer exists AND this file carries both markers -- one of them is
         # a shadow. Fall through so the shadow check below names it.
         peer_lib, _ = markers(candidate)
@@ -309,7 +314,8 @@ def connect(path: str, role: str, *, writable: bool = False,
 
     conn = sqlite3.connect(
         f"file:{main_path}" + ("" if main_writable else "?mode=ro"), uri=True,
-        check_same_thread=check_same_thread)
+        check_same_thread=check_same_thread,
+        **({} if timeout is None else {"timeout": timeout}))
     other = ROLE_LIBRARY if role == ROLE_LISTENER else ROLE_LISTENER
     alias = ALIAS[other]
     conn.execute(

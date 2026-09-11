@@ -54,6 +54,10 @@ import socket
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 SOURCE_PREFIX = "synced"
 
 
@@ -464,7 +468,13 @@ def main() -> int:
         doc = json.load(f)
     changes = doc.get("changes", [])
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Writes the catalogue (passages/recordings/artists) and stamps a
+    # listener-side review table to say the decision landed. Catalogue
+    # as `main` because that is what it creates and rewrites;
+    # `peer_writable` because the stamp is a genuine second-half write,
+    # and saying so at the call site is the point `[IMPL-DBSPLIT-025]`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY,
+                            writable=True, peer_writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
 
@@ -511,7 +521,7 @@ def main() -> int:
     # A compare copy predating `[REQ-VIS-265]` entirely has no `listener_flags`
     # at all -- `--clear-flags` is then simply nothing to do, not an error
     # that would otherwise mask the change it was attached to having landed.
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    have = vaino_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
     clear_flags_ok = args.clear_flags and "listener_flags" in have
 
     say(f"{len(changes)} change(s) in {args.changes}")
