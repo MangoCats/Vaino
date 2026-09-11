@@ -96,6 +96,30 @@ LISTENER="${VAINO_LISTENER_DB:-/var/vaino/listener.db}"
 
 for db in "$DB" "$LIB" "$LISTENER"; do
     [ -f "$db" ] || continue
+    # **`[PI-PRE-090]` Once the halves exist, the whole database is a rollback
+    # artifact and recovering it is pure cost.** `$DB` is the pre-split file.
+    # After `[IMPL-DBSPLIT-025]` the player opens the two halves and never
+    # touches it again -- but this script still opened it read-write at every
+    # single boot: on `vainopi`, 1.16 GB of superseded database, mapped and
+    # read on behalf of nobody, on the slowest machine in the ecosystem, at
+    # the one moment it is trying to start.
+    #
+    # Measured before claiming worse: the file's own mtime has not moved since
+    # 2026-09-08 across every boot since, so the open was wasted work rather
+    # than damage. Its content is frozen at the split -- 38,554 plays, last one
+    # 2026-09-07 02:34 -- while the live listener half has gone on past it.
+    #
+    # The test is the halves' own existence, not a hard-coded name, so it is
+    # right on an appliance that has not been split yet -- there the halves are
+    # absent, `$DB` is the live database, and it is recovered exactly as
+    # before. Rolling back by removing the halves restores that automatically.
+    #
+    # Said out loud rather than skipped in silence, because the file is still
+    # sitting there taking a gigabyte: the line stops the day it is deleted.
+    if [ "$db" = "$DB" ] && [ -f "$LIB" ] && [ -f "$LISTENER" ]; then
+        echo "vaino-db-recover: not recovering $db, superseded by the split halves"
+        continue
+    fi
     # Evidence of an unclean stop is the whole reason this runs; say so when
     # there is some, so the boot log carries the fact rather than leaving it
     # to be deduced later.

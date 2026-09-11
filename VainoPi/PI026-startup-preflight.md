@@ -144,7 +144,50 @@ fails the suite, where before it passed.
 `finalize-bose.sh` had the matching hole: it shipped `bose`'s unit without the
 helpers the unit names. It now installs them first `[BOS-RUN-085]`.
 
-## 6. Open
+## 6. The database nobody opens
+
+**`[PI-PRE-090]` `vainopi` was recovering its pre-split original at every
+boot.** `vaino-db-recover` walks three paths, and the first of them defaults
+to the whole database that `[IMPL-DBSPLIT-025]` superseded. On `vainopi` that
+is `/srv/library/vaino.db`: 1.16 GB, opened read-write on the slowest machine
+in the ecosystem at the one moment it is trying to start, on behalf of nobody.
+
+It is skipped now when **both** halves exist beside it. The rule is one-sided
+by design, because the two mistakes are not equal: recovering a database
+nobody opens wastes a little boot time, while skipping one the player *does*
+open is a crash loop. So the halves' own existence is the test, and an
+appliance that has not been split yet is unaffected — its halves are absent,
+the whole file is live, and it is recovered exactly as before. Rolling a split
+back by removing the halves restores that automatically, with nothing to
+remember.
+
+The skip is announced rather than silent. The file is still sitting there
+taking a gigabyte, and the line stops the day somebody deletes it:
+
+```
+vaino-db-recover: not recovering /srv/library/vaino.db, superseded by the split halves
+vaino-db-recover: un-checkpointed WAL on /var/vaino/listener.db, replaying
+```
+
+**`[PI-PRE-095]` What that file is, measured rather than assumed.** Its
+contents are frozen at the split — 38,554 plays, the last at 2026-09-07
+02:34 — against 39,037 in the live listener half. It is also byte-for-byte
+different from its own dated backup, `vaino.db.pre-split-20260907`, despite
+being logically identical to it.
+
+A first draft of this blamed that divergence on the boot-time opens. Wrong,
+and checking took one command: the file's mtime has not moved since
+2026-09-08, across every boot since. The opens were wasted work, not damage,
+and the `-shm` files that looked like evidence of them turned out to be
+thirty seconds old — created by the read-only queries run to investigate.
+The change is worth making on cost alone; it did not need the worse story.
+
+**`[PI-PRE-098]`** So `vainopi` keeps two full copies of the same superseded
+database, 2.3 GB together, where one dated backup would do. Not deleted here:
+that is a judgement about how long a rollback stays useful, and disk is not
+scarce on that machine — 170 GB free.
+
+## 7. Open
 
 **`[PI-PRE-080]`** `vainopi`'s unit template in `setup-vainopi.sh` still names
 the pre-split `/srv/library/vaino.db` in its base `ExecStart`; the live
@@ -152,10 +195,9 @@ machine is correct only because `mpd-guest.conf` overrides it. Re-running the
 installer is safe while that drop-in exists, and silently wrong if it is ever
 removed.
 
-**`[PI-PRE-085]`** `vainopi` still carries `/srv/library/vaino.db`, the 1.16 GB
-pre-split original, and `vaino-db-recover` opens it read-write on every boot
-because `VAINO_DB` still defaults to it. Harmless, and pointless: nothing has
-read it since 2026-09-07.
+**`[PI-PRE-085]` Closed** by `[PI-PRE-090]` on the same day it was raised.
+`vaino-db-recover` no longer opens the pre-split original once the split
+halves exist. The file itself is still there `[PI-PRE-098]`.
 
 ---
 

@@ -112,6 +112,41 @@ PATH="$REALPATH" VAINO_DB="$D/broken.db" VAINO_LIBRARY_DB="$D/absent.db" \
     VAINO_LISTENER_DB="$D/absent2.db" sh "$PI/vaino-db-recover" >/dev/null 2>&1
 assert_eq "$?" "0" "always exits 0, so a bad database never blocks the boot"
 
+# **`[PI-PRE-090]` The pre-split whole database, once the halves exist.**
+# The danger in this rule is one-sided: recovering a database nobody opens
+# costs a little time, while SKIPPING one the player does open is a crash
+# loop. So the cases below pin both directions, and the not-skipped one
+# matters more.
+SPLIT="$D/split"; mkdir -p "$SPLIT"
+PATH="$REALPATH" sqlite3 "$SPLIT/whole.db" "CREATE TABLE t (x);" >/dev/null
+
+# No halves beside it: this is an unsplit appliance, the whole database is the
+# live one, and nothing may change about how it is treated.
+printf 'not a database
+' > "$SPLIT/whole.db.broken"
+OUT=$(recover "$SPLIT/whole.db" "$SPLIT/no-library.db" "$SPLIT/no-listener.db")
+assert_eq "$OUT" "" "recovers the whole database when no split halves exist"
+
+# One half only -- a half-finished split, or a half-restored rollback. Still
+# not evidence that the player has moved on, so still recovered.
+PATH="$REALPATH" sqlite3 "$SPLIT/library.db" "CREATE TABLE t (x);" >/dev/null
+OUT=$(recover "$SPLIT/whole.db" "$SPLIT/library.db" "$SPLIT/no-listener.db")
+assert_eq "$OUT" "" "still recovers the whole database when only one half exists"
+
+# Both halves: the player opens those and has not touched the whole file since
+# the split. Skipped, and said out loud, because a gigabyte of superseded
+# database is worth mentioning until somebody deletes it.
+PATH="$REALPATH" sqlite3 "$SPLIT/listener.db" "CREATE TABLE t (x);" >/dev/null
+OUT=$(recover "$SPLIT/whole.db" "$SPLIT/library.db" "$SPLIT/listener.db")
+assert_in "$OUT" "superseded by the split halves" "names the whole database it is skipping"
+
+# And the skip must be confined to the whole database: a broken HALF still has
+# to be reported, or the rule would have silenced the databases that matter.
+printf 'this is not a database at all
+' > "$SPLIT/listener.db"
+OUT=$(recover "$SPLIT/whole.db" "$SPLIT/library.db" "$SPLIT/listener.db")
+assert_in "$OUT" "could not open" "still reports a broken half while skipping the whole database"
+
 # **`[PI-PRE-030]` Which command performs the recovery, and what happens when
 # it is not there.** The script used to name `sqlite3`. Being never-fatal, it
 # would then have reported "could not open" -- the same words it uses for a

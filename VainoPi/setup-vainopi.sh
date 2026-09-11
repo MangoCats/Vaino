@@ -332,7 +332,8 @@ fi
 
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-preflight          vaino-underruns vaino-led-boot \
+for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-preflight \
+         vaino-underruns vaino-led-boot \
          vaino-wifi-revert vaino-radio-test vaino-startup-sample \
          vaino-hci-capture vaino-linkstate vaino-afh-seed vaino-vitals \
          vaino-bt-agent; do
