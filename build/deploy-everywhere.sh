@@ -5,9 +5,25 @@
 # discovered later by Vaino's own staleness check firing rather than by
 # anyone remembering to look [SPEC-SUI-227].
 #
-#     build/deploy-everywhere.sh                        # local, vainopi, bose
-#     build/deploy-everywhere.sh -- pi@other-host       # one named appliance
+#     build/deploy-everywhere.sh                        # every target below
+#     build/deploy-everywhere.sh -- pi@bose             # one named target
 #     build/deploy-everywhere.sh -- pi@one pi@two ...   # several
+#
+# Two kinds of target, because there are two kinds of machine:
+#
+#   APPLIANCES are aarch64 and run a service. They are sent a cross-compiled
+#   binary and restarted, and they are verified by asking the RUNNING player
+#   what it is -- which is the only thing that can catch a service still
+#   serving an older binary than the one now on disk `[SPEC-APS-140]`.
+#
+#   SOURCE HOSTS have their own architecture and toolchain and a git checkout,
+#   and usually nothing running at all. They pull and rebuild, and are verified
+#   by asking the BUILT BINARY what commit it is. Sending one a cross-compiled
+#   aarch64 binary is not merely wrong, it is refused: deploy-player.sh checks.
+#
+# A source host pulls from the git remote rather than from this machine, so
+# `update-source-host.sh` refuses if HEAD has not been pushed. It does not push
+# on your behalf -- publishing is a decision, not a step in a deploy.
 #
 # bose was added after doing exactly what this script exists to prevent: it
 # sat four commits behind while vainopi was kept current, and nobody noticed
@@ -30,11 +46,27 @@
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-HOSTS="pi@vainopi pi@bose"
+APPLIANCES="pi@vainopi pi@bose"
+# `host:path` -- a source host needs its checkout named, since unlike an
+# appliance's `/usr/local/bin/vaino` there is no conventional location.
+SOURCES="sw@teacherslounge:/home/sw/Dev/Vaino"
+
+# Where a named host sends its work. A host named on the command line is
+# looked up here, so `-- sw@teacherslounge` reaches the source-host leg with
+# its configured path and needs no second argument to say so.
+checkout_for() {
+    for entry in $SOURCES; do
+        case "$entry" in "$1":*) echo "${entry#*:}"; return 0 ;; esac
+    done
+    return 1
+}
+
+HOSTS="$APPLIANCES"
+for entry in $SOURCES; do HOSTS="$HOSTS ${entry%%:*}"; done
 if [ "${1:-}" = "--" ]; then
     shift
-    # Everything after `--` is the host list, so naming one appliance means
-    # that one alone rather than that one plus the defaults. A bare `--` with
+    # Everything after `--` is the host list, so naming one target means that
+    # one alone rather than that one plus the defaults. A bare `--` with
     # nothing after it keeps them, rather than deploying to nowhere and
     # reporting success for having done so.
     if [ "$#" -gt 0 ]; then
@@ -49,8 +81,13 @@ echo "== local =="
 
 for host in $HOSTS; do
     echo
-    echo "== ${host#*@} ($host) =="
-    "$ROOT/build/deploy-vainopi.sh" "$host" || fail=$((fail + 1))
+    if checkout=$(checkout_for "$host"); then
+        echo "== ${host#*@} ($host, source) =="
+        "$ROOT/build/update-source-host.sh" "$host" "$checkout" || fail=$((fail + 1))
+    else
+        echo "== ${host#*@} ($host, appliance) =="
+        "$ROOT/build/deploy-vainopi.sh" "$host" || fail=$((fail + 1))
+    fi
 done
 
 # A final, authoritative check against HEAD *right now* -- not each leg's own
@@ -88,8 +125,15 @@ check_matches() {
 mismatch=0
 check_matches "local" "$local_build" || mismatch=$((mismatch + 1))
 for host in $HOSTS; do
-    remote_build=$(ssh -o ConnectTimeout=5 "$host" "curl -s --max-time 3 http://localhost:$port/build" 2>/dev/null)
-    check_matches "${host#*@}" "$remote_build" || mismatch=$((mismatch + 1))
+    if checkout=$(checkout_for "$host"); then
+        # The binary on disk, not a running player: a source host normally has
+        # nothing running, and asking a process that happened to be up would
+        # not prove the binary had been rebuilt in any case.
+        answer=$(ssh -o ConnectTimeout=5 "$host"             "cd '$checkout' && ./player/target/release/vaino --version" 2>/dev/null | head -1)
+    else
+        answer=$(ssh -o ConnectTimeout=5 "$host" "curl -s --max-time 3 http://localhost:$port/build" 2>/dev/null)
+    fi
+    check_matches "${host#*@}" "$answer" || mismatch=$((mismatch + 1))
 done
 fail=$((fail + mismatch))
 
