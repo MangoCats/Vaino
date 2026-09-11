@@ -88,6 +88,46 @@ One number in the whole table is measured. That is the argument for
 [GUIDE009](GUIDE009-echo-playback-plan.md)'s Phase 0 existing, stated as a
 table rather than as a worry.
 
+**`[GDE-ECHO-470]` An echo node needs the same audio, and three nodes already
+have it.** Surveyed 2026-09-11:
+
+| node | library | audio files |
+| :--- | :--- | ---: |
+| desktop (`local`) | `C:\Users\Mango Cat\Music`, 44 G | 5,743 |
+| `teacherslounge` | `/home/sw/Music`, 44 G | 5,743 — **identical to local** |
+| `smartboardpc` | `/media/mango/PortableSSD/Media/Music`, 49 G | 5,719 — a variant |
+| `bose` | its own, 44 G `[BOSE001]` | — |
+
+`teacherslounge` therefore needs no audio to become a playback node; it needs
+chrony (installed 2026-09-11), a library database, and a service. Smart's
+library sits on a volume that is **100 % full with 11 G spare**
+`[SMT-STO-010]`, which is a provisioning problem of a different kind.
+
+**`[GDE-ECHO-480]` Comparing two libraries by path is unreliable, and failed
+four distinct ways on one afternoon.** Establishing whether local and
+`teacherslounge` differed produced three successive wrong answers before the
+right one, each wrong for its own reason:
+
+| apparent delta | actual cause |
+| ---: | :--- |
+| 685 files | the two sides sorted under different collations |
+| 49 files | Windows cannot store a **trailing dot** in a directory name (`Garage Inc.`) |
+| 21 files | a manual rename (`Born in the U.S.A.` → `Born in the USA`) |
+| **0 files** | the truth — verified byte-identical at 5,171,539 bytes on a disputed track |
+
+Comparing local against Smart added two more classes: a **colon** stripped from
+a directory name, and an artist-folder convention (`The Beach Boys` against
+`Beach Boys, The`) that alone accounted for roughly 150 apparent differences in
+each direction. Normalised by album and track, the genuine delta is 36 files
+one way and 12 the other.
+
+Acting on any of the intermediate answers would have written hundreds of
+duplicate files into differently-spelled directories. **`md5_encoded` is the
+identity `[REQ-AUD-100]`, paths are not**, and `[SPEC012]`'s relink exists
+precisely because a path is not portable between two machines. Any future
+library reconciliation should hash rather than compare names; the figures above
+are path-derived and are evidence of a difference, not proof of one.
+
 **`[GDE-ECHO-460]` The fleet already owns an acoustic instrument, by
 accident.** The ATE1133's *capture* endpoint is asynchronous mono at 48 kHz
 `[SMT-AUD-050]`. A microphone on that input can record two speakers at once and

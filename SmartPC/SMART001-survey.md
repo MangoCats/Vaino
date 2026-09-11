@@ -153,11 +153,20 @@ needed rather than when it breaks.
 
 ## 6. Open
 
-**`[SMT-OPN-010]` Smart has no music library, and no obvious room for one.**
-Root has 63 G free against a library that is 44 G on `bose` alone
-`[BOSE001]` — tight but not impossible — while the 1.9 T volume that would be
-the natural home is full `[SMT-STO-010]`. Until this is answered, Smart is a
-build host that could play, not a playback node.
+**`[SMT-OPN-010]` Smart has a candidate music library, on a volume with no room
+left.** `/media/mango/PortableSSD/Media/Music` — **49 G, 5,719 audio files**,
+the same Mac-origin library the rest of the fleet carries, in a variant
+revision. Compared against the desktop's copy by album and track, the genuine
+delta is **36 files it lacks** (Xavier Rudd's *White Moth* and *Storm Boy*, two
+Gerardo Frisina albums, *Mangocats/Tropicat*) and **12 it has that the desktop
+does not** (Thomas Dolby's *The Golden Age of Wireless*, and two singles) — a
+path-derived figure, not a hash, per `[GDE-ECHO-480]`.
+
+The problem is the volume, not the content: `[SMT-STO-010]` has it at 100 % with
+11 G spare, so the library cannot grow where it sits and Vaino cannot write
+beside it. Root has 63 G free, which would hold the library but leaves little
+margin. Until that is resolved Smart is a build host that could play, not a
+playback node.
 
 **`[SMT-OPN-020]` Whether it joins the mesh as a Sampo-capable peer is
 undecided.** [SPEC035](../docs/spec/SPEC035-mesh-library-sync.md)'s membership

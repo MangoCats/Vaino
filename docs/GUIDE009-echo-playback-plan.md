@@ -106,13 +106,19 @@ that it is running and converged. What must be recorded is not chrony's own
 estimate of its accuracy but the observed offset between nodes over a week —
 `[GOV-SRC-020]` again: a daemon's self-report is a claim, not a measurement.
 
-**Not yet true anywhere it was checked.** `smartboardpc` runs
-`systemd-timesyncd` (probed 2026-09-11: chrony inactive, timesyncd active,
-clock reported synchronised). That is an SNTP client, and it is the wrong tool
-here for a specific reason rather than a general one: it corrects the *time*
-without disciplining the *frequency*, which is precisely the half
+**`systemd-timesyncd` is the default, and it is the wrong tool here** — for a
+specific reason rather than a general one: it is an SNTP client that corrects
+the *time* without disciplining the *frequency*, which is precisely the half
 `[GDE-ECHO-100]` needs. A node left on timesyncd satisfies the wall-clock
 requirement and silently fails the frequency one.
+
+Both x86 nodes shipped that way. **`teacherslounge` was moved to chrony on
+2026-09-11** — installing it deactivates timesyncd automatically — and within a
+minute reported `System time 0.000007303 seconds fast of NTP time`, frequency
+0.556 ppm fast, residual −16.08 ppm still settling. That residual is the figure
+to watch: it is what Phase 0 would otherwise mistake for DAC drift.
+**`smartboardpc` is still on timesyncd** and is not yet a candidate for any
+measurement that depends on frequency.
 
 **Gate.** Node-to-node wall-clock agreement within 1 ms, sustained, across a
 reboot of each node and across a Wi-Fi reconnect. If Wi-Fi proves too unstable
