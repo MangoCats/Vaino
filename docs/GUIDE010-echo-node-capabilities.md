@@ -85,7 +85,7 @@ Probed 2026-09-11.
 | desktop (`local`) | Windows WASAPI | self | unknown | — | estimate only `[GDE-ECHO-180]` |
 
 One number in the whole table is measured. That is the argument for
-[GUIDE009](GUIDE009-echo-playback-plan.md)'s Phase 0 existing, stated as a
+[GUIDE009](GUIDE009-echo-playback-plan.md)'s measurement phase existing, stated as a
 table rather than as a worry.
 
 **`[GDE-ECHO-470]` An echo node needs the same audio, and three nodes already

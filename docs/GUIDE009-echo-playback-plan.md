@@ -4,10 +4,12 @@
 
 The build order for echo playback, with the gate that can stop each phase. The
 plan is shaped by one fact from the investigation: the only drift figure in
-evidence belongs to one machine `[GDE-ECHO-060]`, so the first phase produces
+evidence belongs to one machine `[GDE-ECHO-060]`, so the early phases produce
 measurements and the design of the correction is not settled until it has them.
+The timebase comes first, because every measurement after it is expressed
+against it `[GDE-ECHO-305]`.
 
-> **Related:** [GUIDE008](GUIDE008-echo-playback-investigation.md) — the findings this rests on · [GUIDE010](GUIDE010-echo-node-capabilities.md) — the node model Phase 0 fills in · [REQ003](spec/REQ003-audio-playback.md) — the buffer-depth rule every correction obeys · [SPEC011](spec/SPEC011-audio-path-supervisor.md) — the device lifecycle that invalidates a frame clock · [BOSE004](../BosePi/BOSE004-operating-health.md) — the independent instrument Phase 1 is validated against · [PI026](../VainoPi/PI026-startup-preflight.md) — the preflight shape Phase 2 borrows
+> **Related:** [GUIDE008](GUIDE008-echo-playback-investigation.md) — the findings this rests on · [GUIDE010](GUIDE010-echo-node-capabilities.md) — the node model Phase 1 fills in · [REQ003](spec/REQ003-audio-playback.md) — the buffer-depth rule every correction obeys · [SPEC011](spec/SPEC011-audio-path-supervisor.md) — the device lifecycle that invalidates a frame clock · [BOSE004](../BosePi/BOSE004-operating-health.md) — the independent instrument Phase 2 is validated against · [PI026](../VainoPi/PI026-startup-preflight.md) — the preflight shape Phase 0 borrows
 
 ---
 
@@ -31,7 +33,51 @@ accepted as evidence `[GOV-SRC-020]`.
 
 ---
 
-## 2. Phase 0 — Measure every candidate node
+## 2. Phase 0 — The shared timebase
+
+**`[GDE-ECHO-300]` chrony on every node, verified at boot, reported in the same
+place as everything else.** Install and configure chrony across the fleet with a
+common upstream, then extend the startup preflight `[PI-PRE-010]` with a check
+that it is running and converged. What must be recorded is not chrony's own
+estimate of its accuracy but the observed offset between nodes over a week —
+`[GOV-SRC-020]` again: a daemon's self-report is a claim, not a measurement.
+
+**`systemd-timesyncd` is the default, and it is the wrong tool here** — for a
+specific reason rather than a general one: it is an SNTP client that corrects
+the *time* without disciplining the *frequency*, which is precisely the half
+`[GDE-ECHO-100]` needs. A node left on timesyncd satisfies the wall-clock
+requirement and silently fails the frequency one.
+
+Both x86 nodes shipped that way. **`teacherslounge` was moved to chrony on
+2026-09-11** — installing it deactivates timesyncd automatically — and within a
+minute reported `System time 0.000007303 seconds fast of NTP time`, frequency
+0.556 ppm fast, residual −16.08 ppm still settling. That residual is the figure
+to watch: it is what Phase 1 would otherwise mistake for DAC drift.
+**`smartboardpc` is still on timesyncd** and is not yet a candidate for any
+measurement that depends on frequency.
+
+**`[GDE-ECHO-305]` The timebase precedes the measurement, and an earlier
+revision of this plan had that backwards.** It listed measurement as Phase 0 and
+the timebase as Phase 2, which cannot work: a node's ppm is expressed *against*
+the clock discipline in force, so measuring first and installing chrony
+afterwards invalidates the measurement without changing the hardware. The DAC
+would not have moved; the ruler would.
+
+Observed directly on `smartboardpc`, minutes apart: residual frequency
+**+305.427 ppm, then −213.530 ppm, with skew still at 10⁶ ppm** — chrony's way
+of saying it has no estimate yet. Any ppm figure taken in that window measures
+chrony, not the hardware. The fleet must therefore be **entirely on chrony and
+settled** before Phase 1 begins, and a mixed fleet — some nodes on chrony, some
+on timesyncd — cannot be compared across at all `[GOV-SRC-020]`.
+
+**Gate.** Node-to-node wall-clock agreement within 1 ms, sustained, across a
+reboot of each node and across a Wi-Fi reconnect. If Wi-Fi proves too unstable
+to hold that, the finding belongs in this document before any wire format is
+designed, because it changes how often the anchor in Phase 3 must be resent.
+
+---
+
+## 3. Phase 1 — Measure every candidate node
 
 **`[GDE-ECHO-270]` A per-node ppm campaign, using the instrument that already
 exists, before any player code changes.** For each node that might participate,
@@ -62,7 +108,7 @@ is not a candidate.
 
 ---
 
-## 3. Phase 1 — The frame clock
+## 4. Phase 2 — The frame clock
 
 **`[GDE-ECHO-280]` Count frames where they leave for the device, and nowhere
 else.** In `player/src/output.rs`, `fill` gains three atomics alongside the
@@ -97,36 +143,6 @@ later through a network.
 
 ---
 
-## 4. Phase 2 — The shared timebase
-
-**`[GDE-ECHO-300]` chrony on every node, verified at boot, reported in the same
-place as everything else.** Install and configure chrony across the fleet with a
-common upstream, then extend the startup preflight `[PI-PRE-010]` with a check
-that it is running and converged. What must be recorded is not chrony's own
-estimate of its accuracy but the observed offset between nodes over a week —
-`[GOV-SRC-020]` again: a daemon's self-report is a claim, not a measurement.
-
-**`systemd-timesyncd` is the default, and it is the wrong tool here** — for a
-specific reason rather than a general one: it is an SNTP client that corrects
-the *time* without disciplining the *frequency*, which is precisely the half
-`[GDE-ECHO-100]` needs. A node left on timesyncd satisfies the wall-clock
-requirement and silently fails the frequency one.
-
-Both x86 nodes shipped that way. **`teacherslounge` was moved to chrony on
-2026-09-11** — installing it deactivates timesyncd automatically — and within a
-minute reported `System time 0.000007303 seconds fast of NTP time`, frequency
-0.556 ppm fast, residual −16.08 ppm still settling. That residual is the figure
-to watch: it is what Phase 0 would otherwise mistake for DAC drift.
-**`smartboardpc` is still on timesyncd** and is not yet a candidate for any
-measurement that depends on frequency.
-
-**Gate.** Node-to-node wall-clock agreement within 1 ms, sustained, across a
-reboot of each node and across a Wi-Fi reconnect. If Wi-Fi proves too unstable
-to hold that, the finding belongs in this document before any wire format is
-designed, because it changes how often the anchor in Phase 3 must be resent.
-
----
-
 ## 5. Phase 3 — The wire
 
 **`[GDE-ECHO-310]` A master broadcasts two kinds of anchor; it sends no
@@ -148,7 +164,7 @@ periodically, carrying the master's measured ppm. Computed from `audible_ms`,
 never `played_ms`, because those differ by the ring's depth and only one of them
 describes sound `[REQ-AUD-164]`.
 
-Cadence follows Phase 2's measured stability; twice a second for the drift
+Cadence follows Phase 0's measured stability; twice a second for the drift
 anchor, matching the existing snapshot rate, costs nothing new because it rides
 the WebSocket the browser snapshot already uses. The schedule is emitted on
 admission rather than on a clock.
@@ -179,7 +195,7 @@ joining is explicitly out of scope for v1: it is the case where the ring's depth
 is hardest to reason about, and nothing is learned by attempting it first.
 
 Then measure and do not correct. Log the residual offset between the two nodes
-continuously across many passages and compare it against Phase 0's predicted
+continuously across many passages and compare it against Phase 1's predicted
 drift.
 
 **Gate.** Observed drift matches prediction within a factor of two. A mismatch
@@ -267,9 +283,9 @@ question answered on its own terms in
 
 | risk | shows in | if it happens |
 | :--- | :--- | :--- |
-| A node's ALSA gives no hardware timestamps | Phase 1 | that node cannot echo; `[GDE-ECHO-290]` makes it say so rather than drift silently |
-| Wi-Fi cannot hold 1 ms wall-clock agreement | Phase 2 | anchor cadence rises, or wired-only is accepted |
-| Measured drift contradicts Phase 0 | Phase 4 | stop; the chain is not understood `[GDE-ECHO-330]` |
+| A node's ALSA gives no hardware timestamps | Phase 2 | that node cannot echo; `[GDE-ECHO-290]` makes it say so rather than drift silently |
+| Wi-Fi cannot hold 1 ms wall-clock agreement | Phase 0 | anchor cadence rises, or wired-only is accepted |
+| Measured drift contradicts Phase 1 | Phase 4 | stop; the chain is not understood `[GDE-ECHO-330]` |
 | Crystal drifts with room temperature more than expected | Phase 4 | the trim loop absorbs it, which is what a loop is for |
 | Correction loop hunts | Phase 5 | deadband widened `[GDE-ECHO-350]` |
 | cpal panics on the audio thread | any | `[GDE-ECHO-190]`; do not increase how often that path is called |

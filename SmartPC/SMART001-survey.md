@@ -108,7 +108,7 @@ Residual freq   : +305.427 ppm
 ```
 
 **That residual is not converged and must not be read as a measurement.** It is
-the figure Phase 0 would otherwise mistake for DAC drift, and chrony needs
+the figure Phase 1 would otherwise mistake for DAC drift, and chrony needs
 considerably longer than five seconds to settle it — the point of recording it
 here is that the number changes, so any drift measurement taken before it
 stabilises is measuring chrony, not the hardware `[GOV-SRC-020]`.
@@ -230,6 +230,6 @@ a single file `[IMPL-BOS-078]`; the desktop runs `listener.db` plus
 would sit on the same `ext4` root `[SMT-DB-030]` — so it should follow whatever
 the fleet settles on rather than being decided here.
 
-**`[SMT-OPN-030]` Its drift has not been measured.** It is a Phase 0 subject in
+**`[SMT-OPN-030]` Its drift has not been measured.** It is a Phase 1 subject in
 [GUIDE009](../docs/GUIDE009-echo-playback-plan.md), and `[SMT-AUD-040]` is the
 reason its number cannot be guessed from `bose`'s.

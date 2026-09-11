@@ -62,7 +62,10 @@ protocols look more relevant to this than they are.
 14,126,435,269 frames delivered against 320,327.218 s of monotonic time — a
 **+0.113 s divergence over 3.71 days**, on a stream that triggered once and
 never restarted. That is the HiFiBerry DAC+ Pro's crystal against the Pi's
-system clock. It is between fifty and three hundred times better than the
+system clock **as disciplined by `systemd-timesyncd`, which is what `bose` ran
+until 2026-09-11** — a baseline worth stating, because the figure is a ratio
+against that clock and moving the node to chrony `[GDE-ECHO-305]` changes the
+steering without changing the DAC. It should be re-taken once chrony settles. It is between fifty and three hundred times better than the
 ±20–100 ppm a generic consumer crystal is quoted at, and it is what the Pro's
 dedicated 44.1/48 kHz oscillators are for.
 
@@ -93,8 +96,9 @@ moves with temperature. It is evidence that *this class of hardware can be very
 good*, not evidence that any given node is. The instrument is cheap and already
 proven — `pcm0p/sub0/status` read against monotonic time, exactly as BOSE004 did
 it — so the honest move is to measure each node before deciding what correction
-it needs. That is why [GUIDE009](GUIDE009-echo-playback-plan.md) opens with a
-measurement phase rather than a design.
+it needs. That is why [GUIDE009](GUIDE009-echo-playback-plan.md) measures every
+node before designing a correction — behind a timebase phase that has to settle
+first `[GDE-ECHO-305]`.
 
 **`[GDE-ECHO-070]` `vainopi` is not in this table, but it is not excluded by
 category either — and an earlier revision of this document had that wrong.** It
@@ -163,7 +167,7 @@ modest.** It has to give every node a common wall clock stable to ~1 ms for
 scheduling starts, and — more importantly — a common *frequency* reference
 against which each node's DAC error can be expressed as a number meaning the
 same thing on both machines. It does not have to be accurate in absolute terms;
-it has to be the same on both. Verifying that on the fleet is Phase 2 of
+it has to be the same on both. Verifying that on the fleet is Phase 0 of
 [GUIDE009](GUIDE009-echo-playback-plan.md), not an assumption of this document.
 
 ---
