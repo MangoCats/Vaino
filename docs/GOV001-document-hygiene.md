@@ -140,7 +140,14 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-BK-*]` | Moving a session between Vaino's engine and MPD without stopping | [SPEC018-switching-backends.md](spec/SPEC018-switching-backends.md), [SPEC020-the-handoff.md](spec/SPEC020-the-handoff.md) |
 | `[SPEC-LYR-*]` | Lyrics, and what a guest protocol will not carry | [SPEC019-lyrics.md](spec/SPEC019-lyrics.md) |
 | `[SPEC-VOC-*]`, `[ENT-FILE-*]`, `[ENT-PASSAGE-*]`, `[ENT-RECORDING-*]`, `[ENT-RELEASE-*]`, `[ENT-ALBUM-*]`, `[ENT-ARTIST-*]`, `[ENT-TRACK-*]` | Domain vocabulary: file/passage/recording/release/album/artist/track, precisely | [SPEC023-domain-vocabulary.md](spec/SPEC023-domain-vocabulary.md) |
-| `[IMPL-*]` | Pi Zero 2W appliance setup procedure; the rebuild-from-repository audit is IMPL012, and the database split runs IMPL002 (design) -> IMPL009 (plan) -> IMPL010 (review) -> IMPL011 (built) | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
+| `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../VainoPi/IMPL001-appliance-setup.md) |
+| `[IMPL-DBSPLIT-*]` | Splitting one database into a read-only catalog and a writable listener store: design, plan, review, and what was built | [IMPL002-database-split.md](../VainoPi/IMPL002-database-split.md), [IMPL009-database-split-plan.md](../VainoPi/IMPL009-database-split-plan.md), [IMPL010-database-split-review.md](../VainoPi/IMPL010-database-split-review.md), [IMPL011-database-split-built.md](../VainoPi/IMPL011-database-split-built.md) |
+| `[PI3-REPRO-*]` | Rebuilding the appliance from a fresh card and this tree alone, and what that claim rests on | [IMPL012-rebuilding-from-the-repository.md](../VainoPi/IMPL012-rebuilding-from-the-repository.md) |
+| *(no tags — procedure)* | Deploying a build of Vaino to the running appliance, by commit or by release | [HOWTO.md](../VainoPi/HOWTO.md) |
+| `[REQ-LIB-165]` | Working the questionable-recording review queue | [IMPL002-reviewing-ids.md](IMPL002-reviewing-ids.md) |
+| `[SPEC-SUI-*]`, `[REQ-LIB-*]` | Build order for the waveform boundary editor and the Sampo editing workflows | [IMPL006-sampo-editing-workflows.md](IMPL006-sampo-editing-workflows.md) |
+| `[SPEC-DF-*]` (sync) | Build order for syncing edits, and a GUI for the bundle | [IMPL007-syncing-edits.md](IMPL007-syncing-edits.md) |
+| `[SPEC-DF-*]` (reads) | Build order for targeted remote reads | [IMPL008-targeted-remote-reads.md](IMPL008-targeted-remote-reads.md) |
 | `[IMPL-SUI-*]` | Sampo Console build order and per-stage claims | [IMPL003-sampo-console-build.md](IMPL003-sampo-console-build.md) |
 | `[IMPL-MPD-*]` | MPD Director prototype: build order, riskiest part first | [IMPL004-mpd-prototype.md](IMPL004-mpd-prototype.md) |
 | `[PI3-*]` | Speaker link: what it must survive (PI003) and what the player owes in return (PI022) | [PI003-choosing-a-speaker.md](../VainoPi/PI003-choosing-a-speaker.md), [PI022-the-players-speaker-contract.md](../VainoPi/PI022-the-players-speaker-contract.md) |
