@@ -458,6 +458,26 @@ error as the agent's first selftest `[PI3-FOUND-660]` -- a fixture that shares
 the implementation's assumption -- caught this time by mutation rather than by
 a speaker.
 
+**Extended to 63 assertions**, closing the gaps a coverage review found:
+never paging while audio plays `[PI3-AIM-060]` and never paging a device that
+already has a link `[PI3-FOUND-140]` -- both rules whose violation was
+*audible* -- plus `vaino-db-recover`, which runs on every boot of a machine
+that is power-cut by design, and `vaino-btctl`, whose address argument is the
+only untrusted input this appliance takes. That input is now tested against a
+command substitution and a shell metacharacter as well as malformed
+addresses; all six are refused before reaching `bluetoothctl` or SQL.
+
+**One product finding came out of writing them.** `vaino-db-recover` assumes
+opening a database read-write clears a hot journal. Measured: after a write
+killed mid-transaction, the journal survives `PRAGMA user_version`, a real
+`SELECT`, `PRAGMA integrity_check` and `BEGIN IMMEDIATE` alike -- 4616 bytes
+every time -- while the data reads back correctly, because the transaction
+never reached the main database and SQLite does not consider that journal hot.
+The script's warning path fires, which is the behaviour now asserted. The
+recovery it was built for `[PI3-FOUND-120]` is a different case, and this
+fixture does not reproduce it: **rollback of a genuinely hot journal remains
+untested.**
+
 **What it cannot cover, and must not pretend to.** BlueZ's own semantics: a
 stub encodes what its author believed, and the belief that an agent is
 consulted for a trusted device is exactly what cost an evening

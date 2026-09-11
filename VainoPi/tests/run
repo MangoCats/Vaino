@@ -31,6 +31,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PI="$(dirname "$HERE")"
 export VAINO_COMMON="$PI/vaino-common.sh"
+ORIG_PATH="$PATH"
 PASS=0
 FAIL=0
 ONLY="${1:-}"
@@ -47,7 +48,11 @@ setup() {
     : > "$VT_STATE/reachable"
     : > "$VT_STATE/db_writes"
     : > "$VT_STATE/routed"
-    PATH="$HERE/stubs:$PATH"
+    # From the pristine PATH every time. Prepending to the live one made it
+    # accumulate across cases -- stubs:stubs:stubs:... -- so a test that tried
+    # to strip the stub directory off still got a stub, and its fixtures were
+    # never built. The failures that followed looked like product bugs.
+    PATH="$HERE/stubs:$ORIG_PATH"
     export PATH
 }
 
@@ -102,6 +107,8 @@ MIDDL=20:64:DE:CF:F3:AD
 . "$HERE/cases-common.sh"
 . "$HERE/cases-speaker.sh"
 . "$HERE/cases-waitsink.sh"
+. "$HERE/cases-dbrecover.sh"
+. "$HERE/cases-btctl.sh"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

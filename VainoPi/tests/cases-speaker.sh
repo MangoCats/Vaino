@@ -123,3 +123,37 @@ else
     bad "a tick with nothing reachable stays inside its budget" "took ${ELAPSED}s"
 fi
 teardown
+
+# --- 9. never page while audio is playing `[PI3-AIM-060]` ----------------
+# Paging a device the radio cannot reach stalls whatever IS playing for
+# several seconds -- measured as an audible skip with the position display
+# frozen, and invisible to the underrun counter because the stall is on the
+# radio and never touches the output ring. So when the stream is on a real
+# sink, the chase budget is zero and nothing is paged.
+setup
+speaker "$MIDDL" "MIDDLETON" yes yes
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+printf '%s\n' "$MIDDL" > "$VAINO_RUN_DIR/incumbent"
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf 'MIDDLETON\n' > "$VT_STATE/routed"
+sinks "MIDDLETON"
+keeper >/dev/null
+assert_not_called "bluetoothctl connect $OONTZ" "never pages the absent chosen speaker while audio plays"
+teardown
+
+# --- 10. never page a device that already has a link `[PI3-FOUND-140]` ---
+# `Connected` on the D-Bus device goes true only when a PROFILE connects, so
+# it reads false through the whole of A2DP negotiation. An earlier chase took
+# that as "absent" and paged again every two seconds; every one of those
+# collided with the negotiation already in flight -- eight collisions in one
+# boot, and A2DP that had completed at 75 s did not finish until 88. The
+# controller's own view, `hcitool con`, is the honest question.
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf 'Connections:\n\t< ACL %s handle 11 state 1 lm CENTRAL\n' "$OONTZ" > "$VT_STATE/hci_con"
+sinks "Dummy Output"
+keeper >/dev/null
+assert_called "hcitool con" "asks the controller whether a link already exists"
+assert_not_called "bluetoothctl connect $OONTZ" "keeps out of the way of a negotiation in flight"
+teardown

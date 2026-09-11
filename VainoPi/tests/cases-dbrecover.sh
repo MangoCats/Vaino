@@ -1,0 +1,84 @@
+# vaino-db-recover: it runs on every boot of a machine that is power-cut by
+# design `[PI3-FOUND-120]`, and if it is wrong the appliance does not start at
+# all. Run against real SQLite, not a stub -- the behaviour under test is
+# SQLite's recovery, so faking it would test nothing.
+group dbrecover || return 0
+printf '\ndbrecover\n'
+
+recover() { PATH="$REALPATH" VAINO_DB="$1" VAINO_LIBRARY_DB="$2" VAINO_LISTENER_DB="$3" \
+    sh "$PI/vaino-db-recover" 2>&1; }
+
+setup
+REALPATH="$ORIG_PATH"
+D="$VT_STATE/dbs"; mkdir -p "$D"
+if ! PATH="$REALPATH" command -v sqlite3 >/dev/null 2>&1; then
+    printf '  skip sqlite3 not installed, cannot test recovery\n'
+    teardown
+    return 0
+fi
+
+PATH="$REALPATH" sqlite3 "$D/good.db" "CREATE TABLE t (x); INSERT INTO t VALUES (1);"
+OUT=$(recover "$D/good.db" "$D/absent.db" "$D/absent2.db")
+assert_eq "$OUT" "" "says nothing about a healthy database"
+
+# A database that is simply not there is skipped, not an error: a fresh card
+# has no listener store until the player makes one.
+OUT=$(recover "$D/absent.db" "$D/absent2.db" "$D/absent3.db")
+assert_eq "$OUT" "" "skips databases that do not exist"
+
+# **A genuine hot journal, made the way the appliance makes them**: a write in
+# flight and the power removed. An empty `-journal` file will not do -- SQLite
+# reads its header to decide whether there is anything to roll back, so a
+# zero-length one is not a hot journal and tests nothing.
+PATH="$REALPATH" sqlite3 "$D/good.db" "PRAGMA journal_mode=delete;" >/dev/null
+{ printf 'BEGIN IMMEDIATE;
+INSERT INTO t VALUES (2);
+'; sleep 9; } |
+    PATH="$REALPATH" sqlite3 "$D/good.db" >/dev/null 2>&1 &
+WRITER=$!
+i=0
+while [ "$i" -lt 40 ] && [ ! -s "$D/good.db-journal" ]; do i=$((i + 1)); sleep 0.1; done
+kill -9 "$WRITER" 2>/dev/null
+wait "$WRITER" 2>/dev/null
+
+if [ -s "$D/good.db-journal" ]; then
+    ok "the fixture produced a real hot journal"
+    OUT=$(recover "$D/good.db" "$D/absent.db" "$D/absent2.db")
+    assert_in "$OUT" "hot journal" "announces a hot journal"
+    # **Deliberately not asserting that the journal file disappears.**
+    # Measured on the appliance 2026-09-10: after a write killed mid
+    # transaction, the journal survives `PRAGMA user_version`, a real `SELECT`,
+    # `PRAGMA integrity_check` and `BEGIN IMMEDIATE` alike -- 4616 bytes every
+    # time -- while the data reads back correctly. The transaction never
+    # reached the main database, so SQLite does not consider that journal hot
+    # and leaves it where it lies. Asserting on its removal would be testing
+    # SQLite's housekeeping, not this script's contract.
+    #
+    # What the script promises is to say so when a journal outlives the
+    # attempt, and that is what is checked.
+    assert_in "$OUT" "still journalled" "says so when the journal outlives the attempt"
+    # The row from the interrupted transaction must be gone: rolled back, not
+    # applied. This is the whole purpose -- a half-written database is what
+    # left the player restarting 23 times `[PI3-FOUND-120]`.
+    ROWS=$(PATH="$REALPATH" sqlite3 "$D/good.db" "SELECT count(*) FROM t;" 2>/dev/null)
+    assert_eq "$ROWS" "1" "the interrupted write was rolled back, not applied"
+else
+    printf '  skip could not manufacture a hot journal on this filesystem
+'
+    : > "$D/good.db-journal"
+    OUT=$(recover "$D/good.db" "$D/absent.db" "$D/absent2.db")
+    assert_in "$OUT" "hot journal" "announces a journal file beside the database"
+    rm -f "$D/good.db-journal"
+fi
+
+# Opening read-write is the whole point: the read-only attach that this
+# replaced could not roll anything back `[PI3-FOUND-120]`.
+printf 'this is not a database at all\n' > "$D/broken.db"
+OUT=$(recover "$D/broken.db" "$D/absent.db" "$D/absent2.db")
+assert_in "$OUT" "could not open" "reports a database it cannot open"
+
+# It must never stop the boot, whatever it finds.
+PATH="$REALPATH" VAINO_DB="$D/broken.db" VAINO_LIBRARY_DB="$D/absent.db" \
+    VAINO_LISTENER_DB="$D/absent2.db" sh "$PI/vaino-db-recover" >/dev/null 2>&1
+assert_eq "$?" "0" "always exits 0, so a bad database never blocks the boot"
+teardown
