@@ -36,6 +36,33 @@ command -v btmon >/dev/null 2>&1 || {
     exit 0
 }
 
+# The whole of the analysis, in one place and callable on its own.
+#
+# **Separated so it can be tested `[PI3-AIM-100]`.** Every measurement in PI011
+# came through these four lines, and they were verified once by hand against
+# synthetic input and never again. Buried inside the capture they could only
+# be exercised by running a real `btmon` for a real window, which is why they
+# never were.
+#
+#     vaino-hci-capture aggregate <file>    # or on stdin
+aggregate() {
+    awk '
+        /^#T/ { if (t != "") printf "%s %d %d %d\n", t, tx, comp, bytes
+                t = $2; tx = 0; comp = 0; bytes = 0; next }
+        /ACL Data TX/ { tx++
+                        if (match($0, /dlen [0-9]+/))
+                            bytes += substr($0, RSTART + 5, RLENGTH - 5) + 0 }
+        /Number of Completed Packets/ { comp++ }
+        END { if (t != "") printf "%s %d %d %d\n", t, tx, comp, bytes }
+    ' "$@"
+}
+
+if [ "${1:-}" = aggregate ]; then
+    shift
+    aggregate "$@"
+    exit 0
+fi
+
 cleanup() { rm -f "$RAW"; }
 trap cleanup EXIT INT TERM
 
@@ -74,15 +101,7 @@ kill "$TICKPID" 2>/dev/null
 {
     printf '# boot %s -- hci capture, %ss window\n' "$(date 2>/dev/null)" "$SECS"
     printf '# mono acl_tx completed bytes\n'
-    awk '
-        /^#T/ { if (t != "") printf "%s %d %d %d\n", t, tx, comp, bytes
-                t = $2; tx = 0; comp = 0; bytes = 0; next }
-        /ACL Data TX/ { tx++
-                        if (match($0, /dlen [0-9]+/))
-                            bytes += substr($0, RSTART + 5, RLENGTH - 5) + 0 }
-        /Number of Completed Packets/ { comp++ }
-        END { if (t != "") printf "%s %d %d %d\n", t, tx, comp, bytes }
-    ' "$RAW"
+    aggregate "$RAW"
 } >> "$OUT" 2>/dev/null
 
 exit 0

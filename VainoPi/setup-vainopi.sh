@@ -507,6 +507,10 @@ Wants=bluetooth.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/vaino-afh-seed boot
+# Seven passes at ten-second intervals is about a minute by design, so this
+# clears it comfortably. Finite because `Type=oneshot` defaults to infinity
+# `[PI3-FOUND-670]`, and this one talks to `hcitool`.
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target
@@ -589,6 +593,9 @@ After=local-fs.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/vaino-led-boot
+# Short work, but a oneshot without a ceiling is a boot that can hang forever
+# `[PI3-FOUND-670]`.
+TimeoutStartSec=30
 
 [Install]
 WantedBy=multi-user.target

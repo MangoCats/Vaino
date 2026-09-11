@@ -458,7 +458,7 @@ error as the agent's first selftest `[PI3-FOUND-660]` -- a fixture that shares
 the implementation's assumption -- caught this time by mutation rather than by
 a speaker.
 
-**Extended to 63 assertions**, closing the gaps a coverage review found:
+**Extended to 77 assertions**, closing the gaps a coverage review found:
 never paging while audio plays `[PI3-AIM-060]` and never paging a device that
 already has a link `[PI3-FOUND-140]` -- both rules whose violation was
 *audible* -- plus `vaino-db-recover`, which runs on every boot of a machine
@@ -477,6 +477,32 @@ The script's warning path fires, which is the behaviour now asserted. The
 recovery it was built for `[PI3-FOUND-120]` is a different case, and this
 fixture does not reproduce it: **rollback of a genuinely hot journal remains
 untested.**
+
+**Two more groups, and a real gap each found.**
+
+*`units`* reads the systemd units `setup-vainopi.sh` writes -- no stubs, no
+hardware -- and requires a finite `TimeoutStartSec` on every `Type=oneshot`.
+**It found two more unbounded oneshots the moment it existed**:
+`vaino-afh-seed boot`, which applies seven times at ten-second intervals and
+talks to `hcitool`, and `vaino-led-boot`. Both now have ceilings. It also
+checks that the keeper's timeout clears its own tick budget, and that every
+unit's `ExecStart` names a helper that actually ships beside the setup script
+-- a unit pointing at a program nobody installed fails only at boot.
+
+*`hci`* covers the aggregation every measurement in PI011 came through. It was
+verified once by hand against synthetic input and never again, because buried
+inside the capture it could only be exercised by running a real `btmon` for a
+real window. It is now a callable mode -- `vaino-hci-capture aggregate <file>`
+-- which the appliance's own capture path uses, so the tests exercise the code
+that ships. **The assertion that matters is that a silent second is emitted as
+a zero row**: a skipped row would read as continuous audio, which is precisely
+the symptom this instrument exists to find.
+
+Writing those tests corrected the rate arithmetic. A row stamped T reports
+what was seen between T and the *next* marker, so the bytes inside a window
+are rows `t_first..t_last-1` over `t_last - t_first`. Dropping the first row
+and keeping the last counts the right *number* of rows, so it passes unnoticed
+on a long steady capture and is visibly wrong on a short one.
 
 **What it cannot cover, and must not pretend to.** BlueZ's own semantics: a
 stub encodes what its author believed, and the belief that an agent is

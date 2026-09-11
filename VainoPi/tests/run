@@ -109,6 +109,8 @@ MIDDL=20:64:DE:CF:F3:AD
 . "$HERE/cases-waitsink.sh"
 . "$HERE/cases-dbrecover.sh"
 . "$HERE/cases-btctl.sh"
+. "$HERE/cases-units.sh"
+. "$HERE/cases-hci.sh"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
