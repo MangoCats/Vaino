@@ -1,6 +1,11 @@
 # PI025: What the Local Split Owes vainopi
 
-**Appliance Record — a running register, opened 2026-09-11**
+**Appliance Record — opened and settled 2026-09-11**
+
+> **Status: paid.** Everything below was applied to `vainopi` on
+> 2026-09-11, in the order §4 required — deploy first, then drop, then WAL —
+> and verified on the running appliance. The register is kept as the record
+> of what was owed and how each item was proved, not as an outstanding list.
 
 Splitting the *local* database turned up defects that vainopi already has,
 because vainopi split first and nothing swept the rest of the system
@@ -46,8 +51,19 @@ appliance split. Verified directly against `/var/vaino/listener.db`
 
 **Fixed locally 2026-09-11** — the generators now open the catalogue half,
 which is the same file on an unsplit installation and changes nothing
-there. **Needs a build and a deploy to reach vainopi**, so it is the one
-item here that cannot be applied with `sqlite3` alone.
+there.
+
+**Applied 2026-09-11**, build `1a7e100`. Proved by asking for the work
+rather than by reading the log: `POST /cue/1` and `POST /covers/1` on the
+appliance itself, which before the deploy died on `no such table: passages`
+at the first statement. After it:
+
+    cue sheets: 1 cue sheet(s) written, 190 already current, 5518 needed no sheet
+    cover art: 43 cover(s) written, 0 already current, 77 shared a folder,
+               70 already had a cover, 1 without art
+
+Forty-three covers is work that had not been happening since the appliance
+split.
 
 **`[PI-OWE-030]` vainopi lost WAL in the split, and that is why its
 database intermittently reports "locked".** The pre-split
@@ -66,6 +82,12 @@ transaction**: SQLite documents a cross-database transaction as atomic only
 when the journal mode is *not* WAL. Nothing does today (the player attaches
 the catalogue read-only), which is what makes this safe there and would not
 make it safe everywhere.
+
+**Applied 2026-09-11**, both halves, `integrity_check` clean after and the
+mode persisting across a restart. The symptom went with it: twelve
+consecutive `SELECT COUNT(*)` reads against the live listener half while
+the player was running, twelve successes, where the same read had failed
+intermittently before.
 
 **`[PI-OWE-040]` Two empty shadow tables sit in vainopi's listener half.**
 `file_tags` (0 rows) and `cover_art` (0 rows) are in `/var/vaino/listener.db`
@@ -96,6 +118,11 @@ half. Both now use `open_split(&db, &library)`.
 So dropping the two tables on vainopi is not enough on its own — they will
 be back on the next restart until the build carrying this fix is deployed.
 Do the drop and the deploy together, or just the deploy and then the drop.
+
+**Applied 2026-09-11, in that order.** Dropped after the deploy, and gone
+after a full restart, which is the only test that distinguishes this fix
+from a tidy-up. The real tables are untouched in the catalogue half —
+5,709 `file_tags`, 1,079 `cover_art`.
 
 `schema_meta` is in both halves **on purpose** (`split_database.py`'s own
 `BOTH` list) and must not be dropped — the distinction is real and
@@ -166,12 +193,24 @@ is the point of this document.
 **`[PI-OWE-085]` The local database was split on 2026-09-11**, which is what
 found `[PI-OWE-040]`'s real cause and `[PI-OWE-020]` before it. Both halves
 are WAL, the shadow check passes, and the player and console both run
-against the pair — so everything owed above has now been exercised on a
-real split installation rather than only reasoned about.
+against the pair — so everything owed above was exercised on a real split
+installation before it was applied to this one.
+
+**`[PI-OWE-095]` Two split installations now reconcile.** With the desktop
+and `vainopi` both split, `sync_preferences.py` ran end to end for the
+first time in that shape and pulled the one special the appliance held that
+the desktop did not — `user.spiritual` on `93d4c0f2`, set from vainopi's
+own panel. Both sides then read identically and a further run reports
+nothing to do. That is `[SPEC-PREF-155]`'s two-path model, `[IMPL002 §7.4]`'s
+peer column, and `[SPEC-PREF-140]`'s specials sync all working at once,
+against real hardware rather than a fixture.
 
 **`[PI-OWE-090]`** `bose` is not split and is therefore untouched by all of
 it — but `[PI-OWE-010]`'s pattern is what it will meet on the day it is,
-and this register is the list to re-run against it then.
+and this register is the list to re-run against it then. It also still
+carries none of the specials data: `tools/load_occasions.py` and
+`tools/backfill_profanity.py` have never been run against it, and being
+unsplit it needs neither `--library` nor a patch file to do so.
 
 ---
 
