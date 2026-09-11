@@ -70,9 +70,9 @@ on B, per `[PI-DB-010]`'s split design.
 > `ec03371`, was threaded through the catalog queries in `2f2e81c`, and
 > `269fa10` fixed a foreign-key problem "found live on vainopi's real split"
 > the next day. `bose` itself runs the split today —
-> `/var/vaino/listener.db` on C, `/srv/library/library.db` on B — which
-> `[IMPL-BOS-185]` found the hard way. The conclusion below still holds for
-> the **listener** half, and for the same reason: every play is a write.
+> `/var/vaino/listener.db` on C, `/srv/library/library.db` on B — as the
+> RAM-only deploy `[IMPL-BOS-185]` found the hard way. The conclusion below
+> still holds for the **listener** half, and for the same reason: every play is a write.
 
 Whichever file holds listener state has to go somewhere that stays writable,
 because every play is a write to it.

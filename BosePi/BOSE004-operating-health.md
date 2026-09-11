@@ -120,8 +120,12 @@ sudo journalctl -b -u vaino --no-pager -o cat | sed -E 's/[0-9]+/#/g' | sort | u
 grep mmcblk0p3 /proc/diskstats | awk '{ print $10 * 512 / 1e9, "GB written" }'; uptime -p
 ```
 
-`sqlite3` is on the card since `[BOS-IMG-020]`, but the `python3` form below
-works on any appliance and is what the rest of this document assumes. Note
+**`[BOS-OPS-045]`** `sqlite3` is on the card since `[BOS-IMG-020]` — briefly
+untrue on 2026-09-11, when the overlay discarded it `[IMPL-BOS-185]`, and true
+again since it was reinstalled through `overlayroot-chroot` and added to
+`provision-bose.sh`. The `python3` form below works on any appliance and is
+what the rest of this document assumes, which is why that outage changed none
+of these recipes. Note
 the database is **split** since 2026-09-11: `vaino.db` is the retained
 pre-split rollback, and the live halves are `/var/vaino/listener.db` and
 `/srv/library/library.db` `[BOS-RUN-080]`.

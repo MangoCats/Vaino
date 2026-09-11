@@ -60,13 +60,23 @@ there.
 
 ## 2. Add: `sqlite3` (557 KB, no daemon, no resident cost)
 
-**`[BOS-IMG-020]` Install it.** *(Done 2026-09-11 --
-`3.46.1-7+deb13u1`.)* `bose` had no `sqlite3` command, which is
+**`[BOS-IMG-020]` Install it.** *(Done 2026-09-11 -- `3.46.1-7+deb13u1`.
+**Lost the same day and reinstalled durably; see below.**)* `bose` had no `sqlite3` command, which is
 how the whole of this came up: `tools/remote_peek.py` is
 `ssh <host> sqlite3 -json <path> "<sql>"`, so **every** tool built on it —
 `remote_flags`, `sync_preferences`, `mesh_diff`, `resolve_mesh_conflict`,
 `remote_snapshot` — reported that appliance unreachable when it was merely
 differently equipped.
+
+> **It did not stay installed, and that is the more useful lesson.** The
+> 2026-09-11 install went to the overlay's tmpfs upper layer and was gone at
+> the next reboot with the binary, the unit and both recovery helpers, as
+> recorded in `[IMPL-BOS-185]`. So for several hours this document, and `[BOS-OPS-045]`
+> in BOSE004, both asserted a command the appliance did not have — and the
+> five tools above would have gone on reporting `bose` unreachable. Repaired
+> the same day via `overlayroot-chroot` `[IMPL-BOS-180]`, verified present on
+> A rather than only live, and **added to `provision-bose.sh`'s package list**
+> so a rebuilt card arrives with it instead of needing this done again.
 
 It costs 557 KB installed, has no reverse dependencies, runs only when
 invoked, and is resident for the length of one query. Against that:

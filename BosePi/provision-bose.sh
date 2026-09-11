@@ -92,8 +92,18 @@ on "sudo resize2fs $ROOT_DEV" || die "could not grow A -- check with 'df -h /' o
 say "$(on "df -h / | tail -1")"
 
 step "Packages"
+# `sqlite3` is here for Sampo's remote tooling, NOT for database recovery.
+# `vaino-db-recover` resolves a runner and `python3` is a measured equal for
+# that one act `[PI-PRE-030]`. But `tools/remote_peek.py` is literally
+# `ssh <host> sqlite3 -json <path> "<sql>"`, so without the command
+# `remote_flags`, `sync_preferences`, `mesh_diff`, `resolve_mesh_conflict`
+# and `remote_snapshot` all report the appliance UNREACHABLE when it is
+# merely missing a package `[BOS-IMG-020]` -- a false diagnosis that points
+# at the network. It was installed by hand on 2026-09-11 and lost at the next
+# reboot with everything else that went to the overlay `[IMPL-BOS-185]`;
+# listing it here is what stops a rebuilt card from arriving without it.
 on "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        mpd f2fs-tools cloud-guest-utils alsa-utils >/dev/null" \
+        mpd f2fs-tools cloud-guest-utils alsa-utils sqlite3 >/dev/null" \
     || die "package install failed"
 say "mpd $(on 'mpd --version 2>/dev/null | head -1')"
 
