@@ -90,6 +90,22 @@ pub struct Ui {
 /// position counter moves smoothly, slow enough to cost nothing on a Pi.
 const PUSH_EVERY: Duration = Duration::from_millis(500);
 
+/// How often the queue is looked at in between.
+///
+/// `PUSH_EVERY` is the right cadence for a clock and the wrong one for an
+/// answer: a queue edit applied by the engine in microseconds was invisible
+/// for up to half a second afterwards, which read as the control being slow to
+/// obey rather than the display being slow to say so. Looking costs a copy of
+/// the shared state and a comparison of qids -- the same read the engine
+/// already serves ten times a second -- while sending, which is the part that
+/// crosses a socket and rebuilds a page, still happens only on the heartbeat
+/// or on the queue actually changing.
+///
+/// Matched to [`crate::engine::Engine::PUBLISH_EVERY`], since the engine
+/// rewrites the shared snapshot at most that often and watching any faster
+/// would only find the same answer twice.
+const WATCH_EVERY: Duration = Duration::from_millis(100);
+
 /// What the browser is told. One flat object, so the client needs no merge
 /// logic and cannot drift out of step with the engine.
 /// The skip transition, with the limits it may be set between `[REQ-AUD-162]`.
@@ -529,11 +545,37 @@ fn explain(ui: &Ui, snap: &mut Snapshot, state: &PlayerState) {
 
 /// Push snapshots until the browser goes away. Each is independent, so a
 /// dropped frame costs nothing and a reconnecting client needs no replay.
+///
+/// Two reasons to send, and they want different cadences. The heartbeat keeps
+/// the position counter moving and is worth no more than `PUSH_EVERY`; a
+/// change to the queue is an answer someone is waiting on and is worth saying
+/// at once. So this watches at `WATCH_EVERY` and sends when either applies.
+///
+/// The queue is observed rather than signalled from the command handlers on
+/// purpose. A handler knows when it *sent* an instruction, not when the engine
+/// applied it -- the engine drains its own channel on its own loop -- so a
+/// push fired from there would usually arrive a tick early and carry the state
+/// the browser already had. What is on screen has to follow what is true.
 async fn push_state(mut socket: WebSocket, ui: Ui) {
-    let mut tick = tokio::time::interval(PUSH_EVERY);
+    let mut watch = tokio::time::interval(WATCH_EVERY);
+    let mut sent_at: Option<std::time::Instant> = None;
+    // The queue as the edit controls see it: which entries, in what order, and
+    // how many the mixer has taken -- which is what makes a row uneditable.
+    let mut sent_queue: Option<(Vec<u64>, usize)> = None;
     loop {
-        tick.tick().await;
+        watch.tick().await;
         let state = ui.handle.snapshot();
+        let queue: Vec<u64> = state.queue.iter().map(|e| e.qid).collect();
+        let now = std::time::Instant::now();
+        let due = sent_at.is_none_or(|t| now.duration_since(t) >= PUSH_EVERY);
+        let moved = sent_queue
+            .as_ref()
+            .is_none_or(|(q, ahead)| q != &queue || *ahead != state.mixing_ahead);
+        if !due && !moved {
+            continue;
+        }
+        sent_at = Some(now);
+        sent_queue = Some((queue, state.mixing_ahead));
         let mut snap = Snapshot::from(&state);
         explain(&ui, &mut snap, &state);
         if let Ok(c) = ui.controls.lock() {

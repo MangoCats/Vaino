@@ -255,6 +255,11 @@ pub struct Engine {
     publish_at: Option<std::time::Instant>,
     /// The audible passage as last published, so a change can bypass the clock.
     published: Option<i64>,
+    /// Set when a command rearranged the queue, so that too can bypass the
+    /// clock. A listener who removes a passage is waiting on the answer; the
+    /// throttle exists for the position counter ticking along, and making an
+    /// edit wait behind it is what made the controls feel slow to obey.
+    queue_edited: bool,
     /// Misses already reported, so each is logged once.
     last_lock_failures: u64,
     /// The audio path, held at arm's length `[SPEC-APS-070]`.
@@ -435,6 +440,7 @@ impl Engine {
             out_room: 0,
             publish_at: None,
             published: None,
+            queue_edited: false,
             last_lock_failures: 0,
             out_rate,
             out_channels,
@@ -551,7 +557,8 @@ impl Engine {
         // position ticking along in between.
         let now = std::time::Instant::now();
         let changed = self.shown.as_ref().map(|(e, _)| e.passage_id) != self.published;
-        if changed || self.publish_at.is_none_or(|t| now >= t) {
+        if changed || self.queue_edited || self.publish_at.is_none_or(|t| now >= t) {
+            self.queue_edited = false;
             self.publish_at = Some(now + Self::PUBLISH_EVERY);
             self.publish();
         }
@@ -630,9 +637,16 @@ impl Engine {
                     }
                     self.remember_settings();
                 }
-                Ok(Command::Enqueue(e)) => self.queue.push(e),
-                Ok(Command::EnqueueNext(e)) => self.queue.push_front(e),
+                Ok(Command::Enqueue(e)) => {
+                    self.queue.push(e);
+                    self.queue_edited = true;
+                }
+                Ok(Command::EnqueueNext(e)) => {
+                    self.queue.push_front(e);
+                    self.queue_edited = true;
+                }
                 Ok(Command::EnqueueMany(entries, place)) => {
+                    self.queue_edited = true;
                     if !entries.is_empty() {
                         match place {
                             Placement::Now => {
@@ -660,6 +674,7 @@ impl Engine {
                     // was already next instead.
                     self.queue.push_front(e);
                     self.skip();
+                    self.queue_edited = true;
                 }
                 Ok(Command::RemoveQueued(id)) => {
                     // Taken out by hand before it ever played: a weaker
@@ -675,6 +690,7 @@ impl Engine {
                         .iter()
                         .find(|e| e.qid == id)
                         .map(|e| (e.passage_id, e.mbid.clone()));
+                    self.queue_edited = true;
                     if self.queue.remove(id) {
                         if let Some((passage_id, mbid)) = declined {
                             self.note_rejection(
@@ -689,6 +705,7 @@ impl Engine {
                 }
                 Ok(Command::ShiftQueued(id, delta)) => {
                     self.queue.shift(id, delta);
+                    self.queue_edited = true;
                 }
                 Ok(Command::Persist) => self.persist(true),
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
@@ -2137,6 +2154,45 @@ mod tests {
             "a removal is not a skip: they earn different windows"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A queue edit reaches the snapshot on the very next tick, without
+    /// waiting out the publish throttle `[REQ-VIS-185]`.
+    ///
+    /// The throttle exists for the position counter ticking along, and a
+    /// change of audible passage already bypasses it. An edit deserves the
+    /// same: the listener who pressed the button is waiting on this answer,
+    /// and the engine had applied it in microseconds while the page was told
+    /// up to `PUBLISH_EVERY` later. That gap was read as the control being
+    /// slow to obey rather than the display being slow to say so.
+    ///
+    /// The TAIL is what is removed, deliberately. Admission only ever takes
+    /// the head, so a test that dropped the head could pass on the admission
+    /// having published instead of on the edit having done so.
+    #[test]
+    fn a_queue_edit_does_not_wait_out_the_publish_throttle() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        // Six, because a tick admits from the head and readies the one behind
+        // it, so a short queue is empty before there is a tail to name.
+        for (n, p) in [(1, "a.mp3"), (2, "b.mp3"), (3, "c.mp3"),
+                       (4, "d.mp3"), (5, "e.mp3"), (6, "f.mp3")] {
+            e.enqueue(entry(n, p));
+        }
+        // The first publish, which also starts the throttle.
+        e.tick();
+        let before: Vec<u64> = h.snapshot().queue.iter().map(|q| q.qid).collect();
+        assert!(before.len() >= 2, "need a tail that admission will not take, got {before:?}");
+        let tail = *before.last().expect("a tail");
+
+        // No sleep anywhere: the throttle window is wide open, and that is the
+        // whole point of the assertion.
+        h.send(Command::RemoveQueued(tail));
+        e.tick();
+        let after: Vec<u64> = h.snapshot().queue.iter().map(|q| q.qid).collect();
+        assert!(
+            !after.contains(&tail),
+            "a removal must reach the snapshot at once, still saw {after:?}"
+        );
     }
 
     /// Removing a passage that is not there records nothing. Without the
