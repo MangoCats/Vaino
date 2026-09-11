@@ -1,0 +1,163 @@
+# PI026: What the Startup Path Depends On, and Saying So
+
+**Implementation Guide — the tools a boot needs, reported at every boot**
+
+Asked whether startup could verify the tools it needs, log their versions, and
+proceed accordingly. It can, it now does on both appliances, and building it
+turned a reporting request into a repair: the missing tool no longer stops
+recovery, it only changes which command performs it.
+
+> **Related:** [PI025](PI025-what-the-local-split-owes-vainopi.md) `[PI-OWE-100]`
+> for `vaino-db-recover`'s WAL reporting · [BOSE009](../BosePi/BOSE009-image-update-runbook.md)
+> `[BOS-RUN-090]` for why read-only media makes recovery matter more on `bose`
+
+---
+
+## 1. The failure this closes
+
+**`[PI-PRE-010]` A never-fatal script cannot report its own disarming.**
+`vaino-db-recover` is what stands between a power cut and a crash loop
+`[PI3-FOUND-120]`, and two of its properties combine badly. It shells out to
+`sqlite3`; and it is deliberately never fatal, because a player that starts
+and complains beats one that refuses. So if `sqlite3` ever went missing, the
+script would print one line about failing to open a database, exit 0, and
+recovery would **silently stop happening** — with nothing in the log
+separating *"this database is broken"* from *"the tool that repairs it is
+gone."* The next power cut would be the crash loop again, months after the
+change that caused it.
+
+That is not hypothetical on this ecosystem. `bose` had no `sqlite3` at all
+until `[BOS-IMG-020]` installed it on 2026-09-11, and `bose` is the machine
+whose catalogue sits on read-only media where recovery is hardest
+`[BOS-RUN-090]`.
+
+## 2. Two answers, and the second is the better one
+
+**`[PI-PRE-020]` Report what is there.** `vaino-preflight` runs first in the
+`ExecStartPre` chain, names each tool the startup path uses, gives its
+version, and states what is lost if it is absent. It repairs nothing and it
+**always exits 0** — refusing to boot over a missing diagnostic helper would
+be the failure this prevents, not a defence against it.
+
+**`[PI-PRE-030]` Then survive without it.** `vaino-db-recover` no longer names
+a command; it resolves a runner, preferring `sqlite3` and falling back to
+`python3`, which every Vaino appliance carries because the tooling already
+assumes it. Reporting a missing tool is worth something. Not needing it is
+worth more.
+
+## 3. The fallback is equivalent, and that was measured
+
+**`[PI-PRE-040]`** The recovery is SQLite's, not the command's — both runners
+do one read-write open and read one page, and SQLite repairs on the way in.
+That is the reason the command can be swapped, but a reason is not evidence.
+Run on `vainopi` 2026-09-11, against two fixtures built by killing a writer
+with `SIGKILL`:
+
+| fixture | `sqlite3` | `python3` |
+| :--- | :--- | :--- |
+| WAL, committed frames never checkpointed | frames replayed, `-wal` removed, both rows readable | **identical** |
+| `delete`-mode hot journal, dirty pages really spilled into the `.db` | rolled back, journal deleted, uncommitted rows gone | **identical** |
+
+The second fixture needed care to be worth anything. A first attempt built a
+"hot journal" from a small uncommitted transaction that never spilled out of
+the page cache, so the database file had never been modified, rollback was a
+no-op, and both runners "passed" a test that proved nothing — while leaving
+the journal file in place. Forcing the spill with `PRAGMA cache_size=10` and
+20,000 rows made rollback a real act with a visible result.
+
+**`[PI-PRE-045]`** That first attempt also found a live false alarm worth
+knowing about: after a hot journal with **nothing to roll back**, both runners
+leave the journal file behind at full size, so `vaino-db-recover`'s
+post-recovery check prints `still journalled after recovery` on stderr for a
+benign leftover. It is stderr-only, it does not affect the start, and the
+message is literally true. Left alone rather than loosened, because a check
+that under-reports a real failure would be worse than one that occasionally
+over-reports a harmless file.
+
+## 4. What it reports, and how it decides what to report
+
+**`[PI-PRE-050]` It asks the machine, not a list.** Which tools matter differs
+per appliance, and hard-coding that means two lists to keep in step. The
+audio-path tools are reported only when `vaino-wait-sink` is installed, since
+that is the only thing in the startup path that uses them. `vainopi` has it
+and `bose` does not — and neither machine is named anywhere in the script to
+get the right answer.
+
+Live output, 2026-09-11, unedited:
+
+```
+# vainopi
+vaino-preflight: vaino 0.1.0 (1a7e1008ab62) at /usr/local/bin/vaino
+vaino-preflight: sqlite3 3.40.1 at /usr/bin/sqlite3
+vaino-preflight: python3 3.11.2 (sqlite module 3.40.1) at /usr/bin/python3
+vaino-preflight: database recovery armed via sqlite3
+vaino-preflight: wpctl (wireplumber 0.4.13) at /usr/bin/wpctl
+vaino-preflight: bluetoothctl 5.66 at /usr/bin/bluetoothctl
+
+# bose -- no audio-path lines, because it has no vaino-wait-sink
+vaino-preflight: vaino 0.1.0 (5272e3f62ca3) at /usr/local/bin/vaino
+vaino-preflight: sqlite3 3.46.1 at /usr/bin/sqlite3
+vaino-preflight: python3 3.13.5 (sqlite module 3.46.1) at /usr/bin/python3
+vaino-preflight: database recovery armed via sqlite3
+```
+
+**`[PI-PRE-055]` The version is the point.** "`sqlite3` present" ages into
+uselessness the moment a version difference matters. These six lines already
+answered a question nobody had asked: the two appliances run **different
+player builds** (`1a7e1008` against `5272e3f6`) on **different SQLite**
+(3.40.1 against 3.46.1). Both facts are consequences of `vainopi` being on
+bookworm and `bose` on trixie `[BOS-IMG-068]`, both are fine, and neither was
+visible in any boot log before today.
+
+**`[PI-PRE-060]` Version strings are asked for, not guessed.** No two of these
+tools agree on how to be asked: `sqlite3 --version` leads with the number,
+`bluetoothctl --version` trails it, and `wpctl` has **no version option at
+all** — it must be asked through `wireplumber`. The first draft assumed a
+uniform form and logged `wpctl Usage:`, which is how a diagnostic becomes
+noise.
+
+## 5. Degraded behaviour, as executed
+
+**`[PI-PRE-070]`** All three states were run on `vainopi` against a real dirty
+WAL database, with the tools hidden behind a sanitised `PATH`:
+
+| state | preflight says | recovery |
+| :--- | :--- | :--- |
+| both present | `armed via sqlite3` | `sqlite3` |
+| no `sqlite3` | `ABSENT` + the ssh-tooling consequence `[BOS-IMG-020]` | **succeeds** via `python3`; frames replayed, `-wal` removed |
+| neither | `UNAVAILABLE`, naming `[PI3-FOUND-120]` | refuses, says exactly why, **exits 0**; frames left intact, not lost |
+
+The third row is the important one. Recovery does not happen, the start is not
+blocked, the data is not damaged, and the log says which of those three is
+true.
+
+**`[PI-PRE-075]` The unit test that should have caught a missing helper could
+not see one.** `cases-units.sh` checks that every unit names a program which
+ships beside it -- a good check, written against `^ExecStart=`, which cannot
+match `ExecStartPre=`. So the two helpers that run *before* the player were
+outside it, and those are the ones where absence is worst: systemd counts a
+missing `ExecStartPre` as a failed start, and `Restart=always` turns that into
+the boot loop this whole mechanism exists to prevent. Widened to both, and
+verified by mutation -- pointing a unit at a helper that does not exist now
+fails the suite, where before it passed.
+
+`finalize-bose.sh` had the matching hole: it shipped `bose`'s unit without the
+helpers the unit names. It now installs them first `[BOS-RUN-085]`.
+
+## 6. Open
+
+**`[PI-PRE-080]`** `vainopi`'s unit template in `setup-vainopi.sh` still names
+the pre-split `/srv/library/vaino.db` in its base `ExecStart`; the live
+machine is correct only because `mpd-guest.conf` overrides it. Re-running the
+installer is safe while that drop-in exists, and silently wrong if it is ever
+removed.
+
+**`[PI-PRE-085]`** `vainopi` still carries `/srv/library/vaino.db`, the 1.16 GB
+pre-split original, and `vaino-db-recover` opens it read-write on every boot
+because `VAINO_DB` still defaults to it. Harmless, and pointless: nothing has
+read it since 2026-09-07.
+
+---
+
+**Traceability:** `[PI-PRE-010..085]` · answers a question put after
+`[BOS-RUN-090]` · implemented in `vaino-preflight` and `vaino-db-recover`

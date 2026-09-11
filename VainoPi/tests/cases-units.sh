@@ -46,16 +46,24 @@ fi
 
 # Every unit the setup installs must name a program that ships beside it --
 # a unit pointing at a helper nobody installed fails only at boot.
+#
+# **`ExecStartPre` counts, and the first version of this check could not see
+# it**: `^ExecStart=` cannot match `ExecStartPre=`, so the two helpers that
+# run before the player -- the one that recovers a power-cut database and the
+# one that reports whether recovery is even possible `[PI-PRE-010]` -- went
+# unchecked. systemd treats a missing `ExecStartPre` as a failed start, and
+# with `Restart=always` that is a boot loop: strictly worse than the case this
+# was written for, and invisible to it.
 BADEXEC=""
-for prog in $(sed -n 's|^ExecStart=/usr/local/bin/\([a-z-]*\).*|\1|p' "$SETUP" | sort -u); do
+for prog in $(sed -n 's|^ExecStart\(Pre\)\{0,1\}=/usr/local/bin/\([a-z-]*\).*|\2|p' "$SETUP" | sort -u); do
     # `vaino` itself is the compiled player, cross-built and deployed
     # separately; everything else is a script that ships beside this setup.
     [ "$prog" = vaino ] && continue
     [ -f "$PI/$prog" ] || [ -f "$PI/$prog.sh" ] || BADEXEC="$BADEXEC $prog"
 done
 if [ -z "$BADEXEC" ]; then
-    ok "every unit's ExecStart names a helper that ships in this directory"
+    ok "every unit's ExecStart/ExecStartPre names a helper that ships here"
 else
-    bad "every unit's ExecStart names a helper that ships in this directory" "missing:$BADEXEC"
+    bad "every unit's ExecStart/ExecStartPre names a helper that ships here" "missing:$BADEXEC"
 fi
 teardown

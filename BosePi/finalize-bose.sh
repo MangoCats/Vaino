@@ -61,6 +61,18 @@ check "vaino.db present"     ssh "$HOST" test -f /var/vaino/vaino.db
 check "mpd installed"        ssh "$HOST" command -v mpd
 
 if [ "$MODE" = "--start" ]; then
+    step "Install the startup helpers the unit names"
+    # The unit has two ExecStartPre lines, and systemd counts a missing
+    # ExecStartPre as a failed start -- which with Restart=always is the very
+    # crash loop vaino-db-recover exists to prevent. Ship them BEFORE the unit
+    # that names them; half a mechanism is the recurring mistake here
+    # [BOS-RUN-085].
+    scp -q VainoPi/vaino-preflight VainoPi/vaino-db-recover "$HOST:/tmp/" ||
+        die "scp helpers failed"
+    for h in vaino-preflight vaino-db-recover; do
+        run "install $h" ssh "$HOST" "sudo install -m755 /tmp/$h /usr/local/bin/$h"
+    done
+
     step "Install vaino's unit"
     scp -q BosePi/vaino-bose.service "$HOST:/tmp/vaino.service" || die "scp failed"
     run "install unit + daemon-reload" ssh "$HOST" \

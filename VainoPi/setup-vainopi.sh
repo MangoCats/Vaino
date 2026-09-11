@@ -272,6 +272,11 @@ After=local-fs.target sound.target
 # player uses, which turns Restart=always into a crash loop. Ordered before
 # the sink wait because it is instant and must happen even when that wait
 # runs its full timeout.
+# First, and it repairs nothing: vaino-preflight names the tools the two
+# steps below depend on and reports each one's version, so a boot log says
+# whether recovery was ARMED rather than leaving it to be inferred from the
+# absence of a complaint [PI-PRE-010]. Always exits 0.
+ExecStartPre=/usr/local/bin/vaino-preflight
 ExecStartPre=/usr/local/bin/vaino-db-recover
 ExecStartPre=/usr/local/bin/vaino-wait-sink
 ExecStart=/usr/local/bin/vaino /srv/library/vaino.db --port 5720
@@ -327,7 +332,7 @@ fi
 
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
+for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-preflight          vaino-underruns vaino-led-boot \
          vaino-wifi-revert vaino-radio-test vaino-startup-sample \
          vaino-hci-capture vaino-linkstate vaino-afh-seed vaino-vitals \
          vaino-bt-agent; do

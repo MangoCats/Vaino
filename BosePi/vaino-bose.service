@@ -26,7 +26,20 @@ Type=simple
 # HiFiBerry as card 1 on the old 32-bit install; this Bookworm/trixie image
 # orders it differently. Played perfectly, reported healthy, silent --
 # [IMPL-AUD-010]'s dummy-output hazard, in a different shape.
-ExecStart=/usr/local/bin/vaino /var/vaino/vaino.db --device hifiberry --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
+#
+# Split since 2026-09-11 [BOS-RUN-080]: the listener half is the positional
+# argument and the catalogue is named with --library. /srv/library is `ro` in
+# normal operation, which is why the catalogue goes there and why
+# vaino-db-recover cannot repair it in place [BOS-RUN-090].
+#
+# vaino-preflight runs first and repairs nothing -- it reports which tools are
+# present, with versions, so the log says whether recovery is armed
+# [PI-PRE-010]. vaino-db-recover then does the one read-write open that
+# replays a WAL or rolls back a journal [PI3-FOUND-120]. No vaino-wait-sink
+# here: that waits on PipeWire, and this machine goes straight to ALSA.
+ExecStartPre=/usr/local/bin/vaino-preflight
+ExecStartPre=/usr/local/bin/vaino-db-recover
+ExecStart=/usr/local/bin/vaino /var/vaino/listener.db --library /srv/library/library.db --device hifiberry --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
 Restart=always
 RestartSec=2
 User=pi

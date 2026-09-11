@@ -43,6 +43,53 @@
 # was not asked.
 set -u
 
+# **`[PI-PRE-030]` The recovery needs one external command, and it may be
+# either of two.** This script's whole value is that it is never fatal -- it
+# reports what it cannot open and lets the player start -- and that same
+# property is what would hide the loss of `sqlite3`: recovery would stop
+# happening, and the log would say only "could not open", the same words it
+# uses for a genuinely broken database. The next power cut would be the crash
+# loop again, long after the change that caused it.
+#
+# So it resolves a runner instead of naming one. `python3` is on every Vaino
+# appliance because the tooling already assumes it, and for THIS act it is
+# not a lesser substitute: measured on `vainopi` 2026-09-11, against a WAL
+# database carrying un-checkpointed frames and against a hot rollback journal
+# whose dirty pages had really spilled into the database file, `python3` and
+# `sqlite3` gave identical outcomes -- frames replayed and the `-wal` removed,
+# the journal rolled back and deleted. Both recover because both open the
+# database read-write and read one page; the recovery is SQLite's, not the
+# command's, which is why the command can be swapped.
+#
+# `vaino-preflight` reports which of the two is armed, at every start.
+if command -v sqlite3 >/dev/null 2>&1; then
+    RUNNER=sqlite3
+elif command -v python3 >/dev/null 2>&1; then
+    RUNNER=python3
+else
+    RUNNER=
+fi
+
+# One read-write open, one cheap read. Writes nothing itself: the rollback or
+# the WAL replay is what SQLite does on the way in.
+open_rw() {
+    case "$RUNNER" in
+        sqlite3)
+            sqlite3 "$1" 'PRAGMA user_version;'
+            ;;
+        python3)
+            python3 -c 'import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("PRAGMA user_version").fetchone()
+c.close()' "$1"
+            ;;
+        *)
+            echo "no sqlite3 and no python3 on this host; cannot recover" >&2
+            return 1
+            ;;
+    esac
+}
+
 DB="${VAINO_DB:-/srv/library/vaino.db}"
 LIB="${VAINO_LIBRARY_DB:-/srv/library/library.db}"
 LISTENER="${VAINO_LISTENER_DB:-/var/vaino/listener.db}"
@@ -70,7 +117,7 @@ for db in "$DB" "$LIB" "$LISTENER"; do
     # from that exact state. An instrument that reports a failure without its
     # cause makes the next person guess, and this one had already cost that
     # once `[PI3-FOUND-120]`.
-    if err="$(sqlite3 "$db" 'PRAGMA user_version;' 2>&1 >/dev/null)"; then
+    if err="$(open_rw "$db" 2>&1 >/dev/null)"; then
         # The same asymmetry on the way out. A surviving `-journal` is worth
         # reporting; a surviving `-wal` is only worth reporting if it still
         # holds frames, since the last connection to close a WAL database

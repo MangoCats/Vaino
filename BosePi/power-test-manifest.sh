@@ -135,9 +135,15 @@ probe "6b. service state" on "systemctl show vaino.service -p NRestarts -p Activ
 say "swap present here answers whether [IMPL-BOS-170]'s fix survives a boot."
 say "A cut taken without a graceful reboot first tests that AND the cut at once."
 say "NRestarts>0 after a boot is the crash loop [PI3-FOUND-120] warned about."
-say "vaino-db-recover is NOT deployed on bose, so recovery is by hand, as pi:"
+say "vaino-db-recover IS deployed since 2026-09-11 and runs at every start,"
+say "so recovery should be automatic; the boot log says whether it happened:"
+say "  journalctl -u vaino -b | grep -E 'preflight|db-recover'"
+say "vaino-preflight runs before it and names the tools it depends on, so an"
+say "'armed via' line means recovery was possible [PI-PRE-010]. By hand, as pi:"
 say "  sudo -u pi python3 -c \"import sqlite3; sqlite3.connect('$DB').execute('pragma user_version')\""
 say "  sudo systemctl reset-failed vaino.service && sudo systemctl start vaino.service"
+say "NOTE: the catalogue at /srv/library is read-only in normal operation, so"
+say "a dirty library.db-wal needs an attended window to repair [BOS-RUN-090]."
 
 # The card is found BY NAME, never by number. The 2026-09-10 power cut moved
 # the HiFiBerry from card 2 to card 1 (vc4hdmi1 and it swapped places), which

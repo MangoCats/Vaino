@@ -111,4 +111,53 @@ assert_in "$OUT" "could not open" "reports a database it cannot open"
 PATH="$REALPATH" VAINO_DB="$D/broken.db" VAINO_LIBRARY_DB="$D/absent.db" \
     VAINO_LISTENER_DB="$D/absent2.db" sh "$PI/vaino-db-recover" >/dev/null 2>&1
 assert_eq "$?" "0" "always exits 0, so a bad database never blocks the boot"
+
+# **`[PI-PRE-030]` Which command performs the recovery, and what happens when
+# it is not there.** The script used to name `sqlite3`. Being never-fatal, it
+# would then have reported "could not open" -- the same words it uses for a
+# genuinely broken database -- and recovery would have stopped happening with
+# nothing in the log to say so. It now resolves a runner instead, and these
+# cases are what stop that quietly regressing.
+#
+# The PATH is sanitised rather than emptied. `command -v` is a builtin, but
+# the script is INVOKED as `sh <path>`, so a bare `PATH=` hides the
+# interpreter itself and every case fails with `sh: not found` -- which is
+# what the first version of this did. Both directories therefore carry `sh`,
+# and differ only in which database tool they offer.
+SANE="$D/bin-python-only"; mkdir -p "$SANE"
+NONE="$D/bin-empty"; mkdir -p "$NONE"
+SH="$(PATH="$REALPATH" command -v sh 2>/dev/null || echo /bin/sh)"
+ln -sf "$SH" "$SANE/sh"
+ln -sf "$SH" "$NONE/sh"
+PY="$(PATH="$REALPATH" command -v python3 2>/dev/null || true)"
+[ -n "$PY" ] && ln -sf "$PY" "$SANE/python3"
+
+recover_pathless() { PATH="$1" VAINO_DB="$2" VAINO_LIBRARY_DB="$D/absent.db"     VAINO_LISTENER_DB="$D/absent2.db" sh "$PI/vaino-db-recover" 2>&1; }
+
+if [ -n "$PY" ]; then
+    # A healthy WAL database, recovered by python3 alone. Silence proves the
+    # fallback opened it without complaint -- had no runner been resolved, the
+    # script would have said "could not open" here.
+    OUT=$(recover_pathless "$SANE" "$D/wal.db")
+    assert_eq "$OUT" "" "with no sqlite3, python3 opens a healthy database silently"
+
+    # And it really is python3 doing the work rather than nothing at all: a
+    # file that is not a database must still be reported. A resolver that
+    # silently did nothing would pass the case above and fail this one.
+    OUT=$(recover_pathless "$SANE" "$D/broken.db")
+    assert_in "$OUT" "could not open" "with no sqlite3, python3 still reports an unopenable database"
+else
+    printf '  skip python3 not installed, cannot test the fallback runner
+'
+fi
+
+# Neither runner. The failure that matters is a SILENT one, so the message
+# must name the cause rather than blaming the database -- and the boot must
+# still proceed, because refusing to start over a missing helper is the
+# outcome this whole mechanism exists to avoid `[PI-PRE-020]`.
+OUT=$(recover_pathless "$NONE" "$D/wal.db")
+assert_in "$OUT" "no sqlite3 and no python3" "names the missing tools instead of blaming the database"
+
+PATH="$NONE" VAINO_DB="$D/wal.db" VAINO_LIBRARY_DB="$D/absent.db"     VAINO_LISTENER_DB="$D/absent2.db" sh "$PI/vaino-db-recover" >/dev/null 2>&1
+assert_eq "$?" "0" "still exits 0 when no runner exists at all"
 teardown
