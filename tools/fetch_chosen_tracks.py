@@ -14,7 +14,7 @@ them. Fetching it per **chosen** release is cheap, because a chosen release
 covers every one of its tracks at once: an album of twelve songs is one request,
 not twelve. Run after `choose_release.py`.
 
-    python tools/fetch_chosen_tracks.py data/vaino_new.db [--limit N]
+    python tools/fetch_chosen_tracks.py data/library.db [--limit N]
 """
 
 import argparse

@@ -28,7 +28,7 @@ Nothing is discarded. The choice, its margin and its runners-up are written to
 `ingest_decisions` `[REQ-VIS-110]`, because a selection nobody can argue with is
 a selection nobody can correct.
 
-    python tools/choose_release.py data/vaino_new.db [--limit N] [--explain MBID]
+    python tools/choose_release.py data/library.db [--limit N] [--explain MBID]
 """
 
 import argparse

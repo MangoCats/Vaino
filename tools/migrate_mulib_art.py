@@ -34,7 +34,7 @@ the MPD-facing cover file), which is what turns this from 164 passages worth
 of art into roughly 15,600 of the library's 16,400.
 
 Usage:
-    python tools/migrate_mulib_art.py --mulib mulib.db data/vaino_new.db
+    python tools/migrate_mulib_art.py --mulib mulib.db data/library.db
     python tools/migrate_mulib_art.py --mulib mulib.db --dry-run /srv/library/vaino.db
 """
 

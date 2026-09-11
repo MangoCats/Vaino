@@ -25,7 +25,9 @@ Two bridges make it work, both verified before writing:
              checked per file here rather than assumed.
 
 Usage:
-    python tools/migrate_mulib.py --mulib ../MuLibPlay/mulib.db --out data/vaino_new.db
+    python tools/migrate_mulib.py --mulib ../MuLibPlay/mulib.db --out data/migrated-whole.db
+    python tools/split_database.py data/migrated-whole.db \
+        --library-out data/library.db --listener-out data/listener.db --commit
 """
 
 import argparse
@@ -120,7 +122,11 @@ def build_sig_index(roots):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mulib", default="../MuLibPlay/mulib.db")
-    ap.add_argument("--out", default="data/vaino_new.db")
+    # A WHOLE database, which split_database.py then divides into the live
+    # pair [IMPL-DBSPLIT-025]. Deliberately not named after the old live
+    # file: that one was deleted 2026-09-11 [PI-PRE-098], and recreating
+    # the name would resurrect the ambiguity its removal ended.
+    ap.add_argument("--out", default="data/migrated-whole.db")
     ap.add_argument("--music", nargs="*", default=[r"C:\Users\Mango Cat\Music"])
     ap.add_argument("--schema", default="sql/schema.sql")
     args = ap.parse_args()

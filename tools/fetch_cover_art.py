@@ -25,7 +25,7 @@ Sampo's job, not the player's. `[REQ-NEG-100]` forbids *playback* depending on
 a live external service; fetching at build time into local storage is the
 division that requirement exists to protect. Nothing here runs on the appliance.
 
-    python tools/fetch_cover_art.py data/vaino_new.db [--limit N] [--refetch]
+    python tools/fetch_cover_art.py data/library.db [--limit N] [--refetch]
 """
 
 import argparse

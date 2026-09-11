@@ -19,7 +19,7 @@ Being a good citizen of a free service is most of the design here:
 At one request per second the full library is a little over two hours. It is
 meant to be left running, and it can be stopped at any point with Ctrl-C.
 
-    python tools/fetch_releases.py data/vaino_new.db [--limit N] [--refresh]
+    python tools/fetch_releases.py data/library.db [--limit N] [--refresh]
 """
 
 import argparse

@@ -13,7 +13,7 @@ which is the only irreplaceable data in the system.
 The payload is built by `payload.py`, which is the one serializer
 `[SPEC-DF-065]`. Nothing here re-implements it.
 
-    python tools/export_bundle.py data/vaino_new.db --like '%Frisina%' \\
+    python tools/export_bundle.py data/library.db --like '%Frisina%' \\
            --root "C:/Users/Mango Cat/Music" -o out/frisina
     rsync -a out/frisina/ pi@vainopi:/srv/library/incoming/frisina/
 """

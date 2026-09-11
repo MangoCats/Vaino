@@ -11,7 +11,7 @@ Never touches `lowlevel_cache`, `musicbrainz_cache` or `identification_cache`
 -- `[SPEC-SUI-090]` already found no reason to move them, and they are most
 of a library's bytes.
 
-    python tools/mesh_diff.py data/vaino_new.db pi@bose:/var/vaino/vaino.db -o diff.json
+    python tools/mesh_diff.py data/library.db pi@bose:/srv/library/library.db -o diff.json
 
 This is read-only against both sides `[SPEC-MESH-038]` -- nothing here writes
 anything, on either end, ever. What to do with the result is `export_bundle.py`

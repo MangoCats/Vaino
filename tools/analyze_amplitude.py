@@ -35,8 +35,8 @@ own cache-filling passes (an objective computation over what is missing, not
 an editorial decision among candidates like `suggest_release.py --accept`
 is) -- no `--commit` gate.
 
-    python tools/analyze_amplitude.py data/vaino_new.db [--limit N] [--jobs N] [--recheck]
-    python tools/analyze_amplitude.py data/vaino_new.db --folder "C:/Music/Foghat/The Best of Foghat"
+    python tools/analyze_amplitude.py data/library.db [--limit N] [--jobs N] [--recheck]
+    python tools/analyze_amplitude.py data/library.db --folder "C:/Music/Foghat/The Best of Foghat"
 """
 
 from __future__ import annotations

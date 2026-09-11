@@ -8,11 +8,14 @@ flagged recording or passage off that installation and onto a portable form a
 *different* installation's own library can resolve, the same way `export_changes.py`
 already does for an applied decision rather than a mere identity.
 
-vainopi has no Python `[SPEC-DF-108]`, so this never runs there -- it reads a
-**copy** of its database, pulled down however you like:
+This reads a **copy** of the peer's listener half, pulled down however you
+like. (`[SPEC-DF-108]` justified that by vainopi having no Python. It has
+python3 3.11.2 -- `vaino-preflight` logs it at every boot `[PI-PRE-010]` --
+so the copy is a convenience now, not a necessity; `remote_flags.py` gets the
+same answer over one ssh round trip without copying anything.)
 
-    scp pi@vainopi:/srv/library/vaino.db /tmp/vainopi-copy.db
-    python tools/export_flags.py /tmp/vainopi-copy.db -o flags.json
+    scp pi@vainopi:/var/vaino/listener.db /tmp/vainopi-listener.db
+    python tools/export_flags.py /tmp/vainopi-listener.db -o flags.json
 
 Read-only: nothing here writes to the database it reads from. The write half
 is `tools/import_flags.py`, run against the *receiving* installation.

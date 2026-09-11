@@ -24,7 +24,7 @@ Three views:
   /folder      what is on disk, against what the database claims
   /profile/N   one passage's whole derivation
 
-    python tools/console.py data/vaino_new.db --root "C:/Users/Mango Cat/Music"
+    python tools/console.py data/library.db --root "C:/Users/Mango Cat/Music"
 """
 
 import argparse

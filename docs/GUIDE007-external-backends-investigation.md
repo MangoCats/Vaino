@@ -96,7 +96,7 @@ A build without them contains no adapter code, no adapter dependencies, and no l
 
 **`[GDE-BAK-055]` Three further rules keep the blast radius at zero:**
 
-1. **No schema change.** Any passage-to-server mapping lives in a **sidecar**, not `vaino.db` — the precedent already exists twice, in `vaino_new.idchecks.db` and `<library>.console.db` `[IMPL-SUI-055]`. A local-only user never grows a table they will not fill `[SPEC-SC-015]`.
+1. **No schema change.** Any passage-to-server mapping lives in a **sidecar**, not `vaino.db` — the precedent already exists twice, in `library.idchecks.db` and `<library>.console.db` `[IMPL-SUI-055]`. A local-only user never grows a table they will not fill `[SPEC-SC-015]`.
 2. **The trait is internal.** `Engine` implements it and behaves identically; no local code path changes, and the spike proves it by leaving `engine.rs` (now `engine/`) untouched.
 3. **Static dispatch.** Make `Session` generic over `P: Playback` rather than holding a `dyn`, and the local build monomorphises to what it compiles today.
 

@@ -34,17 +34,17 @@ Critical path to *"the new music plays on the appliance"* is **0 → 1 → 3 →
 > **Six files, four tracks.** The transfer unit and the induct unit are not the same number and this document originally used one for both. rsync moves 6 files; `ingest_folder.py` inducts the 4 that are audio. Anywhere a count appears, it now says which.
 
 ```
-python tools/ingest_folder.py data/vaino_new.db "C:/Users/Mango Cat/Music/Frisina, Gerardo"
-python tools/ingest_folder.py data/vaino_new.db "C:/Users/Mango Cat/Music/Frisina, Gerardo" --commit
-python tools/extract_library.py data/vaino_new.db
-python tools/fingerprint_ids.py data/vaino_new.db  ;  ... --merge
+python tools/ingest_folder.py data/library.db "C:/Users/Mango Cat/Music/Frisina, Gerardo"
+python tools/ingest_folder.py data/library.db "C:/Users/Mango Cat/Music/Frisina, Gerardo" --commit
+python tools/extract_library.py data/library.db
+python tools/fingerprint_ids.py data/library.db  ;  ... --merge
 ```
 
 Cover art needs nothing: both albums already carry `cover.jpg` beside the tracks, which is where [tags.rs](../player/src/tags.rs) looks.
 
 > **This is not just backlog.** The transcript *is* the specification for what `[SPEC-SUI-085]`'s progress display must render — real stage names, real timings, real failure text on a real folder. Designing that view against imagined output is how it ends up showing a spinner and a percentage that means nothing.
 
-> **DONE 2026-08-20.** All four inducted into the live `data/vaino_new.db`, every claim met.
+> **DONE 2026-08-20.** All four inducted into the live `data/library.db`, every claim met.
 >
 > | | |
 > | :--- | ---: |

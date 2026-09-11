@@ -12,8 +12,8 @@ it, and the naming, the rotation and the "played 12 times" all move with it.
 That is a migration. Migrations belong to Sampo and to a moment someone chose,
 not to a web click.
 
-    python tools/apply_reviews.py data/vaino_new.db            REHEARSE
-    python tools/apply_reviews.py data/vaino_new.db --commit   do it
+    python tools/apply_reviews.py data/library.db            REHEARSE
+    python tools/apply_reviews.py data/library.db --commit   do it
 
 The numbers a rehearsal prints are the ones a real run produces: both are
 measured from the same queries before anything is written.

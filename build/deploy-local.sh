@@ -9,7 +9,7 @@
 # Run from anywhere; the repository root is found from this script's own
 # location, the same way build/verify-targets.sh already does.
 #
-#     build/deploy-local.sh                        # data/vaino_new.db, port 5720
+#     build/deploy-local.sh                        # the split pair, port 5720
 #     build/deploy-local.sh mylib.db --port 6000    # anything else, passed straight through
 #
 # set -u only, not -e: `taskkill` legitimately exits non-zero when nothing
@@ -25,7 +25,9 @@ die() { echo "deploy-local: $*" >&2; exit 1; }
 # used verbatim instead -- the same shape `VainoPi/deploy-player.sh` already
 # uses for its own $HOST default.
 if [ "$#" -eq 0 ]; then
-    set -- "$ROOT/data/vaino_new.db" --port "${VAINO_PORT:-5720}"
+    # The split pair [IMPL-DBSPLIT-025], in the same shape both appliances'
+    # units use: listener half positional, catalogue named with --library.
+    set -- "$ROOT/data/listener.db" --library "$ROOT/data/library.db" --port "${VAINO_PORT:-5720}"
 fi
 
 # The port to verify against below -- whatever follows --port in the args

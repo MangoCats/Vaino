@@ -29,14 +29,21 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 HOST="${HOST:-pi@bose}"
 MUSIC_DIR="${MUSIC_DIR:-$HOME/Music}"
-DB="${DB:-data/vaino_new.db}"
+DB="${DB:-data/library.db}"
 FORCE_SWAP=0
 [ "${1:-}" = "--force-swap" ] && FORCE_SWAP=1
 
 caveat \
     "Run once for real already -- see the header for what that proved and" \
     "what it didn't. Watch each step below rather than trusting a clean" \
-    "exit at the end."
+    "exit at the end." \
+    "" \
+    "PREDATES THE SPLIT [BOS-RUN-080]. Its final step installs one whole" \
+    "database as /var/vaino/vaino.db, which is NOT what bose runs since" \
+    "2026-09-11: it opens /var/vaino/listener.db with /srv/library/library.db" \
+    "as its catalogue, and the whole file was deleted. Seeding a fresh" \
+    "card needs this for the audio, then split_database.py inside an" \
+    "attended window -- BOSE009 section 4. Do NOT run the swap step as is."
 
 step "Preconditions"
 check "bose reachable"         ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" true

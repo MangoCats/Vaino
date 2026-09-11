@@ -13,7 +13,7 @@ inducted 2026-08-20 — rather than hand-written, so the format is known to surv
 contact with data before anything is built on it. Regenerate with:
 
 ```
-python tools/payload.py data/vaino_new.db --like '%Frisina%' \
+python tools/payload.py data/library.db --like '%Frisina%' \
        --roots 'C:\Users\Mango Cat\Music' -o fixtures/payload/01-valid-four-tracks.json
 ```
 

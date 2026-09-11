@@ -18,7 +18,7 @@ separately and strong evidence together.
   disagree   neither matches: the id is questionable
   untagged   no tags to check against; this says nothing either way
 
-    python tools/verify_ids.py data/vaino_new.db [--sample N] [--list-bad N]
+    python tools/verify_ids.py data/library.db [--sample N] [--list-bad N]
 """
 
 import argparse

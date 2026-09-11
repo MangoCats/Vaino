@@ -15,7 +15,7 @@ end_ms)` anchor `[SPEC-DF-103]` already uses, a recording-kind flag passed
 through by its own mbid -- as one query, over one `ssh` round trip, via
 `remote_peek.py`'s `run_remote_sql()`.
 
-    python tools/remote_flags.py pi@vainopi:/srv/library/vaino.db -o flags.json
+    python tools/remote_flags.py pi@vainopi:/srv/library/library.db         --remote-listener /var/vaino/listener.db -o flags.json
 
 Writes the identical `flags.json` shape `export_flags.py` always has
 (`{"format_version": 1, "flags": [...]}`) -- `import_flags.py` runs
@@ -134,7 +134,8 @@ def fetch_flags(remote: str, hostname: str, timeout: float = rp.TOTAL_TIMEOUT,
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("remote", help="user@host:/path/to/vaino.db")
+    ap.add_argument("remote",
+                help="user@host:/path/to/library.db -- the peer's CATALOGUE half")
     ap.add_argument("-o", "--out", required=True)
     # The peer's listener half, where it has one `[IMPL002 §7.4]`. Path
     # only: the host comes from `remote`.

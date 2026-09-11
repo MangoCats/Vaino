@@ -110,7 +110,7 @@ def build(src, out, keep):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", default="data/vaino_new.db")
+    ap.add_argument("--src", default="data/library.db")
     ap.add_argument("--out", default="data/sample-library.db")
     ap.add_argument("--stage", default="data/sample-audio")
     ap.add_argument("--albums", type=int, default=8)

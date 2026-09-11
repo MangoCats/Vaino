@@ -35,8 +35,8 @@ at a time, and a two-hour pass that has to queue behind them would spend most of
 its life waiting; a pass that cannot write to the library also cannot damage it.
 `--merge` folds the sidecar in once the library is quiet.
 
-    python tools/fingerprint_ids.py data/vaino_new.db [--limit N] [--recheck]
-    python tools/fingerprint_ids.py data/vaino_new.db --merge
+    python tools/fingerprint_ids.py data/library.db [--limit N] [--recheck]
+    python tools/fingerprint_ids.py data/library.db --merge
 """
 
 import argparse

@@ -26,7 +26,7 @@ re-decode audio; a player neither queries nor decodes. Class D never travels at
 all `[SPEC-DF-055]`, and machine scope -- `path`, `mtime`, `size_bytes` -- is
 supplied by the receiver from the file it actually has `[SPEC-DF-030]`.
 
-    python tools/payload.py data/vaino_new.db --like '%Frisina%' -o out.json
+    python tools/payload.py data/library.db --like '%Frisina%' -o out.json
 """
 
 import argparse

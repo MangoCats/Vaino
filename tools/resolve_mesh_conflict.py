@@ -7,7 +7,7 @@
 that tool `[SPEC-MESH-038]` -- it is read-only, always. This is the write,
 and only this is.
 
-    python tools/resolve_mesh_conflict.py data/vaino_new.db pi@bose:/var/vaino/vaino.db \\
+    python tools/resolve_mesh_conflict.py data/library.db pi@bose:/srv/library/library.db \\
         --table recordings --key '["<mbid>"]' --choice local --commit
 
 `--choice` is `local` or `peer` -- the current value on that side, refetched

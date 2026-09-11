@@ -14,13 +14,13 @@ index `/review` takes minutes instead of half a second.
 
 ```
 cargo build --release --manifest-path player/Cargo.toml
-player/target/release/vaino data/vaino_new.db
+player/target/release/vaino data/library.db
 ```
 
 Both migrations run at startup and take under a second. To confirm:
 
 ```
-sqlite3 data/vaino_new.db ".tables id_reviews"
+sqlite3 data/library.db ".tables id_reviews"
 ```
 
 ---
@@ -77,8 +77,8 @@ Nothing here changes the library. Decisions are recorded and applied in §4.
 Rehearse first — it writes nothing and prints exactly what a real run does:
 
 ```
-python tools/apply_reviews.py data/vaino_new.db
-python tools/apply_reviews.py data/vaino_new.db --commit
+python tools/apply_reviews.py data/library.db
+python tools/apply_reviews.py data/library.db --commit
 ```
 
 A reassignment whose recording has no cached name is **refused**, not guessed
@@ -87,7 +87,7 @@ at, and reported so you can pick a different candidate.
 **To undo something already applied**, the page will refuse and tell you to:
 
 ```
-python tools/apply_reviews.py data/vaino_new.db --revert <passage_id> --commit
+python tools/apply_reviews.py data/library.db --revert <passage_id> --commit
 ```
 
 That restores the previous id and puts the passage back in the queue.
@@ -103,8 +103,8 @@ Re-run the fingerprint pass, then merge. It reads the library read-only and
 writes to a sidecar, so it is safe to run while Vaino is playing.
 
 ```
-python tools/fingerprint_ids.py data/vaino_new.db      # ~55 min for 8,078
-python tools/fingerprint_ids.py data/vaino_new.db --merge
+python tools/fingerprint_ids.py data/library.db      # ~55 min for 8,078
+python tools/fingerprint_ids.py data/library.db --merge
 ```
 
 Needs `secrets/acoustid.key` (or `ACOUSTID_KEY`) and an `ffmpeg` built with

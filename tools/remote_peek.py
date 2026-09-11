@@ -12,20 +12,33 @@ mirrored here as `sql_for`), just fetched across the network instead of from
 an open connection. A handful of bytes, not the ~1.16 GB `[SPEC-DF-114]`
 measured a full copy at.
 
-    python tools/remote_peek.py pi@vainopi:/srv/library/vaino.db \
+    python tools/remote_peek.py pi@vainopi:/srv/library/library.db \
         --kind boundary_review --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000
 
-    python tools/remote_peek.py pi@vainopi:/srv/library/vaino.db \
+    python tools/remote_peek.py pi@vainopi:/srv/library/library.db \
         --kind id_review --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000
 
-    python tools/remote_peek.py pi@vainopi:/srv/library/vaino.db \
+    python tools/remote_peek.py pi@vainopi:/srv/library/library.db \
         --kind artist_review --recording-mbid <mbid>
 
-    python tools/remote_peek.py pi@vainopi:/srv/library/vaino.db \
+    python tools/remote_peek.py pi@vainopi:/srv/library/library.db \
         --kind passage_flag --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000
+
+**`[SPEC-DF-124]` `passage_flag` does not work against a split peer, and
+every installation is now split.** Its query joins `passages`, which lives in
+the catalogue half, with `listener_flags`, which lives in the listener half,
+and one path cannot serve both `[IMPL002 7.4]`. Measured against `pi@vainopi`
+2026-09-11: pointed at the catalogue it fails on `listener_flags`, pointed at
+the listener half it fails on `passages`. The other three kinds are pure
+catalogue and are unaffected.
+
+`remote_flags.py` already solved exactly this, with an `attached()` helper
+that prepends `ATTACH DATABASE <listener> AS lis;` and a `--remote-listener`
+option to name it. This tool needs the same and does not have it yet, so
+`console.py`'s flag peek is the one caller currently affected.
 
 Prints one JSON line: `{"ok": true, "current": {...} | null}` on a
 successful round trip (a `null` current means the remote answered but has
@@ -267,7 +280,8 @@ def peek(remote: str, kind: str, anchor: dict, timeout: float = TOTAL_TIMEOUT) -
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("remote", help="user@host:/path/to/vaino.db")
+    ap.add_argument("remote",
+                help="user@host:/path/to/library.db -- the peer's CATALOGUE half")
     ap.add_argument("--kind", required=True,
                      choices=["id_review", "boundary_review", "artist_review", "passage_flag"])
     ap.add_argument("--audio-md5")

@@ -19,13 +19,13 @@ row exactly the way `apply_changes.py` already does (`resolve_passage`,
 reused here rather than reimplemented); `--value` is the JSON
 `remote_peek.py` already printed as `current`, passed through unchanged.
 
-    python tools/accept_remote_basis.py data/vaino_new.db \
+    python tools/accept_remote_basis.py data/library.db \
         --kind boundary_review --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000 \
         --value '{"start_ms":2000,"end_ms":190000,"lead_in_ms":250,"lead_out_ms":1200,"gain_db":-2.0}' \
         --commit
 
-    python tools/accept_remote_basis.py data/vaino_new.db \
+    python tools/accept_remote_basis.py data/library.db \
         --kind id_review --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000 --value '{"mbid":"..."}' --commit
 

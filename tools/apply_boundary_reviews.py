@@ -7,8 +7,8 @@ step that acts on it -- deliberately separate, run by hand, and a rehearsal
 by default, for the same reason `tools/apply_reviews.py` is: an edit changes
 what a passage *is*, and the library is Sampo's to write, not a web click's.
 
-    python tools/apply_boundary_reviews.py data/vaino_new.db            REHEARSE
-    python tools/apply_boundary_reviews.py data/vaino_new.db --commit   do it
+    python tools/apply_boundary_reviews.py data/library.db            REHEARSE
+    python tools/apply_boundary_reviews.py data/library.db --commit   do it
 
 No `--revert`. Unlike a recording reassignment, the automatic values an edit
 overrides are always recoverable by re-running the amplitude/segmentation

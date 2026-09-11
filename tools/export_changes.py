@@ -14,7 +14,7 @@ Each applied row becomes one portable JSON record, keyed so a *different*
 installation can find the same fact without ever seeing this one's
 `passage_id` `[SPEC-DF-035]`.
 
-    python tools/export_changes.py data/vaino_new.db -o changes.json
+    python tools/export_changes.py data/library.db -o changes.json
     rsync changes.json pi@vainopi:/srv/library/incoming/
 
 Read-only: nothing here writes to the database it reads from. The write half

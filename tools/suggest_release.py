@@ -17,7 +17,7 @@ Two independent modes, rehearse-by-default like every other tool here:
 
 **Discovery** -- read and cache only, never touches `passage_recordings`:
 
-    python tools/suggest_release.py data/vaino_new.db "C:/Music/Foghat/The Best of Foghat" --json
+    python tools/suggest_release.py data/library.db "C:/Music/Foghat/The Best of Foghat" --json
 
 Guesses `artist`/`album` from the folder's own file tags (majority vote) when
 `--query` isn't given, searches MusicBrainz's release search, fetches full
@@ -35,7 +35,7 @@ scored" for a release that plainly exists.
 
 **Accept** -- the write half, rehearse-by-default:
 
-    python tools/suggest_release.py data/vaino_new.db "C:/Music/Foghat/The Best of Foghat" \\
+    python tools/suggest_release.py data/library.db "C:/Music/Foghat/The Best of Foghat" \\
         --accept e4d469ff-3633-4e16-8f49-03c48e37c5fb --commit --json
 
 Re-derives the same per-file matches against that one release (from cache,

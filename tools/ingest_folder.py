@@ -14,8 +14,8 @@ compute flavor `[REQ-LIB-120]`, or invent a MusicBrainz identity. One passage
 per file, spanning the whole file, is right for single-track audio and wrong
 for a DAO capture -- so it refuses nothing and claims nothing.
 
-    python tools/ingest_folder.py data/vaino_new.db "C:/path/to/album"
-    python tools/ingest_folder.py data/vaino_new.db "C:/path/to/album" --commit
+    python tools/ingest_folder.py data/library.db "C:/path/to/album"
+    python tools/ingest_folder.py data/library.db "C:/path/to/album" --commit
 """
 
 import argparse
