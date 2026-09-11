@@ -184,9 +184,11 @@ the reported commit. Consolidating them is a design decision about what the
 operator-facing entry point should be, and should not be settled by whoever
 next touches either file.
 
-**`[GDE-DEP-097]` `deploy.sh`'s final cross-check reads the live binary.** It
-asks `/usr/local/bin/vaino --version` over ssh, which on an overlay host is the
-ephemeral copy — the exact blind spot `[GDE-DEP-070]` names. It is not wrong
-today, because `install-player.sh` has already verified the durable copy by
-then, but it is the weaker of the two available checks and should read the
-durable one.
+**`[GDE-DEP-097]` Closed 2026-09-11: `deploy.sh` now cross-checks the durable
+binary.** It asked `/usr/local/bin/vaino --version`, which on an overlay host is
+the ephemeral copy — the exact blind spot `[GDE-DEP-070]` names. It was never
+wrong in practice, because `install-player.sh` has already verified the durable
+copy by that point, but it was the weaker of two available checks and the whole
+argument of this document is that the weaker one is what let five days pass. It
+now resolves the `lowerdir` and asks the copy that survives a reboot, saying so
+in the log `[GDE-DEP-060]`.

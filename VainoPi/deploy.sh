@@ -128,7 +128,18 @@ echo "deploy: putting it on $HOST"
 # The checksum-and-restart above proves *a* new binary answers; this proves
 # it is the *right* one, by asking the same way a person checking by hand
 # would [SPEC-APS-140].
-REPORTED="$(ssh "$HOST" "/usr/local/bin/vaino --version" 2>/dev/null \
+# On an overlay root `/usr/local/bin/vaino` is the EPHEMERAL copy, so asking it
+# proves what is running now and nothing about what survives a reboot
+# `[GDE-DEP-070]`. install-player.sh has already written the same bytes to both
+# layers by this point, so ask the durable one: a disagreement here means that
+# write did not take, which is exactly the fault `[IMPL-BOS-185]` was.
+VBIN=/usr/local/bin/vaino
+LOWER="$(ssh "$HOST" "findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^lowerdir=//p'" 2>/dev/null)"
+if [ -n "$LOWER" ]; then
+    VBIN="$LOWER$VBIN"
+    echo "deploy: $HOST has an overlay root -- asking the DURABLE copy at $VBIN"
+fi
+REPORTED="$(ssh "$HOST" "sudo $VBIN --version" 2>/dev/null \
             | grep -o '[0-9a-f]\{12\}\(+dirty\)\?')"
 if [ "$REPORTED" = "$EXPECTED" ]; then
     echo "deploy: confirmed -- $HOST is running $EXPECTED"
