@@ -89,7 +89,7 @@ and refuses to be typed by accident `[IMPL-BOS-120]`.
 | :--- | :--- |
 | `deploy-vainopi.sh` (build/) | [`build/deploy-appliance.sh`](../build/deploy-appliance.sh) |
 | `deploy-player.sh` (VainoPi/) | [`build/install-player.sh`](../build/install-player.sh) |
-| `deploy.sh` (VainoPi/) | unchanged — `[GDE-DEP-025]` |
+| `deploy.sh` (VainoPi/) | merged into [`build/deploy-appliance.sh`](../build/deploy-appliance.sh); a forwarder remains at the old path |
 
 `vainopi` remains the default host, so existing invocations keep working; only
 the name and path changed. Every executable reference was updated in the same
@@ -177,12 +177,40 @@ own `resolv.conf` is the NetworkManager stub. `sqlite3` remains absent from
 `bose` for this reason — recovery falls back to `python3` and says so, which is
 `[GOV-SRC-030]` working, but the preferred tool is still missing.
 
-**`[GDE-DEP-095]` Whether `deploy.sh` and `deploy-appliance.sh` should merge is
-open.** They overlap only when no ref is named `[GDE-DEP-025]`; `deploy.sh`
-additionally builds a named tag in a container-side worktree and cross-checks
-the reported commit. Consolidating them is a design decision about what the
-operator-facing entry point should be, and should not be settled by whoever
-next touches either file.
+**`[GDE-DEP-095]` Merged 2026-09-11, guards first.** The order mattered more
+than the merge. The dirty-tree refusal moved into `install-player.sh` *before*
+the scripts were joined, so the two callers ended up differing only in
+ref-selection and the merge became small instead of a 130-line consolidation.
+
+That guard now checks the **artefact** rather than the checkout's git state —
+it asks the staged binary its own version on the target, after upload and
+before install, while backing out still costs nothing. Checking git state
+would have re-made the mistake this document is about: trusting the convenient
+proxy over the thing that actually ships `[GDE-DEP-070]`.
+
+`VainoPi/deploy.sh` remains as a forwarder rather than being deleted, because
+the old path is named in `HOWTO.md`, BOSE008 and BOSE009 and in people's shell
+history. It passes every argument through unchanged.
+
+**`[GDE-DEP-098]` Open, and surfaced by the merge: appliances are built WITH
+`sampo-support`, and probably should not be.** The two scripts disagreed —
+`deploy-vainopi.sh` passed `--features sampo-support`, `deploy.sh` did not — so
+which binary an appliance received depended on which command was typed. Merging
+forced one answer, and it preserves today's fleet behaviour rather than
+changing what runs on two appliances inside a merge.
+
+The evidence says today's behaviour is wrong. `[SPEC-SUI-196]` states the gate
+exists *"so an appliance build never resolves or compiles an HTTP client it
+will never call"*, and `[SPEC-SUI-190]` measured the appliance binary ~200 KB
+smaller without it. Measured 2026-09-11: `/review` answers **200 on both bose
+and vainopi**, so both carry a `reqwest`/`rustls` stack they never call, on
+machines with a stated memory budget `[REQ-HW-140]`. The flag has been there
+since `968bdca`, the commit that created these scripts, and no document argues
+for it.
+
+Changing it is one line — `VAINO_FEATURES=""` already overrides — but it
+alters what runs on both appliances and deserves a deliberate decision and a
+redeploy, not a quiet edit.
 
 **`[GDE-DEP-097]` Closed 2026-09-11: `deploy.sh` now cross-checks the durable
 binary.** It asked `/usr/local/bin/vaino --version`, which on an overlay host is

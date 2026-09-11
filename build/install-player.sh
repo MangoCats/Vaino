@@ -68,6 +68,35 @@ scp -q "$BIN" "$HOST:/tmp/vaino.new" || die "upload failed"
 ssh "$HOST" "md5sum /tmp/vaino.new | grep -q $LOCAL_SUM" \
     || die "uploaded binary does not match; not installing"
 
+# Refuse to ship a binary built from edited sources, unless told to.
+#
+# Checked on the ARTEFACT rather than on this checkout's git state, which is
+# `[GDE-DEP-070]` applied to the build side: the tree can move between the
+# compile and the copy, and the binary's own stamp cannot. It is aarch64 and
+# cannot run on the development host, so it is asked on the TARGET -- after
+# upload, before install, while the only copy is still in /tmp and backing out
+# costs nothing.
+#
+# This guard was `VainoPi/deploy.sh`'s alone, which meant the fleet-wide path
+# through `deploy-everywhere.sh` had the weaker check: a `+dirty` binary went
+# to bose on 2026-09-11 precisely that way. Putting it where both callers
+# converge is what makes the two entry points safe to merge `[GDE-DEP-095]`.
+#
+# A binary predating `--version` (421f7c1) answers nothing; that is not a
+# dirty build and is allowed through, the same judgement `deploy.sh` makes.
+STAGED_VER=$(ssh "$HOST" "/tmp/vaino.new --version" 2>/dev/null | head -1)
+case "$STAGED_VER" in
+    *+dirty*)
+        if [ "${ALLOW_DIRTY:-}" != "1" ]; then
+            ssh "$HOST" "rm -f /tmp/vaino.new"
+            die "refusing to install a dirty build ($STAGED_VER) on $HOST -- commit first, or re-run with ALLOW_DIRTY=1"
+        fi
+        echo "deploy: WARNING -- installing a DIRTY build ($STAGED_VER) because ALLOW_DIRTY=1" >&2
+        ;;
+    "") echo "deploy: staged binary does not self-report a version (predates 421f7c1); dirty-check skipped" ;;
+    *)  echo "deploy: staged binary reports $STAGED_VER" ;;
+esac
+
 # Keep the outgoing binary. A player that will not start leaves an appliance
 # with no web interface, which is also the only way back into it.
 ssh "$HOST" "sudo cp -f $REMOTE ${REMOTE}.prev 2>/dev/null;
