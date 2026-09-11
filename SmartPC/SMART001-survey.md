@@ -3,7 +3,7 @@
 **Measurement — Tier 1 · surveyed on `mango@smartboardpc`, 2026-09-11**
 
 A reconnaissance of the fourth node before anything is built for it. Most
-figures here were read from the running machine; the three changes that were
+figures here were read from the running machine; the four changes that were
 *made* are marked as such in §4, because a survey that quietly includes its own
 side effects is not a survey.
 
@@ -91,22 +91,35 @@ asynchronous but is a microphone input and irrelevant here.
 
 ## 3. Time
 
-**`[SMT-TIME-010]` `systemd-timesyncd`, not chrony.** Probed 2026-09-11: chrony
-and chronyd both inactive, `systemd-timesyncd` active, `timedatectl` reporting
-*System clock synchronized: yes*, `America/New_York`.
+**`[SMT-TIME-010]` chrony, since 2026-09-11 — it shipped on
+`systemd-timesyncd`.** As found, chrony and chronyd were both inactive and
+timesyncd was active with `timedatectl` reporting *System clock synchronized:
+yes*. That satisfies a wall-clock requirement and silently fails a frequency
+one: timesyncd is an SNTP client, correcting *what time it is* without
+disciplining *how fast the clock runs*, which is the half `[GDE-ECHO-100]`
+actually needs.
 
-That satisfies a wall-clock requirement and silently fails a frequency one.
-timesyncd is an SNTP client: it corrects *what time it is* without disciplining
-*how fast the clock runs*, which is the half `[GDE-ECHO-100]` actually needs.
-Anything in [GUIDE009](../docs/GUIDE009-echo-playback-plan.md)'s Phase 2 that
-assumes a common frequency reference is not yet true on this machine.
+Installing chrony deactivates timesyncd on its own. Five seconds after start:
+
+```
+System time     : 0.000001428 seconds fast of NTP time
+Frequency       : 5.043 ppm fast
+Residual freq   : +305.427 ppm
+```
+
+**That residual is not converged and must not be read as a measurement.** It is
+the figure Phase 0 would otherwise mistake for DAC drift, and chrony needs
+considerably longer than five seconds to settle it — the point of recording it
+here is that the number changes, so any drift measurement taken before it
+stabilises is measuring chrony, not the hardware `[GOV-SRC-020]`.
 
 ---
 
 ## 4. What was changed, and why
 
-Three changes were made on 2026-09-11 rather than merely observed. They are
-listed because §0's framing — a read-only survey — does not apply to them.
+Four changes were made on 2026-09-11 rather than merely observed. They are
+listed because the survey framing — read-only — does not apply to them. The
+fourth, chrony, is described in §3 where its effect belongs.
 
 **`[SMT-BLD-010]` There was no Rust toolchain; rustup was installed.** The
 machine had a clean checkout at `/home/mango/Dev/Vaino` on the correct origin,
@@ -139,7 +152,43 @@ merely compile.
 
 ---
 
-## 5. Standing findings not related to audio
+## 5. Where Vaino's own state must go
+
+The audio stays on the PortableSSD `[SMT-OPN-010]`. The databases cannot follow
+it, and the reason is not the 11 G.
+
+**`[SMT-DB-010]` No SQLite file may live on the PortableSSD, because it is
+exFAT.** `findmnt` reports `/dev/sda1 exfat rw,nosuid,nodev,relatime,uid=1000,…`.
+SQLite's locking is built on POSIX advisory locks, and its WAL mode additionally
+needs a shared-memory file; exFAT offers neither with the semantics SQLite
+requires, and has no ownership model of its own — the `uid=1000` above is a
+mount option, not a property of the files. This is a **correctness** objection,
+not a performance one, and it would hold even on an empty 1.9 T volume.
+
+**`[SMT-DB-020]` The library path is a udisks automount, which no boot-time
+service can depend on.** `/media/mango/PortableSSD` appears in no `fstab`; it is
+mounted by the desktop session. A `vaino` unit starting at boot would find an
+empty directory and, worse, could create one — the failure mode being a player
+that starts healthily with no library rather than one that refuses. Before Smart
+plays anything, that volume needs an `fstab` entry **by UUID, with `nofail`**,
+and the unit needs to require it. The same instinct as `[BOS-PWR-050]`'s "find
+the card by name": never depend on a path someone else chose for you.
+
+**`[SMT-DB-030]` The databases go on the eMMC root, at `/var/vaino/`.** 61 G
+free, `ext4`, present at boot, and outside `/home/mango/Dev/Vaino` so that
+`update-source-host.sh`'s `git pull` can never interact with runtime state. The
+path follows `bose`'s convention `[IMPL-BOS-078]` rather than inventing a
+third — Smart has no A/B/C partitioning to reason about, so the only thing the
+convention has to buy is consistency, and it costs nothing. Cover-art and lyrics
+caches, `[REQ-LIB-160]` backups and logs land beside it.
+
+Sizing, from the desktop's own files: a catalogue of this size is ~1.2 GB and
+listener state ~6.5 MB. Both are comfortable against 61 G. Whether Smart uses
+one `vaino.db` or the split pair is open — see `[SMT-OPN-040]`.
+
+---
+
+## 6. Standing findings not related to audio
 
 **`[SMT-STO-010]` `/media/mango/PortableSSD` is full.** 1.9 T, **100 % used, 11
 G available**. Whatever it is for, it has no room left.
@@ -151,7 +200,7 @@ needed rather than when it breaks.
 
 ---
 
-## 6. Open
+## 7. Open
 
 **`[SMT-OPN-010]` Smart has a candidate music library, on a volume with no room
 left.** `/media/mango/PortableSSD/Media/Music` — **49 G, 5,719 audio files**,
@@ -173,6 +222,13 @@ undecided.** [SPEC035](../docs/spec/SPEC035-mesh-library-sync.md)'s membership
 list is explicit and human-maintained `[SPEC-MESH-025]`; Smart is not on it, and
 adding it is a decision about what this machine is *for*, not a consequence of
 it existing.
+
+**`[SMT-OPN-040]` One `vaino.db` or the split pair is undecided.** `bose` runs
+a single file `[IMPL-BOS-078]`; the desktop runs `listener.db` plus
+`--library library.db`, and `attach_library()` has supported the split since
+2026-09-06. Nothing about Smart's storage forces the choice, since both files
+would sit on the same `ext4` root `[SMT-DB-030]` — so it should follow whatever
+the fleet settles on rather than being decided here.
 
 **`[SMT-OPN-030]` Its drift has not been measured.** It is a Phase 0 subject in
 [GUIDE009](../docs/GUIDE009-echo-playback-plan.md), and `[SMT-AUD-040]` is the
