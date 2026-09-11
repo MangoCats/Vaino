@@ -533,6 +533,52 @@ async function run(skin) {
     check(dev.hidden, 'and clear again when it goes off');
   }
 
+  // Startup: the web server binds before the Program Director is built, so for
+  // those seconds the snapshot reports no programmes because none are KNOWN
+  // yet. Rendering that as a silently blank panel read as the feature having
+  // broken, and keeping the previous rows on screen instead would be worse --
+  // `/program/{id}` validates against this very list, so a press in that
+  // window is answered 404 and dropped without a word.
+  //
+  // `pool` is absent exactly while there is no Director, which is what tells
+  // "not yet" apart from "none configured" without resorting to a timer.
+  {
+    const prog = window.document.getElementById('prog');
+    const starting = { ...RICH, programs: [], program: null, pool: null };
+    sock.onmessage({ data: JSON.stringify(starting) });
+    await new Promise(r => setTimeout(r, 20));
+    if (stations) {
+      check(/starting/i.test(stations.textContent),
+            `an empty list must say the Director is starting, got ${JSON.stringify(stations.textContent)}`);
+      check(window.document.getElementById('autoclock').disabled,
+            'the autoselect box must not accept a choice it cannot name a programme for');
+    }
+    if (prog) {
+      check(prog.disabled, 'the picker must not look usable while it can offer nothing');
+      check(/starting/i.test(prog.textContent),
+            `the picker must say why it is empty, got ${JSON.stringify(prog.textContent)}`);
+    }
+
+    // A Director that IS there and still reports none means none are
+    // configured. Saying "starting" for ever would be a lie on such a system.
+    sock.onmessage({ data: JSON.stringify({ ...starting, pool: [0, 0] }) });
+    await new Promise(r => setTimeout(r, 20));
+    const shown = stations ? stations.textContent : (prog ? prog.textContent : '');
+    check(/no programmes/i.test(shown) && !/starting/i.test(shown),
+          `a Director reporting none must not read as starting up, got ${JSON.stringify(shown)}`);
+
+    // And it all comes back when the programmes do.
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    await new Promise(r => setTimeout(r, 20));
+    if (stations) {
+      check(stations.querySelectorAll('.button, .buttonOn').length === RICH.programs.length,
+            'the station buttons must return when the Director does');
+      check(!window.document.getElementById('autoclock').disabled,
+            'and the autoselect box must be usable again');
+    }
+    if (prog) check(!prog.disabled, 'the picker must be usable again');
+  }
+
   // The same guarantee for the skins that put a control set on every row
   // rather than one beside the picked one. A queue that has not changed must
   // come through a snapshot as the very same rows: rebuilding them regardless

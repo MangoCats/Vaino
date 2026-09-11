@@ -413,29 +413,60 @@ const Vaino = (() => {
     };
   }
 
+  // Is there a Director yet?
+  //
+  // `pool` is absent exactly when there is none `[REQ-VIS-150]`, which makes it
+  // the one honest way to read an empty programme list. The web server binds
+  // before the Director is built -- deliberately, since the page is the only
+  // way back into an appliance -- so for those seconds the snapshot reports no
+  // programmes because none are *known*, not because none exist. A Director
+  // that is there and still reports none means none are configured, and saying
+  // "starting" for ever would be a lie on a system that simply has none.
+  const directorReady = s => s.pool != null;
+
   // The programme picker. The option list is rebuilt only when it actually
   // changes; replacing it on every push would close the dropdown in the hand
   // of whoever is reading it.
-  function bindProgram(select, autoLabel = 'Automatic (by time of day)') {
+  //
+  // With nothing to offer the control is disabled and says why. Disabled
+  // rather than merely empty because `/program/{id}` validates the id against
+  // this same list: a choice made during the startup window is answered 404
+  // and dropped without a word, so a picker that looked usable would be one
+  // more control that takes a press and does nothing `[REQ-VIS-185]`.
+  function bindProgram(select, autoLabel = 'Automatic (by time of day)', labels = {}) {
+    const starting = labels.starting ?? 'Program Director starting…';
+    const none = labels.none ?? 'no programmes configured';
     let signature = '';
     select.onchange = e => post(`/program/${e.target.value}`);
     return s => {
       const programs = s.programs || [];
-      const sig = programs.map(p => p.id + p.name).join('|');
+      const waiting = programs.length === 0;
+      // A real signature is `id + name` joined, so it always starts with a
+      // digit and can never collide with either of these.
+      const sig = waiting ? (directorReady(s) ? 'empty:none' : 'empty:starting')
+                          : programs.map(p => p.id + p.name).join('|');
       if (sig !== signature) {
         signature = sig;
         select.textContent = '';
-        const auto = document.createElement('option');
-        auto.value = 'auto';
-        auto.textContent = autoLabel;
-        select.appendChild(auto);
-        for (const p of programs) {
+        if (waiting) {
           const o = document.createElement('option');
-          o.value = p.id;
-          o.textContent = `${p.name} — from ${p.start}`;
+          o.textContent = directorReady(s) ? none : starting;
           select.appendChild(o);
+        } else {
+          const auto = document.createElement('option');
+          auto.value = 'auto';
+          auto.textContent = autoLabel;
+          select.appendChild(auto);
+          for (const p of programs) {
+            const o = document.createElement('option');
+            o.value = p.id;
+            o.textContent = `${p.name} — from ${p.start}`;
+            select.appendChild(o);
+          }
         }
       }
+      select.disabled = waiting;
+      if (waiting) return;
       if (!s.program_manual) {
         select.value = 'auto';
       } else {
@@ -1202,6 +1233,10 @@ const Vaino = (() => {
     queue: (id, action) => post(`/queue/${id}/${action}`),
 
     queueControls,
+    // Exported because a skin that draws its own programme list -- MuLibPlay
+    // draws stacked buttons rather than a picker -- needs the same reading of
+    // an empty one that `bindProgram` makes.
+    directorReady,
     named,
     badge,
     showBackArt,

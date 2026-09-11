@@ -49,10 +49,25 @@
     const sorted = [...(s.programs || [])].sort((a, b) => a.start.localeCompare(b.start));
     const active = sorted.find(p => p.name === s.program);
     activeProgramId = active ? active.id : null;
-    const sig = sorted.map(p => p.id + p.name + p.start).join('|');
+    // Nothing to show, and two different reasons for it. The Director is built
+    // after the web server binds, so for those seconds the list is empty
+    // because nothing is KNOWN yet -- which used to render as a silently blank
+    // panel and read as the feature having broken. `Vaino.directorReady` tells
+    // the two apart from the snapshot rather than from a timer.
+    const waiting = sorted.length === 0;
+    const sig = waiting ? (Vaino.directorReady(s) ? 'empty:none' : 'empty:starting')
+                        : sorted.map(p => p.id + p.name + p.start).join('|');
     if (sig !== stationSig) {
       stationSig = sig;
       host.textContent = '';
+      if (waiting) {
+        const note = document.createElement('p');
+        note.className = 'stationnote';
+        note.textContent = Vaino.directorReady(s)
+          ? 'No programmes configured.'
+          : 'Program Director starting…';
+        host.appendChild(note);
+      }
       for (const p of sorted) {
         const row = document.createElement('div');
         row.className = 'stationrow';
@@ -72,6 +87,10 @@
     // Dimmed once a manual pick has made the schedule inert -- the same
     // signal the checkbox itself gives, read here for the times beside it.
     for (const t of host.querySelectorAll('.engagetime')) t.classList.toggle('dim', s.program_manual);
+    // Unticking has to name a programme to switch TO, and while the Director
+    // is starting there is none: `activeProgramId` is null, so the box would
+    // spring back on the next snapshot having done nothing at all.
+    $('autoclock').disabled = waiting;
     $('autoclock').checked = !s.program_manual;
   }
 
