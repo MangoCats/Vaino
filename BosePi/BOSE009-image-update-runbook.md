@@ -183,19 +183,49 @@ Both units are now on `bose` with `vainopi`'s own enablement: `startup-sample`
 something is being investigated). `vaino-underruns` genuinely is standalone
 and needs no unit.
 
-**`[BOS-RUN-090]` A WAL catalogue on read-only media is safe only while it
-is clean.** `library.db` is WAL, inherited from the source by
-`split_database.py`, and it now lives on a partition that is `ro` in normal
-operation. Measured: a cleanly-closed WAL database removes its sidecars and
-opens read-only without them, and `bose`'s `library.db-wal` is 0 bytes, so
-the current state is sound.
+**`[BOS-RUN-090]` A WAL catalogue on read-only media: what actually
+happens, measured on `bose`.** `library.db` is WAL, inherited from the
+source by `split_database.py`, and now lives on a partition that is `ro` in
+normal operation. The first account of this in these documents said a dirty
+`-wal` there could not be replayed by any read-only open. That is wrong, and
+the truth is more useful:
 
-The narrow risk is an attended window that closes with frames still
-un-checkpointed: B would go `ro` carrying a dirty `-wal` that no read-only
-open can replay. `attended-import.sh` `sync`s, which is not the same as a
-checkpoint. Any future window that writes `library.db` should end with
-`PRAGMA wal_checkpoint(TRUNCATE)` before B closes — noted in §6 rather than
-built, since nothing writes that file today.
+| left on `ro` media | `mode=ro` — what the player uses | `immutable=1` |
+| :--- | :--- | :--- |
+| clean (no sidecars) | correct | correct |
+| dirty `-wal`, `-shm` present | **correct** — frames are read out of the `-wal` | **1 row of 2, silently stale** |
+| dirty `-wal`, `-shm` absent | `unable to open database file` | **silently stale** |
+
+Two conclusions, and they point opposite ways.
+
+**The player is never silently wrong.** `mode=ro` either reads the frames
+correctly or fails loudly. That is the good half, and it is not luck —
+`[IMPL-DBSPLIT-025]`'s choice to attach the catalogue `mode=ro` is what buys
+it.
+
+**But a loud failure here is not self-healing, and on this machine that is
+the sharp edge.** If the `-shm` is ever missing while the `-wal` is dirty,
+the player cannot open the catalogue, `Restart=always` turns that into the
+crash loop `[PI3-FOUND-120]` describes — and `vaino-db-recover` **cannot fix
+it on `bose`**, because its one read-write open lands on a partition that is
+read-only. Recovery needs an attended window. That is a real difference from
+`vainopi`, where the same file sits on a writable filesystem and the script
+heals it at the next boot.
+
+`attended-import.sh` `sync`s, which is not a checkpoint. Any future window
+that writes `library.db` should end with `PRAGMA wal_checkpoint(TRUNCATE)`,
+so B never closes over frames. Today `bose`'s `library.db-wal` is 0 bytes and
+nothing writes that file, so the state is sound — but `[BOS-RUN-078]` stops
+being optional the first time an import touches the catalogue.
+
+**`[BOS-RUN-095]` Nothing in this project reads a catalogue with
+`immutable=1`, and nothing should start.** Checked: every use of that flag
+is against a genuinely frozen external file — `mulib.db`, AcousticBrainz
+dump shards — which is what it is for. Against a live catalogue it is the
+one configuration that answers wrongly without saying so, in every dirty
+case above. `remote_peek.py`'s python fallback carries a comment saying so,
+because its own wording had used "immutable" loosely to mean "does not
+write".
 
 ## 6. Open
 
@@ -217,7 +247,7 @@ glibc would close it.
 
 ---
 
-**Traceability:** `[BOS-RUN-010..075]` · executes
+**Traceability:** `[BOS-RUN-010..095]` · executes
 [BOSE008](BOSE008-image-update-plan.md) · inherits `[PI-OWE-040]`'s
 deploy-before-drop ordering as deploy-before-split · corrects `BOSE008 §5`'s
 commands and `§6`'s `vaino-wifi-revert` recommendation

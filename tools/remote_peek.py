@@ -154,14 +154,21 @@ def parse_rows(output: str) -> list:
 
 
 # The same query, run by python3 instead, emitting exactly what
-# `sqlite3 -json` would. `bose` carries no `sqlite3` CLI -- a minimal
-# appliance image has no reason to -- but every Vaino appliance has python3
-# with the `sqlite3` module, because the tooling already assumes it.
+# `sqlite3 -json` would. This exists because `bose` carried no `sqlite3`
+# CLI -- a minimal appliance image has no reason to -- and every Vaino
+# appliance has python3 with the `sqlite3` module, because the tooling
+# already assumes it. `bose` has been given `sqlite3` since `[BOS-IMG-020]`,
+# so nothing reaches this path today; it is kept because the next appliance
+# built from a minimal image will arrive without the command again.
 #
 # Kept to one expression passed with `-c` so nothing has to be installed,
-# copied or left behind on the far side. Read-only and immutable, matching
-# the posture every caller here already has: this file never writes a
-# remote.
+# copied or left behind on the far side. `mode=ro` and deliberately NOT
+# `immutable=1`, which is a different thing than it sounds: `immutable`
+# tells SQLite the file cannot change and so it may skip the WAL entirely,
+# which against an appliance whose catalogue carries un-checkpointed frames
+# returns the stale base file with no error at all `[BOS-RUN-090]`.
+# `mode=ro` reads the frames correctly. This file never writes a remote,
+# which is the posture meant here -- not the `immutable` flag.
 _PY_FALLBACK = (
     "import sqlite3,json,sys;"
     "c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True);"
@@ -191,10 +198,12 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
     itself informative, not a failure) or `{"ok": False, "error": "..."}`.
 
     **A host with no `sqlite3` CLI is retried through python3**, which emits
-    the identical JSON. `bose` is such a host -- a minimal image has no
+    the identical JSON. `bose` was such a host -- a minimal image has no
     reason to carry the command-line shell for a library it never uses from
-    the shell -- and without this every remote tool reports that appliance
-    unreachable when it is merely differently equipped. Only that one
+    the shell -- and without this every remote tool reported that appliance
+    unreachable when it was merely differently equipped. `bose` has carried
+    `sqlite3` since `[BOS-IMG-020]`, so no deployed host exercises this
+    now `[BOS-RUN-075]`. Only that one
     failure is retried; every other stays what it was, so a genuinely
     unreachable host still fails fast.
     """

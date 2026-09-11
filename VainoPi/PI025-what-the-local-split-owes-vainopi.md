@@ -205,12 +205,15 @@ nothing to do. That is `[SPEC-PREF-155]`'s two-path model, `[IMPL002 §7.4]`'s
 peer column, and `[SPEC-PREF-140]`'s specials sync all working at once,
 against real hardware rather than a fixture.
 
-**`[PI-OWE-090]`** `bose` is not split and is therefore untouched by all of
-it — but `[PI-OWE-010]`'s pattern is what it will meet on the day it is.
-Planned out in [BOSE008](../BosePi/BOSE008-image-update-plan.md), which
-carries this register's findings into a decision about that image and adds
-the one this work produced: `bose` has no `sqlite3`, so every tool built on
-`remote_peek` reported it unreachable until that gained a `python3`
+**`[PI-OWE-090]`** `bose` was unsplit when this register was written, and
+`[PI-OWE-010]`'s pattern is what it met on the day it was — **2026-09-11**,
+per [BOSE009](../BosePi/BOSE009-image-update-runbook.md), which found two
+further traps that reviewing had not. Planned out in
+[BOSE008](../BosePi/BOSE008-image-update-plan.md), which carries this
+register's findings into a decision about that image and adds the one this
+work produced: `bose` had no `sqlite3`, so every tool built on `remote_peek`
+reported it unreachable until that gained a `python3` fallback — and the
+decision taken was to install the command rather than rely on the
 fallback.
 
 That plan now recommends **splitting** `bose` — reversing its own first

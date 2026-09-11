@@ -60,7 +60,8 @@ there.
 
 ## 2. Add: `sqlite3` (557 KB, no daemon, no resident cost)
 
-**`[BOS-IMG-020]` Install it.** `bose` has no `sqlite3` command, which is
+**`[BOS-IMG-020]` Install it.** *(Done 2026-09-11 --
+`3.46.1-7+deb13u1`.)* `bose` had no `sqlite3` command, which is
 how the whole of this came up: `tools/remote_peek.py` is
 `ssh <host> sqlite3 -json <path> "<sql>"`, so **every** tool built on it —
 `remote_flags`, `sync_preferences`, `mesh_diff`, `resolve_mesh_conflict`,

@@ -120,7 +120,11 @@ sudo journalctl -b -u vaino --no-pager -o cat | sed -E 's/[0-9]+/#/g' | sort | u
 grep mmcblk0p3 /proc/diskstats | awk '{ print $10 * 512 / 1e9, "GB written" }'; uptime -p
 ```
 
-There is **no `sqlite3` binary on the card**; use the `python3` that is there.
+`sqlite3` is on the card since `[BOS-IMG-020]`, but the `python3` form below
+works on any appliance and is what the rest of this document assumes. Note
+the database is **split** since 2026-09-11: `vaino.db` is the retained
+pre-split rollback, and the live halves are `/var/vaino/listener.db` and
+`/srv/library/library.db` `[BOS-RUN-080]`.
 
 ```sh
 sudo python3 -c "
