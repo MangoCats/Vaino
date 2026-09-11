@@ -201,7 +201,7 @@ changing what runs on two appliances inside a merge.
 
 The evidence says today's behaviour is wrong. `[SPEC-SUI-196]` states the gate
 exists *"so an appliance build never resolves or compiles an HTTP client it
-will never call"*, and `[SPEC-SUI-190]` measured the appliance binary ~200 KB
+will never call"*, and `[SPEC-SUI-190]` measures the appliance binary **3.05 MB**
 smaller without it. Measured 2026-09-11: `/review` answers **200 on both bose
 and vainopi**, so both carry a `reqwest`/`rustls` stack they never call, on
 machines with a stated memory budget `[REQ-HW-140]`. The flag has been there

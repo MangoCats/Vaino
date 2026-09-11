@@ -56,7 +56,7 @@ die() { echo "deploy: $*" >&2; exit 1; }
 # Settled 2026-09-11 in favour of the documented design `[GDE-DEP-098]`:
 # appliances build WITHOUT it. `[SPEC-SUI-196]` states the gate exists "so an
 # appliance build never resolves or compiles an HTTP client it will never
-# call", and `[SPEC-SUI-190]` measured the binary ~200 KB smaller without it.
+# call", and `[SPEC-SUI-190]` measures the binary 3.05 MB smaller without it.
 #
 # The deciding argument was not size. On `bose` the catalogue is read-only
 # twice over -- `/srv/library` mounted `ro`, and `attach_library()` attaching

@@ -181,7 +181,13 @@ But that is the *absence* of a header, not a promise of one, and the fallback is
 
 Cross-origin also means Sampo cannot see inside the frame. That is not a limitation to engineer around; it is `[SPEC-SUI-145]` holding.
 
-**`[SPEC-SUI-190]` Everything in this section is behind `sampo-support`, off by default.** *(Decided 2026-08-27.)* `[SPEC-SA-010]` already confines Sampo itself to an x86 desktop that never runs on the appliance; a Vaino feature that exists only to be *reached from* Sampo inherits the same confinement, and a Pi Zero 2W that will never see a console has no reason to carry the review page's routes, its embedded HTML and JS, or the database code behind them. Cargo's own `mpd` feature is the precedent — off by default, one line of `Environment` away from being real. `cargo build --release` for the appliance carries none of it; a build for a desktop induct session adds `--features sampo-support`. Measured: **≈200 KB smaller** without it.
+**`[SPEC-SUI-190]` Everything in this section is behind `sampo-support`, off by default.** *(Decided 2026-08-27.)* `[SPEC-SA-010]` already confines Sampo itself to an x86 desktop that never runs on the appliance; a Vaino feature that exists only to be *reached from* Sampo inherits the same confinement, and a Pi Zero 2W that will never see a console has no reason to carry the review page's routes, its embedded HTML and JS, or the database code behind them. Cargo's own `mpd` feature is the precedent — off by default, one line of `Environment` away from being real. `cargo build --release` for the appliance carries none of it; a build for a desktop induct session adds `--features sampo-support`. Measured **3.05 MB smaller** without it — 11,110,704 against 7,912,728 bytes,
+real aarch64 binaries, 2026-09-11. *Corrected from ≈200 KB, carried here since
+2026-08-27 and repeated in four other documents: it understated the saving
+fifteen-fold.* The routes are small; the `reqwest`/`rustls` stack behind them
+`[SPEC-SUI-196]` is not. Size was never the real argument — on `bose` the
+catalogue is read-only twice over, so these pages took input they could not
+save `[GDE-DEP-098]`.
 
 This is why the waveform editor and the MusicBrainz search of [SPEC010 §3](SPEC010-identification-review.md#3-searching-musicbrainz-directly) belong behind the same flag from the day they are written, not retrofitted afterward — the second thing built ungated is the second thing that has to be moved later.
 

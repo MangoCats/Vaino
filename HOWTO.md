@@ -47,7 +47,8 @@ plain appliance-equivalent build.
 **If you also want the review page, the waveform editor, and MusicBrainz
 search reachable from Sampo**, build with the feature that carries them —
 off by default because an appliance that never runs Sampo has no reason to
-carry the extra ~200 KB or the `reqwest` dependency it pulls in:
+carry the extra **3.05 MB** (measured 2026-09-11, `[SPEC-SUI-190]`) or the
+`reqwest`/`rustls` stack it pulls in:
 
 ```
 env -u CC cargo build --release --features sampo-support
