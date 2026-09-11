@@ -323,6 +323,36 @@ def main():
             hint = " -- summary table and detail? check they still agree" if same_doc else ""
             warnings.append(f"tag {t} defined {len(locs)}x: {', '.join(locs)}{hint}")
 
+    # 6b -- tags cited from the appliance's own code must exist
+    #
+    # The shell helpers cite findings as authority: a comment saying why a
+    # line is the way it is, anchored to the measurement that decided it. But
+    # nothing checked the anchor still existed. [PI3-FOUND-080] was cited
+    # twice in VainoPi/vaino-btctl long after the tag itself was merged into
+    # [PI3-FOUND-090] by a genre split, and no check could see it, because
+    # this checker read only markdown. A citation that resolves to nothing is
+    # worse than no citation: it looks like provenance.
+    code_paths = []
+    for pattern in ("VainoPi/vaino-*", "VainoPi/*.conf", "VainoPi/setup-*.sh",
+                    "VainoPi/tests/*", "VainoPi/tests/stubs/*",
+                    "BosePi/bose-*", "BosePi/setup-*.sh"):
+        code_paths.extend(glob.glob(pattern))
+    for cp in sorted(set(code_paths)):
+        if not os.path.isfile(cp) or cp.endswith(".md"):
+            continue
+        try:
+            text = open(cp, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            for t in sorted(set(TAG.findall(line))):
+                if t in defs or t in inherited_tags or t in EXAMPLE_TAGS:
+                    continue
+                if t in PREEXISTING_V1_DANGLING:
+                    continue
+                errors.append(f"dangling tag {t} cited in code at {cp}:{n} "
+                              f"but never defined")
+
     # 7 -- doc-cited repository paths must exist, advisory [GOV-DOC-040]
     #
     # Excludes docs/inherited/: those documents describe a predecessor

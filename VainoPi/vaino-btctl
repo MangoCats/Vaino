@@ -146,7 +146,7 @@ transport_state() {
         | sed 's/^s "//; s/"$//' | grep -E '^[a-z]+$' || echo none
 }
 
-# **`[PI3-FOUND-080]` One `connect` is a coin toss, not a policy.** A speaker
+# **One `connect` is a coin toss, not a policy `[PI3-FOUND-090]`.** A speaker
 # already carrying another device's connection stops answering pages
 # altogether: BlueZ returns `br-connection-page-timeout`, which is
 # indistinguishable from "switched off" and was being reported as plain
@@ -279,7 +279,7 @@ case "$VERB" in
         # is the button pressed straight after the speaker's own pairing
         # button, so it must be willing to wait out a pairing window rather
         # than report failure in five seconds and leave the person pressing
-        # buttons in the dark `[PI3-FOUND-080]`. Trust comes first, because
+        # buttons in the dark `[PI3-FOUND-090]`. Trust comes first, because
         # trust is what survives the next power cut `[PI3-WHY-040]` and this
         # appliance power-cycles every time the speaker does
         # `[PI3-FOUND-090]`.

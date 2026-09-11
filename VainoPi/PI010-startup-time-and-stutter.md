@@ -510,13 +510,27 @@ consulted for a trusted device is exactly what cost an evening
 `[PI3-FOUND-680]`. Whether audio is audible, and at what rate, stays with the
 listener's ear and `vaino-hci-capture`.
 
+**`[PI3-FOUND-710]` Two rockers, and the appliance ran the broken one.**
+`vaino-rocker` at 84 lines and `vaino-rocker.sh` at 124 both lived in
+`VainoPi/`, and the install loop took the shorter one by name. The longer is a
+superset: it adds `WAIT_FOR` and `MAP_ONLY`, and it fixes `say()` writing to
+stdout -- which was captured into the device name `await_dev` returns and
+produced a first run reading `/dev/input/22:25:46 waiting...event2`.
+
+So a fix sat in the repository, beside the file it fixed, undeployed. Nothing
+was wrong with either file; the defect was having two. The stale copy is
+deleted rather than left to be picked again, and the `.sh` source now installs
+under the bare name -- the convention `vaino-speaker.sh` already followed
+`[PI3-AIM-090]`.
+
 ## 3. Diagnostic tools, and how to switch them back on
 
-Seven tools were built during the 2026-09-08 investigation and the stutter
-hunt that followed -- six instruments and one intervention. Four are **off by
-default** because they cost something to run or because they change behaviour;
-all seven stay installed, because the expensive part was working out what to
-measure, not writing it.
+Six tools were built during the 2026-09-08 investigation and the stutter hunt
+that followed -- five instruments (`vaino-underruns`, `vaino-startup-sample`,
+`vaino-hci-capture`, `vaino-linkstate`, `vaino-vitals`) and one intervention
+(`vaino-afh-seed`). Four are **off by default** because they cost something to
+run or because they change behaviour; all six stay installed, because the
+expensive part was working out what to measure, not writing it.
 
 **`vaino-underruns` — always available, costs nothing.** Prints the player's
 own `underrun_samples`: how many samples the output ring failed to supply.

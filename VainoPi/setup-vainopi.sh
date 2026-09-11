@@ -328,7 +328,7 @@ fi
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in vaino-btctl vaino-wait-sink vaino-db-recover vaino-underruns vaino-led-boot \
-         vaino-wifi-revert vaino-rocker vaino-radio-test vaino-startup-sample \
+         vaino-wifi-revert vaino-radio-test vaino-startup-sample \
          vaino-hci-capture vaino-linkstate vaino-afh-seed vaino-vitals \
          vaino-bt-agent; do
     if [ -f "$HERE/$f" ]; then
@@ -376,6 +376,22 @@ HERE="${HERE:-$(cd "$(dirname "$0")" && pwd)}"
 
 # Named with a `.sh` in the repository and without one on the machine, because
 # the unit has always called it `vaino-speaker`.
+# **`[PI3-FOUND-710]` One rocker, and it is the one with the fix.** Two copies
+# lived here: `vaino-rocker` at 84 lines and `vaino-rocker.sh` at 124, and the
+# install loop took the shorter one. The longer is a superset -- it adds
+# `WAIT_FOR` and `MAP_ONLY`, and it fixes `say()` writing to stdout, which was
+# captured into the device name `await_dev` returns and produced a first run
+# reading `/dev/input/22:25:46 waiting...event2`. The appliance had been
+# running the version with that bug. The stale copy is deleted rather than
+# left to be picked again, and the `.sh` source installs under the bare name,
+# which is the convention `vaino-speaker.sh` already follows.
+if [ -f "$HERE/vaino-rocker.sh" ]; then
+    if ! cmp -s "$HERE/vaino-rocker.sh" /usr/local/bin/vaino-rocker; then
+        install -m755 "$HERE/vaino-rocker.sh" /usr/local/bin/vaino-rocker &&
+            did "installed vaino-rocker"
+    fi
+fi
+
 if [ -f "$HERE/vaino-speaker.sh" ]; then
     if ! cmp -s "$HERE/vaino-speaker.sh" /usr/local/bin/vaino-speaker; then
         install -m755 "$HERE/vaino-speaker.sh" /usr/local/bin/vaino-speaker
