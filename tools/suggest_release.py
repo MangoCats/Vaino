@@ -69,6 +69,7 @@ import time
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from apply_changes import clear_flags_for  # noqa: E402  -- [SPEC-DF-112], reused not reinvented
 from choose_release import name_match  # noqa: E402  -- reused, not re-derived
 from fetch_releases import get as mb_get, RATE_S, CACHE_DDL  # noqa: E402
@@ -428,7 +429,11 @@ def do_accept(conn: sqlite3.Connection, args, files: list) -> int:
     # A compare copy predating `[REQ-VIS-265]` entirely has no `listener_flags`
     # at all -- clearing is then simply nothing to do, the same reasoning
     # `apply_changes.py`'s own `clear_flags_ok` gate already uses.
-    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    # `listener_flags` is LISTENER-side while this script runs with the
+    # catalogue as `main`, so a bare `sqlite_master` here reports it absent
+    # on every split installation and silently turns clearing off
+    # `[IMPL-DBSPLIT-025]`.
+    have = vaino_db.tables(conn)
     clear_flags_ok = "listener_flags" in have
     # `id_checks` is `fingerprint_ids.py`'s own AcoustID-fingerprint verdict,
     # a *different* identification method than a release-tracklist match --
@@ -521,7 +526,8 @@ def main() -> int:
                           "rather than a person")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True)
     conn.execute("PRAGMA busy_timeout = 5000")
     ensure_schema(conn)
 

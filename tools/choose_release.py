@@ -35,6 +35,10 @@ import argparse
 import json
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import time
 
 # Weights. Deliberately blunt: the name term decides when a tag exists, and the
@@ -235,7 +239,8 @@ def main() -> int:
     ap.add_argument("--explain", help="show the scoring for one recording MBID")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True)
     conn.execute("PRAGMA busy_timeout = 5000")
     # The chosen flag lives beside the link it qualifies. Vaino reads it with
     # `ORDER BY chosen DESC`, which still behaves when nothing has been chosen.

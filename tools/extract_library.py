@@ -35,6 +35,7 @@ import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import gaia_classify as gc  # noqa: E402
 import audio_duration  # noqa: E402
 
@@ -166,7 +167,8 @@ def main() -> int:
     # and unaffected `[GDE-FEX-105]`.
     passage_id = int(args[args.index("--passage") + 1]) if "--passage" in args else None
 
-    con = sqlite3.connect(db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    con = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, writable=True)
     con.execute(
         """CREATE TABLE IF NOT EXISTS lowlevel_cache (
              audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,

@@ -32,6 +32,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import mesh_diff as md  # noqa: E402  -- TABLES, fetch_local/fetch_remote
 import remote_peek as rp  # noqa: E402  -- run_remote_sql()/literal()
 
@@ -94,7 +95,8 @@ def apply_local(db_path: str, table: str, key: tuple, chosen: dict) -> None:
     if spec["manual_field"]:
         set_clause += f", {spec['manual_field']} = 'manual'"
     where, where_params = local_where(table, key)
-    conn = sqlite3.connect(db_path)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(db_path, vaino_db.ROLE_LIBRARY, writable=True)
     try:
         conn.execute(f"UPDATE {table} SET {set_clause} WHERE {where}",
                      tuple(chosen.get(c) for c in cols) + where_params)

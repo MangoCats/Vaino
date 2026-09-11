@@ -34,6 +34,10 @@ import json
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 # The payload's own version, independent of `schema_meta.schema_version` --
 # a database schema and a wire format are free to move separately, and
 # conflating them would tie a receiver's acceptance to a table it never sees.
@@ -283,7 +287,8 @@ def main() -> int:
     ap.add_argument("-o", "--out", default="-")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    # Catalogue-only, read-only.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY)
     md5s = list(args.md5)
     if args.like:
         md5s += [r[0] for r in conn.execute(

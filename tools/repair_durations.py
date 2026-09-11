@@ -39,6 +39,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import audio_duration  # noqa: E402
 import passage_orphans  # noqa: E402  -- [IMPL009 §7.7]'s cascade replacement
 
@@ -61,7 +62,8 @@ def main() -> int:
     write = "--write" in args
     delete_phantoms = "--delete-phantoms" in args
 
-    con = sqlite3.connect(db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    con = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, writable=True)
     files = con.execute("SELECT file_id, path, duration_ms FROM files").fetchall()
     print(f"probing {len(files)} files (real decode, not a header estimate)...", flush=True)
 
@@ -113,9 +115,10 @@ def main() -> int:
     for fid, _p, _d in wrong:
         con.execute("UPDATE files SET duration_ms = ? WHERE file_id = ?",
                     (int(round(real[fid])), fid))
-    has_cache = con.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lowlevel_cache'"
-    ).fetchone()[0] > 0
+    # Catalogue-side, so `main` would answer correctly today -- asked across
+    # both halves anyway, because "which half is main" is exactly the kind of
+    # assumption that stops being true quietly `[IMPL-DBSPLIT-025]`.
+    has_cache = vaino_db.has_table(con, "lowlevel_cache")
     orphaned_cache = 0
     for pid, fid, _s, e, _k, md5 in overrun:
         new_end = int(round(real[fid]))

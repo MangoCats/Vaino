@@ -54,6 +54,10 @@ import argparse
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 SRC = "inherited:mulib"
 CHARACTERISTIC = "user.profanity"
 POSITIVE = "profane"
@@ -164,7 +168,12 @@ def main() -> int:
             f"every row guarded by its own EXISTS check against `recordings`")
         return 0
 
-    con = sqlite3.connect(target if args.commit else f"file:{target}?mode=ro", uri=not args.commit)
+    # `flavor` is catalogue-side, so that half is `main`. `--library` still
+    # names it explicitly for halves that are not siblings; where they are,
+    # or where this is one whole database, it is found without being told
+    # `[IMPL-DBSPLIT-025]`.
+    con = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=args.commit,
+                           peer=(args.library if args.library else None))
     try:
         writable, missing, unchanged = plan(con, ratings)
     except sqlite3.OperationalError as e:

@@ -49,6 +49,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import time
 
 import numpy as np
@@ -233,7 +235,8 @@ def main() -> int:
             say(json.dumps({"ok": False, "error": "ffmpeg not found"}))
         return 1
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("""CREATE TABLE IF NOT EXISTS ingest_decisions (
         decision_id INTEGER PRIMARY KEY, audio_md5 TEXT, stage TEXT,

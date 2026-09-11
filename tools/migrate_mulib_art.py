@@ -41,6 +41,10 @@ Usage:
 import argparse
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import time
 
 SRC = "inherited:mulib"
@@ -81,7 +85,8 @@ def main() -> int:
     def usable(blob: bytes | None) -> bytes | None:
         return blob if blob is not None and len(blob) >= MIN_BYTES else None
 
-    out = sqlite3.connect(args.db, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    out = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     out.execute("PRAGMA busy_timeout = 60000")
     out.executescript(DDL)
     out.commit()

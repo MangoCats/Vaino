@@ -28,6 +28,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import audio_duration  # noqa: E402
 
 AUDIO = (".mp3", ".flac", ".ogg", ".m4a", ".wav", ".opus")
@@ -169,7 +170,8 @@ def main() -> int:
     if not args.json:
         say(f"{len(files)} audio file(s) under {args.folder}\n")
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
 

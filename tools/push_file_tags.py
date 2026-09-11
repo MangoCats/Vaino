@@ -61,6 +61,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import remote_peek  # noqa: E402 -- literal()/run_remote_sql(), not duplicated
 
 BATCH = 200  # audio_md5 values per local lookup -- generous, and the common
@@ -221,7 +222,8 @@ def main() -> int:
         say("the remote has nothing to fix.")
         return finish(True, remote_gaps=0, fixed=0, unresolved=0, landed=False)
 
-    conn = sqlite3.connect(args.db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True)
     conn.row_factory = sqlite3.Row
     fixes = local_fixes_for(conn, gaps)
     conn.close()

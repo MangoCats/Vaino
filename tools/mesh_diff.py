@@ -26,6 +26,7 @@ import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import remote_peek as rp  # noqa: E402  -- run_remote_sql()/literal(), reused not reinvented
 
 # One entry per identity-scoped table this diffs. `key` names the columns
@@ -71,7 +72,8 @@ def _key_of(row: dict, key_cols) -> tuple:
 
 def fetch_local(db_path: str, table: str) -> dict:
     """Every row of one table, keyed -- a plain local query, no ssh involved."""
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # Catalogue-only, read-only.
+    conn = vaino_db.connect(db_path, vaino_db.ROLE_LIBRARY)
     conn.row_factory = sqlite3.Row
     try:
         rows = [dict(r) for r in conn.execute(TABLES[table]["sql"])]

@@ -39,6 +39,7 @@ import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import apply_changes as ac  # noqa: E402  -- resolve_passage, reused not reinvented
 
 
@@ -108,7 +109,8 @@ def main() -> int:
 
     anchor = {"audio_md5": args.audio_md5, "passage_kind": args.passage_kind,
               "start_ms": args.start_ms, "end_ms": args.end_ms}
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
 

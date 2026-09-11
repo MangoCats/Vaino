@@ -34,6 +34,7 @@ import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import audio_duration        # noqa: E402
 import cd_toc                 # noqa: E402
 import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
@@ -376,7 +377,8 @@ def do_ingest(db_path: str, folder: str, commit: bool) -> dict:
     if audio_md5 is None:
         raise RuntimeError(f"could not hash the encoded {mp3_path!r}")
 
-    conn = sqlite3.connect(db_path, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(db_path, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
     existing = conn.execute(

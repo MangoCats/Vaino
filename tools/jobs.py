@@ -29,6 +29,8 @@ import queue
 import sqlite3
 import subprocess
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import threading
 import time
 
@@ -142,7 +144,8 @@ def counts(db: str) -> dict:
     key and the index. Omitting it scans 578,452 rows per passage
     `[IMPL-SUI-045]`.
     """
-    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    # Catalogue-only, read-only.
+    c = vaino_db.connect(db, vaino_db.ROLE_LIBRARY)
     try:
         q = lambda s: c.execute(s).fetchone()[0]  # noqa: E731
         return {

@@ -247,16 +247,23 @@ def main() -> int:
         check(False, f"a deliberately shared table must not be called a shadow: {e}")
 
     print()
-    print("a half with no peer is an error, not a guess")
+    print("a half with no peer opens alone -- never worse than a plain connect")
     lonely = os.path.join(tmp, "lonely")
     os.makedirs(lonely, exist_ok=True)
     only = os.path.join(lonely, "listener.db")
     make_listener(only)
-    try:
-        vd.connect(only, vd.ROLE_LISTENER)
-        check(False, "half a database must not open silently")
-    except vd.SplitError as e:
-        check("library" in str(e).lower(), f"the error must say which half is missing, got {e}")
+    # A catalogue-only or listener-only database is an ordinary thing --
+    # snapshots, fixtures, a library ingested but never played -- and by
+    # content it cannot be told from half a pair. Refusing to open it broke
+    # four unrelated suites, so the old behaviour stands and the failure, if
+    # there is one, happens where it always did: on a query for the other
+    # side's tables.
+    conn = vd.connect(only, vd.ROLE_LISTENER)
+    check(conn.execute("SELECT COUNT(*) FROM listener_play_history").fetchone()[0] == 1,
+          "its own half must still read normally")
+    check([r[0] for r in conn.execute("PRAGMA database_list")] == [0],
+          "and nothing must be attached")
+    conn.close()
     # ...and an explicit path resolves it.
     conn = vd.connect(only, vd.ROLE_LISTENER, peer=lib)
     check(conn.execute("SELECT COUNT(*) FROM recordings").fetchone()[0] >= 1,

@@ -30,6 +30,7 @@ import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import gaia_classify as gc  # noqa: E402
 
 BETWEEN_PAIRS = 20_000
@@ -111,7 +112,8 @@ def main() -> int:
     write = "--write" in args
     pairs = int(args[args.index("--pairs") + 1]) if "--pairs" in args else BETWEEN_PAIRS
 
-    con = sqlite3.connect(db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    con = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, writable=True)
     vecs = load_flavor(con, "local:%")
     print(f"local flavor: {len(vecs)} recordings")
     rng = random.Random(11)

@@ -47,6 +47,8 @@ import os
 import re
 import subprocess
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import time
 
 # `[AFS-SIL-020]` gives one threshold per source medium, and measurement says
@@ -599,7 +601,8 @@ def validate(db: str, limit: int, medium: str, tolerance: float, cascade: bool =
     actually improve on Stage 2 alone, per `[GOV-SRC-020]`.
     """
     import sqlite3
-    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    # Catalogue-only, read-only.
+    c = vaino_db.connect(db, vaino_db.ROLE_LIBRARY)
     files = c.execute(
         """SELECT f.file_id, f.path, COUNT(*) n FROM passages p JOIN files f USING(file_id)
             WHERE p.kind='radio' GROUP BY f.file_id HAVING n>1 ORDER BY n DESC""").fetchall()
@@ -789,7 +792,8 @@ def do_commit(db_path: str, path: str, spans: list[tuple[float, float]], decisio
         say("would not decode")
         return 1
 
-    conn = sqlite3.connect(db_path, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(db_path, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
     row = conn.execute("SELECT file_id FROM files WHERE audio_md5=?1", (md5,)).fetchone()

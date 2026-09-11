@@ -65,6 +65,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import remote_peek as rp  # noqa: E402  -- run_remote_sql(), literal(): reused, not reinvented
 
 MANIFEST_SQL = (
@@ -548,8 +549,12 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True) if not args.commit \
-        else sqlite3.connect(args.db, timeout=60)
+    # Listener half as `main`: everything this writes is listener-side.
+    # The catalogue rides along read-only for `[SPEC-PREF-110]`'s existence
+    # check, which is the one thing here that asks about `recordings`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LISTENER,
+                            writable=args.commit,
+                            **({"timeout": 60} if args.commit else {}))
     if args.commit:
         conn.execute("PRAGMA busy_timeout = 60000")
 

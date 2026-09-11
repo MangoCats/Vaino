@@ -64,9 +64,19 @@ NOT_APPLICABLE = {
     "migrate_mulib.py": "builds a whole database from MuLibPlay, pre-split",
     "remote_flags.py": "remote only; split peers handled by --remote-listener",
     "remote_snapshot.py": "builds a standalone snapshot file, not a half",
+    "ab_harvest.py": "reads AcousticBrainz dump shards; writes its own --out",
+    "gaia_predict.py": "reads data/flavor-sample.db, a reference set",
+    "recompute_floor.py": "reads data/flavor.db, the standalone flavor store",
 }
 
-TABLE_RE = re.compile(r"\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_][a-z0-9_]*)", re.I)
+# `FROM|JOIN|INTO|UPDATE` alone under-reports, and did: it missed
+# `rename_recording_time_scale.py` entirely, whose only contact with a
+# table is `ALTER TABLE listener_settings` and
+# `PRAGMA table_info(listener_settings)`. A checklist that quietly omits a
+# script is worse than no checklist, so both forms are matched now.
+TABLE_RE = re.compile(
+    r"\b(?:FROM|JOIN|INTO|UPDATE|ALTER\s+TABLE|DELETE\s+FROM)\s+([a-z_][a-z0-9_]*)"
+    r"|PRAGMA\s+table_info\(\s*([a-z_][a-z0-9_]*)", re.I)
 MASTER_RE = re.compile(r"FROM\s+sqlite_master", re.I)
 CREATE_RE = re.compile(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)", re.I)
 CONNECT_RE = re.compile(r"sqlite3\.connect\s*\(")
@@ -74,7 +84,7 @@ CONNECT_RE = re.compile(r"sqlite3\.connect\s*\(")
 
 def classify(path: str) -> dict:
     src = open(path, encoding="utf-8").read()
-    named = {m.lower() for m in TABLE_RE.findall(src)}
+    named = {g.lower() for m in TABLE_RE.findall(src) for g in m if g}
     cat = named & CATALOGUE
     lis = named & LISTENER
     creates = {m.lower() for m in CREATE_RE.findall(src)}

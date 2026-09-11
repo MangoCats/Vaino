@@ -32,6 +32,10 @@ import argparse
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 # Fade gets the schema's own default (20ms/exponential) by omission, the
 # same de-click ramp every passage gets regardless of kind `[SPEC-SUI-226]`
 # -- an album cut still plays start-to-end through real speakers and still
@@ -109,7 +113,8 @@ def main() -> int:
     ap.add_argument("--commit", action="store_true")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")

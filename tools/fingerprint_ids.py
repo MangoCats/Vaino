@@ -54,6 +54,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import secret  # noqa: E402
 
 # fpcalc fingerprints the first 120 seconds and AcoustID's index is built from
@@ -260,7 +261,8 @@ def merge(db: str, side: str) -> int:
         return 1
     # uri=True so ATTACH below may use a `file:` URI. A plain path is still
     # treated as a plain path; only strings starting with `file:` are parsed.
-    conn = sqlite3.connect(db, timeout=60, uri=True)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("""CREATE TABLE IF NOT EXISTS id_checks (
         passage_id   INTEGER PRIMARY KEY REFERENCES passages(passage_id) ON DELETE CASCADE,
@@ -305,7 +307,8 @@ def main() -> int:
 
     key = secret.acoustid_key()
     # Read-only: Sampo may be writing this, and under WAL a reader never waits.
-    lib = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True, timeout=30)
+    # Catalogue-only, read-only.
+    lib = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, timeout=30)
     side = sqlite3.connect(side_path, timeout=30)
     side.executescript(RESULTS_DDL)
     side.commit()

@@ -32,6 +32,10 @@ import argparse
 import json
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import time
 import urllib.error
 import urllib.request
@@ -111,7 +115,8 @@ def main() -> int:
                     help="ask again about releases already tried")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.executescript(DDL)
     conn.commit()

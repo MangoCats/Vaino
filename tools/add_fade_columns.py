@@ -26,6 +26,10 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from pathlib import Path
 
 COLUMNS = [
@@ -49,7 +53,8 @@ def main() -> int:
     db = Path(args[0])
     write = "--write" in args
 
-    con = sqlite3.connect(db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    con = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, writable=True)
     have = {r[1] for r in con.execute("PRAGMA table_info(passages)")}
     missing = [(name, ddl) for name, ddl in COLUMNS if name not in have]
 

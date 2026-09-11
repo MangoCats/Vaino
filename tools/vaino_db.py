@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 
 ROLE_LIBRARY = "library"
 ROLE_LISTENER = "listener"
@@ -123,7 +124,17 @@ def _tables(conn, schema="main") -> set[str]:
 
 
 def markers(path: str) -> tuple[bool, bool]:
-    """`(has_any_library_table, has_any_listener_table)` for one file."""
+    """`(has_any_library_table, has_any_listener_table)` for one file.
+
+    A path that does not exist yet has neither, and says so rather than
+    raising. `sqlite3.connect(path)` *creates* a missing database, and
+    several scripts rely on that -- inspecting the file first must not take
+    that away, or a tool that used to bootstrap an empty library starts
+    failing with "unable to open database file". Found by running every
+    migrated script rather than by reading them.
+    """
+    if not os.path.exists(path):
+        return False, False
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         names = _tables(conn)
@@ -313,10 +324,35 @@ def connect(path: str, role: str, *, writable: bool = False,
         peer_path = find_peer(path, this, peer)
 
     if not peer_path:
-        want = ROLE_LIBRARY if this == ROLE_LISTENER else ROLE_LISTENER
-        raise SplitError(
-            f"{path} is the {this} half of a split database and the {want} half "
-            f"was not found. Pass it explicitly, or set VAINO_{want.upper()}.")
+        # **No peer: open it plainly, exactly as the script did before.**
+        #
+        # This used to raise, on the reasoning that half a database gives
+        # answers that look fine and are wrong. Running the suites proved
+        # that wrong in the other direction: a catalogue-only database is a
+        # perfectly ordinary thing -- `remote_snapshot.py` builds one,
+        # `accept_remote_basis.py` and the `jobs.py` tests use one, a
+        # library ingested but never played is one -- and refusing to open
+        # it broke four suites that had nothing to do with splitting.
+        #
+        # By content, a catalogue-only file and the library half of a pair
+        # are indistinguishable. The peer is the only evidence, and without
+        # it the safe answer is the old behaviour: this helper must never
+        # leave a script worse off than the `sqlite3.connect` it replaced.
+        # A genuine half with a genuinely missing peer then fails the way it
+        # always would have -- on the first query naming a table from the
+        # other side, which is a clean error and not a quiet wrong answer.
+        #
+        # Said out loud only when the filename follows the split convention,
+        # which is the one case where "half a pair, peer missing" is the
+        # likely reading rather than a guess.
+        if os.path.basename(path) in (f"{ROLE_LIBRARY}.db", f"{ROLE_LISTENER}.db"):
+            want = ROLE_LIBRARY if this == ROLE_LISTENER else ROLE_LISTENER
+            print(f"vaino_db: {path} looks like the {this} half of a split database "
+                  f"but no {want} half was found; opening it alone. Pass it "
+                  f"explicitly, or set VAINO_{want.upper()}.", file=sys.stderr)
+        return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
+                               uri=not writable, check_same_thread=check_same_thread,
+                               **({} if timeout is None else {"timeout": timeout}))
 
     # The half this script owns is `main`, whichever one was named.
     main_path, attach_path = (path, peer_path) if this == role else (peer_path, path)

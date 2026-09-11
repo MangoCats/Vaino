@@ -26,6 +26,10 @@ import argparse
 import json
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import time
 import urllib.error
 import urllib.request
@@ -185,7 +189,8 @@ def main() -> int:
                     help="ignore the cache and ask MusicBrainz again")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True)
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(CACHE_DDL)
     for ddl in EXTRA_DDL:

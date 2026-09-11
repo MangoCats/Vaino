@@ -25,6 +25,10 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from pathlib import Path
 
 
@@ -41,8 +45,9 @@ def main() -> int:
     db = Path(args[0])
     write = "--write" in args
 
-    con = sqlite3.connect(db)
-    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    # Listener-only: `listener_settings` is the single table it touches.
+    con = vaino_db.connect(db, vaino_db.ROLE_LISTENER, writable=True)
+    have = vaino_db.tables(con)  # both halves [IMPL-DBSPLIT-025]
     if "listener_settings" not in have:
         say("no listener_settings table -- nothing tuned yet, nothing to rename")
         return 0

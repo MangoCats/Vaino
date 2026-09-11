@@ -25,6 +25,10 @@ import argparse
 import sqlite3
 import sys
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+
 # Titles carry accents and dashes the Windows console cannot encode, and a
 # report that dies on the fourth line of its own findings is not a report.
 def say(text: str) -> None:
@@ -99,7 +103,8 @@ def main() -> int:
     ap.add_argument("--list-bad", type=int, default=12)
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True)
     rows = conn.execute(
         """SELECT p.passage_id, pr.mbid, r.title, ft.title, ft.artist,
                   (SELECT a.name FROM recording_artists ra

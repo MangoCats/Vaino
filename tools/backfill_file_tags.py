@@ -36,6 +36,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import ingest_folder  # noqa: E402 -- reuses probe(), not a reimplementation
 
 
@@ -93,7 +94,8 @@ def main() -> int:
     ap.add_argument("--commit", action="store_true")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 60000")
 

@@ -26,6 +26,7 @@ import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import payload as payloadmod  # noqa: E402
 
 
@@ -45,7 +46,8 @@ def main() -> int:
     ap.add_argument("--gzip", action="store_true", help="write payload.json.gz as well")
     args = ap.parse_args()
 
-    conn = payloadmod.sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    # Catalogue-only, read-only.
+    conn = vaino_db.connect(args.db, vaino_db.ROLE_LIBRARY)
     md5s = list(args.md5)
     if args.md5_file:
         with open(args.md5_file, encoding="utf-8") as fh:

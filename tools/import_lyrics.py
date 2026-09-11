@@ -20,6 +20,10 @@ Dry by default. `--apply` writes.
 
 import sqlite3
 import sys
+
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from datetime import datetime, timezone
 
 SOURCE = "mulibplay"
@@ -42,7 +46,8 @@ def main() -> int:
         return 2
     vaino_path, mulib_path = args
 
-    db = sqlite3.connect(vaino_path)
+    # Catalogue-only, and it writes -- library half as `main`.
+    db = vaino_db.connect(vaino_path, vaino_db.ROLE_LIBRARY, writable=True)
     db.execute("ATTACH ? AS m", (mulib_path,))
 
     # Every candidate, and whether Vaino has anywhere to put it. Counted apart
