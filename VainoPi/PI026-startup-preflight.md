@@ -9,7 +9,7 @@ recovery, it only changes which command performs it.
 
 > **Related:** [PI025](PI025-what-the-local-split-owes-vainopi.md) `[PI-OWE-100]`
 > for `vaino-db-recover`'s WAL reporting · [BOSE009](../BosePi/BOSE009-image-update-runbook.md)
-> `[BOS-RUN-090]` for why read-only media makes recovery matter more on `bose`
+> for why read-only media makes recovery matter more on `bose` `[BOS-RUN-090]`
 
 ---
 
@@ -219,7 +219,8 @@ named is gone.
 the pre-split `/srv/library/vaino.db` in its base `ExecStart`; the live
 machine is correct only because `mpd-guest.conf` overrides it.
 
-`[PI-PRE-098]` improved this by accident, and the direction is worth noting.
+Deleting those copies `[PI-PRE-098]` improved this by accident, and the
+direction is worth noting.
 While that file existed, losing the drop-in meant the player would open a
 database four days stale and **run**, reporting nothing wrong — plays going
 into a file nobody reads. Now the file is gone, so the same mistake is a
