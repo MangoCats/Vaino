@@ -103,12 +103,35 @@ def copy_table(source: sqlite3.Connection, dest: sqlite3.Connection, table: str)
     return len(rows)
 
 
+def journal_mode_of(path: str) -> str:
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return con.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        con.close()
+
+
 def build_half(source_path: str, out_path: str, tables: list) -> dict:
     """Builds one output file against `out_path`, returning `{table: rows}`."""
     if os.path.exists(out_path):
         os.remove(out_path)
     source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
     dest = sqlite3.connect(out_path)
+    # Carry the source's journal mode across. A fresh SQLite file is
+    # `delete`, and nothing here used to change that -- so splitting a WAL
+    # database silently produced two non-WAL halves. That matters: the
+    # console reads the live library while the player writes it, and
+    # `[IMPL-SUI-040]` rests on WAL for exactly that ("readers never block
+    # the player"). vainopi's own halves are `delete` today because this
+    # line did not exist when they were made.
+    #
+    # It is also the one pragma that changes what a cross-half transaction
+    # guarantees: SQLite documents multi-database transactions as atomic
+    # only when the journal mode is NOT WAL. Preserving the source's choice
+    # keeps that a property of the installation rather than an accident of
+    # the migration.
+    mode = source.execute("PRAGMA journal_mode").fetchone()[0]
+    dest.execute(f"PRAGMA journal_mode = {mode}")
     counts = {}
     try:
         for table in tables:
@@ -198,6 +221,7 @@ def main() -> int:
                 say(f"  - {p}")
             return 1
 
+        say(f"journal_mode carried across from the source: {journal_mode_of(args.source)}")
         for label, counts in (("library.db", lib_counts), ("listener.db", listener_counts)):
             total = sum(counts.values())
             nonzero = {t: n for t, n in counts.items() if n}
