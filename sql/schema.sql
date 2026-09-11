@@ -286,6 +286,14 @@ CREATE TABLE IF NOT EXISTS listener_occasions (
     class           TEXT NOT NULL,          -- e.g. 'christmasy'
     interp          TEXT NOT NULL DEFAULT 'step'
                     CHECK (interp IN ('step','linear')),
+    -- What a person is offered this as, in the preference panel
+    -- [SPEC-PREF-080]. Data for the same reason the curve is: a label can
+    -- read properly ("Children's") where the characteristic cannot
+    -- ('user.childrens'), and a label can be changed without rewriting every
+    -- row that names the characteristic. NULL falls back to the
+    -- characteristic's own last segment, title-cased, so an occasion loaded
+    -- before this column existed still shows up named rather than blank.
+    label           TEXT,
     PRIMARY KEY (characteristic, class)
 ) WITHOUT ROWID;
 
@@ -301,6 +309,29 @@ CREATE TABLE IF NOT EXISTS listener_occasion_points (
     PRIMARY KEY (characteristic, class, month, day),
     FOREIGN KEY (characteristic, class)
         REFERENCES listener_occasions(characteristic, class) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+-- The listener's own hand-set value for a registered characteristic
+-- [SPEC-PREF-085] -- MuLibPlay's `occasions` tags and its profanity slider,
+-- which were editable there and, until this, were carried by Vaino but
+-- settable by nothing.
+--
+-- Listener-side rather than a `flavor` row, though `flavor` is where the same
+-- value inherited from the migration lives, for a reason that is not
+-- stylistic: once `tools/split_database.py` has run, `library.db` is ATTACHed
+-- READ-ONLY by the player [PI-DB-020], so the player cannot write `flavor` at
+-- all. It is also true on the merits -- this is a person's judgment about
+-- their own music, Class D like every other `listener_*` table, and it
+-- outranks the derived value rather than being averaged with it.
+
+CREATE TABLE IF NOT EXISTS listener_characteristics (
+    subject_kind    TEXT NOT NULL CHECK (subject_kind IN ('recording')),
+    subject_id      TEXT NOT NULL,
+    characteristic  TEXT NOT NULL,
+    class           TEXT NOT NULL,
+    value           REAL NOT NULL CHECK (value >= 0.0 AND value <= 1.0),
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (subject_kind, subject_id, characteristic, class)
 ) WITHOUT ROWID;
 
 -- A programme is a list of exemplar passages, not tuned parameters

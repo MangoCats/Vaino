@@ -46,6 +46,11 @@ pub const LISTENER_TABLES: &[&str] = &[
     "listener_program_seeds",
     "listener_occasions",
     "listener_occasion_points",
+    // The listener's own "special" tagging `[SPEC-PREF-085]` -- which songs
+    // are Christmas songs, which are for children, which are spiritual.
+    // Small, and nothing recreates it: it is a person's judgment about
+    // their own music, not anything derivable from the audio.
+    "listener_characteristics",
     "listener_settings",
     "player_state",
 ];

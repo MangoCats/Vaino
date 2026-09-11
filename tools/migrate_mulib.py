@@ -68,8 +68,23 @@ OCCASION_MAP = {
     "[K]": ("user.childrens", "for_children", "not_for_children"),
 }
 
-# Deliberately NOT migrated [GDE-BMK-040] -- NULL for all 8,116 rows across six
-# years, or under 10 rows. Reported so the omission is visible, not silent.
+# Not migrated by this script. Reported so the omission is visible, not silent.
+#
+# Nine of these are dead exactly as [GDE-BMK-040] found: tempo, intensity,
+# keyMood, darkLight, genre and themes are NULL for all 8,116 rows across six
+# years; quality, jts and popularity carry under 10 between them. venue,
+# ukChart, usChart and usChartPeak are NULL throughout as well.
+#
+# The remaining two are NOT dead, and citing [GDE-BMK-040] over the whole list
+# overstated what that finding actually says (audited 2026-09-10):
+#   lyrics     2,288 rows of real text -- not lost, just not this script's job.
+#              They reached Vaino's own `lyrics` table separately (2,265 rows,
+#              source 'mulibplay') [SPEC019].
+#   profanity  2,529 non-NULL, of which 69 carry a real non-zero value between
+#              0.001 and 0.874. Genuinely dropped, and the only MuLibPlay
+#              listener data this migration actually loses. Every one of the 69
+#              carries an `mbidRecording` that resolves in Vaino, so restoring
+#              them is a join rather than a re-derivation [SPEC-PREF-082].
 DEAD_FIELDS = ["tempo", "intensity", "keyMood", "darkLight", "genre", "themes",
                "quality", "jts", "popularity", "venue", "lyrics", "profanity",
                "ukChart", "usChart", "usChartPeak"]

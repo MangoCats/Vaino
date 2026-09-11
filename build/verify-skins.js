@@ -1336,8 +1336,178 @@ async function runPassage() {
   if (errors.length) failures++;
 }
 
+// The preference panel `[REQ-VIS-290]`, `[SPEC-PREF-080]`, `[SPEC-PREF-090]`
+// -- built in core.js and shared by every skin that carries the slot, so it is
+// checked once against each skin rather than being a fourth thing `run()` has
+// to know about. What is under test is what `cargo test` structurally cannot
+// reach: that the server's own JSON becomes the right controls, and that Save
+// turns those controls back into the three-way query `preference.rs` parses.
+const PREFERENCE = {
+  rotation: null, recovery: null, restraint: null,
+  defaults: { rotation: 2.0, recovery: 2.6, restraint: 0.0 },
+  subject: { title: 'Fairytale of New York', artist: 'The Pogues',
+             album: 'If I Should Fall from Grace with God' },
+  specials: [
+    // Tagged by the MuLibPlay migration, never touched by this listener.
+    { characteristic: 'user.christmas', class: 'christmasy', label: 'Christmas',
+      inherited: 1.0, value: null },
+    // Inherited nothing, set by hand. That is profanity's real shape today
+    // only because `migrate_mulib.py` drops MuLibPlay's 69 values as a dead
+    // field `[SPEC-PREF-082]`; what is under test is a special with no
+    // inherited value, whichever special happens to be in that state.
+    { characteristic: 'user.profanity', class: 'profane', label: 'Profanity',
+      inherited: null, value: 0.5 },
+  ],
+};
+
+async function runPreference(skin) {
+  const dir = path.join(ROOT, 'skins', skin);
+  const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
+    .replace('<script>Vaino.start();</script>', '');
+  const dom = new JSDOM(shell,
+                        { runScripts: 'dangerously', url: 'http://localhost/?skin=' + skin });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+
+  const posted = [];
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') { posted.push(url); return Promise.resolve({ ok: true }); }
+    if (url === '/skins') {
+      return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
+    }
+    const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
+    if (m) return Promise.resolve({ text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    if (/^\/preference\//.test(url)) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(PREFERENCE) });
+    }
+    // Its own independent fetch, deliberately not awaited by the panel
+    // `[REQ-VIS-300]` -- answered here so the panel's real path runs.
+    if (/^\/play-frequency\//.test(url)) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(
+        [{ label: 'All', counts: [0, 1, 2, 3, 4] }]) });
+    }
+    if (/^\/art\//.test(url)) return Promise.reject(new Error('no art in a test DOM'));
+    return Promise.reject(new Error('unexpected fetch ' + url));
+  };
+
+  let sock = null;
+  window.WebSocket = function () { sock = this; this.close = () => {}; };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript('Vaino.start();');
+  for (let i = 0; i < 200 && !sock; i++) await new Promise(r => setTimeout(r, 5));
+  if (!sock) { console.log(`${('pref/' + skin).padEnd(11)} FAIL  core never loaded the skin`); failures++; return; }
+  try {
+    runScript(fs.readFileSync(path.join(dir, 'skin.js'), 'utf8'));
+  } catch (e) {
+    console.log(`${('pref/' + skin).padEnd(11)} FAIL  skin.js threw: ${e.message}`);
+    failures++;
+    return;
+  }
+  sock.onopen && sock.onopen();
+  sock.onmessage({ data: JSON.stringify(RICH) });
+
+  const panel = window.document.getElementById('pref-panel');
+  // WinAmp carries no slot, and that is designed rather than missed
+  // `[SPEC-PREF-070]`: its marquee concatenates artist and title into one
+  // scrolling string with no separate node to hang a link on. Opening the
+  // panel there must be a silent no-op, not a crash.
+  if (!panel) {
+    try {
+      runScript("Vaino.editPreference('recording', 'rec-1', 'Whatever');");
+      await new Promise(r => setTimeout(r, 30));
+    } catch (e) {
+      errors.push(`a skin with no panel slot must not throw: ${e.message}`);
+    }
+    console.log(`${('pref/' + skin).padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+                `no panel slot, and opening one is a silent no-op`);
+    for (const e of errors) console.log('    ! ' + e);
+    if (errors.length) failures++;
+    return;
+  }
+
+  // Through a <script>, not `window.Vaino`: core.js's own top-level `const`
+  // lives in the shared script scope, which is exactly why this harness
+  // already starts core with `runScript('Vaino.start();')` above.
+  runScript("Vaino.editPreference('recording', 'rec-1', 'A Fallback Label');");
+  await new Promise(r => setTimeout(r, 30));
+
+  check(!panel.hidden, 'the panel must be open');
+  const heading = panel.querySelector('.pref-heading').textContent;
+  check(/Fairytale of New York/.test(heading),
+        `the heading must name the recording the server named, got "${heading}"`);
+  check(!/A Fallback Label/.test(heading),
+        "the library's own title must replace the caller's label once it arrives");
+  const subject = panel.querySelector('.pref-subject');
+  check(!subject.hidden, 'the artist/album line must be shown when both are known');
+  check(/by The Pogues/.test(subject.textContent) &&
+        /from If I Should Fall from Grace with God/.test(subject.textContent),
+        `the artist and album must both appear, got "${subject.textContent}"`);
+
+  const specials = panel.querySelector('.pref-specials');
+  check(!specials.hidden, 'the specials section must be shown when any are registered');
+  const rows = [...specials.querySelectorAll('.pref-field')];
+  check(rows.length === 2, `two specials were served, ${rows.length} rendered`);
+  const labels = rows.map(r => r.querySelector('label').textContent);
+  check(labels.join(',') === 'Christmas,Profanity',
+        `the specials must be named as the server named them, got "${labels.join(',')}"`);
+  // The whole point of two values rather than one: an inherited value must
+  // not read as a choice this listener made.
+  const christmasReadout = rows[0].querySelector('.pref-readout').textContent;
+  check(christmasReadout === '100% (inherited)',
+        `an untouched special must show the inherited value as inherited, got "${christmasReadout}"`);
+  const profanityReadout = rows[1].querySelector('.pref-readout').textContent;
+  check(profanityReadout === '50%',
+        `a hand-set special must show as chosen, not inherited, got "${profanityReadout}"`);
+
+  // Drag Christmas down, and Reset a special that was set -- the two edits that
+  // must reach the server, beside the three fields left alone, which must not.
+  const slider = rows[0].querySelector('input');
+  slider.value = '0.25';
+  slider.dispatchEvent(new window.Event('input'));
+  check(rows[0].querySelector('.pref-readout').textContent === '25%',
+        'dragging a special must stop calling it inherited');
+  rows[1].querySelector('.pref-reset').click();
+  check(rows[1].querySelector('.pref-readout').textContent === '0% (inherited)',
+        'Reset must fall back to the inherited value, which here is nothing');
+
+  panel.querySelector('.pref-save').click();
+  await new Promise(r => setTimeout(r, 30));
+  const save = posted.find(u => /^\/preference\//.test(u));
+  check(save, 'Save must post to /preference');
+  if (save) {
+    const q = new window.URLSearchParams(save.split('?')[1] ?? '');
+    check(q.get('special:user.christmas:christmasy') === '0.25',
+          `the dragged special must be sent as a number, got "${q.get('special:user.christmas:christmasy')}"`);
+    check(q.get('special:user.profanity:profane') === '',
+          'a Reset special must be sent empty, which is what the server reads as "use the inherited value"');
+    check(!q.has('rotation') && !q.has('recovery') && !q.has('restraint'),
+          'a field nobody touched must be absent, not resent');
+  }
+
+  console.log(`${('pref/' + skin).padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `heading="${heading.slice(-34)}"  specials=${rows.length}  ` +
+              `saved=${save ? save.split('?')[1] : 'nothing'}`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
+  for (const s of skins) await runPreference(s);
   await runBrowse();
   await runReview();
   await runReviewHandoff();

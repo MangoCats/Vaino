@@ -1,12 +1,13 @@
-# SPEC030: Syncing Listener Preferences Between Installations
+# SPEC030: Syncing Listener Preferences and Specials Between Installations
 
 **Design Specification — Tier 2 · Built**
 
 [SPEC029](SPEC029-listener-preference-editing.md) gave a listener a way to
 edit an artist's or a recording's own `rotation`/`recovery`/`restraint`
-locally. This is what happens once two installations — a desktop and
-`vainopi`, say — have each done that independently, and someone wants the
-two reconciled.
+locally, and later its "special" tags — Christmas, Children's, Profanity,
+Spiritual — in the same panel. This is what happens once two installations
+— a desktop and `vainopi`, say — have each done that independently, and
+someone wants the two reconciled.
 
 > **Status.** Built 2026-09-04, per `[REQ-VIS-295]`. `tools/sync_preferences.py`
 > (the tool), `jobs.py`'s `sync-preferences` job kind, and a third button on
@@ -27,7 +28,8 @@ two reconciled.
 
 ## 1. Why this is new territory, not a rebuild
 
-**`[SPEC-PREF-100]`** `listener_preferences` is Class D
+**`[SPEC-PREF-100]`** `listener_preferences` — and, since §7,
+`listener_characteristics` beside it — is Class D
 ([SPEC006 §3](SPEC006-data-flow-and-portability.md#3-what-travels-and-what-must-not)
 names it explicitly, alongside likes/dislikes, play history and programs).
 Class D's stated rule is that it "never travels with music," moving only
@@ -39,7 +41,7 @@ and the backup/restore direction is one-way (restore *from* a snapshot),
 not the bidirectional, selective reconciliation asked for. This document
 is the first time a *subset* of Class D gets its own narrow, two-way sync
 — deliberate, not an oversight in `SPEC006`'s own rule, and scoped to
-exactly this one table.
+exactly what one panel edits.
 
 ## 2. The conflict model: last-write-wins, not a three-way merge
 
@@ -127,7 +129,76 @@ reached only from its own console button, the same standing `remote-pull`/
 
 ---
 
-**Traceability:** `[SPEC-PREF-100..130]` · derives `[REQ-VIS-295]` ·
+## 7. The specials, on the same terms
+
+> **Status.** Built 2026-09-10, per `[REQ-VIS-315]`.
+
+**`[SPEC-PREF-140]` `listener_characteristics` syncs by §2's rule, reusing
+§2's code.** Its rows are the same shape of thing `listener_preferences`'s
+are — one per decision a person made, its own `updated_at`, no merge
+history — so every argument for last-write-wins carries over unchanged, and
+the way to keep it carrying over unchanged is for it to be the same
+function. `decide()` gained two parameters (`when`, `subject_of`) rather
+than a near-copy: this key holds two more fields and keeps its timestamp
+somewhere else, and nothing else about the decision differs. §3's existence
+rule applies too, against the *recording* inside the longer key, batched
+into the same round trip the tunings already pay for. One patch, one
+service stop, one restart, however many of the three tables moved — three
+pushes would be three gaps in the music to sync three tables nobody edited
+separately.
+
+**`[SPEC-PREF-145]` The registry syncs too, and additively — never
+last-write-wins.** A value for `user.spiritual` means nothing on an
+installation that has never heard of `user.spiritual`, so
+`listener_occasions` and `listener_occasion_points` travel with the values;
+that is what "usable once defined, on another database" actually requires.
+But a curve is not a fact about one recording, it is a setting someone
+tuned (`--kids 0.5`), and it carries no `updated_at` to judge by. So: a
+definition the other side lacks is **copied**; a definition both sides have
+and disagree about is **reported and left alone on both sides**. The
+alternative is a sync that silently retunes somebody's seasons, which is a
+much worse failure than a conflict a person has to go and look at.
+
+**`[SPEC-PREF-150]` A far side that predates any of this still syncs — and
+"absent" is never confused with "could not be read".**
+`listener_characteristics` is `CREATE TABLE IF NOT EXISTS`-ed by the patch
+before anything is inserted into it, and `listener_occasions.label` is
+dropped from the column list when the remote's own table has no such column
+— read back as absent rather than assumed. A name is the least important
+thing being carried, and losing it must not cost the curve.
+
+`run_remote_sql` deliberately collapses every failure to `{"ok": False}`,
+because `[SPEC-DF-118]` only ever needed "did this work". That is exactly
+wrong here, and `absent_table()` is the correction: only a *no such table*
+error reads as an empty table. Every other failure — a locked database, a
+timeout, a dropped connection — leaves the remote's state **unknown**, and
+unknown stops the sync rather than being treated as empty. The difference is
+not theoretical: reading a locked database as "the remote has no specials"
+would push every local value over whatever is actually there, including
+newer values, silently. Observed live on 2026-09-10, a count against
+`pi@vainopi` failing once seconds after the service restarted and succeeding
+four times immediately after.
+
+**`[SPEC-PREF-155]` A split remote must be told where its catalogue is.**
+`[SPEC-PREF-110]`'s existence rule reads `artists`/`recordings`, which on a
+split installation `[IMPL-DBSPLIT-025]` are not in the listener database
+this tool otherwise talks to — and `run_remote_sql` opens exactly one path.
+So `--remote-library` names the second file, and the existence batch alone
+is addressed to it; everything else still goes to the listener database.
+
+Without it the failure is silent and total: every existence query errors,
+`{"ok": False}` collapses to an empty set, every one-sided subject is filed
+`skip_missing`, and the tool reports a clean "nothing to do" while having
+synced nothing at all. Found live against `pi@vainopi` on 2026-09-10 —
+this document's own **Status** block records a live verification against
+that installation on 2026-09-04, which was true then and was quietly
+falsified when the appliance was split afterwards `[IMPL011]`. A
+verification is only as current as the shape of the thing verified.
+
+---
+
+**Traceability:** `[SPEC-PREF-100..155]` · derives `[REQ-VIS-295]`,
+`[REQ-VIS-315]` ·
 crosses the Class-D boundary `[SPEC006]` §3 states and does not relitigate
 it · reuses `run_remote_sql`/`literal` (`tools/remote_peek.py`), the
 `[PI5-LIB-010]` stop/patch/restart recipe (`jobs.py::_remote_push`,

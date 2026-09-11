@@ -597,6 +597,7 @@ pub(crate) mod test_support {
         c.execute_batch(REJECTION_TABLE).unwrap();
         c.execute_batch(FLAGS_TABLE).unwrap();
         c.execute_batch(PREFERENCES_TABLE).unwrap();
+        c.execute_batch(CHARACTERISTICS_TABLE).unwrap();
         c
     }
 

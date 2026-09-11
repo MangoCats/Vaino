@@ -505,12 +505,22 @@ const Vaino = (() => {
         </div>
         <input type="range" min="-0.998" max="0.998" step="0.001">
       </div>`;
+    // `.pref-subject` carries "by <artist> from <album>" on its own line
+    // rather than being run into the heading `[SPEC-PREF-090]` -- three
+    // names concatenated into one uppercase, letter-spaced heading (which
+    // is what the Vaino skin makes of `.pref-heading`) is a wall, and the
+    // title is the thing being edited while the other two only say which
+    // one it is. `.pref-specials` is filled per subject in
+    // `editPreference` below, since which specials exist is a property of
+    // the library rather than of this file `[SPEC-PREF-080]`.
     panel.innerHTML = `
       <h2 class="pref-heading"></h2>
+      <p class="pref-subject" hidden></p>
       <p class="pref-error" hidden></p>
       ${field('rotation', 'Cooldown')}
       ${field('recovery', 'Recovery')}
       ${field('restraint', 'Preference')}
+      <div class="pref-specials" hidden></div>
       <div class="pref-actions">
         <button type="button" class="pref-cancel">Cancel</button>
         <button type="button" class="pref-save">Save</button>
@@ -653,6 +663,78 @@ const Vaino = (() => {
     return -Math.sign(u) * (1 - 2 ** -Math.abs(u));
   }
 
+  // Builds one row per special the library registers `[SPEC-PREF-080]` --
+  // MuLibPlay's Christmas/Winter/Summer/Children's occasions and its profanity
+  // slider, which were editable there and, until this, were carried by Vaino
+  // and settable by nothing. Returns the per-row state `editPreference`'s
+  // own Save reads.
+  //
+  // Which specials exist is never hardcoded here: the server reports
+  // whatever `listener_occasions` registers, so adding one stays "rows in
+  // two tables and no edit to the engine" `[SPEC-DIR-130]` -- and no edit to
+  // this file either.
+  //
+  // Two values per special, and the distinction is the whole point.
+  // `inherited` is what `flavor` holds (six years of MuLibPlay tagging, or
+  // whatever Sampo derived); `own` is what this listener set by hand, `null`
+  // when they never did. Reset drops `own` and goes back to `inherited` --
+  // it does not mean zero, which would be the different and permanent claim
+  // "this is definitely not a Christmas song."
+  function renderSpecials(box, rows) {
+    box.textContent = '';
+    box.hidden = rows.length === 0;
+    if (!rows.length) return [];
+    const heading = document.createElement('h3');
+    heading.className = 'pref-section';
+    heading.textContent = 'Specials';
+    box.appendChild(heading);
+
+    return rows.map(row => {
+      const inherited = row.inherited ?? 0;
+      const state = {
+        key: `special:${row.characteristic}:${row.class}`,
+        own: row.value ?? null,
+        cleared: false,
+      };
+      const field = document.createElement('div');
+      field.className = 'pref-field';
+      // The same `.pref-field` shape the three tuning sliders use, so every
+      // skin's existing CSS dresses these without a line of new styling per
+      // skin. Structure from markup, every name through `textContent`:
+      // `row.label` is a database value, and a label is not a place to start
+      // trusting one with `innerHTML`.
+      field.innerHTML = `
+        <div class="pref-field-head">
+          <label></label>
+          <span class="pref-readout"></span>
+          <button type="button" class="pref-reset" title="use the inherited value">Reset</button>
+        </div>
+        <input type="range" min="0" max="1" step="0.01">`;
+      field.querySelector('label').textContent = row.label;
+      const input = field.querySelector('input');
+      const readout = field.querySelector('.pref-readout');
+      const refresh = () => {
+        const v = state.own ?? inherited;
+        readout.textContent = `${Math.round(v * 100)}%${state.own == null ? ' (inherited)' : ''}`;
+      };
+      input.value = state.own ?? inherited;
+      refresh();
+      input.oninput = () => {
+        state.own = Number(input.value);
+        state.cleared = false;
+        refresh();
+      };
+      field.querySelector('.pref-reset').onclick = () => {
+        state.own = null;
+        state.cleared = true;
+        input.value = inherited;
+        refresh();
+      };
+      box.appendChild(field);
+      return state;
+    });
+  }
+
   // Opens the panel for one subject, fetches its current tuning, and wires
   // Save/Reset. `kind` is `'recording'` or `'artist'`; `id` its mbid.
   // A subject with no mbid (unidentified audio, an uncredited artist) has
@@ -662,7 +744,20 @@ const Vaino = (() => {
     if (!panel) return; // this skin carries no #pref-panel slot (WinAmp)
     const err = panel.querySelector('.pref-error');
     const save = panel.querySelector('.pref-save');
+    const subject = panel.querySelector('.pref-subject');
+    const specialsBox = panel.querySelector('.pref-specials');
     err.hidden = true;
+    // Cleared, not left showing the last subject's: the fetch below may
+    // fail, and a panel headed by one recording while naming another's
+    // artist and album is worse than one naming neither.
+    subject.hidden = true;
+    subject.textContent = '';
+    specialsBox.hidden = true;
+    specialsBox.textContent = '';
+    // The caller's own label until the fetch lands, then the library's own
+    // naming `[SPEC-PREF-090]` -- which is the same for a given recording
+    // wherever the panel was opened from, unlike what each surface happens
+    // to have on hand.
     panel.querySelector('.pref-heading').textContent =
       `${kind === 'artist' ? 'Artist' : 'Recording'} preferences — ${label ?? id}`;
     // Disabled until the fetch below actually succeeds -- there is nothing
@@ -691,6 +786,21 @@ const Vaino = (() => {
       err.hidden = false;
       return;
     }
+
+    const named = current.subject ?? {};
+    panel.querySelector('.pref-heading').textContent =
+      `${kind === 'artist' ? 'Artist' : 'Recording'} preferences — ${named.title ?? label ?? id}`;
+    // MuLibPlay's own track editor headed this page "<name> *by* <artist>
+    // *from* <album>", and that is the phrasing kept here. Either half is
+    // dropped when the library doesn't know it rather than shown empty --
+    // an uncredited artist and a recording on no release are both ordinary
+    // `[REQ-VIS-120]`, not a gap to paper over.
+    const provenance = [];
+    if (named.artist) provenance.push(`by ${named.artist}`);
+    if (named.album) provenance.push(`from ${named.album}`);
+    subject.textContent = provenance.join(' · ');
+    subject.hidden = provenance.length === 0;
+    const specials = renderSpecials(specialsBox, current.specials ?? []);
 
     // Per-field state: `null` means "at the default", a number means
     // "explicitly set to this" -- the same three-way shape the server
@@ -733,6 +843,13 @@ const Vaino = (() => {
       for (const field of ['rotation', 'recovery', 'restraint']) {
         if (cleared.has(field)) q.set(field, '');
         else if (current[field] != null) q.set(field, String(state[field]));
+      }
+      // Same three-way query the three fields above use `[SPEC-PREF-087]`:
+      // a special nobody touched is simply absent, so a save never rewrites
+      // tagging it did not look at.
+      for (const sp of specials) {
+        if (sp.cleared) q.set(sp.key, '');
+        else if (sp.own != null) q.set(sp.key, String(sp.own));
       }
       try {
         const r = await fetch(`/preference/${kind}/${encodeURIComponent(id)}?${q}`,

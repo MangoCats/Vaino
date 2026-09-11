@@ -39,6 +39,10 @@ body { background-color: black; color: #ccc; }
 .pref-panel:not([hidden]) { border: 2px solid #402080; border-radius: 12px;
     padding: .75rem 0; margin: .6rem 0; text-align: left; }
 .pref-heading { font-weight: bold; margin: 0 0 .5rem; text-align: center; padding: 0 1rem; }
+/* "by <artist> from <album>" [SPEC-PREF-090] -- centred under the heading,
+   the same shape MuLibPlay's own track editor headed its page with. */
+.pref-subject { color: #888; font-size: .85rem; margin: -.3rem 0 .5rem;
+    text-align: center; padding: 0 1rem; }
 .pref-error { color: #ff8080; margin: 0 0 .5rem; padding: 0 1rem; }
 /* Label, readout and Reset share a row; the slider itself gets a full-width
    row of its own underneath, flush with the panel's own edges -- the same
@@ -49,6 +53,13 @@ body { background-color: black; color: #ccc; }
 .pref-field input[type=range] { width: 100%; display: block; margin-top: .3rem; }
 .pref-readout { color: #888; white-space: nowrap; font-size: .85rem; }
 .pref-reset, .pref-cancel, .pref-save { font-size: 16px; padding: 6px 14px; }
+/* The specials [SPEC-PREF-080] reuse `.pref-field` wholesale and need no
+   styling of their own -- only a rule dividing them from the three tuning
+   sliders, and the heading naming them. */
+.pref-specials { border-top: 1px solid #402080; margin-top: .5rem;
+    padding-top: .4rem; }
+.pref-section { font-weight: bold; margin: 0 0 .2rem; text-align: center;
+    padding: 0 1rem; }
 .pref-actions { margin-top: .5rem; padding: 0 1rem; text-align: right; }
 .pref-actions button { margin-left: .4rem; }
 

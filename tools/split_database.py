@@ -59,7 +59,8 @@ LISTENER_TABLES = [
     "listener_play_history", "listener_rejections", "listener_flags",
     "listener_preferences", "listener_likes", "listener_programs",
     "listener_program_seeds", "listener_occasions",
-    "listener_occasion_points", "listener_settings", "player_state",
+    "listener_occasion_points", "listener_characteristics",
+    "listener_settings", "player_state",
     "player_settings", "id_reviews", "boundary_reviews", "artist_reviews",
     "selection_decisions",
 ]

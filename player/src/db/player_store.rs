@@ -103,6 +103,43 @@ pub struct PreferenceRow {
     pub restraint: Option<f64>,
 }
 
+/// One "special" a recording can be tagged with `[SPEC-PREF-080]` --
+/// MuLibPlay's Christmas/Winter/Summer/Children's occasions and its profanity
+/// slider, as [`PlayerStore::list_specials`] reports them.
+///
+/// Two values, never merged into one: `inherited` is what `flavor` carries
+/// (six years of MuLibPlay tagging, or whatever Sampo derived), `value` is
+/// what this listener set by hand and `None` when they never did. Keeping
+/// them apart is what lets the panel say "1.0, inherited" rather than
+/// implying a person chose it, and what lets Reset mean "go back to the
+/// inherited value" rather than "go to zero".
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SpecialRow {
+    pub characteristic: String,
+    pub class: String,
+    /// What a person is offered this as -- `listener_occasions.label` where
+    /// one is set, the characteristic's own last segment otherwise.
+    pub label: String,
+    pub inherited: Option<f64>,
+    pub value: Option<f64>,
+}
+
+/// What a subject is actually called `[SPEC-PREF-090]`, for the preference
+/// panel's own heading: a recording's title with its credited artist and the
+/// release it came from, or an artist's name alone.
+///
+/// Answered by the server rather than passed in by whichever surface was
+/// clicked, because those surfaces do not all know the same things -- the
+/// queue carries no album, the Vaino skin's runner-up list carries only a
+/// title -- and the heading should not be better or worse depending on where
+/// the panel was opened from.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct SubjectNaming {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+}
+
 /// One row of the play-frequency table `[REQ-VIS-300]`: a label ("All",
 /// "User", or a Program Director program's own name) and a play count for
 /// each of the five windows [`PlayerStore::play_frequency`] reports,
@@ -122,6 +159,56 @@ pub(crate) const PREFERENCES_TABLE: &str = "
         restraint    REAL,
         updated_at   TEXT NOT NULL,
         PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID;";
+
+/// The listener's own hand-set characteristic values `[SPEC-PREF-085]` --
+/// the "special" tags MuLibPlay let a person set directly (its `occasions`
+/// string, and its profanity slider) and Vaino carried without a way to set.
+///
+/// Listener-side, not a `flavor` row, and not by preference: once split,
+/// `library.db` -- which owns `flavor` -- is ATTACHed **read-only** through
+/// this very connection `[PI-DB-020]`, so the player physically cannot write
+/// that table on the installation this feature matters most on. It is the
+/// right side on the merits too: a person's own judgment about their own
+/// music is Class D, like every other `listener_*` table here.
+pub(crate) const CHARACTERISTICS_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS listener_characteristics (
+        subject_kind   TEXT NOT NULL CHECK (subject_kind IN ('recording')),
+        subject_id     TEXT NOT NULL,
+        characteristic TEXT NOT NULL,
+        class          TEXT NOT NULL,
+        value          REAL NOT NULL CHECK (value >= 0.0 AND value <= 1.0),
+        updated_at     TEXT NOT NULL,
+        PRIMARY KEY (subject_kind, subject_id, characteristic, class)) WITHOUT ROWID;";
+
+/// Give an existing `listener_occasions` the display label `[SPEC-PREF-080]`
+/// reads. Same shape and same expected-failure path as `ensure_flags_columns`
+/// below: the `CREATE TABLE IF NOT EXISTS` in `schema.sql` is a no-op against
+/// a database that already has the table, so the column has to be added
+/// separately, and the add fails on every start after the first.
+///
+/// The player never writes this column -- `tools/load_occasions.py` does --
+/// but it has to exist for `list_specials` to select it, on every
+/// installation rather than on whichever ones a tool happened to reach.
+fn ensure_occasion_columns(conn: &Connection) {
+    let _ = conn.execute("ALTER TABLE listener_occasions ADD COLUMN label TEXT", []);
+}
+
+/// What to call a special whose `listener_occasions` row carries no label
+/// `[SPEC-PREF-080]` -- the characteristic's own last segment, title-cased:
+/// `user.christmas` reads as "Christmas".
+///
+/// A fallback, not the scheme. Every occasion `tools/load_occasions.py`
+/// writes names itself properly ("Children's", which `user.childrens`
+/// cannot spell), and this only covers an occasion registered before the
+/// label column existed, or by hand. Better a plain name than a blank row.
+fn derived_label(characteristic: &str) -> String {
+    let tail = characteristic.rsplit('.').next().unwrap_or(characteristic);
+    let mut chars = tail.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => characteristic.to_string(),
+    }
+}
 
 /// Bring a `listener_flags` predating `origin` up to date `[SPEC-DF-107]`,
 /// the same reason `ensure_history_columns` exists for the two tables beside
@@ -641,8 +728,10 @@ impl PlayerStore {
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PREFERENCES_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(CHARACTERISTICS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_history_columns(&conn);
         ensure_flags_columns(&conn);
+        ensure_occasion_columns(&conn);
         #[cfg(feature = "sampo-support")]
         ensure_review_table(&conn)?;
         #[cfg(feature = "sampo-support")]
@@ -1392,6 +1481,131 @@ impl PlayerStore {
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Every registered special, with both values `[SPEC-PREF-080]`.
+    ///
+    /// The registry is `listener_occasions` -- the same table the Program
+    /// Director already reads its curves from, so "what a listener can tag a
+    /// recording with" and "what actually changes selection" cannot drift
+    /// apart into two lists. A new special is rows in that table and needs no
+    /// edit here, which is `[SPEC-DIR-130]`'s own rule applied one layer up.
+    ///
+    /// A missing `listener_occasions` is an empty list, not an error -- the
+    /// same posture `load_occasions` takes: a database with no occasions
+    /// defined simply has no specials to offer, and the panel shows the three
+    /// tuning sliders alone.
+    pub fn list_specials(&self, subject_id: &str) -> Result<Vec<SpecialRow>, DbError> {
+        let Ok(mut stmt) = self.conn.prepare(
+            "SELECT o.characteristic, o.class, o.label, \
+                    (SELECT f.value FROM __LIB__.flavor f \
+                      WHERE f.subject_kind = 'recording' AND f.subject_id = ?1 \
+                        AND f.characteristic = o.characteristic AND f.class = o.class), \
+                    (SELECT c.value FROM listener_characteristics c \
+                      WHERE c.subject_kind = 'recording' AND c.subject_id = ?1 \
+                        AND c.characteristic = o.characteristic AND c.class = o.class) \
+             FROM listener_occasions o \
+             ORDER BY COALESCE(o.label, o.characteristic), o.class",
+        ) else {
+            return Ok(Vec::new());
+        };
+        let rows = stmt
+            .query_map(rusqlite::params![subject_id], |r| {
+                let characteristic: String = r.get(0)?;
+                let label: Option<String> = r.get(2)?;
+                Ok(SpecialRow {
+                    label: label
+                        .filter(|l| !l.trim().is_empty())
+                        .unwrap_or_else(|| derived_label(&characteristic)),
+                    characteristic,
+                    class: r.get(1)?,
+                    inherited: r.get(3)?,
+                    value: r.get(4)?,
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Set one special on one recording `[SPEC-PREF-085]`.
+    ///
+    /// Unlike `set_preference` beside it, every call names exactly one
+    /// `(characteristic, class)` and carries a real value, so there is no
+    /// "leave this one alone" case to encode -- the caller simply does not
+    /// call this for the specials it did not touch.
+    pub fn set_special(
+        &self,
+        subject_id: &str,
+        characteristic: &str,
+        class: &str,
+        value: f64,
+    ) -> Result<(), DbError> {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(DbError::Query(format!("{characteristic}/{class} must be between 0 and 1")));
+        }
+        self.conn
+            .execute(
+                "INSERT INTO listener_characteristics \
+                     (subject_kind, subject_id, characteristic, class, value, updated_at) \
+                 VALUES ('recording', ?1, ?2, ?3, ?4, datetime('now')) \
+                 ON CONFLICT(subject_kind, subject_id, characteristic, class) DO UPDATE SET \
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![subject_id, characteristic, class, value],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Drop the listener's own value, so the inherited `flavor` one applies
+    /// again `[SPEC-PREF-085]`.
+    ///
+    /// A delete rather than a write of zero, and the difference matters: zero
+    /// would say "this recording is definitely not christmasy," permanently
+    /// overriding what the migration knew. Deleting says "I have no opinion,"
+    /// which is what Reset means everywhere else in this panel.
+    pub fn reset_special(&self, subject_id: &str, characteristic: &str, class: &str) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "DELETE FROM listener_characteristics WHERE subject_kind = 'recording' \
+                   AND subject_id = ?1 AND characteristic = ?2 AND class = ?3",
+                rusqlite::params![subject_id, characteristic, class],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// What to head the preference panel with `[SPEC-PREF-090]`: title, the
+    /// credited artist, and the release -- whichever of them the library
+    /// actually knows.
+    ///
+    /// The artist and album expressions are the ones `library.rs` already
+    /// uses for a history row (`HIST_ARTIST_EXPR`, `HIST_ALBUM_EXPR`),
+    /// including the `chosen DESC, release_date, title` tie-break that picks
+    /// one release out of the thirty-odd a well-known recording appears on.
+    /// A subject the catalog has never heard of is three `None`s, not an
+    /// error: the panel then keeps showing whatever the caller displayed.
+    pub fn subject_naming(&self, kind: &str, id: &str) -> Result<SubjectNaming, DbError> {
+        let sql = if kind == "artist" {
+            "SELECT name, NULL, NULL FROM __LIB__.artists WHERE mbid = ?1"
+        } else {
+            "SELECT r.title, \
+                    (SELECT a.name FROM __LIB__.recording_artists ra \
+                       JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
+                      WHERE ra.mbid = r.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), \
+                    (SELECT rel.title FROM __LIB__.release_recordings rr \
+                       JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
+                      WHERE rr.mbid = r.mbid \
+                      ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1) \
+             FROM __LIB__.recordings r WHERE r.mbid = ?1"
+        };
+        self.conn
+            .query_row(sql, rusqlite::params![id], |r| {
+                Ok(SubjectNaming { title: r.get(0)?, artist: r.get(1)?, album: r.get(2)? })
+            })
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(SubjectNaming::default()),
+                other => Err(DbError::Query(other.to_string())),
+            })
     }
 
     /// How often a subject has played, broken out by who selected it
@@ -2729,6 +2943,119 @@ mod tests {
     fn set_preference_rejects_an_unknown_subject_kind() {
         let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         assert!(store.set_preference("album", "x", Some(1.0), None, None).is_err());
+    }
+
+    /// `listener_occasions` registers what can be tagged; `flavor` holds what
+    /// the migration inherited. Both are needed before a special has anything
+    /// to report, and neither is created by `PREFERENCES_TABLE`.
+    fn specials_store() -> PlayerStore {
+        let c = historyable();
+        c.execute_batch(
+            "CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT,
+                 label TEXT);
+             CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,
+                 class TEXT, value REAL, source TEXT, accuracy REAL);
+             INSERT INTO listener_occasions VALUES
+                 ('user.christmas','christmasy','linear','Christmas'),
+                 ('user.profanity','profane','step',NULL);
+             INSERT INTO flavor VALUES
+                 ('recording','aaaaaaaa-0000-0000-0000-000000000001','user.christmas',
+                  'christmasy',1.0,'inherited:mulib',NULL);",
+        )
+        .unwrap();
+        PlayerStore { conn: QualifyingConn::wrap_unsplit(c) }
+    }
+
+    #[test]
+    fn a_special_reports_the_inherited_value_with_no_listener_value() {
+        let store = specials_store();
+        let rows = store.list_specials("aaaaaaaa-0000-0000-0000-000000000001").unwrap();
+        let christmas = rows.iter().find(|r| r.class == "christmasy").unwrap();
+        assert_eq!(christmas.inherited, Some(1.0));
+        assert_eq!(christmas.value, None, "nothing was set by hand, so this stays None");
+        assert_eq!(christmas.label, "Christmas");
+    }
+
+    #[test]
+    fn a_special_with_no_label_falls_back_to_its_characteristic() {
+        let store = specials_store();
+        let rows = store.list_specials("aaaaaaaa-0000-0000-0000-000000000001").unwrap();
+        let profanity = rows.iter().find(|r| r.class == "profane").unwrap();
+        assert_eq!(profanity.label, "Profanity");
+        // Carries no inherited value today: `migrate_mulib.py` drops
+        // MuLibPlay's 69 real profanity values by listing the field as
+        // dead `[SPEC-PREF-082]`. This fixture pins the shape a special
+        // with nothing behind it must still report.
+        assert_eq!(profanity.inherited, None);
+    }
+
+    #[test]
+    fn setting_a_special_leaves_the_inherited_value_visible_beside_it() {
+        let store = specials_store();
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        store.set_special(id, "user.christmas", "christmasy", 0.25).unwrap();
+        let rows = store.list_specials(id).unwrap();
+        let christmas = rows.iter().find(|r| r.class == "christmasy").unwrap();
+        assert_eq!(christmas.value, Some(0.25), "the listener's own value");
+        assert_eq!(christmas.inherited, Some(1.0), "and what it overrode, still readable");
+    }
+
+    #[test]
+    fn resetting_a_special_restores_the_inherited_value_rather_than_zeroing_it() {
+        let store = specials_store();
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        store.set_special(id, "user.christmas", "christmasy", 0.0).unwrap();
+        store.reset_special(id, "user.christmas", "christmasy").unwrap();
+        let rows = store.list_specials(id).unwrap();
+        let christmas = rows.iter().find(|r| r.class == "christmasy").unwrap();
+        assert_eq!(christmas.value, None, "Reset means 'no opinion', not 'definitely not'");
+        assert_eq!(christmas.inherited, Some(1.0));
+    }
+
+    #[test]
+    fn a_special_outside_zero_to_one_is_refused() {
+        let store = specials_store();
+        let id = "aaaaaaaa-0000-0000-0000-000000000001";
+        assert!(store.set_special(id, "user.christmas", "christmasy", 1.5).is_err());
+        assert!(store.set_special(id, "user.christmas", "christmasy", -0.1).is_err());
+    }
+
+    #[test]
+    fn a_library_with_no_occasions_registered_simply_offers_no_specials() {
+        // `historyable()` alone -- no `listener_occasions` table at all.
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
+        assert_eq!(store.list_specials("aaaaaaaa-0000-0000-0000-000000000001").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_recording_is_named_by_title_artist_and_album() {
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
+        let named = store.subject_naming("recording", "aaaaaaaa-0000-0000-0000-000000000001").unwrap();
+        assert_eq!(named.title.as_deref(), Some("A Song"));
+        assert_eq!(named.artist.as_deref(), Some("A Band"));
+        assert_eq!(named.album.as_deref(), Some("An Album"));
+    }
+
+    #[test]
+    fn an_artist_is_named_by_name_alone() {
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
+        let named = store.subject_naming("artist", "bbbbbbbb-0000-0000-0000-000000000001").unwrap();
+        assert_eq!(named.title.as_deref(), Some("A Band"));
+        assert_eq!(named.artist, None, "an artist is not its own credited artist");
+        assert_eq!(named.album, None);
+    }
+
+    #[test]
+    fn an_unknown_subject_is_named_by_nothing_rather_than_failing() {
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
+        assert_eq!(store.subject_naming("recording", "no-such-mbid").unwrap(), SubjectNaming::default());
+    }
+
+    #[test]
+    fn a_label_is_derived_from_the_characteristics_last_segment() {
+        assert_eq!(derived_label("user.christmas"), "Christmas");
+        assert_eq!(derived_label("mood_happy"), "Mood_happy");
+        assert_eq!(derived_label(""), "");
     }
 
     #[test]

@@ -134,6 +134,11 @@
     padding: .8rem 0; margin: .75rem 0; }
 .pref-heading { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
     color: var(--dim); font-weight: 600; margin: 0 0 .8rem; padding: 0 1rem; }
+/* "by <artist> from <album>" [SPEC-PREF-090] -- mixed case and not
+   letter-spaced, deliberately unlike `.pref-heading` above it: the title is
+   what is being edited, and these two only say which one it is. */
+.pref-subject { color: var(--dim); font-size: .8125rem; margin: -.6rem 0 .8rem;
+    padding: 0 1rem; }
 .pref-error { color: #c0392b; font-size: .875rem; margin: 0 0 .6rem; padding: 0 1rem; }
 /* Label, readout and Reset share a row; the slider itself gets a full-width
    row of its own underneath, flush with the panel's own edges -- the same
@@ -147,6 +152,16 @@
 .pref-readout { color: var(--dim); font-variant-numeric: tabular-nums;
     white-space: nowrap; font-size: .8125rem; }
 .pref-reset { font-size: .75rem; padding: .2rem .5rem; }
+/* The specials [SPEC-PREF-080] reuse `.pref-field` wholesale, so they need
+   no styling of their own -- only the rule that divides them from the three
+   tuning sliders above, and the heading that names them. The top border is
+   here rather than on `.pref-field:last-of-type`, which stays borderless:
+   `last-of-type` is scoped to `.pref-specials` for these rows, so the last
+   special closes the panel as cleanly as Preference used to. */
+.pref-specials { border-top: 1px solid var(--line); margin-top: .5rem;
+    padding-top: .5rem; }
+.pref-section { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); font-weight: 600; margin: 0 0 .2rem; padding: 0 1rem; }
 .pref-actions { margin-top: .8rem; padding: 0 1rem; text-align: right; }
 .pref-actions button { margin-left: .5rem; }
 

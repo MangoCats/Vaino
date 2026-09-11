@@ -866,6 +866,44 @@ fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError> {
             }
         }
     }
+
+    // The listener's own hand-set values, laid over the inherited ones
+    // `[SPEC-PREF-085]`. Last, and replacing rather than adding to what
+    // `flavor` said: a person who marked a recording "not a Christmas song"
+    // after the migration decided it was one has to win, or the panel would
+    // accept an edit the engine then ignored. A row here for a
+    // characteristic no curve covers is skipped by the same
+    // `curves.contains_key` test the pass above uses -- an occasion can be
+    // retired from the registry without its tagging having to be deleted
+    // first.
+    //
+    // A missing table is not an error, for the same reason a missing
+    // `listener_occasions` is not: an installation that has never set a
+    // special simply has none to lay over.
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT subject_id, characteristic, class, value FROM listener_characteristics          WHERE subject_kind = 'recording'",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?,
+            ))
+        }) {
+            for (subject, ch, cl, v) in rows.flatten() {
+                let key = (ch, cl);
+                if !curves.contains_key(&key) {
+                    continue;
+                }
+                let entry = values.entry(subject).or_default();
+                match entry.iter_mut().find(|(k, _)| *k == key) {
+                    Some(slot) => slot.1 = v,
+                    None => entry.push((key, v)),
+                }
+            }
+        }
+    }
     Ok(Occasions::new(curves, values))
 }
 
@@ -1194,6 +1232,77 @@ mod tests {
         let (_, a) = w.iter().find(|(e, _)| e.passage_id == 1).unwrap();
         // value 0.5 against a x5.0 curve: 1 + 0.5*(5-1) = 3.0
         assert!((a.occasion - 3.0).abs() < 1e-9, "occasion {}", a.occasion);
+    }
+
+    /// The listener said "not really a Christmas song" about a recording the
+    /// MuLibPlay migration tagged as one `[SPEC-PREF-085]`. Their value has
+    /// to win, or the preference panel would accept an edit the engine then
+    /// quietly ignored.
+    #[test]
+    fn a_listener_set_special_overrides_the_inherited_flavor_value() {
+        let c = fixture();
+        c.execute_batch(
+            "CREATE TABLE listener_characteristics (subject_kind TEXT, subject_id TEXT,
+                 characteristic TEXT, class TEXT, value REAL, updated_at TEXT);
+             INSERT INTO listener_occasions VALUES ('user.christmas','christmasy','step');
+             INSERT INTO listener_occasion_points VALUES
+                 ('user.christmas','christmasy',1,1,0.000001),
+                 ('user.christmas','christmasy',12,1,5.0);
+             INSERT INTO flavor VALUES ('recording','rec-a','user.christmas','christmasy',
+                 1.0,'inherited:mulib',NULL);
+             INSERT INTO listener_characteristics VALUES ('recording','rec-a',
+                 'user.christmas','christmasy',0.5,'now');",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        let dec = 1_796_904_000; // 10 December 2026
+        let (_, a) = d.weigh_all(dec).into_iter().find(|(e, _)| e.passage_id == 1).unwrap();
+        // The listener's 0.5, not the migration's 1.0: 1 + 0.5*(5-1) = 3.0,
+        // where the inherited value alone would have given 5.0.
+        assert!((a.occasion - 3.0).abs() < 1e-9, "occasion {}", a.occasion);
+    }
+
+    /// Tagging something the migration never knew about -- the ordinary case
+    /// for music added since, and the only case there is for a special
+    /// `flavor` carries no values for at all (profanity).
+    #[test]
+    fn a_listener_set_special_applies_where_flavor_had_nothing() {
+        let c = fixture();
+        c.execute_batch(
+            "CREATE TABLE listener_characteristics (subject_kind TEXT, subject_id TEXT,
+                 characteristic TEXT, class TEXT, value REAL, updated_at TEXT);
+             INSERT INTO listener_occasions VALUES ('user.christmas','christmasy','step');
+             INSERT INTO listener_occasion_points VALUES
+                 ('user.christmas','christmasy',12,1,5.0);
+             INSERT INTO listener_characteristics VALUES ('recording','rec-a',
+                 'user.christmas','christmasy',1.0,'now');",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        let dec = 1_796_904_000;
+        let w = d.weigh_all(dec);
+        let (_, a) = w.iter().find(|(e, _)| e.passage_id == 1).unwrap();
+        let (_, b) = w.iter().find(|(e, _)| e.passage_id == 2).unwrap();
+        assert!((a.occasion - 5.0).abs() < 1e-9, "occasion {}", a.occasion);
+        assert_eq!(b.occasion, 1.0, "an untagged recording is still untouched");
+    }
+
+    /// A value for a characteristic no curve covers is skipped, exactly as
+    /// the `flavor` pass skips one -- so retiring an occasion from the
+    /// registry does not require deleting the tagging first.
+    #[test]
+    fn a_listener_set_value_for_an_unregistered_characteristic_is_ignored() {
+        let c = fixture();
+        c.execute_batch(
+            "CREATE TABLE listener_characteristics (subject_kind TEXT, subject_id TEXT,
+                 characteristic TEXT, class TEXT, value REAL, updated_at TEXT);
+             INSERT INTO listener_characteristics VALUES ('recording','rec-a',
+                 'user.christmas','christmasy',1.0,'now');",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        assert_eq!(d.occasion_count(), 0);
+        assert!(d.weigh_all(NOW).iter().all(|(_, x)| x.occasion == 1.0));
     }
 
     /// Ordinary flavor characteristics are not seasons and must not be taken
