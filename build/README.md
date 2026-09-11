@@ -72,7 +72,7 @@ happened to be checked out, which is not the same claim as "this is commit
 that tree in front of them at the time.
 
 So: **commit before running a deploy** (`build/deploy-local.sh`,
-`build/deploy-vainopi.sh`, `build/deploy-everywhere.sh`), even to a feature
+`build/deploy-appliance.sh`, `build/deploy-everywhere.sh`), even to a feature
 branch nowhere near ready to merge to `main`. The commit doesn't need to be
 merged, or even good enough to survive review — it only needs to exist, so
 that six weeks from now "what was actually running when this was tested"

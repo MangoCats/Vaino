@@ -4,8 +4,8 @@
 #
 #     build/update-source-host.sh sw@teacherslounge /home/sw/Dev/Vaino
 #
-# Why this is not another host in deploy-vainopi.sh's list: the appliances are
-# aarch64 and are sent a cross-compiled binary by VainoPi/deploy-player.sh,
+# Why this is not another host in deploy-appliance.sh's list: the appliances
+# are aarch64 and are sent a cross-compiled binary by build/install-player.sh,
 # which refuses outright anything that is not aarch64. A source host is a
 # different shape -- its own architecture, its own toolchain, a git checkout,
 # and usually no service at all -- so there is nothing to scp and nothing to

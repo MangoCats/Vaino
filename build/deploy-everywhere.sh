@@ -14,13 +14,20 @@
 #
 #   APPLIANCES are aarch64 and run a service. They are sent a cross-compiled
 #   binary and restarted, and they are verified by asking the RUNNING player
-#   what it is -- which is the only thing that can catch a service still
-#   serving an older binary than the one now on disk `[SPEC-APS-140]`.
+#   what it is -- the only thing that can catch a service still serving an
+#   older binary than the one now on disk `[SPEC-APS-140]`.
+#
+#   That check is necessary and was not sufficient. It is structurally blind
+#   to the inverse case -- where the disk is RAM -- because it passes
+#   precisely when the ephemeral copy is the one running. Five days of
+#   deploys to bose were verified green this way and evaporated at the next
+#   reboot `[IMPL-BOS-185]`. So an overlay-rooted appliance is now ALSO
+#   checked for live-vs-durable agreement below `[GDE-DEP-070]`.
 #
 #   SOURCE HOSTS have their own architecture and toolchain and a git checkout,
 #   and usually nothing running at all. They pull and rebuild, and are verified
 #   by asking the BUILT BINARY what commit it is. Sending one a cross-compiled
-#   aarch64 binary is not merely wrong, it is refused: deploy-player.sh checks.
+#   aarch64 binary is not merely wrong, it is refused: install-player.sh checks.
 #
 # A source host pulls from the git remote rather than from this machine, so
 # `update-source-host.sh` refuses if HEAD has not been pushed. It does not push
@@ -95,7 +102,7 @@ for host in $HOSTS; do
         "$ROOT/build/update-source-host.sh" "$host" "$checkout" || fail=$((fail + 1))
     else
         echo "== ${host#*@} ($host, appliance) =="
-        "$ROOT/build/deploy-vainopi.sh" "$host" || fail=$((fail + 1))
+        "$ROOT/build/deploy-appliance.sh" "$host" || fail=$((fail + 1))
     fi
 done
 
@@ -141,6 +148,21 @@ for host in $HOSTS; do
         answer=$(ssh -o ConnectTimeout=5 "$host"             "cd '$checkout' && ./player/target/release/vaino --version" 2>/dev/null | head -1)
     else
         answer=$(ssh -o ConnectTimeout=5 "$host" "curl -s --max-time 3 http://localhost:$port/build" 2>/dev/null)
+        # And, on an overlay root, whether what is running is what will still
+        # be there after a reboot. Cheap: two checksums, no second build.
+        durable=$(ssh -o ConnectTimeout=5 "$host" '
+            L=$(findmnt -no OPTIONS / | tr "," "
+" | sed -n "s/^lowerdir=//p")
+            [ -n "$L" ] || { echo same; exit 0; }
+            a=$(md5sum /usr/local/bin/vaino 2>/dev/null | cut -d" " -f1)
+            b=$(sudo md5sum "$L/usr/local/bin/vaino" 2>/dev/null | cut -d" " -f1)
+            [ "$a" = "$b" ] && echo same || echo "EPHEMERAL live=$a durable=${b:-absent}"' 2>/dev/null)
+        case "$durable" in
+            same|"") ;;
+            *) printf '  %-*s : %s -- this deploy would NOT survive a reboot
+'                    "$width" "${host#*@}" "$durable" >&2
+               mismatch=$((mismatch + 1)) ;;
+        esac
     fi
     check_matches "${host#*@}" "$answer" || mismatch=$((mismatch + 1))
 done

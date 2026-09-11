@@ -238,7 +238,7 @@ Two details that are easy to get wrong and are not:
 
 The console offers it on the jobs page, and **the browser posts it, not the console's server** — the same allowance the handoff embed relies on `[SPEC-SUI-025]`. No Sampo process speaks to a Vaino process; a page in a tab asks a service on the same machine.
 
-**`[IMPL-SUI-079]` Deployed to the appliance 2026-08-20.** Cross-compiled and shipped by [`deploy-player.sh`](../VainoPi/deploy-player.sh), which proved the running process answers as the new build before keeping it. `POST /library/reload` returns **202** there and a snapshot caught the rebuild in flight — `reload_status: rebuilding`, then `rebuilt` — with the queue unmoved at 6 and the service active.
+**`[IMPL-SUI-079]` Deployed to the appliance 2026-08-20.** Cross-compiled and shipped by [`install-player.sh`](../build/install-player.sh) (then named `deploy-player.sh`, under `VainoPi/`), which proved the running process answers as the new build before keeping it. `POST /library/reload` returns **202** there and a snapshot caught the rebuild in flight — `reload_status: rebuilding`, then `rebuilt` — with the queue unmoved at 6 and the service active.
 
 Two observations from the appliance that are **not** about this change, and are worth separating from it:
 

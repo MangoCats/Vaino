@@ -38,9 +38,21 @@ matters as much.** Every script taking a `HOST` argument was checked, 2026-09-11
 | :--- | :--- | :--- | :--- |
 | `deploy-vainopi.sh` (build/) | yes | yes | **misnamed** — generic appliance deploy |
 | `deploy-player.sh` (VainoPi/) | yes | by folder | **misplaced** — generic installer |
-| `deploy.sh` (VainoPi/) | yes | by folder | **misplaced** — thin wrapper |
+| `deploy.sh` (VainoPi/) | yes | by folder | **misplaced** — see `[GDE-DEP-025]` |
 | `provision-bose.sh`, `finalize-bose.sh`, `build-bose-card.sh`, `seed-library.sh`, `attended-import.sh`, `request-unlock.sh` (BosePi/) | yes | yes | **correct** |
 | `deploy-everywhere.sh`, `deploy-local.sh`, `update-source-host.sh`, `verify-targets.sh` (build/) | n/a | no | **correct** |
+
+**`[GDE-DEP-025]` Correction, 2026-09-11: `deploy.sh` is not a thin wrapper.**
+An earlier revision of this document called it "a two-line wrapper over both"
+and proposed folding it away. Reading it first would have prevented that: it is
+~130 lines that build a *named ref* in a container-side git worktree without
+touching the caller's checkout, refuse a dirty tree, handle MSYS path
+translation, and cross-check the commit the appliance reports against the one
+requested. It overlaps `deploy-appliance.sh` in the no-ref case only.
+
+Whether those two should merge is a **consolidation** question, not a naming
+one, and it is left open deliberately rather than answered by a rename
+`[GDE-DEP-095]`.
 
 The BosePi scripts are parameterised but genuinely implement *bose's*
 procedure — its card layout, its lock-in, its library seed. A host argument is
@@ -71,20 +83,25 @@ and refuses to be typed by accident `[IMPL-BOS-120]`.
 
 ---
 
-## 4. Proposed names
+## 4. The names, applied 2026-09-11
 
-Proposed names are given as basenames; the directory is stated in the last
-column, deliberately, so this plan does not cite paths that do not exist yet
-and set `[GOV-DOC-040]`'s path check complaining about its own proposal.
+| was | is now |
+| :--- | :--- |
+| `deploy-vainopi.sh` (build/) | [`build/deploy-appliance.sh`](../build/deploy-appliance.sh) |
+| `deploy-player.sh` (VainoPi/) | [`build/install-player.sh`](../build/install-player.sh) |
+| `deploy.sh` (VainoPi/) | unchanged — `[GDE-DEP-025]` |
 
-| now | proposed basename | lands in |
-| :--- | :--- | :--- |
-| `deploy-vainopi.sh` (build/) | `deploy-appliance.sh` | `build/` — cross-compiles, then delegates |
-| `deploy-player.sh` (VainoPi/) | `install-player.sh` | `build/` — the installer, out of the machine folder |
-| `deploy.sh` (VainoPi/) | *fold into the above* | — a two-line wrapper over both |
+`vainopi` remains the default host, so existing invocations keep working; only
+the name and path changed. Every executable reference was updated in the same
+commit, and the documentation citations with them, because `[GOV-DOC-040]`'s
+path check makes a half-done rename fail rather than rot — the cost being
+visible up front is the point `[GDE-DEP-080]`.
 
-`vainopi` remains the default host for all three, so existing invocations keep
-working; only the name and path change.
+Historical records keep the name they were written with, annotated once:
+`PI008`'s bringup narrative and `IMPL003`'s 2026-08-20 deploy both still say
+`deploy-player.sh`, each with a pointer to where it went. Current-state specs
+(`SPEC034`, `PI005`) name today's script, because they describe today's
+system.
 
 ---
 
@@ -135,12 +152,41 @@ historical.
 
 ---
 
-## 7. Open
+## 7. Configuration, and what is still open
 
-**`[GDE-DEP-090]` Not yet decided: whether anything persists *configuration* to
-an overlay appliance.** `[IMPL-BOS-185]` fixed the binary path only. Unit files
-and `/etc` are still written by `provision-bose.sh` pre-lock-in and by nothing
-afterwards, so a unit change on a locked `bose` is a RAM write that looks
-correct until the next reboot — the failure that actually stopped the music.
-Whichever script grows that capability should be named for it, and this
-document's rules should be applied to it when it is written rather than after.
+**`[GDE-DEP-090]` Configuration now persists too, by the same rule.**
+[`build/install-config.sh`](../build/install-config.sh) puts one file on an
+appliance so that it is still there after a reboot: detect the root's actual
+filesystem, announce which kind it found, write the live copy and — on an
+overlay — the durable copy beneath it, then verify the **durable** one by
+checksum and report whether the lower layer could be returned to read-only.
+
+It closes the gap that mattered most. `[IMPL-BOS-185]` cost a binary, but what
+actually stopped the music was a *unit file* that reverted, and no tool existed
+to put one on a locked appliance at all. Used 2026-09-11 to restore `bose`'s
+`vaino.service` together with the `vaino-preflight` and `vaino-db-recover`
+helpers its `ExecStartPre` lines need — all three absent since the reboot, all
+three now verified across one. `vaino-db-recover` replayed an un-checkpointed
+4.1 MB WAL on `listener.db` the first time it ran, which is the clearest
+possible argument that a missing helper is not a cosmetic absence.
+
+**`[GDE-DEP-092]` Packages are still the manual case.** `install-config.sh`
+moves *files*. A package needs `overlayroot-chroot` and an `apt` run
+`[IMPL-BOS-180]`, which also needs a nameserver inside the chroot, because A's
+own `resolv.conf` is the NetworkManager stub. `sqlite3` remains absent from
+`bose` for this reason — recovery falls back to `python3` and says so, which is
+`[GOV-SRC-030]` working, but the preferred tool is still missing.
+
+**`[GDE-DEP-095]` Whether `deploy.sh` and `deploy-appliance.sh` should merge is
+open.** They overlap only when no ref is named `[GDE-DEP-025]`; `deploy.sh`
+additionally builds a named tag in a container-side worktree and cross-checks
+the reported commit. Consolidating them is a design decision about what the
+operator-facing entry point should be, and should not be settled by whoever
+next touches either file.
+
+**`[GDE-DEP-097]` `deploy.sh`'s final cross-check reads the live binary.** It
+asks `/usr/local/bin/vaino --version` over ssh, which on an overlay host is the
+ephemeral copy — the exact blind spot `[GDE-DEP-070]` names. It is not wrong
+today, because `install-player.sh` has already verified the durable copy by
+then, but it is the weaker of the two available checks and should read the
+durable one.

@@ -7,7 +7,7 @@
 #   VainoPi/deploy.sh pi@x                              latest, to a different host
 #
 # Wraps the two steps this used to mean doing by hand: cross-compiling
-# (build/README.md) and VainoPi/deploy-player.sh. Ends by asking the
+# (build/README.md) and build/install-player.sh. Ends by asking the
 # appliance which commit it is actually running and refusing to call it
 # done if the answer disagrees -- the same reason deploy-player.sh already
 # asks the running process to identify itself rather than trusting a
@@ -120,10 +120,10 @@ EOS
 fi
 
 echo "deploy: putting it on $HOST"
-# deploy-player.sh looks for the binary at a path relative to wherever it is
+# install-player.sh looks for the binary at a path relative to wherever it is
 # run from, not relative to itself -- so this only works run from anywhere
 # (including from inside VainoPi/ itself) because of the `cd` here.
-(cd "$REPO_ROOT" && "$HERE/deploy-player.sh" "$HOST") || die "deploy-player.sh failed; see above"
+(cd "$REPO_ROOT" && "$REPO_ROOT/build/install-player.sh" "$HOST") || die "install-player.sh failed; see above"
 
 # The checksum-and-restart above proves *a* new binary answers; this proves
 # it is the *right* one, by asking the same way a person checking by hand

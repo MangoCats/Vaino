@@ -117,7 +117,7 @@ which is exactly when a speaker is most likely to be absent.
 
 ## 3. Two things this work exposed
 
-**Currently:** `deploy-player.sh` polls the new build to a bounded deadline
+**Currently:** `install-player.sh` polls the new build to a bounded deadline
 instead of assuming it will have answered by a fixed sleep, and the
 appliance's `/etc/sudoers.d/` still carries the Raspberry Pi OS default
 (`pi ALL=(ALL) NOPASSWD: ALL`) alongside `vaino-btctl`'s narrow verb-set rule —

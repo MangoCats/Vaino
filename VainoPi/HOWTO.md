@@ -70,7 +70,7 @@ deploy: confirmed -- pi@vainopi is running 05d501191f16
 
 That hash is what the running binary itself reports back over SSH, not
 just what was uploaded — the same "ask the process, don't trust a
-checksum" check `deploy-player.sh` has always done, extended to also prove
+checksum" check `install-player.sh` has always done, extended to also prove
 it's the *commit you meant*. A build with local edits reports `+dirty` and
 still has to match; there is never a passing case where what's running and
 what you asked for silently differ. A build old enough to predate that
@@ -85,7 +85,7 @@ came back, and exits non-zero without pretending the deploy succeeded.
 
 ## Where to go next
 
-- `deploy-player.sh` — the lower-level script `deploy.sh` wraps; run it
+- `build/install-player.sh` — the lower-level script `deploy.sh` wraps (named `deploy-player.sh`, under `VainoPi/`, until 2026-09-11); run it
   directly if you've already built the binary some other way (e.g. by
   hand, per `build/README.md`) and just need it uploaded.
 - [PI001-image-and-partitions.md](PI001-image-and-partitions.md) — building the Pi image itself, not

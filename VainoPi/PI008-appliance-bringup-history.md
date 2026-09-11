@@ -139,7 +139,8 @@ motivated is no longer needed.
 From [PI005](PI005-appliance-library.md), 2026-08-20.
 
 **`[PI5-DEP-010]` The deploy script's health check had rotted, and rolled back
-a good binary.** `deploy-player.sh` waited `sleep 8` then asked the running
+a good binary.** `deploy-player.sh` (renamed to `build/install-player.sh` on
+2026-09-11 `[GDE-DEP-030]`) waited `sleep 8` then asked the running
 player to identify itself. That was true against the 31-file test library and
 false the moment the appliance held the real one: the Program Director is
 built at startup and takes **9.86 s** over 8,330 passages, so the web server

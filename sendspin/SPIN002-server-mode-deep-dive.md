@@ -4,7 +4,7 @@
 
 [SPIN001](SPIN001-protocol-and-integration-analysis.md) `[GDE-SPIN-110]` named Mode A — Vaino as its own Sendspin server, fanning the Director's own selection out to cheap synced receivers — as the option that preserves the most of what the Program Director is for, and the most protocol to build. This is what "the most protocol to build" actually contains, and what it would take to avoid building most of it.
 
-> **Related:** [SPIN001](SPIN001-protocol-and-integration-analysis.md) · [GUIDE007](../docs/GUIDE007-external-backends-investigation.md) for the sibling cost analysis and its feature-gate conclusion · [`VainoPi/deploy-player.sh`](../VainoPi/deploy-player.sh) for the "ship a finished artifact, run it as a unit" pattern this borrows
+> **Related:** [SPIN001](SPIN001-protocol-and-integration-analysis.md) · [GUIDE007](../docs/GUIDE007-external-backends-investigation.md) for the sibling cost analysis and its feature-gate conclusion · [`build/install-player.sh`](../build/install-player.sh) for the "ship a finished artifact, run it as a unit" pattern this borrows
 
 ---
 

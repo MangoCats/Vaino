@@ -154,7 +154,7 @@ capability the process could otherwise claim on its own. `libcap2-bin`
 nothing new to add for that part.
 
 Failing to bind :80 is logged and never fatal — the configured port is
-what everything else (the systemd unit, `deploy-player.sh`'s own
+what everything else (the systemd unit, `install-player.sh`'s own
 reachability check, every bookmark already saved) depends on, and must
 never wait on or be brought down by a convenience for a phone that would
 rather not type a port number. A desktop build, or a fresh appliance
@@ -163,7 +163,7 @@ failure and carry on serving its configured port exactly as before.
 
 **A capability is a file attribute on the specific inode, not the
 binary's name or path** — it does not survive the file being replaced,
-which is what every deploy does. Both `deploy-player.sh` (the primary
+which is what every deploy does. Both `install-player.sh` (the primary
 install *and* its rollback-to-`.prev` path — either can leave a freshly
 written file with no capability of its own) and `setup-vainopi.sh` (a
 fresh appliance build, checked idempotently via `getcap` so a re-run

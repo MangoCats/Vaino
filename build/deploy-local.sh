@@ -22,7 +22,7 @@ BIN="$ROOT/player/target/release/vaino.exe"
 die() { echo "deploy-local: $*" >&2; exit 1; }
 
 # A default invocation when none is given; anything the caller does pass is
-# used verbatim instead -- the same shape `VainoPi/deploy-player.sh` already
+# used verbatim instead -- the same shape `build/install-player.sh` already
 # uses for its own $HOST default.
 if [ "$#" -eq 0 ]; then
     # The split pair [IMPL-DBSPLIT-025], in the same shape both appliances'
@@ -64,7 +64,7 @@ LOG="$ROOT/player/target/release/vaino-local.log"
 echo "deploy-local: launching -- log at $LOG"
 ( cd "$ROOT" && nohup "$BIN" "$@" >"$LOG" 2>&1 & )
 
-# Polled, not a fixed wait -- the same reasoning `deploy-player.sh` already
+# Polled, not a fixed wait -- the same reasoning `install-player.sh` already
 # gives for not guessing a sleep duration against a program director whose
 # own startup time scales with library size.
 DEADLINE=${VAINO_DEPLOY_WAIT:-30}

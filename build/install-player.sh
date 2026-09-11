@@ -3,7 +3,7 @@
 #
 # Run from the repository root on the development machine:
 #
-#     VainoPi/deploy-player.sh [host]
+#     build/install-player.sh [host]
 #
 # Idempotent: running it twice with the same binary is a no-op after the first,
 # because it compares checksums before doing anything.

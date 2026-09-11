@@ -13,10 +13,15 @@ read-only*, which turned out to be a different question with sharper edges.
 
 ## 1. The short answer
 
-**`[IMPL-BOS-190]` Use `overlayroot-chroot`. Do not use the escape hatch.**
-For any persistent change to a locked card — a package, a binary, a unit file,
-anything under `/etc` — `overlayroot-chroot` writes through to A with no reboot
-`[IMPL-BOS-180]`. The escape hatch `[IMPL-BOS-160]` exists for a narrower case
+**`[IMPL-BOS-190]` Use the tool that writes both layers. Do not use the escape
+hatch.** For a **file** — a unit, anything under `/etc`, a helper script —
+[`build/install-config.sh`](../build/install-config.sh) is the tool: it detects
+the overlay, writes the live and durable copies, and verifies the durable one
+`[GDE-DEP-090]`. For a **package**, or anything needing a real root
+environment, `overlayroot-chroot` writes through to A with no reboot
+`[IMPL-BOS-180]`. The player binary is handled by
+[`build/install-player.sh`](../build/install-player.sh), which does the same
+two-layer write itself. The escape hatch `[IMPL-BOS-160]` exists for a narrower case
 than its own description claims, does not leave A writable `[IMPL-BOS-175]`,
 and took this appliance off the network when it was used for a package install.
 

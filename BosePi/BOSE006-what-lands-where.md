@@ -44,7 +44,7 @@ table: passages` with no catalogue at all. Restored 2026-09-11 by writing the
 split `ExecStart` to both A and the live overlay (originals kept as
 `.pre-split-revert`).
 
-`VainoPi/deploy-player.sh` now detects an overlay root on the target, reads its
+`build/install-player.sh` now detects an overlay root on the target, reads its
 `lowerdir`, and writes the binary to both layers — **after** the new binary has
 answered, so A always keeps the last build that actually started. Proven across
 a reboot: live and A both `ba3d3e95…`, `/build` reporting the deployed commit
