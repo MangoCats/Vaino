@@ -27,6 +27,15 @@ body { background-color: black; color: #ccc; }
 }
 .button, .pref-reset, .pref-cancel, .pref-save { background-color: #2010a0; color: #cccccc; }
 .buttonOn { background-color: #d0a000; color: #111111; }
+/* Skip, acknowledged -- the same gold on black, and the same 700 ms, as the
+   queue verbs `[REQ-VIS-185]`. One gesture should not report itself two ways
+   depending on which control took it.
+   Scoped to `[data-cmd]` so it cannot reach the station buttons, whose own
+   class `lit()` rewrites wholesale on every snapshot. Play and Pause are not
+   flashed: they already wear `.buttonOn` for exactly this, and a second signal
+   over the top would be answering a question the gold has answered. */
+[data-cmd].acked { background-color: #d0a000; color: #111111; border-color: #ffd24d; }
+[data-cmd].failed { background-color: #7a1010; color: #ffdede; border-color: #c03030; }
 
 /* The listener-preference panel itself [REQ-VIS-290] -- an in-page block,
    not a dialog, in the original's own palette: the same border as every

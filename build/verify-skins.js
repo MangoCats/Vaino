@@ -260,12 +260,32 @@ async function run(skin) {
   }
 
   // The transport must be wired, and the picker populated from the catalogue.
-  window.document.querySelector('[data-cmd="skip"]').onclick();
+  const skipBtn = window.document.querySelector('[data-cmd="skip"]');
+  skipBtn.onclick();
+  // Skip is momentary -- no snapshot field reports that one happened -- so it
+  // carries the same receipt the queue verbs do, and for the same 700 ms. The
+  // class comes from core in every skin; whether it is drawn is each skin's
+  // own business, which is why this asserts the class and not a colour.
+  check(skipBtn.classList.contains('acked'),
+        'Skip must acknowledge the press: nothing else reports that it landed');
   // Volume must round-trip through the shared fader curve, not a per-skin copy.
   const vol = window.document.getElementById('volume');
   vol.value = 0.5;
   vol.oninput();
   vol.onchange();
+  // After the volume post, deliberately: the ordering check below reads
+  // `posted[1]` as the volume, and these presses would displace it.
+  //
+  // Play and Pause must NOT flash. `playing` already comes back in the snapshot
+  // and every skin draws it one way or another, so a second signal over the top
+  // would be answering a question already answered.
+  for (const cmd of ['play', 'pause']) {
+    const b = window.document.querySelector(`[data-cmd="${cmd}"]`);
+    if (!b) continue;
+    b.onclick();
+    check(!b.classList.contains('acked'),
+          `${cmd} reports itself through the snapshot and must not also flash`);
+  }
   const picker = window.document.querySelector('[data-skins]');
   const opts = picker ? picker.options.length : 0;
 
@@ -608,7 +628,9 @@ async function run(skin) {
   // The shared-control skin sends three: a remove, the same remove again to
   // prove the buttons still work after a snapshot, and a shift the stub
   // refuses so the failed state has something to report.
-  const expectedPosts = (gear ? (nowrow ? 7 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
+  // `+2` for the Play and Pause presses above, which exist to prove they do
+  // NOT flash; they still reach the engine like any other press.
+  const expectedPosts = 2 + (gear ? (nowrow ? 7 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
   if (!ok) failures++;

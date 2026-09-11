@@ -1011,6 +1011,27 @@ mod tests {
                 skin.name
             );
         }
+
+        // Skip gets the same receipt, because it is the one transport command
+        // with no state of its own: `playing` reports Play and Pause, and
+        // every skin already draws that, but nothing reports a skip.
+        //
+        // Named skins rather than all of them, deliberately. WinAmp declines:
+        // its bevel already presses in its own idiom, and core hands every
+        // skin the class either way, so opting out means styling nothing. The
+        // two that DO flash it are held to it here -- a half-applied
+        // convention is worse than either choice made whole.
+        assert!(
+            CORE.contains("MOMENTARY"),
+            "core.js no longer distinguishes a momentary command from a state"
+        );
+        for name in ["vaino", "mulibplay"] {
+            let skin = SKINS.iter().find(|s| s.name == name).expect("skin exists");
+            assert!(
+                skin.css.contains("[data-cmd].acked"),
+                "{name} flashes its queue verbs but not Skip, so one gesture                  reports itself two ways depending on which control took it"
+            );
+        }
     }
 
     /// `guide.js` only ever asks for routes the router serves, and only ever

@@ -366,6 +366,16 @@ const Vaino = (() => {
   const ACK_HOLD_MS = 700;
   const ACK_FAIL_MS = 1200;
 
+  // Commands that DO something once, rather than moving the player into a state
+  // the next snapshot will report. Only these are acknowledged: Play and Pause
+  // come back as `playing` and every skin already shows that, so flashing them
+  // as well would be a second answer to a question already answered.
+  //
+  // The class is all core contributes. Each skin decides whether to show it and
+  // in what colours -- Vaino and MuLibPlay flash Skip, WinAmp leaves it to the
+  // bevel its own idiom already presses.
+  const MOMENTARY = new Set(['skip']);
+
   function ack(b) {
     b.classList.remove('failed');
     b.classList.add('acked');
@@ -1061,7 +1071,27 @@ const Vaino = (() => {
     document.getElementById('app').innerHTML = html;
     // Buttons are wired centrally so no skin has to know a URL to be playable.
     for (const b of document.querySelectorAll('[data-cmd]')) {
-      b.onclick = () => post(`/command/${b.dataset.cmd}`);
+      b.onclick = () => {
+        // Momentary commands get the receipt the queue verbs get, and for the
+        // same reason: nothing in the snapshot says "a skip happened", so
+        // unlike Play and Pause -- whose effect comes back as `playing`, which
+        // every skin already draws one way or another -- Skip has no state of
+        // its own to show that the press landed.
+        //
+        // On click rather than on pointerdown, which is where the queue verbs
+        // raise theirs. There the early signal buys something: those buttons
+        // are rebuilt from snapshots and a press can outlive the element. This
+        // one is markup that is never replaced, so the click is both reliable
+        // and the exact moment the command is sent -- and a receipt that fires
+        // when the command does is the more honest of the two.
+        const momentary = MOMENTARY.has(b.dataset.cmd);
+        if (momentary) ack(b);
+        const sent = post(`/command/${b.dataset.cmd}`);
+        if (momentary) {
+          sent.then(r => { if (!r || r.ok === false) ackFailed(b); })
+              .catch(() => ackFailed(b));
+        }
+      };
     }
     for (const b of document.querySelectorAll('[data-skin]')) {
       b.onclick = () => setSkin(b.dataset.skin);

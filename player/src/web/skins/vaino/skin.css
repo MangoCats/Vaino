@@ -48,6 +48,15 @@
   button { font: inherit; padding: .5rem 1.1rem; border: 1px solid var(--line);
            background: transparent; color: inherit; border-radius: 6px; cursor: pointer; }
   button:hover { border-color: var(--dim); }
+  /* Skip, acknowledged -- the same inversion, and the same 700 ms, as the
+     queue verbs `[REQ-VIS-185]`. One gesture should not report itself two ways
+     depending on which control took it. Ink and paper simply trade places, so
+     the dark theme gets black on white and the light theme white on black
+     without either being spelled out twice.
+     Play and Pause are deliberately left alone: this skin chooses not to
+     invert them, and the transport's state is legible elsewhere on the page. */
+  [data-cmd].acked { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  [data-cmd].failed { background: #9b2226; color: #fff; border-color: #9b2226; }
   /* Two equal columns, so Underruns starts exactly at the half-way point
      however wide the page is. */
   .status { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem 1rem;
