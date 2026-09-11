@@ -223,6 +223,12 @@ def _amp():
     return analyze_amplitude
 
 
+def _orphans():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import passage_orphans  # noqa: E402
+    return passage_orphans
+
+
 def db_profile(path: str, window_ms: int = PROFILE_WINDOW_MS, sample_rate: int = 44100):
     """One decode, one windowed RMS envelope. `None` if the file would not
     decode. Returns `(envelope, window_ms)` -- the window travels with the
@@ -693,6 +699,12 @@ def commit_segments(conn, file_id: int, audio_md5: str, path: str,
         conn.execute(
             f"DELETE FROM passage_recordings WHERE passage_id IN ({','.join('?' * len(old))})", old)
         conn.execute("DELETE FROM passages WHERE file_id=?1", (file_id,))
+        # The cascade that NULLs listener references to these passages is a
+        # FOREIGN KEY, and a FOREIGN KEY does not cross an ATTACH boundary
+        # `[IMPL009 §7.7]`. In one file this finds nothing, because the
+        # cascade has already fired; on a split installation it is the only
+        # thing that does the work at all. The same call, either shape.
+        _orphans().clear(conn)
 
     boundary_src = "computed:segment-cascade@v1"
     identified = unidentified = 0

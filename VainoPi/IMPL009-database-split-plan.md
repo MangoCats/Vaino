@@ -225,6 +225,17 @@ listener_programs(program_id)` (C, so unaffected). Same shape, same
 conclusion below: nothing in the player enables `foreign_keys`, so this
 has never been enforced from playback, split or not.
 
+**And a third, found on 2026-09-10 when this prerequisite was actually
+built:** `player_state` (C) carries `passage_id REFERENCES
+passages(passage_id) ON DELETE SET NULL` as well — the resume point. Found
+the same way as the other two, by reading `sqlite_master` on the real local
+database rather than the Rust source, which is the third time that method
+has returned something the source does not say. The count in this section
+was two; it is three, and `[IMPL-DBSPLIT-060]`'s replacement clears all
+three. Losing this one silently would mean a resume point pointing at a
+passage a rescan had renumbered — the player would resume the wrong track,
+or none.
+
 **Whether this matters depends on who's asking, and the answer differs by
 environment:**
 
@@ -259,9 +270,24 @@ passage_id = NULL WHERE passage_id NOT IN (SELECT passage_id FROM
 passages)`-shaped step run by whichever of them deletes or renumbers a
 passage), matching the pattern `backup.rs::restore()` already uses for
 cross-database consistency it can't get from a database-level constraint.
-Not built, not needed for the work this document scopes, named here so it
-is a known prerequisite rather than a surprise when local's own split is
-eventually considered.
+
+**`[IMPL-DBSPLIT-060]` Built 2026-09-10** as `tools/passage_orphans.py`.
+One `clear(conn)` call, correct before a split as well as after: in a
+single file the cascade has already fired and it clears nothing; on a
+split pair opened so both halves are visible on one connection, it is the
+only thing that does the work. Wired into the two tools that actually
+delete passages — `segment_dao.py` (re-segmenting a file) and
+`repair_durations.py` (deleting phantoms) — and available as a CLI to
+sweep a database already damaged.
+
+`repair_durations.py` turned out never to have set `PRAGMA foreign_keys =
+ON` at all, so it is not in the eight listed above and its passage deletes
+have been orphaning listener references in a *single* file too, for as
+long as it has existed. The split did not create that bug; it would have
+made it universal. The local database was checked when this was built and
+carries zero orphans across all three columns, so nothing needed
+repairing — but that is luck about which tool has been run lately, not a
+property of the design.
 
 ---
 

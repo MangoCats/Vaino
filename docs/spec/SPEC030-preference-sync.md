@@ -179,21 +179,34 @@ newer values, silently. Observed live on 2026-09-10, a count against
 `pi@vainopi` failing once seconds after the service restarted and succeeding
 four times immediately after.
 
-**`[SPEC-PREF-155]` A split remote must be told where its catalogue is.**
-`[SPEC-PREF-110]`'s existence rule reads `artists`/`recordings`, which on a
-split installation `[IMPL-DBSPLIT-025]` are not in the listener database
-this tool otherwise talks to — and `run_remote_sql` opens exactly one path.
-So `--remote-library` names the second file, and the existence batch alone
-is addressed to it; everything else still goes to the listener database.
+**`[SPEC-PREF-155]` A split peer is addressed by two paths, and the
+positional one is the catalogue.** `[IMPL002 §7.4]` settled this before
+either was built: `sync_remote`/`sync_peers.remote` means a peer's
+**catalogue**, because `mesh_diff.py` wants that and only that, and the
+listener half is a nullable second value read as "the same file" when
+absent — true of every peer that has not split, so nothing already
+configured needs re-entering. This tool takes it as `--remote-listener`,
+and everything it reads and writes goes there; the existence check in
+`[SPEC-PREF-110]` is the one thing that genuinely wants the catalogue, and
+it is the one thing addressed to the positional argument.
 
-Without it the failure is silent and total: every existence query errors,
+Without it the failure is silent and total: `run_remote_sql` opens exactly
+one path, so every existence query against a split peer errors,
 `{"ok": False}` collapses to an empty set, every one-sided subject is filed
 `skip_missing`, and the tool reports a clean "nothing to do" while having
-synced nothing at all. Found live against `pi@vainopi` on 2026-09-10 —
-this document's own **Status** block records a live verification against
-that installation on 2026-09-04, which was true then and was quietly
-falsified when the appliance was split afterwards `[IMPL011]`. A
-verification is only as current as the shape of the thing verified.
+synced nothing at all. Found live against `pi@vainopi` on 2026-09-10.
+
+Two things had gone stale rather than been wrong when written. This
+document's own **Status** block records a live verification against that
+installation on 2026-09-04 — true then, quietly falsified when the
+appliance was split afterwards `[IMPL011]`; a verification is only as
+current as the shape of the thing it verified. And `[IMPL002 §7.4]`'s fix
+was *half* built: `sync_peers.remote_listener`, `sync_remote_listener` and
+`JobRunner.get_remote_listener()` all existed, with tests, and **nothing
+read them** — so `jobs.py`'s `sync-preferences` job, the one the console's
+own button runs, addressed a split peer's catalogue with queries only its
+listener half can answer. Storage without consumption looks exactly like a
+finished feature from the outside.
 
 ---
 

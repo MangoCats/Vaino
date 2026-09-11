@@ -30,11 +30,16 @@ side: only the rows that differ are ever patched, in either direction.
     python tools/sync_preferences.py <local_db> user@host:/path/to/vaino.db --commit
     python tools/sync_preferences.py <local_db> user@host:/path/to/vaino.db --commit --json
 
-A **split** remote needs `--remote-library /path/to/library.db` as well: the
-existence check in `[SPEC-PREF-110]` reads `artists`/`recordings`, which do
-not live in the listener database this otherwise talks to `[SPEC-PREF-155]`.
-Without it every one-sided subject is filed "missing on the other side" and
-nothing syncs at all.
+A **split** remote needs `--remote-listener /path/to/listener.db` as well.
+The positional `remote` is the peer's **catalogue**, which is what
+`[IMPL002 §7.4]` already established `sync_remote`/`sync_peers.remote` to
+mean for every tool that reaches a peer -- `mesh_diff.py` wants only that
+one. The listener half is the nullable second path, read as "the same file"
+when omitted, which is true of every peer that has not split. Without it on
+a peer that has, the existence check in `[SPEC-PREF-110]` asks the listener
+database for `artists`/`recordings`, gets nothing, and every one-sided
+subject is filed "missing on the other side" -- a clean "nothing to do"
+while nothing syncs `[SPEC-PREF-155]`.
 
 Rehearse by default: without `--commit`, nothing is written on either
 side -- only counts are reported. The remote write, when there is one,
@@ -533,11 +538,11 @@ def reload_local(port: int) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
-    ap.add_argument("remote", help="user@host:/path/to/vaino.db")
-    # A split remote keeps `artists`/`recordings` in a second file
-    # `[SPEC-PREF-155]`. Path only: the host is the remote's own.
-    ap.add_argument("--remote-library",
-                    help="path to the remote's library.db, if it is split")
+    ap.add_argument("remote", help="user@host:/path/to/vaino.db (the peer's catalogue)")
+    # The peer's listener half, where it has one `[IMPL002 §7.4]`,
+    # `[SPEC-PREF-155]`. Path only: the host is the `remote` argument's own.
+    ap.add_argument("--remote-listener",
+                    help="path to the remote's listener.db, if it is split")
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--port", type=int, default=int(os.environ.get("VAINO_PORT", "5720")))
     ap.add_argument("--json", action="store_true")
@@ -548,20 +553,29 @@ def main() -> int:
     if args.commit:
         conn.execute("PRAGMA busy_timeout = 60000")
 
+    # `remote` is the catalogue; the listener half is the same file unless
+    # this peer has split `[IMPL002 §7.4]`. Everything this tool reads and
+    # writes is listener-side except the existence check, which is the one
+    # thing that genuinely wants the catalogue.
+    catalogue = args.remote
+    listener = args.remote
+    if args.remote_listener:
+        listener = f"{args.remote.partition(':')[0]}:{args.remote_listener}"
+
     local = read_local_manifest(conn)
     local_specials = read_local_specials(conn)
     local_defs, local_has_label = read_local_definitions(conn)
-    remote = fetch_remote_manifest(args.remote)
+    remote = fetch_remote_manifest(listener)
     if remote is None:
-        result = {"ok": False, "error": f"could not reach {args.remote}"}
+        result = {"ok": False, "error": f"could not reach {listener}"}
         if args.json:
             print(json.dumps(result))
         else:
             say(f"error: {result['error']}")
         return 1
 
-    remote_specials = fetch_remote_specials(args.remote)
-    remote_defs, remote_has_label = fetch_remote_definitions(args.remote)
+    remote_specials = fetch_remote_specials(listener)
+    remote_defs, remote_has_label = fetch_remote_definitions(listener)
     # Unknown is not empty `[SPEC-PREF-150]`: syncing against a remote whose
     # specials could not be read would push local values over whatever is
     # actually there.
@@ -588,10 +602,6 @@ def main() -> int:
         if key not in remote_specials:
             remote_ids_by_kind["recording"].append(key[1])
     remote_ids_by_kind = {k: sorted(set(v)) for k, v in remote_ids_by_kind.items()}
-    # Same host, different file, where the remote is split.
-    catalogue = args.remote
-    if args.remote_library:
-        catalogue = f"{args.remote.partition(':')[0]}:{args.remote_library}"
     remote_known = {
         kind: remote_exists_batch(catalogue, kind, ids)
         for kind, ids in remote_ids_by_kind.items() if ids
@@ -647,7 +657,10 @@ def main() -> int:
             definitions_patch_sql_for(dplan["push"], local_defs, remote_has_label),
         )
         if patch:
-            ok = apply_remote(args.remote, patch)
+            # The patch is all listener tables, so it lands on the
+            # listener half -- and `apply_remote` restarts the service
+            # around it either way.
+            ok = apply_remote(listener, patch)
             if not ok:
                 result["ok"] = False
                 result["error"] = "remote push failed -- see stderr above"

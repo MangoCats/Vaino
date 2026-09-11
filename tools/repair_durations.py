@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import audio_duration  # noqa: E402
+import passage_orphans  # noqa: E402  -- [IMPL009 §7.7]'s cascade replacement
 
 # Below this, a difference is rounding rather than error. MP3 frame duration is
 # ~26 ms, so a second of slack is comfortably clear of encoder granularity.
@@ -131,6 +132,15 @@ def main() -> int:
         q = ",".join("?" * len(ids))
         con.execute(f"DELETE FROM passage_recordings WHERE passage_id IN ({q})", ids)
         con.execute(f"DELETE FROM passages WHERE passage_id IN ({q})", ids)
+        # This tool never set `PRAGMA foreign_keys = ON`, so the
+        # `ON DELETE SET NULL` cascade on the three listener references to
+        # `passages` has never fired here -- deleting a phantom passage has
+        # been leaving orphaned ids behind in one file too, not only after a
+        # split `[IMPL009 §7.7]`. Fixed for both shapes at once.
+        cleared = passage_orphans.clear(con)
+        if sum(cleared.values()):
+            print("cleared orphaned listener references: " +
+                  ", ".join(f"{t} {n}" for t, n in cleared.items() if n))
         print(f"deleted {len(ids)} phantom passages")
     elif phantom:
         print(f"{len(phantom)} phantom passages left in place "

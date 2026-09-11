@@ -522,6 +522,15 @@ class Runner:
         tools = os.path.dirname(os.path.abspath(__file__))
         argv = [sys.executable, os.path.join(tools, "sync_preferences.py"),
                 self.library, target, "--commit", "--json"]
+        # `[IMPL002 §7.4]`'s second path, finally consumed. The column and
+        # `get_remote_listener()` have existed since that review; nothing
+        # read them, so this job addressed a split peer's catalogue with
+        # queries only its listener half can answer and reported a clean
+        # "nothing to do" `[SPEC-PREF-155]`. `None` -- every peer that has
+        # not split -- passes nothing and behaves exactly as before.
+        listener = self.get_remote_listener()
+        if listener:
+            argv += ["--remote-listener", listener.partition(":")[2] or listener]
         self._run_single_stage(job_id, "sync", argv)
 
     def _mesh_resolve(self, job_id: int, target: str):
