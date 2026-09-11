@@ -97,13 +97,6 @@ GOV_DOC_010_OUTSTANDING = {
     "docs/spec/SPEC015-mpd-director.md",
     "docs/spec/SPEC035-mesh-library-sync.md",
     "docs/spec/SPEC036-framebuffer-touch-ui.md",
-    "VainoPi/IMPL001-appliance-setup.md",
-    "VainoPi/IMPL002-database-split.md",
-    "VainoPi/PI001-image-and-partitions.md",
-    "VainoPi/PI003-choosing-a-speaker.md",
-    "VainoPi/PI004-speaker-operation.md",
-    "BosePi/BOSE002-image-build.md",
-    "BosePi/BOSE003-build-procedure.md",
 }
 
 # Known, accepted tag collisions. Each entry is debt with a stated retirement
