@@ -22,8 +22,10 @@ the tension has to be stated rather than resolved by instinct — every
 addition below carries what it costs, and the ones that were rejected say
 why.
 
-> **Related:** [BOSE003](BOSE003-build-procedure.md) for how the image is
-> built · [BOSE005](BOSE005-power-loss-test.md) for the power cut this plan
+> **Related:** [BOSE009](BOSE009-image-update-runbook.md) for the order to
+> execute this in, the rollback at each step, and the three ways the first
+> draft of this document would have failed · [BOSE003](BOSE003-build-procedure.md)
+> for how the image is built · [BOSE005](BOSE005-power-loss-test.md) for the power cut this plan
 > reasons about · [PI025](../VainoPi/PI025-what-the-local-split-owes-vainopi.md)
 > for the same exercise done against `vainopi` · [IMPL001](../VainoPi/IMPL001-appliance-setup.md)
 > for the package list this proposes one addition to
@@ -195,7 +197,7 @@ diagnosing `bose` means improvising each time.
 | `vaino-vitals` | **yes** | Samples vital signs to a file that survives a wedge — needed most on the machine you cannot see |
 | `vaino-underruns` | **yes** | Reads the player's own underrun counters `[PI3-FOUND-200]`; underruns are an audio-path fact, not a Bluetooth one |
 | `vaino-startup-sample` | **yes** | Records what the player does for the first minutes after boot; boots are boots |
-| `vaino-wifi-revert` | **yes** | Both appliances are on `wlan0`; locking yourself out of a wireless box is not a `vainopi` privilege |
+| `vaino-wifi-revert` | **no** — see `[BOS-RUN-045]` | Hardware-neutral and beside the point: it is scheduled only by `vaino-btctl`, which is not being ported, so alone it is a script nothing calls |
 | `vaino-db-recover` | **on split** | `[BOS-IMG-045]`'s obligation, not optional once split |
 | `vaino-wait-sink` | no | Blocks until **PipeWire** has a sink; `bose` has no PipeWire and goes straight to ALSA via the HiFiBerry |
 | `vaino-btctl`, `-bt-agent`, `-hci-capture`, `-linkstate`, `-afh-seed`, `-radio-test`, `-speaker` | no | All Bluetooth. `bose`'s output is an I²S DAC |
@@ -206,6 +208,11 @@ diagnosing `bose` means improvising each time.
 resident — they run when invoked and exit. The rule in `[BOS-IMG-035]`
 admits them precisely: they are what a person needs to diagnose the machine
 when it will not play.
+
+`vaino-wifi-revert` was on this list in the first draft and has been removed
+`[BOS-RUN-045]`. "Hardware-neutral" was the wrong test: it is half of a
+mechanism whose other half is `vaino-btctl`, and half a safety mechanism is
+worse than none, because it looks like protection.
 
 ## 7. What stays different, even after all of this
 
@@ -242,8 +249,10 @@ differences left over are ones no runbook has to mention.
 ## 8. Open
 
 **`[BOS-IMG-070]`** None of this is applied. §2, §5 and §6 are independent
-and can be done in any order; §4 is a package to be taken whole or not at
-all.
+and individually reversible; §4 is a package to be taken whole or not at
+all. **The order is not free**, though: the build must be deployed before
+the split, or the old binary manufactures shadow tables on every boot
+`[BOS-RUN-035]`. [BOSE009](BOSE009-image-update-runbook.md) is the sequence.
 
 **`[BOS-IMG-075]`** The `python3` fallback in `remote_peek` will have no
 regular exerciser once `bose` has `sqlite3`. It is pinned by shape in

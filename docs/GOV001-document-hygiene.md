@@ -160,6 +160,7 @@ grep -rn "SPEC-PD" docs/
 | `[PI-OWE-*]` | Defects the local split found that vainopi already has, itemised so they land as one update | [PI025-what-the-local-split-owes-vainopi.md](../VainoPi/PI025-what-the-local-split-owes-vainopi.md) |
 | `[BOS-OPS-*]` | `bose` in service: the health baseline to compare against, the measurements that look alarming and are not, and the standing findings | [BOSE004-operating-health.md](../BosePi/BOSE004-operating-health.md) |
 | `[BOS-IMG-*]` | What to add to `bose`'s image and what to refuse, held to the Pi Zero 2W's memory budget | [BOSE008-image-update-plan.md](../BosePi/BOSE008-image-update-plan.md) |
+| `[BOS-RUN-*]` | Executing the `bose` update: order, rollback per step, and the failures found by trying to break the plan | [BOSE009-image-update-runbook.md](../BosePi/BOSE009-image-update-runbook.md) |
 | `[BOS-PWR-*]` | `bose`'s first hard power cut: what survived, and the card-renumbering and stale-clock findings the boot itself produced | [BOSE005-power-loss-test.md](../BosePi/BOSE005-power-loss-test.md) |
 | `[LOG-I*-*]` | Extraction iteration history & measured results (Route 3, distillation — not what ships) | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
 | `[LOG-FEX-*]` | Route 2 (Gaia/SVM chain reproduction) reverse-engineering and production validation — what ships | [LOG002-feature-reproduction-investigation.md](LOG002-feature-reproduction-investigation.md), [LOG003-feature-reproduction-verification.md](LOG003-feature-reproduction-verification.md) |
