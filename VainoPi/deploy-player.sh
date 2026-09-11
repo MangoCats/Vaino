@@ -35,11 +35,32 @@ esac
 ssh -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
     || die "$HOST is not reachable"
 
+# An overlay-rooted appliance needs the binary written TWICE: once to the live
+# overlay so the running service picks it up now, and once to the real lower
+# filesystem, or the deploy evaporates at the next reboot `[IMPL-BOS-185]`.
+# Every bose deploy between 2026-09-06 and this fix was RAM-only for exactly
+# this reason, and reported success every time, because the check below asks
+# the RUNNING process -- which was faithfully running the ephemeral copy.
+# vainopi has a plain rw root and takes none of this path.
+LOWER=""
+if [ "$(ssh "$HOST" "findmnt -no FSTYPE /" 2>/dev/null)" = "overlay" ]; then
+    LOWER=$(ssh "$HOST" "findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^lowerdir=//p'" 2>/dev/null)
+    [ -n "$LOWER" ] || die "overlay root on $HOST but no lowerdir found -- refusing to deploy blind"
+    echo "deploy: $HOST has an overlay root; will persist through $LOWER"
+fi
+
 LOCAL_SUM=$(md5sum "$BIN" | cut -d' ' -f1)
 REMOTE_SUM=$(ssh "$HOST" "md5sum $REMOTE 2>/dev/null | cut -d' ' -f1")
-if [ "$LOCAL_SUM" = "$REMOTE_SUM" ]; then
+# On an overlay host the live copy is evidence of nothing durable, so the
+# persisted copy is checked too and BOTH must match before this is a no-op.
+PERSIST_SUM=""
+[ -n "$LOWER" ] && PERSIST_SUM=$(ssh "$HOST" "sudo md5sum $LOWER$REMOTE 2>/dev/null | cut -d' ' -f1")
+if [ "$LOCAL_SUM" = "$REMOTE_SUM" ] && { [ -z "$LOWER" ] || [ "$LOCAL_SUM" = "$PERSIST_SUM" ]; }; then
     echo "deploy: already running this build ($LOCAL_SUM)"
     exit 0
+fi
+if [ -n "$LOWER" ] && [ "$LOCAL_SUM" = "$REMOTE_SUM" ]; then
+    echo "deploy: live copy is current but persisted copy is ${PERSIST_SUM:-absent} -- repairing"
 fi
 echo "deploy: $REMOTE_SUM -> $LOCAL_SUM"
 
@@ -77,6 +98,26 @@ for _ in $(seq 1 "$DEADLINE"); do
 done
 if [ "$CODE" = "204" ]; then
     echo "deploy: running, and answering as the new build"
+    # Persist ONLY now, never before. A binary that never answered must not
+    # become the one the appliance boots into, so the lower layer keeps the
+    # last build that actually started until this line is reached.
+    if [ -n "$LOWER" ]; then
+        ssh "$HOST" "sudo mount -o remount,rw $LOWER \
+            && sudo install -m 755 /tmp/vaino.new $LOWER$REMOTE \
+            && sudo /usr/sbin/setcap 'cap_net_bind_service=+ep' $LOWER$REMOTE \
+            && sudo sync" || die "could not write $LOWER$REMOTE -- this deploy is RAM-only"
+        PERSIST_SUM=$(ssh "$HOST" "sudo md5sum $LOWER$REMOTE 2>/dev/null | cut -d' ' -f1")
+        [ "$PERSIST_SUM" = "$LOCAL_SUM" ] \
+            || die "persisted copy is ${PERSIST_SUM:-absent}, expected $LOCAL_SUM"
+        echo "deploy: persisted to $LOWER$REMOTE ($PERSIST_SUM)"
+        # Best effort. The overlay holds its own lower layer, so this can
+        # legitimately return EBUSY -- say so rather than implying it is ro.
+        if ssh "$HOST" "sudo mount -o remount,ro $LOWER" 2>/dev/null; then
+            echo "deploy: $LOWER returned to read-only"
+        else
+            echo "deploy: WARNING -- $LOWER left read-write; it returns to ro on the next reboot" >&2
+        fi
+    fi
     ssh "$HOST" "systemctl is-active vaino; journalctl -u vaino -n 3 --no-pager | tail -3"
     exit 0
 fi
