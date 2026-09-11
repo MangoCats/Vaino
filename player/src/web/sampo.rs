@@ -25,13 +25,35 @@ use super::Ui;
 /// either configuring the other.
 const SAMPO_PORT: u16 = 5730;
 
-/// A socket question, not a route question -- the same shape
-/// `vaino_control.py::_vaino_reachable` asks in reverse.
-fn sampo_reachable() -> bool {
-    format!("127.0.0.1:{SAMPO_PORT}")
-        .parse()
-        .ok()
-        .map(|addr| std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok())
+/// Whether a Sampo is *serving*, which is not the same question as whether
+/// something holds the port.
+///
+/// This was a `TcpStream::connect_timeout` and that is precisely what made
+/// the failure it now prevents invisible. A socket check cannot tell a
+/// working console from a wedged one, so a dead-but-bound Sampo read as
+/// *absent*, `sampo_ensure` started another beside it, and the next click
+/// started a third -- each one binding the same address because
+/// `console.py` asked for `allow_reuse_address`, which on Windows permits
+/// exactly that. Measured on 2026-09-11: three consoles `LISTENING` on
+/// `127.0.0.1:5730`, every connection actively refused, and this endpoint
+/// answering `did not answer within 20s` forever after.
+///
+/// `/console.css` is a static asset served by `console.py`'s `do_GET`, so
+/// this reads no database -- a liveness question, the same shape and the
+/// same reasoning as `vaino_control.py::_vaino_has_sampo_support`'s
+/// `/review.js` probe in reverse.
+async fn sampo_reachable() -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1500))
+        .build()
+    else {
+        return false;
+    };
+    client
+        .get(format!("http://127.0.0.1:{SAMPO_PORT}/console.css"))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
         .unwrap_or(false)
 }
 
@@ -74,38 +96,70 @@ fn python() -> Option<&'static str> {
 /// Python to run it with, since offering a link neither `sampo_ensure`
 /// verb could ever satisfy would be worse than no link at all.
 pub(super) async fn sampo_available() -> Response {
-    let available = tokio::task::spawn_blocking(|| {
-        sampo_reachable() || (console_script().is_some() && python().is_some())
-    })
-    .await
-    .unwrap_or(false);
+    let launchable = tokio::task::spawn_blocking(|| console_script().is_some() && python().is_some())
+        .await
+        .unwrap_or(false);
+    let available = launchable || sampo_reachable().await;
     axum::Json(serde_json::json!({ "available": available })).into_response()
 }
 
 /// Start the co-resident Sampo console if one is not already there
-/// `[REQ-VIS-320]`, on *this* Vaino's own database path -- the same reason
+/// `[REQ-VIS-320]`, on *this* Vaino's own catalogue path -- the same reason
 /// `ensure_vaino` starts a fresh Vaino on Sampo's own database path in
 /// reverse: the link should open the same library this browse page is
-/// already showing, not a different one. Launched without `--root`
+/// already showing, not a different one. The catalogue half specifically,
+/// which is what Sampo is a browser for; see the call site for what handing
+/// it the listener half cost. Launched without `--root`
 /// (Vaino has no single "music folder" to offer -- only individual
 /// passage paths); Sampo's own console already treats that as a normal,
 /// supported case, with only its Folder view left empty (`HOWTO.md §5`).
 pub(super) async fn sampo_ensure(State(ui): State<Ui>) -> Response {
-    if sampo_reachable() {
+    if sampo_reachable().await {
         return axum::Json(serde_json::json!({ "ok": true, "port": SAMPO_PORT })).into_response();
     }
-    let db = ui.db.clone();
+    // `ui.library`, not `ui.db` `[PI-OWE-010]`. This passed the path *this*
+    // player was started with, which on a split installation is the listener
+    // half -- the same defect `vaino.rs`'s folder generators had, in the same
+    // shape, found the same way. Sampo survives being handed it (`vaino_db`
+    // finds the catalogue as a sibling) so nothing crashed; what changed was
+    // everything Sampo names after its database. Its job sidecar became
+    // `listener.console.db` instead of `library.console.db`, so a console
+    // launched from this page came up with no job history and, worse, an
+    // empty `remote_config` -- the configured peer simply absent, with no
+    // error to say so. Equal to `ui.db` on every unsplit installation, so
+    // this changes nothing there.
+    let db = ui.library.clone();
     let started = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let script = console_script()
             .ok_or_else(|| "no local Sampo console found (tools/console.py)".to_string())?;
         let py = python().ok_or_else(|| "no python3/python found on PATH".to_string())?;
+        // Sampo's own output, kept rather than discarded. Both streams went
+        // to `Stdio::null()`, which is why a console that refused to start
+        // said nothing at all and this endpoint's 20s timeout was the only
+        // evidence a person ever got. Beside the library, named like the
+        // other sidecars, truncated per launch -- the interesting run is
+        // always the one that just failed. `sampo-support` is desktop-only,
+        // so the directory is writable; if it somehow is not, launching
+        // still matters more than logging and this falls back to discarding.
+        // One handle, cloned -- two `File::create`s would each truncate and
+        // then write at their own offset, so the two streams would overwrite
+        // each other instead of interleaving.
+        let log = db
+            .parent()
+            .map(|d| d.join("sampo-launch.log"))
+            .and_then(|p| std::fs::File::create(p).ok())
+            .and_then(|f| f.try_clone().ok().map(|g| (f, g)));
+        let (out, err) = match log {
+            Some((f, g)) => (Stdio::from(f), Stdio::from(g)),
+            None => (Stdio::null(), Stdio::null()),
+        };
         Command::new(py)
             .arg(&script)
             .arg(&db)
             .arg("--port")
             .arg(SAMPO_PORT.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(out)
+            .stderr(err)
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("could not start sampo: {e}"))
@@ -119,14 +173,18 @@ pub(super) async fn sampo_ensure(State(ui): State<Ui>) -> Response {
     // startup time scales with library size.
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if sampo_reachable() {
+        if sampo_reachable().await {
             return axum::Json(serde_json::json!({ "ok": true, "port": SAMPO_PORT })).into_response();
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+    // Say where the reason is. The console now writes down why it refused to
+    // start (an occupied port, most often), and a message that does not point
+    // at that log sends a person back to guessing.
     axum::Json(serde_json::json!({
         "ok": false,
-        "error": "sampo did not answer within 20s of starting"
+        "error": "sampo did not answer within 20s of starting -- \
+                  see sampo-launch.log beside the library for what it said"
     }))
     .into_response()
 }

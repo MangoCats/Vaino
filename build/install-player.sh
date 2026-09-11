@@ -84,7 +84,13 @@ ssh "$HOST" "md5sum /tmp/vaino.new | grep -q $LOCAL_SUM" \
 #
 # A binary predating `--version` (421f7c1) answers nothing; that is not a
 # dirty build and is allowed through, the same judgement `deploy.sh` makes.
-STAGED_VER=$(ssh "$HOST" "/tmp/vaino.new --version" 2>/dev/null | head -1)
+# `scp` stages at 0644, so this must be made executable before it can be
+# asked anything. Found the hard way: without the chmod the query returned
+# "Permission denied", the empty result was read as "predates --version", and
+# the guard reported itself skipped for a reason it had never checked -- a
+# check excusing its own failure, which is the fault this file exists to stop.
+ssh "$HOST" "chmod 755 /tmp/vaino.new" || die "could not make the staged binary executable"
+STAGED_VER=$(ssh "$HOST" "/tmp/vaino.new --version 2>/dev/null" | head -1)
 case "$STAGED_VER" in
     *+dirty*)
         if [ "${ALLOW_DIRTY:-}" != "1" ]; then
@@ -93,7 +99,11 @@ case "$STAGED_VER" in
         fi
         echo "deploy: WARNING -- installing a DIRTY build ($STAGED_VER) because ALLOW_DIRTY=1" >&2
         ;;
-    "") echo "deploy: staged binary does not self-report a version (predates 421f7c1); dirty-check skipped" ;;
+    "")
+        # Genuinely silent, having been made runnable above: a build older than
+        # `--version` (421f7c1). Distinguished from "could not run it", which
+        # now fails loudly rather than passing as this case.
+        echo "deploy: staged binary runs but reports no version (predates 421f7c1); dirty-check not applicable" ;;
     *)  echo "deploy: staged binary reports $STAGED_VER" ;;
 esac
 

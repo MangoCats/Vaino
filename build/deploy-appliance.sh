@@ -53,14 +53,21 @@ die() { echo "deploy: $*" >&2; exit 1; }
 # command you happened to type. Merging forces one answer; this preserves what
 # the fleet runs today rather than changing behaviour inside a merge.
 #
-# It is probably the WRONG answer, and is left visible rather than settled
-# quietly. `[SPEC-SUI-196]` states the gate exists "so an appliance build never
-# resolves or compiles an HTTP client it will never call", and `[SPEC-SUI-190]`
-# measured the appliance binary ~200 KB smaller without it -- yet `/review`
-# answers 200 on both bose and vainopi today, so both carry a reqwest/rustls
-# stack they never call. Changing that alters what runs on both appliances,
-# which is a decision rather than a cleanup: see `[GDE-DEP-098]`.
-FEATURES="${VAINO_FEATURES:---features sampo-support}"
+# Settled 2026-09-11 in favour of the documented design `[GDE-DEP-098]`:
+# appliances build WITHOUT it. `[SPEC-SUI-196]` states the gate exists "so an
+# appliance build never resolves or compiles an HTTP client it will never
+# call", and `[SPEC-SUI-190]` measured the binary ~200 KB smaller without it.
+#
+# The deciding argument was not size. On `bose` the catalogue is read-only
+# twice over -- `/srv/library` mounted `ro`, and `attach_library()` attaching
+# it `mode=ro` by construction -- while `record_review` and `edit_review` both
+# write through the catalogue. So `/review` and `/edit` served a page, took
+# input, and could not save it: a UI that looks like it works and does not,
+# which is worse than a 404.
+#
+# Set `VAINO_FEATURES="--features sampo-support"` to put it back for a host
+# that can actually write its catalogue.
+FEATURES="${VAINO_FEATURES:-}"
 
 docker info >/dev/null 2>&1 \
     || die "Docker is not running -- start Docker Desktop (or dockerd) and try again"

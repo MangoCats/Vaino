@@ -29,6 +29,7 @@ Three views:
 
 import argparse
 import html
+import http.client
 import json
 import os
 import socketserver
@@ -54,6 +55,35 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # `[SPEC-SUI-170]` may start the player: colliding would make each look like
 # the other's failure.
 DEFAULT_PORT = 5730
+
+
+def already_serving(port: int, timeout: float = 2.0) -> bool:
+    """Whether a console is already answering on `port`.
+
+    Asked as an HTTP question, not a socket one, for the same reason
+    `vaino_control._vaino_has_sampo_support` asks its own in HTTP: a socket
+    that accepts proves a process holds the port, not that it serves this
+    console. `/console.css` is a static asset -- it reads no database, so
+    this stays a liveness question rather than a library one.
+
+    Starting a second console on a port the first one owns is refused rather
+    than attempted `[REQ-VIS-320]`. On Windows it would otherwise *succeed*
+    and leave two live listeners on one address, which is how a Vaino
+    launching this console ends up reporting `did not answer within 20s`
+    while several consoles sit there bound.
+    """
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.request("GET", "/console.css")
+            r = conn.getresponse()
+            r.read()  # drain -- the body is never inspected, only the status
+            return r.status < 400
+        finally:
+            conn.close()
+    except OSError:
+        return False
+
 
 # 71 (characteristic, class) pairs across 18 characteristics is a complete
 # vector `[SPEC-SA-040]`. Measured on the four reference tracks, and the number
@@ -1061,7 +1091,16 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # POSIX needs this to rebind a port still in `TIME_WAIT` from the previous
+    # run. Windows means something else entirely by the same flag: there it
+    # permits a *second live* socket to bind an address another process is
+    # already listening on, silently, and then routes connections between them
+    # unpredictably. Measured on 2026-09-11 -- four consoles bound
+    # `127.0.0.1:5730` at once, and in the state that started this
+    # investigation three were `LISTENING` while every connect was refused
+    # outright. `already_serving()` is the deliberate check that replaces it;
+    # this flag must not be the thing that decides.
+    allow_reuse_address = os.name != "nt"
 
 
 def main() -> int:
@@ -1074,6 +1113,13 @@ def main() -> int:
 
     if not os.path.isfile(args.db):
         print(f"no such database: {args.db}", file=sys.stderr)
+        return 1
+    # Before the database, because opening it is the expensive half and this
+    # is the likelier failure: a console is usually already running.
+    if already_serving(args.port):
+        print(f"a console is already serving on 127.0.0.1:{args.port} -- "
+              f"open http://127.0.0.1:{args.port}/ , or use --port for a second one",
+              file=sys.stderr)
         return 1
     STATE["db"] = ro(args.db)
     STATE["path"] = os.path.abspath(args.db)
