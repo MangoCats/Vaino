@@ -493,7 +493,7 @@ impl Session {
     fn publish_pool(&self) {
         let Some(c) = self.census() else { return };
         let total = c.eligible + c.artist_blocked + c.recording_blocked + c.related_blocked
-            + c.below_min_weight + c.filtered;
+            + c.work_blocked + c.below_min_weight + c.filtered;
         if let Ok(mut ctl) = self.controls.lock() {
             ctl.pool = Some((c.eligible, total));
         }

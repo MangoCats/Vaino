@@ -151,10 +151,15 @@ pub struct Decision {
 /// from its result alone.
 #[derive(Debug, Clone)]
 pub struct QueuedNote {
-    mbid: String,
+    passage_id: i64,
+    prev_passage: Option<i64>,
+    mbid: Option<String>,
     prev_recording: Option<i64>,
     artist: Option<String>,
     prev_artist: Option<i64>,
+    /// One entry per work the recording performs `[GDE-WRK-070]`, each with
+    /// the stamp that was there before.
+    works: Vec<(String, Option<i64>)>,
 }
 
 pub struct Director {
@@ -167,6 +172,15 @@ pub struct Director {
     last_played: HashMap<String, i64>,
     // (see `QueuedNote` for why the previous values are handed back)
     artist_last_played: HashMap<String, i64>,
+    /// recording → the works it performs `[GDE-WRK-035]`. Empty when the
+    /// catalogue predates `recording_works`, which leaves the work tier
+    /// inactive and the recording tier doing what it always did.
+    works_of: HashMap<String, Vec<String>>,
+    /// The narrowest identity tier and the widest, beside the recording tier
+    /// `last_played` already carries. A passage without a recording MBID has
+    /// only the first `[GDE-WRK-055]`.
+    passage_last_played: HashMap<i64, i64>,
+    work_last_played: HashMap<String, i64>,
     /// When each recording was last skipped, and last removed from the queue
     /// unheard `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`. Separate maps from
     /// `last_played` on purpose: a rejection suppresses and does nothing else,
@@ -241,26 +255,72 @@ impl Director {
 
         let artist_of: HashMap<String, String> = map_query(conn, "SELECT mbid, artist_mbid FROM __LIB__.recording_artists")?;
 
+        // A library built before `[GDE-WRK-035]` has no `recording_works`. The
+        // work tier is then inactive -- which is the behaviour that shipped for
+        // years, so it is safe -- but it must say so rather than look like a
+        // library that simply has no works `[GDE-DEP-060]`: those two states
+        // produce identical selection and only one of them is expected.
+        let mut works_of: HashMap<String, Vec<String>> = HashMap::new();
+        match conn.prepare("SELECT mbid, work_mbid FROM __LIB__.recording_works") {
+            Ok(mut stmt) => {
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .map_err(q)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(q)?;
+                for (mbid, work) in rows {
+                    works_of.entry(mbid).or_default().push(work);
+                }
+            }
+            Err(e) => eprintln!(
+                "director: no recording_works ({e}); same-song blocking is \
+                 limited to the recording tier [GDE-WRK-035]"
+            ),
+        }
+
         let mut last_played = HashMap::new();
         let mut artist_last_played: HashMap<String, i64> = HashMap::new();
+        let mut passage_last_played: HashMap<i64, i64> = HashMap::new();
+        let mut work_last_played: HashMap<String, i64> = HashMap::new();
+        // Per play row, not grouped by mbid: the passage tier needs the
+        // passage, and an unidentified passage has no mbid to group by at all.
         let mut stmt = conn
-            .prepare(
-                "SELECT mbid, MAX(played_at) FROM listener_play_history \
-                 WHERE mbid IS NOT NULL GROUP BY mbid",
-            )
+            .prepare("SELECT passage_id, mbid, played_at FROM listener_play_history")
             .map_err(q)?;
+        // **Both columns are nullable**, and on the live listener database 52
+        // of 37,763 rows carry a null `passage_id` -- `player_store.rs` declares
+        // it `INTEGER` with no NOT NULL, so a play can be recorded against a
+        // recording alone. Reading it as `i64` made `Director::load` fail
+        // outright, which no fixture caught because every fixture row has one.
         let plays = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Option<i64>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })
             .map_err(q)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(q)?;
         drop(stmt);
-        for (mbid, at) in plays {
-            if let Some(a) = artist_of.get(&mbid) {
-                let e = artist_last_played.entry(a.clone()).or_insert(at);
+        let bump = |m: &mut HashMap<String, i64>, k: &str, at: i64| {
+            let e = m.entry(k.to_string()).or_insert(at);
+            *e = (*e).max(at);
+        };
+        for (passage_id, mbid, at) in plays {
+            if let Some(passage_id) = passage_id {
+                let e = passage_last_played.entry(passage_id).or_insert(at);
                 *e = (*e).max(at);
             }
-            last_played.insert(mbid, at);
+            let Some(mbid) = mbid else { continue };
+            if let Some(a) = artist_of.get(&mbid) {
+                bump(&mut artist_last_played, a, at);
+            }
+            for w in works_of.get(&mbid).into_iter().flatten() {
+                bump(&mut work_last_played, w, at);
+            }
+            bump(&mut last_played, &mbid, at);
         }
 
         let mut relations: HashMap<String, Vec<(String, f64)>> = HashMap::new();
@@ -345,6 +405,9 @@ impl Director {
             artist_of,
             last_played,
             artist_last_played,
+            works_of,
+            passage_last_played,
+            work_last_played,
             relations,
             occasions,
             flavor,
@@ -469,7 +532,20 @@ impl Director {
                     depth_s: row.entry.start_ms as f64 / 1000.0,
                     recording,
                     artist,
+                    passage_age_s: self
+                        .passage_last_played
+                        .get(&row.entry.passage_id)
+                        .map(|at| (now - at).max(0) as f64),
                     recording_age_s: mbid.and_then(|m| self.age(&self.last_played, m, now)),
+                    // The most recent across every work it performs
+                    // `[GDE-WRK-038]`: a medley that played five minutes ago
+                    // must not be softened by another of its works being cold.
+                    work_age_s: mbid
+                        .and_then(|m| self.works_of.get(m))
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|w| self.age(&self.work_last_played, w, now))
+                        .min_by(f64::total_cmp),
                     skip_age_s: mbid.and_then(|m| self.age(&self.last_skipped, m, now)),
                     dequeue_age_s: mbid.and_then(|m| self.age(&self.last_dequeued, m, now)),
                     artist_age_s: artist_id
@@ -490,30 +566,50 @@ impl Director {
     /// would happily queue five recordings by one artist, because every pick
     /// would weigh against the same stale history.
     pub fn note_queued(&mut self, passage_id: i64, at: i64) -> Option<QueuedNote> {
-        let mbid = self
-            .rows
-            .iter()
-            .find(|r| r.entry.passage_id == passage_id)
-            .and_then(|r| r.mbid.clone())?;
-        let artist = self.artist_of.get(&mbid).cloned();
-        // Both previous values are kept so the note can be taken back exactly.
+        // A passage the Director does not carry cannot be noted; one it carries
+        // without an MBID still can, and must be. Returning `None` for the
+        // unidentified case is what let such a passage repeat freely
+        // `[GDE-WRK-055]`.
+        let row = self.rows.iter().find(|r| r.entry.passage_id == passage_id)?;
+        let mbid = row.mbid.clone();
+        let artist = mbid.as_ref().and_then(|m| self.artist_of.get(m)).cloned();
+        let works: Vec<String> = mbid
+            .as_ref()
+            .and_then(|m| self.works_of.get(m))
+            .cloned()
+            .unwrap_or_default();
+        // Every previous value is kept so the note can be taken back exactly.
         // `max` is not invertible: without the old value, undoing a note would
         // have to guess, and guessing at rotation history is how a recording
         // that never played ends up suppressed.
         let note = QueuedNote {
+            passage_id,
+            prev_passage: self.passage_last_played.get(&passage_id).copied(),
             mbid: mbid.clone(),
-            prev_recording: self.last_played.get(&mbid).copied(),
+            prev_recording: mbid.as_ref().and_then(|m| self.last_played.get(m).copied()),
             artist: artist.clone(),
             prev_artist: artist
                 .as_ref()
                 .and_then(|a| self.artist_last_played.get(a).copied()),
+            works: works
+                .iter()
+                .map(|w| (w.clone(), self.work_last_played.get(w).copied()))
+                .collect(),
         };
+        let e = self.passage_last_played.entry(passage_id).or_insert(at);
+        *e = (*e).max(at);
         if let Some(a) = artist {
             let e = self.artist_last_played.entry(a).or_insert(at);
             *e = (*e).max(at);
         }
-        let e = self.last_played.entry(mbid).or_insert(at);
-        *e = (*e).max(at);
+        for w in works {
+            let e = self.work_last_played.entry(w).or_insert(at);
+            *e = (*e).max(at);
+        }
+        if let Some(m) = mbid {
+            let e = self.last_played.entry(m).or_insert(at);
+            *e = (*e).max(at);
+        }
         Some(note)
     }
 
@@ -525,13 +621,31 @@ impl Director {
     /// and its artist for a full rotation on the strength of a play that never
     /// happened.
     pub fn forget_queued(&mut self, note: QueuedNote) {
-        match note.prev_recording {
-            Some(prev) => {
-                self.last_played.insert(note.mbid, prev);
+        let restore_i = |m: &mut HashMap<i64, i64>, k: i64, prev: Option<i64>| match prev {
+            Some(p) => {
+                m.insert(k, p);
             }
             None => {
-                self.last_played.remove(&note.mbid);
+                m.remove(&k);
             }
+        };
+        let restore_s = |m: &mut HashMap<String, i64>, k: String, prev: Option<i64>| match prev {
+            Some(p) => {
+                m.insert(k, p);
+            }
+            None => {
+                m.remove(&k);
+            }
+        };
+        restore_i(&mut self.passage_last_played, note.passage_id, note.prev_passage);
+        for (w, prev) in note.works {
+            // Another passage of the same work may have been noted since, and
+            // restoring "nothing was there" would forget that one too -- the
+            // same hazard the artist tier documents below.
+            restore_s(&mut self.work_last_played, w, prev);
+        }
+        if let Some(mbid) = note.mbid {
+            restore_s(&mut self.last_played, mbid, note.prev_recording);
         }
         if let Some(a) = note.artist {
             match note.prev_artist {
@@ -761,6 +875,7 @@ impl Director {
                 Some(Exclusion::ArtistRotationBlock) => c.artist_blocked += 1,
                 Some(Exclusion::RecordingRotationBlock) => c.recording_blocked += 1,
                 Some(Exclusion::RelatedRotationBlock) => c.related_blocked += 1,
+                Some(Exclusion::WorkRotationBlock) => c.work_blocked += 1,
                 Some(Exclusion::BelowMinWeight) => c.below_min_weight += 1,
                 // Counted apart from `filtered`, which means "the wrong shape".
                 // A suppressed passage is the right shape and is coming back
@@ -785,6 +900,11 @@ pub struct Census {
     pub artist_blocked: usize,
     pub recording_blocked: usize,
     pub related_blocked: usize,
+    /// Held out because another passage of the same song played `[GDE-WRK-035]`.
+    /// Counted apart from `recording_blocked` so the panel can say which of the
+    /// three identity tiers fired, which is the whole point of keeping them
+    /// distinct `[SPEC-DIR-190]`.
+    pub work_blocked: usize,
     pub below_min_weight: usize,
     pub filtered: usize,
     pub total_weight: f64,
@@ -969,6 +1089,8 @@ mod tests {
              CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
              CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT);
              CREATE TABLE recording_relations (mbid TEXT, related_mbid TEXT, strength REAL);
+             CREATE TABLE works (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE recording_works (mbid TEXT, work_mbid TEXT);
              CREATE TABLE listener_preferences (subject_kind TEXT, subject_id TEXT,
                  rotation REAL, recovery REAL, restraint REAL);
              CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
@@ -1072,6 +1194,48 @@ mod tests {
             .unwrap();
         let d = Director::load(&c).unwrap();
         assert_eq!(d.census(NOW).related_blocked, 1, "rec-a must be blocked by rec-b");
+    }
+
+    /// The incident's own shape, end to end, and the cover decision with it
+    /// `[GDE-WRK-050]`: rec-a and rec-b are different recordings by *different
+    /// artists* sharing one work. A play of rec-b must hold rec-a, which
+    /// neither the recording tier nor the artist tier can see.
+    #[test]
+    fn a_shared_work_blocks_across_recordings_and_artists() {
+        let c = fixture();
+        c.execute("INSERT INTO recording_works VALUES ('rec-a','work-1'),('rec-b','work-1')", [])
+            .unwrap();
+        c.execute("INSERT INTO listener_play_history VALUES (1, ?1, 2, 'rec-b')", [NOW - 60])
+            .unwrap();
+        let d = Director::load(&c).unwrap();
+        let cen = d.census(NOW);
+        assert_eq!(cen.work_blocked, 1, "rec-a must be held by the work it shares with rec-b");
+        assert_eq!(cen.eligible, 1, "only rec-c is left");
+    }
+
+    /// A catalogue built before `[GDE-WRK-035]` has no `recording_works`. It
+    /// must still load, with the work tier simply inactive -- the behaviour
+    /// that shipped for years.
+    #[test]
+    fn a_catalogue_without_recording_works_still_loads() {
+        let c = fixture();
+        c.execute("DROP TABLE recording_works", []).unwrap();
+        let d = Director::load(&c).expect("an older catalogue must still load");
+        assert_eq!(d.census(NOW).eligible, 3);
+    }
+
+    /// `[GDE-WRK-055]`: noting must work for a passage with no recording MBID.
+    /// It returned `None` before, recording nothing, so such a passage carried
+    /// no history at all and could repeat freely.
+    #[test]
+    fn an_unidentified_passage_is_still_noted() {
+        let c = fixture();
+        c.execute("DELETE FROM passage_recordings WHERE passage_id = 3", []).unwrap();
+        let mut d = Director::load(&c).unwrap();
+        let note = d.note_queued(3, NOW).expect("an unidentified passage must still be noted");
+        assert_eq!(d.census(NOW).eligible, 2, "passage 3 is now held by its own play");
+        d.forget_queued(note);
+        assert_eq!(d.census(NOW).eligible, 3, "and the note must be exactly reversible");
     }
 
     /// Ages come from the history, so an old play must recover. Ten days is

@@ -64,6 +64,27 @@ fn main() {
         }
     };
     let cold = t0.elapsed();
+    // What the pool looks like once loaded `[SPEC-DIR-190]`. Cheap here, and
+    // the only place the three identity tiers `[GDE-WRK-035]` can be seen
+    // apart against a real library rather than a fixture.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let cen = first.census(now);
+    println!(
+        "pool: {} eligible of {} | blocked: {} artist, {} recording, {} same song, {} related\n\
+         \x20     {} under min weight, {} filtered, {} suppressed\n",
+        cen.eligible,
+        radio,
+        cen.artist_blocked,
+        cen.recording_blocked,
+        cen.work_blocked,
+        cen.related_blocked,
+        cen.below_min_weight,
+        cen.filtered,
+        cen.suppressed
+    );
     let after_one = rss();
     println!("first load     {:>8.0} ms   peak RSS {:>7.1} MB  (+{:.1})",
              cold.as_secs_f64() * 1000.0, mb(after_one), mb(after_one - base));

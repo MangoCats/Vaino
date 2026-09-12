@@ -184,6 +184,11 @@ pub enum Exclusion {
     ArtistRotationBlock,
     RecordingRotationBlock,
     RelatedRotationBlock,
+    /// Another passage of the same *song* played inside this passage's own
+    /// rotation `[GDE-WRK-035]` — a different recording of it, or the same
+    /// recording under a different passage. Distinct from
+    /// `RecordingRotationBlock` so the panel can say which tier held it out.
+    WorkRotationBlock,
     TooShort,
     TooLong,
     TooDeep,
@@ -218,8 +223,22 @@ pub struct Candidate<'a> {
     pub depth_s: f64,
     pub recording: Tuning,
     pub artist: Tuning,
+    /// Seconds since *this passage* last played; `None` if never.
+    ///
+    /// The narrowest of the three identity tiers `[GDE-WRK-035]`, and the only
+    /// one an unidentified passage has. Without it such a passage carries no
+    /// history at all and may repeat freely `[GDE-WRK-055]`.
+    pub passage_age_s: Option<f64>,
     /// Seconds since this recording last played; `None` if never.
     pub recording_age_s: Option<f64>,
+    /// Seconds since anything performing a work of this recording last played;
+    /// `None` if never, or if the recording performs no known work.
+    ///
+    /// The widest tier, and in practice the one that decides: a play stamps
+    /// every key the passage has, so this is never staler than the other two
+    /// `[GDE-WRK-038]`. A recording performing several works takes the most
+    /// recent across all of them.
+    pub work_age_s: Option<f64>,
     /// Seconds since anything by this artist last played; `None` if never.
     pub artist_age_s: Option<f64>,
     /// Seconds since this recording was last **skipped**; `None` if never.
@@ -304,9 +323,30 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     let rec_rec = seconds(c.recording.recovery) * r_scale;
     let recording_restraint = 10f64.powf(-c.recording.restraint);
     let mut recording_ramp = 1.0;
-    if let Some(age) = c.recording_age_s {
+    // The three identity tiers are a cascade, not three tests `[GDE-WRK-038]`.
+    // A play stamps every key the passage has, so the widest key is never
+    // staler than a narrower one: the most recent stamp -- the smallest age --
+    // is the one that decides, and the others cannot overturn it. Taking the
+    // minimum rather than testing each in turn is what makes that true by
+    // construction rather than by the order the tests happen to be written in.
+    //
+    // The window is always **this** passage's own `rotation`/`recovery`
+    // `[GDE-WRK-036]`, never the played passage's. That is the whole of why
+    // per-passage periods need no per-pair storage: each candidate is weighed
+    // from its own side, so three recordings of one song with 12-, 4- and
+    // 8-day rotations each serve their own on a play of any of them.
+    let tiers = [
+        (c.passage_age_s, Exclusion::RecordingRotationBlock),
+        (c.recording_age_s, Exclusion::RecordingRotationBlock),
+        (c.work_age_s, Exclusion::WorkRotationBlock),
+    ];
+    let freshest = tiers
+        .iter()
+        .filter_map(|(age, why)| age.map(|a| (a, *why)))
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((age, why)) = freshest {
         if age < rec_rot {
-            return Weighing::excluded(Exclusion::RecordingRotationBlock);
+            return Weighing::excluded(why);
         }
         if age < rec_rot + rec_rec {
             recording_ramp = recovery_weight(age, rec_rot, rec_rec);
@@ -480,7 +520,9 @@ mod tests {
             depth_s: 0.0,
             recording: Tuning::recording_defaults(),
             artist: Tuning::artist_defaults(),
+            passage_age_s: None,
             recording_age_s: None,
+            work_age_s: None,
             artist_age_s: None,
             skip_age_s: None,
             dequeue_age_s: None,
@@ -504,6 +546,70 @@ mod tests {
         let mut c = candidate();
         c.recording_age_s = Some(seconds(DEF_ROTATION_REC) - 1.0);
         assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::RecordingRotationBlock));
+    }
+
+    /// The incident `[GDE-WRK-010]`: a different recording of the same song,
+    /// which the recording tier cannot see.
+    #[test]
+    fn a_recent_play_of_the_same_work_blocks_a_different_recording() {
+        let mut c = candidate();
+        c.recording_age_s = None; // this recording itself has never played
+        c.work_age_s = Some(seconds(DEF_ROTATION_REC) - 1.0);
+        let w = weigh(&c, &Policy::default());
+        assert_eq!(w.excluded, Some(Exclusion::WorkRotationBlock));
+    }
+
+    /// `[GDE-WRK-036]`: the window is the candidate's own, never the played
+    /// passage's. One play of a shared work, three rotations, three answers --
+    /// which is what makes per-passage periods need no per-pair storage.
+    #[test]
+    fn each_passage_of_a_work_serves_its_own_rotation() {
+        let age = seconds(2.0); // 4.2 days since something of this work played
+        let mut short = candidate(); // rotation 1.7 => ~2.1 days: recovered
+        short.recording.rotation = 1.7;
+        short.work_age_s = Some(age);
+        let mut long = candidate(); // rotation 2.3 => ~8.4 days: still blocked
+        long.recording.rotation = 2.3;
+        long.work_age_s = Some(age);
+        assert_eq!(weigh(&short, &Policy::default()).excluded, None);
+        assert_eq!(
+            weigh(&long, &Policy::default()).excluded,
+            Some(Exclusion::WorkRotationBlock)
+        );
+    }
+
+    /// `[GDE-WRK-038]`: the tiers are a cascade. The freshest stamp decides,
+    /// and a colder wider tier cannot release what a warmer narrower one holds.
+    #[test]
+    fn the_freshest_tier_decides_and_names_itself() {
+        let (rot, rec) = (seconds(DEF_ROTATION_REC), seconds(DEF_RECOVERY_REC));
+        // Work cold, recording warm: the recording holds it, and says so.
+        let mut c = candidate();
+        c.recording_age_s = Some(rot - 1.0);
+        c.work_age_s = Some(rot + rec * 2.0);
+        assert_eq!(
+            weigh(&c, &Policy::default()).excluded,
+            Some(Exclusion::RecordingRotationBlock)
+        );
+        // Both past the block: the ramp uses the freshest, not the oldest.
+        let mut d = candidate();
+        d.recording_age_s = Some(rot + rec); // fully recovered on its own
+        d.work_age_s = Some(rot + rec / 2.0); // half recovered
+        let w = weigh(&d, &Policy::default());
+        assert!((w.recording_ramp - 0.5).abs() < 1e-9, "ramp {}", w.recording_ramp);
+    }
+
+    /// `[GDE-WRK-055]`: a passage with no recording MBID still blocks itself.
+    #[test]
+    fn an_unidentified_passage_blocks_itself() {
+        let mut c = candidate();
+        c.recording_age_s = None;
+        c.work_age_s = None;
+        c.passage_age_s = Some(seconds(DEF_ROTATION_REC) - 1.0);
+        assert_eq!(
+            weigh(&c, &Policy::default()).excluded,
+            Some(Exclusion::RecordingRotationBlock)
+        );
     }
 
     #[test]
