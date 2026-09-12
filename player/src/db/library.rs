@@ -408,12 +408,42 @@ impl Library {
 /// and the file whose tags stand in. Measured on this library, 463 artists in
 /// 53 ms, 660 albums in 29 ms, 8,078 tracks in 80 ms -- on demand, not per tick,
 /// so that is comfortably fast enough to leave as a query rather than a cache.
-const NAMED: &str = "\
-    SELECT p.passage_id, p.file_id, \
-           (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
-             WHERE pr.passage_id = p.passage_id \
-             ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS mbid \
-      FROM __LIB__.passages p WHERE p.kind = 'radio'";
+/// What every passage-shaped query selects: the passage, its file, and its
+/// current recording link. Written once here because the two constants below
+/// differ only in scope, and a hand-copied second projection is exactly the
+/// drift this file refuses elsewhere.
+macro_rules! named_passages {
+    () => {
+        "SELECT p.passage_id, p.file_id, \
+                (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
+                  WHERE pr.passage_id = p.passage_id \
+                  ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS mbid \
+           FROM __LIB__.passages p"
+    };
+}
+
+/// Radio passages: the playable library, and the id-review queue's scope.
+const NAMED: &str = concat!(named_passages!(), " WHERE p.kind = 'radio'");
+
+/// Every passage, whatever its kind -- for `review_item_for` alone
+/// `[SPEC-SUI-199]`.
+///
+/// The deep link exists precisely "for a passage the CONTRADICTED-only queue
+/// above would never surface itself", and scoping it to `kind = 'radio'` took
+/// that back: Sampo offers a review handoff from *every* passage profile
+/// (`console_web/profile.html`), so half the flagged library led to "Passage N
+/// does not exist in this library", about passages that plainly do.
+///
+/// Not hypothetical, and not a corner. Measured 2026-09-11 on the live
+/// library: the 22 flagged recordings reach 22 album passages and 20 radio
+/// ones, so the majority of every flag a listener sets landed on the dead end.
+/// An album cut with no `id_checks` row grades `on-demand`, which is the state
+/// that severity was added for.
+///
+/// The queue itself stays radio-only: that is a curation scope, deliberately
+/// chosen, and widening it would bury 604 contradicted radio passages under
+/// eight thousand album cuts nobody asked about.
+const NAMED_ANY: &str = named_passages!();
 
 /// The displayed artist, as a SQL expression over `NAMED` joined to `file_tags`.
 const ARTIST_EXPR: &str = "COALESCE( \
@@ -1052,7 +1082,7 @@ impl Library {
                     {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
                     v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
                     a.artist_name, a.applied_at, c.checked_at \
-               FROM ({NAMED}) m \
+               FROM ({NAMED_ANY}) m \
                LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id \
                LEFT JOIN __LIB__.id_checks c ON c.passage_id = m.passage_id \
                LEFT JOIN id_reviews v ON v.passage_id = m.passage_id \
@@ -1937,6 +1967,46 @@ mod tests {
         assert_eq!(q[0].passage_id, 6, "a missing id outranks every wrong one");
         assert_eq!(q[0].severity, "no-mbid");
         assert_eq!(q[0].rank, 0);
+    }
+
+    /// The deep link reaches a passage of any kind; the queue stays radio.
+    ///
+    /// Sampo offers "review in Vaino" from every passage profile, so an album
+    /// cut reached that way must render. It used to 404: `review_item_for`
+    /// selected from `NAMED`, which scopes to `kind = 'radio'`, and on the
+    /// live library that swallowed 22 of the 42 passages reachable from a
+    /// flagged recording.
+    ///
+    /// Both halves are asserted together on purpose. Widening the queue to
+    /// match would be the wrong fix -- it would bury the contradicted radio
+    /// passages under every album cut in the library -- so the test that
+    /// unblocks the deep link also pins the queue's scope against it.
+    #[cfg(feature = "sampo-support")]
+    #[test]
+    fn an_album_passage_is_reviewable_by_deep_link_but_not_queued() {
+        let c = reviewable();
+        c.execute_batch(
+            "INSERT INTO passages VALUES (21,1,'album',0,1000,NULL,NULL,NULL,'ingest:whole-file',20,20,'exponential','exponential');
+             INSERT INTO recordings VALUES ('mbid:album:1','Gangs in the Street',NULL,'s');
+             INSERT INTO passage_recordings VALUES (21,'mbid:album:1',1.0,'s');",
+        )
+        .unwrap();
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
+
+        let item = lib
+            .review_item_for(21)
+            .expect("an album passage reached by deep link must render, not 404");
+        assert_eq!(item.passage_id, 21);
+        assert_eq!(
+            item.severity, "on-demand",
+            "never fingerprinted is its own grade, not a fabricated verdict"
+        );
+
+        let queued: Vec<i64> = lib.review_queue(50).unwrap().iter().map(|i| i.passage_id).collect();
+        assert!(
+            !queued.contains(&21),
+            "the queue is a radio-only curation scope and must not widen with it"
+        );
     }
 
     /// Music that has no MusicBrainz entry is not a fault to be reviewed.
