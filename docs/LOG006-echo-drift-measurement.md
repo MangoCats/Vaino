@@ -145,6 +145,38 @@ Two different causes, neither predicting the other.
 
 ---
 
+## 3a. Phase 2, first result: the delay half does not work on this platform
+
+**`[LOG-DRIFT-055]` `bose` reports `ts=Software`, and that is the detector
+earning its place rather than a disappointment.** The frame clock shipped
+2026-09-12; across **17,954 callbacks** it saw `delay=0` every time, while
+`/proc/asound` on the same machine reported a real, varying `delay: 4092`.
+
+So `[GDE-ECHO-160]`'s plan — take `playback − callback` from cpal, the one part
+of its timestamp that is domain-independent — **does not yield a usable delay
+here**, even though ALSA plainly has one. The information exists; cpal is not
+passing it through.
+
+Two consequences, and they pull in opposite directions:
+
+- **The rate half is fine.** 13,209,552 frames in 300 s is 44,032/s against a
+  nominal 44,100 — the counter tracks, and it is the only instrument `vainopi`
+  can have `[LOG-DRIFT-070]`.
+- **The offset half must come from somewhere else.** Presentation offset
+  `[GDE-ECHO-430]` has to be read from `/proc/asound`'s `delay`, or from ALSA
+  directly, not from cpal. That is a correction to the design, not a bug in it.
+
+Had `[GDE-ECHO-290]`'s three-state detection not been built, `delay=0` would
+have been recorded as a measurement and an offset of zero would have been
+designed against. A constant is not a measurement, and the only reason anyone
+knows that here is that the code was made to say so `[GOV-SRC-030]`.
+
+`vainopi` was given the same build the same day and is logging; its verdict is
+the more interesting one, since a `Software` result there would mean no
+software instrument reaches it at all.
+
+---
+
 ## 4. Open
 
 **`[LOG-DRIFT-060]` Re-read over a longer window, and at a different room

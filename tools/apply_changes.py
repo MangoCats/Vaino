@@ -20,10 +20,10 @@ swap -- this writes to `passages`, `passage_recordings` and
 `recording_artists` directly, with no dependency on Vaino being built with
 `sampo-support` at all.
 
-    python tools/apply_changes.py /srv/library/vaino.db changes.json
-    python tools/apply_changes.py /srv/library/vaino.db changes.json --commit
-    python tools/apply_changes.py /srv/library/vaino.db changes.json --resolve 3=ours
-    python tools/apply_changes.py /srv/library/vaino.db changes.json --resolve 3=theirs --commit
+    python tools/apply_changes.py /var/vaino/listener.db changes.json
+    python tools/apply_changes.py /var/vaino/listener.db changes.json --commit
+    python tools/apply_changes.py /var/vaino/listener.db changes.json --resolve 3=ours
+    python tools/apply_changes.py /var/vaino/listener.db changes.json --resolve 3=theirs --commit
 
 `ours` keeps what is already on this machine, discarding the incoming
 change. `theirs` applies the incoming change, overwriting what diverged.
@@ -39,7 +39,7 @@ CLI:
 
     python tools/apply_changes.py /tmp/vainopi-copy.db changes.json --commit --emit-sql patch.sql
     scp patch.sql pi@vainopi:/tmp/patch.sql
-    ssh pi@vainopi 'systemctl stop vaino && sqlite3 /srv/library/vaino.db < /tmp/patch.sql && systemctl start vaino'
+    ssh pi@vainopi 'systemctl stop vaino && { echo "ATTACH DATABASE '''/srv/library/library.db''' AS lib;"; cat /tmp/patch.sql; } | sqlite3 /var/vaino/listener.db && systemctl start vaino'
 
 **`--clear-flags`**, combined with either write mode: for each change
 actually applied, also deletes the `listener_flags` row(s) that plausibly

@@ -41,27 +41,37 @@ scp pi@vainopi:/var/vaino/listener.db /tmp/vainopi-listener.db          # fresh 
 python tools/export_changes.py <desktop db> -o changes.json
 python tools/apply_changes.py /tmp/vainopi-listener.db changes.json --commit --emit-sql patch.sql --clear-flags
 scp patch.sql pi@vainopi:/tmp/patch.sql
-ssh pi@vainopi 'systemctl stop vaino && sqlite3 /var/vaino/listener.db < /tmp/patch.sql && systemctl start vaino'
+ssh pi@vainopi 'systemctl stop vaino && { echo "ATTACH DATABASE '''/srv/library/library.db''' AS lib;"; cat /tmp/patch.sql; } | sqlite3 /var/vaino/listener.db; systemctl start vaino'
 ```
 
-> **`[SPEC-DF-129]` This recipe is not sufficient against a split peer, and the
-> path above is only half the repair.** It named `/srv/library/vaino.db` until
-> 2026-09-12; `vainopi` split on 2026-09-10 and that file is now 0 bytes, so
-> the apply would have succeeded against an empty database and reported
-> nothing wrong. The path is corrected, but the deeper problem is that
-> `apply_changes.py` emits statements spanning **both** halves — verified on
-> `vainopi` 2026-09-12:
+> **`[SPEC-DF-129]` Against a split peer, open the LISTENER half and attach the
+> catalogue.** The line above named `/srv/library/vaino.db` until 2026-09-12;
+> `vainopi` split on 2026-09-10 and that file is now 0 bytes, so the apply
+> would have succeeded against an empty database and reported nothing wrong.
 >
-> | tables | half |
-> | :--- | :--- |
-> | `listener_flags`, `boundary_reviews`, `id_reviews`, `artist_reviews` | `/var/vaino/listener.db` |
-> | `passage_recordings`, `recording_artists`, `lowlevel_cache` | `/srv/library/library.db` |
+> Correcting the path is only half of it, because `apply_changes.py` emits
+> statements spanning **both** halves — verified on `vainopi` 2026-09-12:
+> `listener_flags`, `boundary_reviews`, `id_reviews` and `artist_reviews` live
+> in the listener half, while `passage_recordings`, `recording_artists` and
+> `lowlevel_cache` live in the catalogue. One `sqlite3` against one file cannot
+> apply the whole patch whichever file it names.
 >
-> One `sqlite3` invocation against one file therefore cannot apply the whole
-> patch whichever file is named: the catalogue statements will fail against the
-> listener half. **Open** — the fix is a decision about where this seam belongs
-> (two invocations, an `ATTACH`ed connection, or a split patch), not something
-> to guess at in passing. Until then, treat a green run of this recipe against
+> **Already built, in `tools/jobs.py`**: the console's `apply-remote` stage
+> opens the listener half as `main` and attaches the catalogue as `lib`, which
+> puts every statement where it belongs with **no change to the patch** — a
+> `CREATE` lands in `main`, now the right half, and an unqualified
+> `passage_recordings` resolves down the chain to the catalogue. Confirmed by
+> hand on `vainopi` 2026-09-12: through one such connection,
+> `passage_recordings` answered 16,409 rows and `listener_flags` 20. Unsplit
+> peers keep the single-file command, with nothing attached.
+>
+> **`bose` still refuses this, by design.** Its catalogue half is mounted `ro`
+> `[BOSE003]` step 10, so the catalogue statements fail there every time
+> (measured 2026-09-11). `jobs.py` handles that by restarting the player
+> whatever the patch did, so a refused sync no longer leaves another room
+> silent — a sync that cannot land is a disappointment, one that turns the
+> music off is a fault. Landing catalogue changes on `bose` needs
+> `attended-import.sh`'s window `[IMPL-BOS-150]`.
 > a split peer as unproven `[GOV-SRC-030]`.
 
 **`[SPEC-DF-112]` `--clear-flags` closes the loop the checkbox itself already models.** `[REQ-VIS-265]`'s flag is "please look at this," not a judgement, cleared the same way it was set: by hand, at any time. A change landing here for exactly the subject a flag named is that looking-at having happened, so `--clear-flags` deletes the plausible `listener_flags` rows for a change it successfully applies: `('passage', <the resolved local passage_id>)` always, and for an `id_review`, `('recording', ...)` under *both* the target mbid and the baseline one — a listener most often flags a misidentification while it still carries the wrong id, so the id being corrected away from is at least as likely to be what was flagged as the id it becomes. It is opt-in and additive to what `--emit-sql`/`--commit` already write, never assumed: not every applied change originated from a flag, and a change that did not still clears nothing that was never set.

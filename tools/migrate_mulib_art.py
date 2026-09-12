@@ -35,7 +35,7 @@ of art into roughly 15,600 of the library's 16,400.
 
 Usage:
     python tools/migrate_mulib_art.py --mulib mulib.db data/library.db
-    python tools/migrate_mulib_art.py --mulib mulib.db --dry-run /srv/library/vaino.db
+    python tools/migrate_mulib_art.py --mulib mulib.db --dry-run /srv/library/library.db
 """
 
 import argparse
