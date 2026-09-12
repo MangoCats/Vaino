@@ -191,7 +191,17 @@ def export_boundary_reviews(conn: sqlite3.Connection, hostname: str) -> list:
         target = {"start_ms": start_ms, "end_ms": end_ms,
                   "lead_in_ms": lead_in_ms, "lead_out_ms": lead_out_ms,
                   "gain_db": gain_db}
-        if have_fade:
+        # The column existing is not the same as the ROW having an opinion.
+        # A `boundary_reviews` row decided before `[SPEC-SUI-226]` sits in a
+        # table that has since been migrated, so `have_fade` is true while
+        # every fade value in it is NULL -- and exporting those nulls is
+        # exactly what the comment above forbids, by the same reasoning: the
+        # receiver reads a present key as "silence the fade ramp". Found
+        # live 2026-09-12 pushing to `teacherslounge`: one such row ("Slow
+        # Ride", passage 16212) reported a conflict on every push whose two
+        # sides had identical spans and differed only in fade, and resolving
+        # it changed nothing, so it came back the next time.
+        if have_fade and (fade_in_ms is not None or fade_out_ms is not None):
             baseline.update(fade_in_ms=orig_fade_in_ms, fade_out_ms=orig_fade_out_ms,
                              fade_in_curve=orig_fade_in_curve, fade_out_curve=orig_fade_out_curve)
             target.update(fade_in_ms=fade_in_ms, fade_out_ms=fade_out_ms,
