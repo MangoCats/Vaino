@@ -73,6 +73,116 @@ impl Counts {
     pub fn last_sample(&self) -> f32 { f32::from_bits(self.last.load(Ordering::Relaxed)) }
 }
 
+/// Where the audio actually leaves, counted so a second node can be kept in
+/// step with this one `[GDE-ECHO-280]`.
+///
+/// Separate from [`Counts`] on purpose: that records what went *wrong*, this
+/// records what went *out*. They are read by different things at different
+/// rates and sharing a struct would only couple them.
+///
+/// **Everything here is measured at the device, not at the mixer.** Anything
+/// upstream of the ring is ~15 s away from being heard, and measuring there is
+/// measuring the wrong moment -- the fault `[REQ-AUD-164]` generalised after
+/// pause, volume, skip and the display each hit it in turn.
+///
+/// **cpal's absolute instants are deliberately not stored** `[GDE-ECHO-160]`.
+/// `StreamInstant` counts from this stream's own trigger, so two machines'
+/// values share no epoch and cannot be compared; and on ALSA they arrive in
+/// `MonotonicRaw`, which is precisely the clock chrony does not discipline
+/// `[GDE-ECHO-150]`. Only the *difference* between them is used, which is the
+/// genuine hardware delay and is domain-independent, and it is paired here
+/// with a reading of the disciplined wall clock taken in the same callback.
+#[derive(Clone, Default)]
+pub struct FrameClock {
+    /// Frames handed to the device since this stream opened. Silence fed while
+    /// paused counts: the device consumed it and its own pointer advanced, so
+    /// excluding it would make this disagree with `/proc/asound`'s counter,
+    /// which is the independent instrument it has to be checked against.
+    frames: Arc<std::sync::atomic::AtomicU64>,
+    /// Nanoseconds since the epoch on the chrony-disciplined clock, read in
+    /// the same callback as `frames`. The pair is what a rate is regressed
+    /// from; either alone says nothing.
+    at_nanos: Arc<std::sync::atomic::AtomicU64>,
+    /// ALSA's own submit-to-sound delay, in frames -- the measured half of a
+    /// node's presentation offset `[GDE-ECHO-430]`.
+    delay_frames: Arc<std::sync::atomic::AtomicU64>,
+    /// Callbacks seen, and how many of them reported a delay differing from
+    /// the one before. Together these answer a question cpal will not:
+    /// whether the timestamps are real `[GDE-ECHO-290]`.
+    callbacks: Arc<std::sync::atomic::AtomicU64>,
+    delay_changes: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// What the timestamps underneath [`FrameClock`] are actually worth.
+///
+/// cpal probes `get_htstamp()` once at stream open and, finding it zero,
+/// silently substitutes elapsed time since stream creation for the rest of the
+/// stream's life -- a software clock carrying no information about the device
+/// at all, in which drift is invisible by construction `[GDE-ECHO-170]`. It
+/// offers no way to ask which happened. So this is detected by observation
+/// rather than interrogation, and reported rather than assumed: a fallback
+/// that answers in the same shape as the real thing is exactly what
+/// `[GOV-SRC-030]` exists to stop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Timestamps {
+    /// The delay has been seen to vary, so it is coming from the hardware.
+    Hardware,
+    /// Many callbacks, never a change: a constant is not a measurement.
+    Software,
+    /// Too few callbacks yet to say. Absent is not zero `[GOV-SRC-040]`.
+    Undetermined,
+}
+
+/// Callbacks to observe before calling a never-varying delay `Software`.
+///
+/// A real delay moves every period as the buffer fills and drains. Several
+/// hundred callbacks is a second or two of audio -- long enough that "it never
+/// moved" means something, short enough that a node does not sit
+/// `Undetermined` for a noticeable part of its startup.
+const TIMESTAMP_VERDICT_AFTER: u64 = 500;
+
+impl FrameClock {
+    /// Frames out, and the disciplined-clock reading taken with them. Returned
+    /// together because using one without the other is the mistake this type
+    /// exists to prevent.
+    pub fn sample(&self) -> (u64, u64) {
+        (self.frames.load(Ordering::Relaxed), self.at_nanos.load(Ordering::Relaxed))
+    }
+    /// ALSA's submit-to-sound delay, in frames.
+    pub fn delay_frames(&self) -> u64 { self.delay_frames.load(Ordering::Relaxed) }
+    /// How many callbacks have been seen, for judging the verdict below.
+    pub fn callbacks(&self) -> u64 { self.callbacks.load(Ordering::Relaxed) }
+    /// Whether the delay underneath all of this is real `[GDE-ECHO-290]`.
+    pub fn timestamps(&self) -> Timestamps {
+        if self.delay_changes.load(Ordering::Relaxed) > 0 {
+            Timestamps::Hardware
+        } else if self.callbacks.load(Ordering::Relaxed) >= TIMESTAMP_VERDICT_AFTER {
+            Timestamps::Software
+        } else {
+            Timestamps::Undetermined
+        }
+    }
+
+    /// Record one callback. Called from the real-time thread, so it does
+    /// exactly what that allows: relaxed stores of values already in hand, no
+    /// allocation, no lock, no syscall. `SystemTime::now()` resolves through
+    /// the vDSO on the platforms this runs on and does not trap into the
+    /// kernel.
+    fn tick(&self, frames: u64, delay: u64) {
+        self.frames.fetch_add(frames, Ordering::Relaxed);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        self.at_nanos.store(now, Ordering::Relaxed);
+        let was = self.delay_frames.swap(delay, Ordering::Relaxed);
+        if was != delay && self.callbacks.load(Ordering::Relaxed) > 0 {
+            self.delay_changes.fetch_add(1, Ordering::Relaxed);
+        }
+        self.callbacks.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Master volume, as `f32` bits in an atomic.
 ///
 /// Deliberately OUTSIDE the mutex that guards the ring. The audio callback must
@@ -158,6 +268,8 @@ pub struct OutputRing {
     /// Counted without the lock, so the callback can record the tick on which
     /// it could not take it.
     pub counts: Counts,
+    /// Frames out and when, for keeping a second node in step `[GDE-ECHO-280]`.
+    pub clock: FrameClock,
 }
 
 impl OutputRing {
@@ -173,6 +285,7 @@ impl OutputRing {
             rate: Arc::new(std::sync::atomic::AtomicU32::new(44_100)),
             chans: Arc::new(std::sync::atomic::AtomicU32::new(2)),
             counts: Counts::default(),
+            clock: FrameClock::default(),
         }
     }
 
@@ -434,9 +547,13 @@ impl Output {
                 let cb_vol = volume.clone();
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
+                let cb_clock = ring.clock.clone();
                 device.build_output_stream(
                 &config,
-                move |out: &mut [f32], _| fill(&cb_state, &cb_vol, out, &cb_silent, &cb_counts),
+                move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                    fill(&cb_state, &cb_vol, out, &cb_silent, &cb_counts);
+                    tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
+                },
                 err_fn,
                 None,
             )}
@@ -445,11 +562,13 @@ impl Output {
                 let cb_vol = volume.clone();
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
+                let cb_clock = ring.clock.clone();
                 device.build_output_stream(
                     &config,
-                    move |out: &mut [i16], _| {
+                    move |out: &mut [i16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
                         fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             *o = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -463,11 +582,13 @@ impl Output {
                 let cb_vol = volume.clone();
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
+                let cb_clock = ring.clock.clone();
                 device.build_output_stream(
                     &config,
-                    move |out: &mut [u16], _| {
+                    move |out: &mut [u16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
                         fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             let v = (s.clamp(-1.0, 1.0) + 1.0) * 0.5;
                             *o = (v * u16::MAX as f32) as u16;
@@ -598,6 +719,27 @@ impl Output {
 ///
 /// The miss is counted either way, because a glitch that is recorded can be
 /// fixed and a glitch that is hidden cannot.
+/// Record one callback against the frame clock.
+///
+/// `playback - callback` is ALSA's own submit-to-sound delay and is the only
+/// part of cpal's timestamp safe to use here: it is a duration, so it carries
+/// no epoch and no clock domain with it `[GDE-ECHO-160]`. The absolute
+/// instants either side of it are discarded unread.
+///
+/// A backend that cannot answer yields `None`, which becomes a delay of zero
+/// -- constant, and therefore reported as `Software` once enough callbacks
+/// have passed without it moving `[GDE-ECHO-290]`. That is the intended
+/// outcome: a node whose delay never varies must say so, not quietly look
+/// like one whose delay happens to be steady.
+fn tick_clock(clock: &FrameClock, info: &cpal::OutputCallbackInfo,
+              samples: usize, channels: usize, rate: u32) {
+    let ts = info.timestamp();
+    let delay = ts.playback.duration_since(&ts.callback)
+        .map(|d| (d.as_secs_f64() * rate as f64) as u64)
+        .unwrap_or(0);
+    clock.tick((samples / channels.max(1)) as u64, delay);
+}
+
 fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
         silent: &Arc<AtomicBool>, counts: &Counts) {
     // Paused means silence, NOT a stopped stream `[PI3-OPEN-020]`. A2DP tears
@@ -709,6 +851,57 @@ mod tests {
     fn audible() -> Arc<AtomicBool> { Arc::new(AtomicBool::new(false)) }
 
     use super::*;
+
+    // `[GDE-ECHO-370]`: the verdict logic is where a threshold error is
+    // invisible in listening and obvious in a test, so it is tested rather
+    // than eyeballed on a running appliance.
+    #[test]
+    fn a_fresh_frame_clock_admits_it_does_not_know_yet() {
+        let c = FrameClock::default();
+        assert_eq!(c.timestamps(), Timestamps::Undetermined);
+        assert_eq!(c.sample().0, 0, "no frames before any callback");
+    }
+
+    #[test]
+    fn a_delay_that_moves_is_coming_from_hardware() {
+        let c = FrameClock::default();
+        c.tick(441, 4188);
+        c.tick(441, 4190); // ALSA's buffer filling and draining
+        assert_eq!(c.timestamps(), Timestamps::Hardware);
+    }
+
+    #[test]
+    fn a_delay_that_never_moves_is_reported_as_software_not_as_steady() {
+        // cpal substitutes a software clock silently when `get_htstamp` is
+        // unavailable `[GDE-ECHO-170]`; the give-away is a delay that never
+        // varies. It must be named, not mistaken for an unusually stable
+        // device `[GOV-SRC-030]`.
+        let c = FrameClock::default();
+        for _ in 0..TIMESTAMP_VERDICT_AFTER {
+            c.tick(441, 0);
+        }
+        assert_eq!(c.timestamps(), Timestamps::Software);
+    }
+
+    #[test]
+    fn the_verdict_waits_rather_than_guessing_early() {
+        let c = FrameClock::default();
+        for _ in 0..(TIMESTAMP_VERDICT_AFTER - 1) {
+            c.tick(441, 0);
+        }
+        assert_eq!(c.timestamps(), Timestamps::Undetermined,
+                   "one callback short of the threshold is not yet an answer");
+    }
+
+    #[test]
+    fn frames_accumulate_and_carry_a_clock_reading_with_them() {
+        let c = FrameClock::default();
+        c.tick(441, 10);
+        c.tick(441, 11);
+        let (frames, at) = c.sample();
+        assert_eq!(frames, 882);
+        assert!(at > 0, "a frame count without a time beside it is not a rate");
+    }
 
     // The real-time path is testable without a device: `fill` is a plain
     // function over shared state, which is why it was written that way.

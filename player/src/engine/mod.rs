@@ -253,6 +253,10 @@ pub struct Engine {
     out_room: usize,
     /// When the shared snapshot may next be written. See `publish`.
     publish_at: Option<std::time::Instant>,
+    /// When the frame clock may next be logged. Separate from `publish_at`
+    /// because the two answer different questions at different rates: one
+    /// serves a browser, the other serves a measurement `[GDE-ECHO-280]`.
+    clock_log_at: Option<std::time::Instant>,
     /// The audible passage as last published, so a change can bypass the clock.
     published: Option<i64>,
     /// Set when a command rearranged the queue, so that too can bypass the
@@ -421,6 +425,16 @@ impl Engine {
     /// it -- and took the output lock to do so. A tenth of a second is well
     /// inside what any consumer can perceive and two orders of magnitude less
     /// work.
+    /// How often the frame clock is written to the log.
+    ///
+    /// Not a display rate: this exists so a drift figure can be taken from two
+    /// lines far apart, and so a power cut costs one interval rather than the
+    /// whole window. Five minutes matches the sampler already reading
+    /// `/proc/asound` on `bose`, which is the independent instrument this has
+    /// to be checked against `[LOG-DRIFT-010]`.
+    pub(crate) const CLOCK_LOG_EVERY: std::time::Duration =
+        std::time::Duration::from_secs(300);
+
     pub(crate) const PUBLISH_EVERY: std::time::Duration =
         std::time::Duration::from_millis(100);
 
@@ -439,6 +453,7 @@ impl Engine {
             path,
             out_room: 0,
             publish_at: None,
+            clock_log_at: None,
             published: None,
             queue_edited: false,
             last_lock_failures: 0,
@@ -562,8 +577,40 @@ impl Engine {
             self.publish_at = Some(now + Self::PUBLISH_EVERY);
             self.publish();
         }
+        self.log_clock(now);
         self.persist(false);
         submitted
+    }
+
+    /// Write the frame clock out, periodically.
+    ///
+    /// Deliberately a log line and not a snapshot field: the snapshot is
+    /// pushed to every browser twice a second and this is read twice a day.
+    /// The pair `frames`/`at_nanos` is emitted together because a rate is
+    /// regressed from both and either alone says nothing; `delay` is the
+    /// measured half of this node's presentation offset `[GDE-ECHO-430]`; and
+    /// `ts` reports whether any of it rests on real hardware timestamps or on
+    /// cpal's silent software substitute `[GDE-ECHO-290]`, which is the one
+    /// thing a reader cannot otherwise tell.
+    fn log_clock(&mut self, now: std::time::Instant) {
+        if self.clock_log_at.is_some_and(|t| now < t) {
+            return;
+        }
+        self.clock_log_at = Some(now + Self::CLOCK_LOG_EVERY);
+        if let Some(r) = self.path.ring.as_ref() {
+            let (frames, at_nanos) = r.clock.sample();
+            // Nothing has left the device yet -- a stream that has just opened,
+            // or one that never will. Saying so beats logging a zero that
+            // reads like a measurement `[GOV-SRC-040]`.
+            if frames == 0 {
+                return;
+            }
+            eprintln!(
+                "clock: frames={} at_nanos={} delay={} rate={} ts={:?} callbacks={}",
+                frames, at_nanos, r.clock.delay_frames(), r.sample_rate(),
+                r.clock.timestamps(), r.clock.callbacks()
+            );
+        }
     }
 
     fn drain_commands(&mut self) {
