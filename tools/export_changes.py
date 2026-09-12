@@ -48,6 +48,71 @@ def has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
+def label_for_recording(conn: sqlite3.Connection, mbid: str) -> dict:
+    """Title and artist, as *this* library knows them `[SPEC-DF-108]`.
+
+    Carried with every change because the receiving side frequently cannot
+    work it out. "Not present here" is precisely the verdict that means the
+    target has never seen this recording, and a conflict is reported against
+    `remote_snapshot.py`'s reconstruction, which holds only the handful of
+    rows the merge itself needed -- neither has a title to show. So the
+    exporting side, which does know, says it once, and every later report
+    can name the song instead of twelve hex characters.
+
+    Advisory, never an identity: `apply_changes.py` still resolves by
+    `audio_md5` and `recording_mbid`, exactly as before. This only decides
+    what a person reads.
+    """
+    if not mbid:
+        return {}
+    # A label is advisory, so it must never be able to fail an export.
+    # `recordings`/`artists`/`releases` are all tables a minimal or
+    # partial library can legitimately lack -- several of this project's
+    # own fixtures do -- and a missing title is simply a change reported
+    # by its hash, exactly as before this existed.
+    try:
+        return _label(conn, mbid)
+    except sqlite3.Error:
+        return {}
+
+
+def _label(conn: sqlite3.Connection, mbid: str) -> dict:
+    row = conn.execute("SELECT title FROM recordings WHERE mbid = ?1", (mbid,)).fetchone()
+    artist = conn.execute(
+        """SELECT a.name FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid
+            WHERE ra.mbid = ?1 ORDER BY ra.weight DESC LIMIT 1""", (mbid,)).fetchone()
+    out = {}
+    if row and row[0]:
+        out["title"] = row[0]
+    if artist and artist[0]:
+        out["artist"] = artist[0]
+    return out
+
+
+def label_for_passage(conn: sqlite3.Connection, passage_id) -> dict:
+    """The same, for a passage: whatever recording it currently points at."""
+    if passage_id is None:
+        return {}
+    try:
+        return _passage_label(conn, passage_id)
+    except sqlite3.Error:
+        return {}
+
+
+def _passage_label(conn: sqlite3.Connection, passage_id) -> dict:
+    row = conn.execute(
+        """SELECT pr.mbid FROM passage_recordings pr WHERE pr.passage_id = ?1
+            ORDER BY pr.weight DESC, pr.mbid LIMIT 1""", (passage_id,)).fetchone()
+    label = label_for_recording(conn, row[0]) if row else {}
+    album = conn.execute(
+        """SELECT rel.title FROM release_recordings rr JOIN releases rel ON rel.mbid = rr.release_mbid
+            WHERE rr.mbid = ?1 ORDER BY rr.chosen DESC LIMIT 1""",
+        (row[0],)).fetchone() if row else None
+    if album and album[0]:
+        label["album"] = album[0]
+    return label
+
+
 def export_id_reviews(conn: sqlite3.Connection, hostname: str) -> list:
     changes = []
     origin_expr = "r.origin" if has_column(conn, "id_reviews", "origin") else "NULL"
@@ -79,6 +144,7 @@ def export_id_reviews(conn: sqlite3.Connection, hostname: str) -> list:
             "target": {"mbid": chosen_mbid, "title": title, "artists": artists},
             "decided_at": decided_at,
             "origin": origin or hostname,
+            "label": label_for_recording(conn, chosen_mbid),
         })
     return changes
 
@@ -103,13 +169,13 @@ def export_boundary_reviews(conn: sqlite3.Connection, hostname: str) -> list:
                  if have_fade else "NULL, NULL, NULL, NULL")
     orig_fade_cols = ("orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve"
                        if have_fade else "NULL, NULL, NULL, NULL")
-    for (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, fade_in_ms, fade_out_ms,
+    for (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, fade_in_ms, fade_out_ms,
          fade_in_curve, fade_out_curve,
          audio_md5, orig_kind, orig_start_ms, orig_end_ms,
          orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
          orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve,
          decided_at, origin) in conn.execute(
-        f"""SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, {fade_cols},
+        f"""SELECT passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, {fade_cols},
                   audio_md5, orig_kind, orig_start_ms, orig_end_ms,
                   orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, {orig_fade_cols},
                   decided_at, {origin_expr}
@@ -138,6 +204,7 @@ def export_boundary_reviews(conn: sqlite3.Connection, hostname: str) -> list:
             "target": target,
             "decided_at": decided_at,
             "origin": origin or hostname,
+            "label": label_for_passage(conn, passage_id),
         })
     return changes
 
@@ -160,6 +227,7 @@ def export_artist_reviews(conn: sqlite3.Connection, hostname: str) -> list:
             "target": {"artist_mbid": artist_mbid, "artist_name": artist_name},
             "decided_at": decided_at,
             "origin": origin or hostname,
+            "label": label_for_recording(conn, recording_mbid),
         })
     return changes
 

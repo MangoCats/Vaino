@@ -240,6 +240,28 @@ def history_for(conn: sqlite3.Connection, table: str, where: str, params: tuple)
     return {"decided_at": decided_at, "origin": origin or "here"}
 
 
+def human(change: dict, fallback: str) -> str:
+    """What a person calls this change `[SPEC-DF-108]`.
+
+    `subject` used to be `audio_md5[:12]` and nothing else, which is a
+    correct identity and an unusable label: a report of four conflicts read
+    as four hex strings, and the only way to find out which songs they were
+    was to go and query for them by hand. `export_changes.py` now carries a
+    title and artist with every change, from the library that has them.
+
+    The technical identifier is kept, never replaced -- it is what actually
+    resolves the change, and it is what anyone debugging this needs. It just
+    no longer travels alone.
+    """
+    label = change.get("label") or {}
+    title, artist = label.get("title"), label.get("artist")
+    if title and artist:
+        return f'"{title}" by {artist}  [{fallback}]'
+    if title:
+        return f'"{title}"  [{fallback}]'
+    return fallback
+
+
 def report_conflict(n: int, kind: str, subject: str, change: dict, current_desc: str, history) -> None:
     say(f"\n#{n} CONFLICT  {kind}: {subject}")
     say(f"   incoming ({change['origin']}, decided {change['decided_at']}): {describe(change['target'], kind)}")
@@ -525,6 +547,13 @@ def main() -> int:
     clear_flags_ok = args.clear_flags and "listener_flags" in have
 
     say(f"{len(changes)} change(s) in {args.changes}")
+    # Per-change detail for whatever is *not* routine `[SPEC-DF-108]`. The
+    # counts alone answer "did it work"; they cannot answer "which song is
+    # stuck, and why", which is the only question a person has once the
+    # answer to the first one is no. `noop` and plain fast-forwards are
+    # deliberately left out: a list of everything that went fine is how the
+    # two entries that did not get lost.
+    details: list = []
     counts = {"fastforward": 0, "noop": 0, "conflict": 0, "missing": 0, "resolved": 0, "error": 0,
               "cleared": 0}
     # `--emit-sql` already has an open transaction from schema readiness
@@ -544,7 +573,7 @@ def main() -> int:
             passage_id = resolve_passage(conn, anchor)
             current = {"mbid": current_recording(conn, passage_id)} if passage_id else None
             keys = ["mbid"]
-            subject = anchor["audio_md5"][:12] + "…"
+            subject = human(change, anchor["audio_md5"][:12] + "…")
             history = history_for(conn, "id_reviews", "passage_id=?1", (passage_id,)) if passage_id else None
         elif kind == "boundary_review":
             passage_id = resolve_boundary_passage(conn, change)
@@ -557,7 +586,7 @@ def main() -> int:
             # conflict over fields it never meant to touch.
             if "fade_in_ms" in change["target"]:
                 keys += ["fade_in_ms", "fade_out_ms", "fade_in_curve", "fade_out_curve"]
-            subject = anchor["audio_md5"][:12] + "…"
+            subject = human(change, anchor["audio_md5"][:12] + "…")
             history = history_for(conn, "boundary_reviews", "passage_id=?1", (passage_id,)) if passage_id else None
         elif kind == "artist_review":
             recording_mbid = anchor["recording_mbid"]
@@ -565,7 +594,7 @@ def main() -> int:
                 "SELECT 1 FROM recordings WHERE mbid=?1", (recording_mbid,)).fetchone()
             current = current_artist(conn, recording_mbid) if has_recording else None
             keys = ["artist_mbid"]
-            subject = f"recording {recording_mbid}"
+            subject = human(change, f"recording {recording_mbid}")
             history = history_for(conn, "artist_reviews", "recording_mbid=?1", (recording_mbid,))
         else:
             say(f"#{i}: unknown change kind {kind!r}, skipped")
@@ -575,6 +604,11 @@ def main() -> int:
         verdict = classify(current, change["baseline"], change["target"], keys)
         if verdict == "missing":
             say(f"#{i} {kind}: not present here ({subject}) -- nothing to resolve this against")
+            details.append({"n": i, "kind": kind, "verdict": "missing", "subject": subject,
+                            "label": change.get("label") or {}, "anchor": change["anchor"],
+                            "incoming": describe(change["target"], kind),
+                            "origin": change.get("origin"),
+                            "decided_at": change.get("decided_at")})
             counts["missing"] += 1
             continue
         if verdict == "noop":
@@ -584,6 +618,14 @@ def main() -> int:
             resolved = resolutions.get(i)
             if resolved == "skip" or resolved is None:
                 report_conflict(i, kind, subject, change, describe(current, kind), history)
+                details.append({"n": i, "kind": kind, "verdict": "conflict", "subject": subject,
+                                "label": change.get("label") or {}, "anchor": change["anchor"],
+                                "incoming": describe(change["target"], kind),
+                                "baseline": describe(change["baseline"], kind),
+                                "here": describe(current, kind),
+                                "origin": change.get("origin"),
+                                "decided_at": change.get("decided_at"),
+                                "diverged": bool(history)})
                 counts["conflict"] += 1
                 continue
             counts["resolved"] += 1
@@ -655,7 +697,8 @@ def main() -> int:
         # remote actually needs" -- `patch_statements` alone is not: it
         # always includes `ensure_review_tables`'s own schema-setup
         # statements, so it is never zero even when nothing changed.
-        say(json.dumps({**counts, "patch_statements": patch_statements, "landed": bool(landed)}))
+        say(json.dumps({**counts, "patch_statements": patch_statements,
+                        "landed": bool(landed), "details": details}))
     return 0
 
 
