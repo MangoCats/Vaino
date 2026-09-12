@@ -131,8 +131,8 @@ listener hearing both would hear the colouration deepen across every passage
 and snap back at each boundary — the changing artefact that is more noticeable
 than a constant offset.
 
-`[GDE-ECHO-110]`'s favourable conclusion was explicitly conditional on both
-nodes being sub-ppm. `bose` is, at 0.432. Smart is not, at 9.96. **A
+The favourable conclusion in `[GDE-ECHO-110]` was explicitly conditional on
+both nodes being sub-ppm. `bose` is, at 0.432. Smart is not, at 9.96. **A
 bose↔Smart pair therefore requires the continuous trim of Phase 5
 `[GDE-ECHO-340]`, not a boundary resync.** A bose↔`teacherslounge` pair might
 still qualify — teacherslounge is self-clocked like bose and unmeasured.
