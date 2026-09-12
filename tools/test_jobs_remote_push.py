@@ -279,6 +279,111 @@ def test_the_player_restarts_even_when_the_patch_fails(tmp: str) -> None:
     # is the `&&`, and that is exactly what these three checks pin.
 
 
+
+def fake_spawn_per_peer(changes_doc, failing_hosts=(), captured=None):
+    """`fake_spawn_success`, but `apply-remote` fails for the named hosts.
+
+    A fan-out's whole reason for existing is what it does when one node is
+    broken and the others are not, so the fake has to be able to be broken
+    for exactly one of them.
+    """
+    inner = fake_spawn_success(changes_doc)
+
+    def _spawn(self, job_id, stage, argv):
+        if stage == "apply-remote":
+            host = argv[1]
+            if captured is not None:
+                captured.setdefault("apply-remote", []).append(argv)
+            return (1, "readonly database") if host in failing_hosts else (0, "")
+        if stage == "send":
+            if captured is not None:
+                captured.setdefault("send", []).append(argv)
+            return 0, ""
+        return inner(self, job_id, stage, argv)
+    return _spawn
+
+
+def test_push_all_visits_every_ticked_peer(tmp: str) -> None:
+    print()
+    print("a fan-out pushes to every ticked node, and only the ticked ones")
+    library = os.path.join(tmp, "fanout.db")
+    build_library(library)
+    runner = jobmod.Runner(library, os.path.join(tmp, "fanout.console.db"))
+    runner.upsert_peer("vainopi", "pi@vainopi:/srv/library/library.db",
+                       "pi@vainopi:/var/vaino/listener.db")
+    runner.upsert_peer("bose", "pi@bose:/srv/library/library.db",
+                       "pi@bose:/var/vaino/listener.db")
+    runner.upsert_peer("teacherslounge", "sw@teacherslounge:/home/sw/vaino-data/library.db",
+                       "sw@teacherslounge:/home/sw/vaino-data/listener.db")
+    runner.set_peer_enabled("bose", False)      # deliberately left out
+    names = [p["name"] for p in runner.peers_for_push()]
+    check(names == ["teacherslounge", "vainopi"],
+          f"only the ticked peers are pushed to, alphabetically, got {names}")
+
+    captured = {}
+    runner._spawn = fake_spawn_per_peer(CHANGES_DOC, captured=captured).__get__(
+        runner, jobmod.Runner)
+    j = wait_for(runner, runner.submit("remote-push-all", json.dumps(names)))
+    check(j["state"] == "done", f"expected done, got {j['state']}")
+    result = j["result"]
+    check(result["attempted"] == 2 and result["succeeded"] == 2,
+          f"both ticked peers must be attempted and succeed, got {result}")
+    check(sorted(result["peers"]) == ["teacherslounge", "vainopi"],
+          f"a result per peer, got {sorted(result['peers'])}")
+    hosts = sorted(a[1] for a in captured.get("apply-remote", []))
+    check(hosts == ["pi@vainopi", "sw@teacherslounge"],
+          f"and bose, unticked, must never have been contacted; got {hosts}")
+    # Each peer's work must be kept apart, or two peers in one job overwrite
+    # each other's changes.json and patch.
+    sent = [a[1] for a in captured.get("send", [])]
+    check(len(set(sent)) == len(sent), f"each peer needs its own patch file, got {sent}")
+
+
+def test_one_failing_peer_does_not_stop_the_others(tmp: str) -> None:
+    print()
+    print("a node that fails is reported, and the rest are still pushed to")
+    # The reason the per-peer result is kept separately at all: an
+    # unreachable bose must not silently cancel a push to vainopi that would
+    # have worked, and "1 of 2" is a true answer a single exit code cannot give.
+    library = os.path.join(tmp, "partial.db")
+    build_library(library)
+    runner = jobmod.Runner(library, os.path.join(tmp, "partial.console.db"))
+    runner.upsert_peer("vainopi", "pi@vainopi:/srv/library/library.db",
+                       "pi@vainopi:/var/vaino/listener.db")
+    runner.upsert_peer("bose", "pi@bose:/srv/library/library.db",
+                       "pi@bose:/var/vaino/listener.db")
+    captured = {}
+    runner._spawn = fake_spawn_per_peer(
+        CHANGES_DOC, failing_hosts=("pi@bose",), captured=captured).__get__(
+            runner, jobmod.Runner)
+    j = wait_for(runner, runner.submit("remote-push-all", json.dumps(["bose", "vainopi"])))
+    result = j["result"]
+    check(j["state"] == "failed", f"a job with a failed peer must say so, got {j['state']}")
+    check(result["failed"] == ["bose"], f"and name which one, got {result['failed']}")
+    check(result["succeeded"] == 1 and result["attempted"] == 2,
+          f"1 of 2, not all-or-nothing, got {result}")
+    hosts = [a[1] for a in captured.get("apply-remote", [])]
+    check("pi@vainopi" in hosts,
+          f"the working peer must still have been pushed to after the failure, got {hosts}")
+    logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
+    check(any("1 of 2 peer(s) updated" in t for t in logs),
+          f"the log must say how many of how many, got {logs[-3:]}")
+
+
+def test_a_deleted_peer_is_skipped_not_fatal(tmp: str) -> None:
+    print()
+    print("a peer removed while the job was queued is skipped, not crashed on")
+    library = os.path.join(tmp, "gone.db")
+    build_library(library)
+    runner = jobmod.Runner(library, os.path.join(tmp, "gone.console.db"))
+    runner._spawn = fake_spawn_per_peer(CHANGES_DOC).__get__(runner, jobmod.Runner)
+    j = wait_for(runner, runner.submit("remote-push-all", json.dumps(["ghost"])))
+    check(j["state"] == "failed", f"expected failed, got {j['state']}")
+    check(j["result"]["failed"] == ["ghost"], f"got {j['result']}")
+    logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
+    check(any("no such peer" in t for t in logs), f"and say why, got {logs}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_push_lands_a_change(tmp)
@@ -287,6 +392,9 @@ def main() -> int:
         test_a_split_peer_is_patched_through_its_listener_half(tmp)
         test_an_unsplit_peer_keeps_the_single_file_command(tmp)
         test_the_player_restarts_even_when_the_patch_fails(tmp)
+        test_push_all_visits_every_ticked_peer(tmp)
+        test_one_failing_peer_does_not_stop_the_others(tmp)
+        test_a_deleted_peer_is_skipped_not_fatal(tmp)
 
     print()
     if FAILED:

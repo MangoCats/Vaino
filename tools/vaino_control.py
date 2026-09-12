@@ -127,11 +127,20 @@ def peer_reachable(remote: str, timeout: float = 2.0) -> bool:
     Never raises: an unresolvable name, a down host and a firewalled port
     are all simply "not reachable" to a person looking at a list.
     """
-    host = peer_host(remote)
+    return _reachable_on(peer_host(remote), 22, timeout)
+
+
+def _reachable_on(host: str, port: int, timeout: float = 2.0) -> bool:
+    """The socket question itself, with the port a parameter.
+
+    Split out from `peer_reachable` so it can be tested against a listener
+    this machine actually owns. A test that needed `bose` to be plugged in
+    would fail for reasons having nothing to do with this code.
+    """
     if not host:
         return False
     try:
-        with socket.create_connection((host, 22), timeout=timeout):
+        with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
         return False
