@@ -381,7 +381,7 @@ impl Session {
     /// refill it, and the SD card is needed to decode from it.
     /// Driven through `Playback` rather than `Engine` `[SPEC-BK-020]`: a
     /// rebuild waits on how much is queued, and that is true of any backend.
-    fn tend_rebuild(&mut self, engine: &dyn Playback) {
+    fn tend_rebuild(&mut self, engine: &dyn crate::switch::Backend) {
         if let Some(rx) = &self.rebuild {
             match rx.try_recv() {
                 Err(std::sync::mpsc::TryRecvError::Empty) => return, // still building
@@ -474,13 +474,29 @@ impl Session {
     /// un-suppressed and could pick a sibling that rotation had ruled out
     /// `[REQ-PD-112]`. The notes are rebuilt rather than moved because each one
     /// holds the *previous* value from the Director that issued it.
-    fn adopt(&mut self, fresh: Director, engine: &dyn Playback) {
+    fn adopt(&mut self, fresh: Director, engine: &dyn crate::switch::Backend) {
         self.director = Some(fresh);
         self.notes.clear();
         let now = unix_now();
-        let queued: Vec<i64> = engine.queued_ids();
+        // **The sounding passage first, and it is not in `queued_ids`.**
+        //
+        // A passage leaves the queue the moment it is admitted to the mixer,
+        // and `record_play` does not write its history row until it crosses the
+        // counted threshold minutes later. Between those two points it is in
+        // neither place a fresh Director reads, so it was silently un-noted --
+        // and a restart mid-passage left its recording, its work and its artist
+        // looking as though they had last played whenever they previously did.
+        //
+        // Found live on 2026-09-11: `vainopi` was restarted 3m46s into
+        // "Funeral for a Friend / Love Lies Bleeding", and the replacement
+        // Director read Elton John's last play as 21 days earlier. Thirteen
+        // minutes later it queued another recording of the same song, through
+        // an 8-hour artist block that never saw a reason to fire
+        // `[GDE-WRK-010]`.
+        let sounding = engine.head_position().map(|(id, _)| id);
+        let ids: Vec<i64> = sounding.into_iter().chain(engine.queued_ids()).collect();
         if let Some(d) = self.director.as_mut() {
-            for id in queued {
+            for id in ids {
                 if let Some(note) = d.note_queued(id, now) {
                     self.notes.insert(id, note);
                 }
@@ -492,10 +508,8 @@ impl Session {
     /// Put the pool size where the browser can see it.
     fn publish_pool(&self) {
         let Some(c) = self.census() else { return };
-        let total = c.eligible + c.artist_blocked + c.recording_blocked + c.related_blocked
-            + c.work_blocked + c.below_min_weight + c.filtered;
         if let Ok(mut ctl) = self.controls.lock() {
-            ctl.pool = Some((c.eligible, total));
+            ctl.pool = Some((c.eligible, c.total()));
         }
     }
 
@@ -1029,6 +1043,138 @@ mod tests {
             &[5, 2, 6],
             "the remembered queue comes back in play order, ahead of any refill"
         );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A file-backed library with the tables `Director::load` needs.
+    ///
+    /// Separate from `library_on_disk`, deliberately: adding these to the
+    /// shared fixture would give every other session test a real Director
+    /// where it currently exercises the uniform-random fallback, which is a
+    /// different thing from what those tests are about.
+    fn director_library_on_disk(name: &str) -> std::path::PathBuf {
+        let tmp = std::env::temp_dir()
+            .join(format!("vaino-dir-{name}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let c = rusqlite::Connection::open(&tmp).unwrap();
+        c.execute_batch(
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL,
+                                 duration_ms INTEGER);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,
+                 kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+                 lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
+             CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT);
+             CREATE TABLE recording_relations (mbid TEXT, related_mbid TEXT, strength REAL);
+             CREATE TABLE works (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE recording_works (mbid TEXT, work_mbid TEXT);
+             CREATE TABLE listener_preferences (subject_kind TEXT, subject_id TEXT,
+                 rotation REAL, recovery REAL, restraint REAL);
+             CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                 played_at INTEGER, passage_id INTEGER, mbid TEXT);
+             CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
+                 artist_time_scale REAL, recording_time_scale REAL, updated_at TEXT);
+             CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT);
+             CREATE TABLE listener_occasion_points (characteristic TEXT, class TEXT,
+                 month INTEGER, day INTEGER, multiplier REAL);
+             CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,
+                 class TEXT, value REAL, source TEXT, accuracy REAL);
+             INSERT INTO files VALUES (1, '/m/a.mp3', 600000);
+             -- three 180 s radio passages, one album passage that must never appear
+             INSERT INTO passages VALUES (1,1,'radio',0,180000,0,0,0.0);
+             INSERT INTO passages VALUES (2,1,'radio',0,180000,0,0,0.0);
+             INSERT INTO passages VALUES (3,1,'radio',0,180000,0,0,0.0);
+             INSERT INTO passages VALUES (4,1,'album',0,180000,0,0,0.0);
+             INSERT INTO passage_recordings VALUES (1,'rec-a',1.0),(2,'rec-b',1.0),(3,'rec-c',1.0);
+             INSERT INTO recording_artists VALUES ('rec-a','art-1'),('rec-b','art-2'),
+                                                  ('rec-c','art-3');
+             -- Added after the fact, exactly like the real migration
+             -- (`tools/add_fade_columns.py`) adds them to a live database
+             -- `[SPEC-SUI-226]` -- so every existing bare `INSERT INTO
+             -- passages VALUES (...)` above keeps working unmodified,
+             -- backfilled with the same default a real ALTER TABLE gives
+             -- every existing row.
+             ALTER TABLE passages ADD COLUMN fade_in_ms INTEGER NOT NULL DEFAULT 20;
+             ALTER TABLE passages ADD COLUMN fade_out_ms INTEGER NOT NULL DEFAULT 20;
+             ALTER TABLE passages ADD COLUMN fade_in_curve TEXT NOT NULL DEFAULT 'exponential';
+             ALTER TABLE passages ADD COLUMN fade_out_curve TEXT NOT NULL DEFAULT 'exponential';",
+        )
+        .unwrap();
+        drop(c);
+        tmp
+    }
+
+    /// A backend that is **sounding but has an empty queue** -- the shape a
+    /// restart leaves behind, and the one `queued_ids` alone cannot describe.
+    struct Sounding(i64);
+
+    impl Playback for Sounding {
+        fn capabilities(&self) -> crate::playback::Capabilities {
+            crate::playback::Capabilities::FULL
+        }
+        fn enqueue(&mut self, _e: crate::queue::QueueEntry) {}
+        fn queued_ids(&self) -> Vec<i64> {
+            Vec::new() // admitted to the mixer, so no longer queued
+        }
+        fn queued_ms(&self) -> u64 {
+            0
+        }
+        fn shortfall(&self) -> usize {
+            0
+        }
+        fn take_dropped(&mut self) -> Vec<i64> {
+            Vec::new()
+        }
+        fn resume_at(&mut self, _position_ms: u64) {}
+        fn tick(&mut self) -> usize {
+            0
+        }
+        fn is_shutdown(&self) -> bool {
+            false
+        }
+    }
+    impl crate::switch::FadeOut for Sounding {
+        fn fade_out(&mut self, _ms: u64) -> crate::switch::Stopped {
+            crate::switch::Stopped::Cut
+        }
+    }
+    impl crate::switch::Publish for Sounding {
+        fn publish(&mut self, _p: &crate::switch::Published<'_>) {}
+    }
+    impl crate::switch::Progress for Sounding {
+        fn head_position(&self) -> Option<(i64, u64)> {
+            Some((self.0, 1_000))
+        }
+    }
+
+    /// The first half of the 2026-09-11 incident `[GDE-WRK-010]`. A passage
+    /// leaves the queue when it is admitted to the mixer and does not reach
+    /// `listener_play_history` until it crosses the counted threshold minutes
+    /// later; a Director rebuilt in between reads neither, so the passage
+    /// sounding *right now* looked as though it had never played.
+    #[test]
+    fn adopting_notes_the_sounding_passage_which_is_in_no_queue() {
+        let tmp = director_library_on_disk("sounding");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+
+        let before = lib.director().unwrap();
+        assert!(
+            before.weigh_all(unix_now()).iter().any(|(e, w)| e.passage_id == 3
+                && w.is_eligible()),
+            "passage 3 starts eligible, or the test proves nothing"
+        );
+
+        session.adopt(lib.director().unwrap(), &Sounding(3));
+        let held = session
+            .director
+            .as_ref()
+            .unwrap()
+            .weigh_all(unix_now())
+            .into_iter()
+            .filter(|(e, w)| e.passage_id == 3 && !w.is_eligible())
+            .count();
+        assert_eq!(held, 1, "the sounding passage must be noted, not left un-suppressed");
         let _ = std::fs::remove_file(&tmp);
     }
 

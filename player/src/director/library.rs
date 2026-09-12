@@ -910,6 +910,38 @@ pub struct Census {
     pub total_weight: f64,
 }
 
+impl Census {
+    /// Every passage weighed, whatever became of it.
+    ///
+    /// `census` puts each passage in exactly one bucket, so this is the radio
+    /// passage count. It lives here rather than at the call site because it
+    /// was a hand-written sum in `publish_pool` and drifted twice: `suppressed`
+    /// was never in it, so a skipped passage made the browser's pool read
+    /// short, and `work_blocked` had to be remembered when it was added
+    /// `[GDE-WRK-240]`. A new exclusion now reaches the total by existing.
+    pub fn total(&self) -> usize {
+        let Census {
+            eligible,
+            suppressed,
+            artist_blocked,
+            recording_blocked,
+            related_blocked,
+            work_blocked,
+            below_min_weight,
+            filtered,
+            total_weight: _,
+        } = self;
+        eligible
+            + suppressed
+            + artist_blocked
+            + recording_blocked
+            + related_blocked
+            + work_blocked
+            + below_min_weight
+            + filtered
+    }
+}
+
 /// Curves and the per-subject values they apply to `[SPEC-DIR-130]`.
 ///
 /// Missing tables are not an error: a library with no occasions defined simply
@@ -1211,6 +1243,55 @@ mod tests {
         let cen = d.census(NOW);
         assert_eq!(cen.work_blocked, 1, "rec-a must be held by the work it shares with rec-b");
         assert_eq!(cen.eligible, 1, "only rec-c is left");
+    }
+
+    /// `[GDE-WRK-240]`: the pool total the browser sees must account for every
+    /// passage, or a suppressed one makes the library look smaller than it is.
+    /// Pinned against the passage count rather than a literal so a new
+    /// exclusion cannot quietly fall out of it.
+    #[test]
+    fn the_census_accounts_for_every_passage() {
+        let c = fixture();
+        c.execute_batch(
+            "CREATE TABLE listener_rejections (mbid TEXT, rejected_at INTEGER, kind TEXT);",
+        )
+        .unwrap();
+        c.execute("INSERT INTO listener_play_history VALUES (1, ?1, 1, 'rec-a')", [NOW - 60])
+            .unwrap();
+        c.execute("INSERT INTO listener_rejections VALUES ('rec-b', ?1, 'skip')", [NOW - 60])
+            .unwrap();
+        let mut d = Director::load(&c).unwrap();
+        d.set_suppress_h((24, 6)); // a skip window, or nothing is suppressed
+        let cen = d.census(NOW);
+        assert!(cen.suppressed > 0, "the fixture must actually exercise suppression");
+        assert_eq!(cen.total(), d.len(), "every radio passage lands in exactly one bucket");
+    }
+
+    /// **Both history columns are nullable**, and the live listener database
+    /// carries 52 rows of 37,763 with a null `passage_id`. Reading it as a
+    /// plain `i64` made `Director::load` fail outright against real data while
+    /// every test stayed green, because every other fixture row here has one.
+    /// Each tier must still stamp from whichever column the row does carry.
+    #[test]
+    fn a_play_row_with_a_null_passage_or_mbid_still_loads_and_still_blocks() {
+        let c = fixture();
+        // No passage_id: the recording tier is all this row can feed.
+        c.execute("INSERT INTO listener_play_history VALUES (1, ?1, NULL, 'rec-a')", [NOW - 60])
+            .unwrap();
+        // No mbid: the passage tier is all this row can feed.
+        c.execute("INSERT INTO listener_play_history VALUES (2, ?1, 2, NULL)", [NOW - 60])
+            .unwrap();
+        // Neither: it must be skipped rather than panicking or stamping nothing.
+        c.execute("INSERT INTO listener_play_history VALUES (3, ?1, NULL, NULL)", [NOW - 60])
+            .unwrap();
+        let d = Director::load(&c).expect("null columns must not fail the load");
+        let cen = d.census(NOW);
+        assert_eq!(cen.eligible, 1, "rec-a by its recording, passage 2 by itself");
+        // rec-a's row also stamps its artist, and the artist pass runs first,
+        // so that passage reports the artist block; passage 2's row carries no
+        // mbid at all, so only the passage tier can be what holds it.
+        assert_eq!(cen.artist_blocked, 1, "the null-passage row still fed the recording/artist tiers");
+        assert_eq!(cen.recording_blocked, 1, "the null-mbid row still fed the passage tier");
     }
 
     /// A catalogue built before `[GDE-WRK-035]` has no `recording_works`. It

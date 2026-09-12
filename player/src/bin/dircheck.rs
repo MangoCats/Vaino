@@ -76,7 +76,7 @@ fn main() {
         "pool: {} eligible of {} | blocked: {} artist, {} recording, {} same song, {} related\n\
          \x20     {} under min weight, {} filtered, {} suppressed\n",
         cen.eligible,
-        radio,
+        cen.total(),
         cen.artist_blocked,
         cen.recording_blocked,
         cen.work_blocked,
