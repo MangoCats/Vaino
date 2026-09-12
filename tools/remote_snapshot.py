@@ -74,7 +74,36 @@ def _passage_row_sql(anchor: dict, extra_cols: str) -> str:
     )
 
 
-def _remote_review_schema(remote: str, timeout: float) -> dict:
+def _attach(listener: str | None) -> str:
+    """`ATTACH` the peer's listener half in front of a catalogue query.
+
+    The three review tables live in the LISTENER half of a split peer, and
+    every query here runs against the CATALOGUE path -- so on a split node
+    `_remote_review_schema` saw no review tables at all and the history
+    subqueries could not resolve one. The snapshot then looked "bare", and
+    `apply_changes.py` duly re-shipped the `CREATE TABLE`/`ALTER TABLE ADD
+    COLUMN` statements the remote already had. Exactly the failure this
+    file's own docstring predicted -- "re-shipping harmless-but-noisy
+    duplicate-column ALTERs to a remote that already has them every single
+    time" -- reached by a route it did not anticipate.
+
+    Not harmless in practice: `sqlite3` returns non-zero on each duplicate
+    column, so a push that had in fact landed all 44 of its changes reported
+    itself failed. Measured against `teacherslounge` 2026-09-12.
+
+    The same one thing `run_remote_sql` can do with a second path that
+    `remote_flags.py` already relies on `[SPEC-DF-119]`: `sqlite3` takes more
+    than one statement, and an unqualified table name then resolves down the
+    attach chain. Empty for an unsplit peer, which is unchanged.
+    """
+    if not listener:
+        return ""
+    path = listener.partition(":")[2] or listener
+    return "ATTACH DATABASE " + remote_peek.literal(path) + " AS lis; "
+
+
+def _remote_review_schema(remote: str, timeout: float,
+                          listener: str | None = None) -> dict:
     """Which of the three review tables the remote actually has, and which
     columns each one carries -- one round trip for the table names plus one
     per existing table for its columns, checked once per `fetch()` rather
@@ -97,8 +126,11 @@ def _remote_review_schema(remote: str, timeout: float) -> dict:
     to assuming nothing is known (querying every column defensively, the
     same posture this tool already took before this distinction existed).
     """
+    # Asked of the listener half when there is one: that is where the
+    # review tables are, and asking the catalogue reports none.
+    review_db = listener or remote
     result = remote_peek.run_remote_sql(
-        remote,
+        review_db,
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name IN ('id_reviews','boundary_reviews','artist_reviews')",
         timeout=timeout)
@@ -110,7 +142,7 @@ def _remote_review_schema(remote: str, timeout: float) -> dict:
         if table not in have:
             schema[table] = None
             continue
-        cols = remote_peek.run_remote_sql(remote, f"PRAGMA table_info({table})", timeout=timeout)
+        cols = remote_peek.run_remote_sql(review_db, f"PRAGMA table_info({table})", timeout=timeout)
         schema[table] = {c["name"] for c in cols["rows"]} if cols["ok"] else None
     return schema
 
@@ -133,7 +165,8 @@ def _history_cols(table: str, key_col: str, key_lit: str, remote_schema: dict) -
             f"AND applied_at IS NOT NULL) AS hist_decided_at, {origin_expr} AS hist_origin")
 
 
-def _id_review_row(remote: str, change: dict, timeout: float, remote_schema: dict) -> dict:
+def _id_review_row(remote: str, change: dict, timeout: float, remote_schema: dict,
+                   attach: str = "") -> dict:
     """One round trip: the anchor's own `passage_id` and current recording,
     whether the *target* recording already exists remotely (the one case
     `apply_id_review` cannot safely guess past -- a plain, non-`OR IGNORE`
@@ -147,7 +180,7 @@ def _id_review_row(remote: str, change: dict, timeout: float, remote_schema: dic
         "    ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS current_mbid, "
         f"({_exists('recordings', 'mbid', change['target']['mbid'])}) AS target_recording_exists, "
         + _history_cols("id_reviews", "passage_id", "p.passage_id", remote_schema))
-    result = remote_peek.run_remote_sql(remote, sql, timeout=timeout)
+    result = remote_peek.run_remote_sql(remote, attach + sql, timeout=timeout)
     if not result["ok"]:
         raise RuntimeError(result["error"])
     rows = result["rows"]
@@ -158,7 +191,8 @@ def _exists(table: str, column: str, value) -> str:
     return f"SELECT 1 FROM {table} WHERE {column} = {remote_peek.literal(value)}"
 
 
-def _boundary_row(remote: str, change: dict, timeout: float, remote_schema: dict) -> tuple[dict, bool]:
+def _boundary_row(remote: str, change: dict, timeout: float, remote_schema: dict,
+                  attach: str = "") -> tuple[dict, bool]:
     """Two attempts, the same fallback `remote_peek.py`'s own `peek()`
     already uses for a lone anchor: with the four fade columns, then without,
     on exactly the failure an unmigrated `passages` (no
@@ -181,7 +215,7 @@ def _boundary_row(remote: str, change: dict, timeout: float, remote_schema: dict
     no_fade_cols = (", p.lead_in_ms, p.lead_out_ms, p.gain_db, " + hist)
 
     def attempt(a: dict, cols: str):
-        return remote_peek.run_remote_sql(remote, _passage_row_sql(a, cols), timeout=timeout)
+        return remote_peek.run_remote_sql(remote, attach + _passage_row_sql(a, cols), timeout=timeout)
 
     result = attempt(anchor, fade_cols)
     has_fade = True
@@ -199,7 +233,8 @@ def _boundary_row(remote: str, change: dict, timeout: float, remote_schema: dict
     return (result2["rows"][0] if result2["rows"] else {}), has_fade
 
 
-def _artist_review_row(remote: str, change: dict, timeout: float, remote_schema: dict) -> dict:
+def _artist_review_row(remote: str, change: dict, timeout: float, remote_schema: dict,
+                       attach: str = "") -> dict:
     """One round trip: whether the recording is known here at all, its
     current credited artist, whether the *target* artist already exists
     (`apply_artist_review`'s own `artists` write is `INSERT OR IGNORE`, so
@@ -218,7 +253,7 @@ def _artist_review_row(remote: str, change: dict, timeout: float, remote_schema:
         f"    WHERE ra.mbid = {lit(rmbid)} ORDER BY ra.weight DESC, a.name LIMIT 1) AS current_artist_name, "
         f"({_exists('artists', 'mbid', change['target']['artist_mbid'])}) AS target_artist_exists, "
         + _history_cols("artist_reviews", "recording_mbid", lit(rmbid), remote_schema))
-    result = remote_peek.run_remote_sql(remote, sql, timeout=timeout)
+    result = remote_peek.run_remote_sql(remote, attach + sql, timeout=timeout)
     if not result["ok"]:
         raise RuntimeError(result["error"])
     rows = result["rows"]
@@ -226,7 +261,8 @@ def _artist_review_row(remote: str, change: dict, timeout: float, remote_schema:
 
 
 def fetch(remote: str, changes: list[dict],
-          timeout: float = remote_peek.TOTAL_TIMEOUT) -> tuple[dict, dict]:
+          timeout: float = remote_peek.TOTAL_TIMEOUT,
+          listener: str | None = None) -> tuple[dict, dict]:
     """One targeted answer per change -- `{index: {"row": {...}, "has_fade": bool}}`,
     `has_fade` only meaningful for `boundary_review`. A change whose kind is
     not one of the three this tool knows is left out; `build()` treats an
@@ -238,17 +274,24 @@ def fetch(remote: str, changes: list[dict],
     so `build()` needs no round trip of its own to learn which migrations a
     real remote already has.
     """
-    remote_schema = _remote_review_schema(remote, timeout)
+    remote_schema = _remote_review_schema(remote, timeout, listener)
+    # Every query below runs against the CATALOGUE path, and the history
+    # subqueries inside them name review tables that live in the other
+    # half. `attach` is the prefix that lets an unqualified name resolve
+    # down the chain; empty for an unsplit peer.
+    attach = _attach(listener)
     out = {}
     for i, change in enumerate(changes):
         kind = change["kind"]
         if kind == "id_review":
-            out[i] = {"row": _id_review_row(remote, change, timeout, remote_schema), "has_fade": None}
+            out[i] = {"row": _id_review_row(remote, change, timeout, remote_schema,
+                                                attach), "has_fade": None}
         elif kind == "boundary_review":
-            row, has_fade = _boundary_row(remote, change, timeout, remote_schema)
+            row, has_fade = _boundary_row(remote, change, timeout, remote_schema, attach)
             out[i] = {"row": row, "has_fade": has_fade}
         elif kind == "artist_review":
-            out[i] = {"row": _artist_review_row(remote, change, timeout, remote_schema), "has_fade": None}
+            out[i] = {"row": _artist_review_row(remote, change, timeout, remote_schema,
+                                                    attach), "has_fade": None}
         # An unknown kind is left for `apply_changes.py` itself to report,
         # exactly as it already does for one it reads locally.
     return out, remote_schema
@@ -421,6 +464,10 @@ def main() -> int:
     ap.add_argument("remote", help="user@host:/path/to/vaino.db")
     ap.add_argument("changes", help="changes.json from export_changes.py")
     ap.add_argument("-o", "--out", required=True)
+    ap.add_argument("--remote-listener",
+                    help="user@host:/path/to/listener.db, for a peer that has split "
+                         "[IMPL002 7.4] -- the review tables live there, not in the "
+                         "catalogue half this tool is otherwise pointed at")
     ap.add_argument("--timeout", type=float, default=remote_peek.TOTAL_TIMEOUT)
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -429,7 +476,8 @@ def main() -> int:
         changes = json.load(f).get("changes", [])
 
     try:
-        fetched, remote_schema = fetch(args.remote, changes, timeout=args.timeout)
+        fetched, remote_schema = fetch(args.remote, changes, timeout=args.timeout,
+                                       listener=args.remote_listener)
     except RuntimeError as e:
         if args.json:
             say(json.dumps({"ok": False, "error": str(e)}))

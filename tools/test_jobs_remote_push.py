@@ -267,8 +267,19 @@ def test_the_player_restarts_even_when_the_patch_fails(tmp: str) -> None:
     # is a disappointment; one that silently turns the music off in another
     # room is a fault.
     cmd = _apply_cmd_for(tmp, "restart", "pi@vainopi:/var/vaino/listener.db")
-    check("&& sudo systemctl start vaino" not in cmd,
-          f"the restart must not be guarded by the patch succeeding, got: {cmd!r}")
+    # Asserted on the MEANING, not on the presence of "&&": the restart is
+    # legitimately guarded by whether the node has the unit at all, and an
+    # earlier version of this check forbade the two characters rather than
+    # the dependency, so it failed the moment that guard was added.
+    apply_at = cmd.index("sqlite3")
+    start_at = cmd.index("sudo systemctl start vaino")
+    check(";" in cmd[apply_at:start_at],
+          f"the restart must be its own statement, not chained to the patch: {cmd!r}")
+    check("|| rc=$?" in cmd,
+          f"and the patch's own failure must be captured, not fatal: {cmd!r}")
+    # A node with no service is not stopped or started at all.
+    check("list-unit-files vaino.service" in cmd,
+          f"the unit must be checked for before it is managed: {cmd!r}")
     check("sudo systemctl start vaino" in cmd, f"and it must still happen, got: {cmd!r}")
     check("exit $rc" in cmd,
           f"while still reporting the patch's own failure to the job, got: {cmd!r}")

@@ -816,9 +816,17 @@ class Runner:
         if code != 0:
             return False, {"error": "export failed"}
         self._emit(job_id, "stage", "snapshot", stage="snapshot")
-        code, _ = self._spawn(job_id, "snapshot", [
+        snap_argv = [
             sys.executable, os.path.join(tools, "remote_snapshot.py"), target, changes_json,
-            "-o", snapshot_db, "--json"])
+            "-o", snapshot_db, "--json"]
+        # The review tables live in the listener half, so a split peer's
+        # schema cannot be read from the catalogue path alone. Without this
+        # the snapshot looks "bare" and the patch re-ships `CREATE TABLE`/
+        # `ALTER TABLE` statements the remote already has -- which sqlite3
+        # reports as errors, failing a push that in fact landed everything.
+        if split:
+            snap_argv += ["--remote-listener", listener]
+        code, _ = self._spawn(job_id, "snapshot", snap_argv)
         if code != 0:
             return False, {"error": "could not read the remote"}
         # `--emit-sql`: `snapshot_db` is a disposable comparison, never the
@@ -887,9 +895,18 @@ class Runner:
         self._emit(job_id, "stage", "apply-remote", stage="apply-remote")
         code, _ = self._spawn(job_id, "apply-remote", [
             "ssh", host,
-            "sudo systemctl stop vaino; rc=0; "
+            # Only a node that HAS the unit gets stopped and started.
+            # `teacherslounge` deliberately runs no service -- it is launched
+            # by hand -- and `systemctl stop vaino` there fails with "Unit
+            # vaino.service not found", which is noise on every push and, read
+            # quickly, looks like the push itself went wrong. A node with no
+            # service has nothing holding the database open, so there is
+            # nothing to stop.
+            'have=$(systemctl list-unit-files vaino.service 2>/dev/null | '
+            'grep -c "^vaino.service" || true); '
+            '[ "$have" != 0 ] && sudo systemctl stop vaino; rc=0; '
             f"{apply_sql} || rc=$?; "
-            "sudo systemctl start vaino; exit $rc"])
+            '[ "$have" != 0 ] && sudo systemctl start vaino; exit $rc'])
         if code == 0:
             self._emit(job_id, "log", f"{host} now has these changes.")
         else:
