@@ -146,12 +146,19 @@ pub struct Handoff {
 /// How much queued audio must be in hand before a live Director rebuild starts
 /// `[IMPL-SUI-075]`.
 ///
-/// Measured by `dircheck`: a rebuild over 8,330 radio passages takes **9.86 s
-/// on the appliance** and 0.89 s on a desktop, so three minutes covers the slow
-/// case eighteen times over. The margin is not really about time — the rebuild
-/// is off the audio path and cannot glitch a note. It is about **I/O**: those
-/// ten seconds are heavy SQLite reading from an SD card, and starting them only
+/// Measured by `dircheck` over 8,330 radio passages. **12.9 s on the
+/// appliance** as of 2026-09-12, against 11.5 s for the same library before the
+/// work tier `[GDE-WRK-035]` added a third history map — so three minutes still
+/// covers the slow case fourteen times over. The margin is not really about
+/// time: the rebuild is off the audio path and cannot glitch a note. It is
+/// about **I/O**, heavy SQLite reading from an SD card, and starting it only
 /// when decode is well ahead keeps the two from contending for the same card.
+///
+/// The figure this replaces was 9.86 s, and it was **stale rather than
+/// wrong** — measured on a smaller library, then read as a baseline for a
+/// change made much later. Re-measuring the old code on the current data is
+/// what separated a 12% cost from an apparent 31% one, and is the only way
+/// either number means anything `[GOV-SRC-020]`.
 ///
 /// The default depth of five passages holds far more than this, so in ordinary
 /// running the rebuild starts at once; the threshold bites only when the queue
