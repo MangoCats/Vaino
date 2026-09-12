@@ -42,6 +42,7 @@ folded into one spec.
 | Director as a guest | [GUIDE006](GUIDE006-director-as-a-guest.md) | [§5 Open](GUIDE006-director-as-a-guest.md#5-open) |
 | Deploy script naming and target signposting (renamed 2026-09-11; config persistence built) | [GUIDE011](GUIDE011-deploy-script-naming.md) | [§7 Configuration, and what is still open](GUIDE011-deploy-script-naming.md#7-configuration-and-what-is-still-open) |
 | External backends | [GUIDE007](GUIDE007-external-backends-investigation.md) | [§7 Open](GUIDE007-external-backends-investigation.md#7-open) |
+| Echo drift measurement (Phase 1 campaign, t0 taken 2026-09-12, second reads due 2026-09-13) | [LOG006](LOG006-echo-drift-measurement.md) | [§4 Open](LOG006-echo-drift-measurement.md#4-open) |
 | Echo playback — two or more instances, one programme, each from its own files (investigated 2026-09-11, not yet built) | [GUIDE008](GUIDE008-echo-playback-investigation.md) · [GUIDE009](GUIDE009-echo-playback-plan.md) · [GUIDE010](GUIDE010-echo-node-capabilities.md) | [GUIDE009 §10 Explicitly not in v1](GUIDE009-echo-playback-plan.md#10-explicitly-not-in-v1) |
 | Appliance setup | [VainoPi/IMPL001](../VainoPi/IMPL001-appliance-setup.md) | [§9 Open](../VainoPi/IMPL001-appliance-setup.md#9-open) |
 | Image & partitions | [VainoPi/PI001](../VainoPi/PI001-image-and-partitions.md) | [§7 What is not yet decided](../VainoPi/PI001-image-and-partitions.md#7-what-is-not-yet-decided) |
