@@ -1356,15 +1356,50 @@ impl Library {
         }
     }
 
+    /// Whether `name` is reachable on this connection, in **any** attached
+    /// schema -- not just `main`.
+    ///
+    /// `sqlite_master` is per-schema, and this asked `main` alone. Post-split
+    /// `main` is the *listener* half, so every catalogue table checked here
+    /// read as absent: `id_checks`, `release_recordings`, `cover_art`,
+    /// `ingest_decisions`. The callers then do whatever they do when a table
+    /// is genuinely missing, which is the quiet half of the failure -- no
+    /// error, just a feature that stops existing.
+    ///
+    /// Found live 2026-09-11 on the review page, which rendered "the
+    /// fingerprint pass has not been run against this library yet" over a
+    /// progress object it had filled in correctly on the same request:
+    /// `checked: 8273, contradicted: 604, ran: false`. The counts come from
+    /// `__LIB__.`-qualified queries and were right; only this unqualified
+    /// existence check was wrong. `/review/passage/12169` 404'd for a passage
+    /// that exists.
+    ///
+    /// The same shape `tools/` hit when the desktop split, fixed there as
+    /// `vaino_db.tables()` and never given a Rust equivalent -- `[PI-OWE-010]`'s
+    /// pattern, a catalogue question asked with the listener as `main`. This
+    /// is that equivalent: ask every schema `PRAGMA database_list` reports,
+    /// which is one schema when nothing is attached and costs the same as
+    /// before.
     fn has_table(&self, name: &str) -> bool {
-        self.conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                [name],
-                |r| r.get::<_, i64>(0),
-            )
-            .unwrap_or(0)
-            > 0
+        let schemas: Vec<String> = match self.conn.prepare("PRAGMA database_list") {
+            Ok(mut stmt) => match stmt.query_map([], |r| r.get::<_, String>(1)) {
+                Ok(rows) => rows.filter_map(Result::ok).collect(),
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        };
+        schemas.iter().any(|schema| {
+            // The schema name comes from SQLite itself and cannot be bound as
+            // a parameter, so it is quoted rather than interpolated bare.
+            let sql = format!(
+                "SELECT COUNT(*) FROM \"{}\".sqlite_master WHERE type='table' AND name=?1",
+                schema.replace('"', "\"\"")
+            );
+            self.conn
+                .query_row(&sql, [name], |r| r.get::<_, i64>(0))
+                .unwrap_or(0)
+                > 0
+        })
     }
 
     pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
@@ -2276,6 +2311,67 @@ mod tests {
         assert_eq!(rows[0].artist.as_deref(), Some("A Band"), "recording_artists+artists through lib");
         assert_eq!(rows[0].album.as_deref(), Some("An Album"), "release_recordings+releases through lib");
         assert_eq!(rows[1].kind, "play");
+
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+    }
+
+    /// `has_table` must answer for both halves, not just `main`.
+    ///
+    /// The regression for the review page reporting "the fingerprint pass has
+    /// not been run" while counting 8,273 checked passages on the same
+    /// request. `main` post-split is the listener half, so a bare
+    /// `sqlite_master` said every catalogue table was missing and the guards
+    /// in `review_queue`, `review_passage`, `review_progress`,
+    /// `release_recordings` and `cover_art` all tripped.
+    ///
+    /// Deliberately asserts a table from *each* half plus one that exists in
+    /// neither: an implementation that simply looked in the attached half
+    /// instead of `main` would pass a one-sided test just as happily as the
+    /// broken one did.
+    #[test]
+    fn has_table_sees_both_halves_of_a_split_pair() {
+        let listener_path = std::env::temp_dir()
+            .join(format!("vaino-hastable-listener-{}.db", std::process::id()));
+        let library_path = std::env::temp_dir()
+            .join(format!("vaino-hastable-library-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&listener_path);
+        let _ = std::fs::remove_file(&library_path);
+
+        let source = historyable();
+        let dest_lib = Connection::open(&library_path).unwrap();
+        for table in ["recordings", "artists", "recording_artists", "releases", "release_recordings"] {
+            copy_table(&source, &dest_lib, table);
+        }
+        drop(dest_lib);
+        let dest_listener = Connection::open(&listener_path).unwrap();
+        for table in ["listener_play_history", "listener_rejections", "listener_flags", "listener_preferences"] {
+            copy_table(&source, &dest_listener, table);
+        }
+        drop(dest_listener);
+
+        let lib = Library::open_split(&listener_path, &library_path).unwrap();
+        assert!(
+            lib.has_table("recordings"),
+            "a catalogue table lives in the attached half and must still be found"
+        );
+        assert!(
+            lib.has_table("release_recordings"),
+            "the catalogue table `release_recordings` guards its own query"
+        );
+        assert!(
+            lib.has_table("listener_play_history"),
+            "a listener table is in `main` and must not have been broken by the fix"
+        );
+        assert!(
+            !lib.has_table("a_table_in_neither_half"),
+            "a genuinely absent table must still read as absent"
+        );
+
+        // And unsplit, where one schema holds everything, the answer is the same.
+        let whole = Library::open_split(&library_path, &library_path).unwrap();
+        assert!(whole.has_table("recordings"), "unsplit must be unaffected");
+        assert!(!whole.has_table("a_table_in_neither_half"));
 
         let _ = std::fs::remove_file(&listener_path);
         let _ = std::fs::remove_file(&library_path);
