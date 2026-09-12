@@ -77,7 +77,9 @@ on B, per `[PI-DB-010]`'s split design.
 Whichever file holds listener state has to go somewhere that stays writable,
 because every play is a write to it.
 
-`vainopi` gets away with the same single file sitting under `/srv/library`
+`vainopi` ran the same single file under `/srv/library` until its own split on
+2026-09-10 — it now opens `/var/vaino/listener.db --library
+/srv/library/library.db`, confirmed live 2026-09-12 — and got away with it
 (`[PI002](../VainoPi/PI002-test-image-setup.md)`,
 `[PI005](../VainoPi/PI005-appliance-library.md)`) only because that partition
 is never actually made read-only in practice — `vainopi` has no C, and its
