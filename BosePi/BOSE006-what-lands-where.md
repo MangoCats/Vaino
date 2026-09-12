@@ -87,6 +87,22 @@ data partition just stays `rw` forever. `bose` is not that: step 10 of
 until the split is built, `vaino.db` lives at **`/var/vaino/vaino.db`** — C,
 not B — and B holds only audio, cover art, and MPD's own derived index.
 
+> **The split was built on 2026-09-11, and the halves did not both go to C.**
+> Current paths on `bose`: the **catalogue** is `/srv/library/library.db` on
+> **B** (`/dev/mmcblk0p4`, `ext4 ro`), and the **listener** half is
+> `/var/vaino/listener.db` on **C** (`/dev/mmcblk0p3`, `f2fs rw`). The
+> paragraph above still explains why the *listener* half cannot live on B; the
+> catalogue can, because after the split nothing writes it in normal
+> operation. Every `/var/vaino/vaino.db` elsewhere in this directory is a
+> record of what was done before that date and is left as written
+> `[GOV-DOC-050]`.
+>
+> One consequence is live and unresolved: because B is genuinely `ro`, a
+> **Sampo push cannot land on `bose`** — `sqlite3` against the catalogue half
+> fails every time, so `bose` is excluded from pushes `[SPEC-DF-126]` until
+> that path learns `attended-import.sh`'s remount window `[IMPL-BOS-150]`.
+> Pulling *from* `bose` is unaffected.
+
 **`[IMPL-BOS-150]` The attended-import operation, finally built.**
 `[PI-B-030]` said what this should be — "remount rw, run the ingest, sync,
 remount ro" — from this project's earliest design pass; nothing carried it

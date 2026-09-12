@@ -222,6 +222,20 @@ row.
 
 > **Split on 2026-09-10.** The prerequisite and the concrete design are now
 > [SPEC040](SPEC040-peer-registry-and-review-ui.md).
+## 7b. The registry becomes a list a person reads, not one address they retype
+
+*Added 2026-09-12, once there were four nodes rather than two.*
+
+**`[SPEC-MESH-101]` Reachability is observed, never stored.** The node list shows whether each peer answers on ssh right now — a TCP connect to port 22, not a handshake: the question the page is asking is "is it worth ticking this box", and a cheap honest answer in two seconds beats an authoritative one costing a key exchange per peer per refresh. It will say reachable for a host that is up but would refuse the key; the push itself reports that, loudly, which is the right place for it. Probed on its own route and in parallel, so a sleeping node cannot hold up the table's own render, and never persisted — a stored "online" is a lie the moment a laptop closes.
+
+**`[SPEC-MESH-102]` Included-in-a-push and read-for-a-pull are separate choices about the same node.** `sync_peers.enabled` — a column that existed from `[SPEC-MESH-025]` and which nothing read until now — is the push set, a checkbox, many nodes at once: a push fans out over every ticked peer `[SPEC-DF-128]`. Which node a *pull* reads is the active peer (`remote_config.sync_remote`, via `activate_peer()`), a radio, one node at a time, because a pull reads one library. The radio's state is **derived** from `sync_remote` rather than given a column of its own, so the two cannot drift apart and disagree about which node is active.
+
+They are deliberately independent. A node you read from is not necessarily one you write to: `bose` is pulled from and excluded from pushes `[SPEC-DF-126]`, because its catalogue half is mounted read-only and no push can land there yet. Adding a peer leaves it **out** of the push set — enrolling somebody else's machine into your next write should be a deliberate tick, not a side effect of typing an address.
+
+> A pre-registry `remote_config.sync_remote` is adopted into the list once, named for its host, rather than leaving a console showing "no nodes yet" over a perfectly good configured address. Only when the registry is genuinely empty: a console that has peers has already answered this question.
+
+---
+
 ## 8. What remains open after this document
 
 1. ~~**`sync_peers` and the console's peer selector are designed, not built.**~~ **Built 2026-09-06** — §7a: `sync_peers` (additive, `remote_config` untouched), `Runner.list_peers/upsert_peer/delete_peer/activate_peer`, the `/api/peers*` routes, and a new `/mesh` console page with the peer list and a diff-and-resolve UI. Four test files (`test_jobs_peers.py`, `test_jobs_mesh_diff.py`, `test_jobs_mesh_resolve.py`, plus `resolve_mesh_conflict.py`'s own).
@@ -236,7 +250,7 @@ row.
 
 ---
 
-**Traceability:** `[SPEC-MESH-005..085]` · derives `[REQ-PORT-160..200]` ·
+**Traceability:** `[SPEC-MESH-005..102]` · derives `[REQ-PORT-160..200]` ·
 extends [SPEC006](SPEC006-data-flow-and-portability.md) §§3, 5, 6 (§5's
 amendment is `[SPEC-MESH-065]`) · reuses [SPEC013 §5](SPEC013-sampo-console.md#5-export--new-music-to-a-remote-vaino)'s
 bundle mechanism and `apply_changes.py`'s `classify()` · reuses

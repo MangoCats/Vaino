@@ -70,6 +70,26 @@ With Stage 10 done, both features `[REQ-LIB-175]` and `[REQ-LIB-180]` requested 
 
 ---
 
+## Stage 11 — Applying without typing a command
+
+*Added 2026-09-12. Stage 8 built the tool; this is the button, and the reason there is now allowed to be one.*
+
+**`[IMPL-SUI-095]` "Never a web click" was the wrong rule; "never thoughtless" was the right one.** `[IMPL-SUI-055]`'s reasoning — *"an edit changes what a passage is, and the library is Sampo's to write, not a web click's"* — is an argument against an edit landing as a **side effect**: on a timer, folded into a larger workflow, or as the second half of some other action. It is not an argument for making a deliberate, understood action expensive. A command typed into a rarely-used terminal, against a path a person has to look up, is not safer than a button. It is the same act with worse odds of being done right, and with no record of what happened afterwards.
+
+`[IMPL-SUI-055]` itself is **unchanged and still true**: nothing writes the library through the HTTP handler. The `apply-reviews` job spawns the same `apply_boundary_reviews.py` / `apply_reviews.py` Stage 8 built, as subprocesses, through the same job model as every other write. What changed is who types them.
+
+Three things keep it deliberate rather than easy:
+
+1. **Two steps, and the first one is a list.** `/api/pending/detail` shows the exact before/after of every edit that would be written, read-only, before the button that writes them appears. A confirmation reading "apply 4 edits?" asks consent for something unseen.
+2. **The write refuses to be triggered accidentally.** `POST /api/apply-reviews` requires an explicit `confirmed` **and** the kind list the page just displayed, so a stray or replayed request does nothing, and reviewing four boundary edits can never also land ninety-nine recording reassignments.
+3. **It is never chained.** No other job starts it, and it starts no other job.
+
+**The player is interrupted around the write, not merely warned about.** Pause → write → `/library/reload` → resume, and resume **only** if `player_state.playing` said it was playing when the run began, so applying never starts music at someone who had deliberately stopped it. A pause, not a restart: `/power/restart` and `/power/off` shell out to `sudo systemctl`, which exists on the appliances and not on the desktop this console runs on. The reload is not optional — without it the edit is on disk and inaudible, because the Director holds the spans it was built with.
+
+> **It also stops overstating what is pending.** `apply_reviews.py` acts only on `reassigned` rows carrying a chosen id, so of 99 pending id reviews exactly 40 would ever be written; the other 59 are `kept`/`deferred` judgements that rewrite nothing and whose `applied_at` therefore stays `NULL` for ever. The page says what will be written and names the remainder separately. Promising 99 changes and delivering 40 is worse than not offering the button at all.
+
+> **Done, 2026-09-12.** `tools/jobs.py`'s `apply-reviews` kind, `console.py`'s `pending_detail()` and the two routes, the flags page's review-then-apply panel, and `vaino_control.pause_vaino/play_vaino/reload_vaino_library`. `tools/test_jobs_apply_reviews.py` runs the real applier against a real split pair and pins: the span lands in the catalogue half, `applied_at` is stamped in the listener half, `kinds: ["boundary"]` leaves the id reviews untouched, the call order is pause → reload → play, a stopped player is left stopped, and an empty `kinds` fails without stamping anything.
+
 ## Not on this path
 
 **Release search beyond what a chosen recording already links to.** `[SPEC-SUI-197]`'s table names it as wanted; it is not scheduled here, because Stage 9's proxy makes it a small addition once built — a second `kind=release` search against the same route — and adding it before the proxy exists would mean building the rate-limited plumbing twice.
@@ -78,4 +98,4 @@ With Stage 10 done, both features `[REQ-LIB-175]` and `[REQ-LIB-180]` requested 
 
 ---
 
-**Traceability:** implements `[SPEC-SUI-195..200]`, `[REQ-LIB-175]`, `[REQ-LIB-180]` · sits under [IMPL003](IMPL003-sampo-console-build.md) Stage 5
+**Traceability:** implements `[SPEC-SUI-195..200]`, `[REQ-LIB-175]`, `[REQ-LIB-180]` · `[IMPL-SUI-095]` refines `[IMPL-SUI-055]`'s scope without weakening it · sits under [IMPL003](IMPL003-sampo-console-build.md) Stage 5

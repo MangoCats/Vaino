@@ -95,13 +95,30 @@ have it.** Surveyed 2026-09-11:
 | :--- | :--- | ---: |
 | desktop (`local`) | `C:\Users\Mango Cat\Music`, 44 G | 5,743 |
 | `teacherslounge` | `/home/sw/Music`, 44 G | 5,743 — **identical to local** |
-| `smartboardpc` | `/media/mango/PortableSSD/Media/Music`, 49 G | 5,719 — a variant |
+| `smartboardpc` | `/media/mango/PortableSSD/Media/Music`, 49 G | 5,754 — a variant, reconciled with local 2026-09-12 |
 | `bose` | its own, 44 G `[BOSE001]` | — |
 
 `teacherslounge` therefore needs no audio to become a playback node; it needs
 chrony (installed 2026-09-11), a library database, and a service. Smart's
 library sits on a volume that is **100 % full with 11 G spare**
 `[SMT-STO-010]`, which is a provisioning problem of a different kind.
+
+> **Smart was given a library on 2026-09-12, and the reconciliation is the
+> lesson.** The local catalogue was snapshotted (`VACUUM INTO`, so a live WAL
+> database could be copied consistently), transferred, paired with a fresh
+> empty listener half from `schema.sql` → `split_database.py`, and bound with
+> `relink` — which matches by **encoded-audio hash**, not by path
+> `[SPEC012]`. Smart keeps its own listening history rather than inheriting
+> the desktop's.
+>
+> Comparing the two collections **by path** claimed 877 audio files were
+> missing. The hash said **35**. The other ~840 were already on Smart under
+> different filenames, and copying them would have written ~1.7 GB of
+> duplicates into that 11 G of headroom and left the library pointing at the
+> wrong copies. `[GDE-ECHO-480]` said path comparison was unreliable; this is
+> the number that says how unreliable. The 35 genuinely-absent files were five
+> complete albums, copied into Smart's own root and structure, after which
+> `relink --apply` bound **5,709 of 5,709** rows with zero missing.
 
 **`[GDE-ECHO-480]` Comparing two libraries by path is unreliable, and failed
 four distinct ways on one afternoon.** Establishing whether local and
