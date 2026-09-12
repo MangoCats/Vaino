@@ -123,6 +123,10 @@ CREATE TABLE IF NOT EXISTS release_recordings (
 ) WITHOUT ROWID;
 
 -- Related recordings: block and damp each other in selection [SPEC-DIR-115].
+-- Superseded for same-song blocking by `works`/`recording_works` [GDE-WRK-037],
+-- which does it by identity rather than by a graded pairwise relation. Kept
+-- because a graded relation is still the only way to express "related, but
+-- weaker", which identity cannot.
 CREATE TABLE IF NOT EXISTS recording_relations (
     mbid          TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE,
     related_mbid  TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE,
@@ -130,6 +134,26 @@ CREATE TABLE IF NOT EXISTS recording_relations (
     source        TEXT NOT NULL,
     PRIMARY KEY (mbid, related_mbid)
 ) WITHOUT ROWID;
+
+-- A MusicBrainz Work is the song; a Recording is one rendering of it. The
+-- third and widest identity tier selection blocks on [GDE-WRK-035]: hearing
+-- any passage of a work holds every other passage of that work.
+CREATE TABLE IF NOT EXISTS works (
+    mbid   TEXT PRIMARY KEY,
+    title  TEXT,
+    source TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- Many-to-many on purpose: a medley performs several works, and 68 of this
+-- library's recordings link to more than one [GDE-WRK-070].
+CREATE TABLE IF NOT EXISTS recording_works (
+    mbid       TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE,
+    work_mbid  TEXT NOT NULL REFERENCES works(mbid) ON DELETE CASCADE,
+    source     TEXT NOT NULL,
+    PRIMARY KEY (mbid, work_mbid)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS recording_works_by_work ON recording_works(work_mbid);
 
 -- =================================================================== flavor
 

@@ -52,8 +52,8 @@ fn main() {
     // pool minus what was just queued, which is a different question.
     if let Some(c) = session.census() {
         println!("pool: {} eligible, total weight {:.1}", c.eligible, c.total_weight);
-        println!("      blocked: {} artist, {} recording, {} related | {} under min weight, {} filtered",
-                 c.artist_blocked, c.recording_blocked, c.related_blocked,
+        println!("      blocked: {} artist, {} recording, {} same song, {} related | {} under min weight, {} filtered",
+                 c.artist_blocked, c.recording_blocked, c.work_blocked, c.related_blocked,
                  c.below_min_weight, c.filtered);
         println!("      suppressed by a recent skip or removal: {}", c.suppressed);
     } else {
