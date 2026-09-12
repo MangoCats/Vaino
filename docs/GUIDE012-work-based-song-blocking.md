@@ -4,10 +4,10 @@
 figures replaced and the design settled 2026-09-12, the latter by owner
 decision `[GDE-WRK-035]`, which supersedes this document's own recommendation**
 
-The related-recording rotation of `[SPEC-DIR-116]` is fully implemented, fully
-tested, and has never had a row to act on. This document scopes filling it from
-MusicBrainz **Works**, and measures that option against the cheaper one it
-would replace. Nothing is asserted here without a measurement behind it
+The related-recording rotation of `[SPEC-DIR-116]` was fully implemented, fully
+tested, and never had a row to act on. This document scoped the fix, measured
+it, and records the rule that replaced it — **built 2026-09-12** as
+`[SPEC-DIR-119]`. Nothing is asserted here without a measurement behind it
 `[GOV-SRC-020]`.
 
 > **Related:** [SPEC037](spec/SPEC037-eligibility-and-frequency.md) `[SPEC-DIR-116]` — the rule this feeds · [SPEC008](spec/SPEC008-database-schema.md) — the `recording_relations` junction · [SPEC007](spec/SPEC007-sampo-architecture.md) — the S3 identification stage this extends · [GOV002](GOV002-sources-of-truth.md) — ranking by measurement
@@ -46,18 +46,13 @@ by design. The entity meaning "the same song" is the **Work**.
 
 ## 2. What the player already has
 
-**`[GDE-WRK-030]` The shape exists; the identity design still needs new code.**
-[`player/src/director/frequency.rs`](../player/src/director/frequency.rs)
-already blocks and damps on `Related`,
-[`player/src/director/library.rs`](../player/src/director/library.rs) loads
-`recording_relations`, and `Census.related_blocked` already counts the
-exclusions, so the reporting surface is in place.
-
-An earlier revision of this document said no player code was in scope. That
-held for the junction design, where filling a table the player already read was
-the whole job. `[GDE-WRK-035]`'s tiers are new history maps keyed on
-`passage_id` and work MBID, so the claim no longer holds — see
-`[GDE-WRK-125]` stages 4–6.
+**`[GDE-WRK-030]` The player needed new code after all.** An earlier revision
+said none was in scope. That held for the junction design, where filling a
+table [`library.rs`](../player/src/director/library.rs) already read was the
+whole job. `[GDE-WRK-035]`'s tiers are new history maps keyed on `passage_id`
+and work MBID, so `weigh` in
+[`frequency.rs`](../player/src/director/frequency.rs), the load, the noting and
+the census all moved. Built 2026-09-12.
 
 ---
 
@@ -126,11 +121,11 @@ the rule as stated stands:
 `live` is common — 171 relations in the probe's 559. Reading attributes would
 mean a graded relation, which `[GDE-WRK-037]` deliberately gave up.
 
-**`[GDE-WRK-055]` The passage tier is new, and closes a real hole.** History is
-keyed on the recording MBID today, and `note_queued` returns `None` for a
-passage without one — recording nothing at all, so such a passage could repeat
-freely. Every passage currently carries an id, 163 of them synthetic, so this
-changes no behaviour now; it is the invariant that keeps it true.
+**`[GDE-WRK-055]` The passage tier closed a real hole.** History had been keyed
+on the recording MBID alone, and `note_queued` returned `None` for a passage
+without one — recording nothing at all, so such a passage could repeat freely.
+Every passage carries an id, 163 of them synthetic, so this changed no
+behaviour on this library; it is the invariant that keeps it true.
 
 **`[GDE-WRK-057]` Tuning is stored per recording, not per passage.**
 `listener_preferences` is keyed `(subject_kind, subject_id)` over `recording`
@@ -254,9 +249,10 @@ request.
 | 1 · `tools/fetch_works.py`, cache only | **built 2026-09-11** | read-only network, cannot damage anything |
 | 2 · the crawl | **done 2026-09-12** `[GDE-WRK-120]` | 8,004 of 8,008, cached in `data/work_relations.db` |
 | 3 · measure reach, then decide | **done** `[GDE-WRK-090]`/`[GDE-WRK-095]` | a decision against a number, not a guess |
-| 4 · `works`/`recording_works` schema, filled from the cache | open | nothing downstream is testable without it |
-| 5 · passage-id history tier | open | `[GDE-WRK-055]`; independent of 4, and small |
-| 6 · work-MBID history tier in the Director | open, needs 4 | the widest key of `[GDE-WRK-038]`'s cascade |
+| 4 · `works`/`recording_works`, filled by `tools/load_works.py` | **done 2026-09-12** | 6,605 works over 7,199 rows |
+| 5 · passage-id history tier | **done 2026-09-12** | `[GDE-WRK-055]` |
+| 6 · work-MBID tier in the Director | **done 2026-09-12** | `[GDE-WRK-038]`'s widest key |
+| 7 · `[SPEC-DIR-119]` in SPEC037 | **done 2026-09-12** | the spec now says what the code does |
 
 **`[GDE-WRK-130]` Transport already works, by accident.** `vainopi` carries the
 whole 1.17 GB `library.db`, caches included, so a `recording_works` table ships
@@ -276,7 +272,10 @@ that gap closed first.
 - **`[GDE-WRK-220]`** *Resolved 2026-09-12* — relation attributes stay unread
   and the medley and national-anthem cases stand `[GDE-WRK-052]`. Reopening it
   means reopening `[GDE-WRK-037]`.
-- **`[GDE-WRK-230]`** Whether the rule belongs in
-  [SPEC037](spec/SPEC037-eligibility-and-frequency.md) as a revision of
-  `[SPEC-DIR-116]`, which currently specifies the graded-relation model this
-  supersedes. It should; that edit is not made here.
+- **`[GDE-WRK-230]`** *Resolved 2026-09-12* — the rule is
+  [SPEC037](spec/SPEC037-eligibility-and-frequency.md) `[SPEC-DIR-119]`, and
+  `[SPEC-DIR-116]` is marked superseded for the same-song case while its code
+  and table stay live for graded relations.
+- **`[GDE-WRK-240]`** `publish_pool` omits `suppressed` from the pool total it
+  shows the browser, so a suppressed passage makes the total read low. Found
+  while adding `work_blocked` to that sum; pre-existing, not fixed here.
