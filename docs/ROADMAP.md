@@ -41,6 +41,7 @@ folded into one spec.
 | Hosted flavor service | [GUIDE005](GUIDE005-flavor-service.md) | [§5 Open](GUIDE005-flavor-service.md#5-open) |
 | Director as a guest | [GUIDE006](GUIDE006-director-as-a-guest.md) | [§5 Open](GUIDE006-director-as-a-guest.md#5-open) |
 | External backends | [GUIDE007](GUIDE007-external-backends-investigation.md) | [§7 Open](GUIDE007-external-backends-investigation.md#7-open) |
+| Same-song blocking across different recordings (scoped 2026-09-11, not yet built; `recording_relations` holds 0 rows) | [GUIDE012](GUIDE012-work-based-song-blocking.md) | [§7 Open](GUIDE012-work-based-song-blocking.md#7-open) |
 | Appliance setup | [VainoPi/IMPL001](../VainoPi/IMPL001-appliance-setup.md) | [§9 Open](../VainoPi/IMPL001-appliance-setup.md#9-open) |
 | Image & partitions | [VainoPi/PI001](../VainoPi/PI001-image-and-partitions.md) | [§7 What is not yet decided](../VainoPi/PI001-image-and-partitions.md#7-what-is-not-yet-decided) |
 | Appliance characterisation | [VainoPi/PI006](../VainoPi/PI006-appliance-characterisation.md) | [§9 What was not measured](../VainoPi/PI006-appliance-characterisation.md#9-what-was-not-measured) |
