@@ -103,6 +103,90 @@ def _vaino_set_flag(port: int, kind: str, subject_id: str, flagged: bool,
         return False
 
 
+def peer_host(remote: str) -> str:
+    """The bare hostname out of `user@host:/path/to/library.db`.
+
+    Split on the *first* colon, which is what `scp`/`ssh` themselves do --
+    the path after it may contain colons on Windows, and the user@ part
+    never does.
+    """
+    host = (remote or "").partition(":")[0]
+    return host.partition("@")[2] or host
+
+
+def peer_reachable(remote: str, timeout: float = 2.0) -> bool:
+    """Whether this peer answers on ssh, right now `[SPEC-MESH-090]`.
+
+    A TCP connect to port 22, not a real `ssh` handshake: the question the
+    page is asking is "is it worth ticking this box", and an honest cheap
+    answer given in two seconds is more useful than an authoritative one
+    that costs a key exchange per peer per refresh. It will say reachable
+    for a host that is up but would refuse the key -- the push itself
+    reports that, loudly, and that is the right place for it.
+
+    Never raises: an unresolvable name, a down host and a firewalled port
+    are all simply "not reachable" to a person looking at a list.
+    """
+    host = peer_host(remote)
+    if not host:
+        return False
+    try:
+        with socket.create_connection((host, 22), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _vaino_post(path: str, port: int = VAINO_PORT, timeout: float = 3.0) -> bool:
+    """POST one of the player's own control routes. `True` if it accepted.
+
+    The player answers `204` for `/command/:name` and `202` for the two
+    asynchronous ones (`/library/reload` asks; the engine performs it on its
+    next pass), so anything below 400 is success here.
+    """
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.request("POST", path)
+            r = conn.getresponse()
+            r.read()
+            return r.status < 400
+        finally:
+            conn.close()
+    except OSError:
+        return False
+
+
+def pause_vaino(port: int = VAINO_PORT) -> bool:
+    """Stop the audio before the library underneath it is rewritten.
+
+    Deliberately `pause`, not a stop or a process kill. `/power/restart` and
+    `/power/off` both shell out to `sudo systemctl`, which exists on the
+    appliances and not on the desktop this console actually runs on, and the
+    player has no shutdown route at all -- so a pause is the only interruption
+    available to every installation, and it is also the *right* one: it is
+    reversible, it keeps the queue, and it costs no audio-device churn.
+    """
+    return _vaino_post("/command/pause", port)
+
+
+def play_vaino(port: int = VAINO_PORT) -> bool:
+    """Put playback back, after `pause_vaino` and the write it guarded."""
+    return _vaino_post("/command/play", port)
+
+
+def reload_vaino_library(port: int = VAINO_PORT) -> bool:
+    """Make a running player adopt a library that changed under it.
+
+    Without this the edit is on disk and inaudible: the Director holds the
+    spans it was built with, so a passage whose boundaries just moved keeps
+    playing the old ones until something rebuilds it. The rebuild is
+    backgrounded and gated on queue depth by the player itself, so this
+    returns as soon as the request is *accepted*, not when it completes.
+    """
+    return _vaino_post("/library/reload", port)
+
+
 def _remote_set_flag(remote: str, port: int, kind: str, subject_id: str, flagged: bool,
                       timeout: float = 8.0) -> bool:
     """The identical signal `_vaino_set_flag` sends locally, sent instead to

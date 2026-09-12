@@ -31,6 +31,7 @@ import subprocess
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vaino_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import vaino_control  # noqa: E402  -- pause/resume/reload the co-resident player
 import threading
 import time
 
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'segment-dao' | 'cd-rip'
                                         -- | 'sync-preferences'
                                         -- | 'mesh-diff' | 'mesh-resolve'
+                                        -- | 'apply-reviews'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
     state      TEXT NOT NULL,          -- queued|running|done|failed|stopped
     plan       TEXT,                   -- the proposal, as returned by --json
@@ -190,7 +192,43 @@ class Runner:
                    "WHERE state IN ('running','queued')", (now(),))
         db.commit()
         db.close()
+        self._adopt_configured_remote()
         threading.Thread(target=self._work, daemon=True).start()
+
+    def _adopt_configured_remote(self) -> None:
+        """Carry a pre-registry remote into the peer list, once.
+
+        `remote_config.sync_remote` was the whole of the configuration before
+        `sync_peers` existed, and on every console that predates the peer
+        list it still holds the only address anyone has entered. The page
+        that now lists peers would show "no nodes yet" over a perfectly good
+        configured remote, and the first thing a person would do is type it
+        again -- so it is adopted instead, named for its host.
+
+        Only when the registry is genuinely empty. A console that has peers
+        has already answered this question, and re-adding the active one
+        under a second name every restart would be its own small disaster.
+        """
+        db = self._db()
+        try:
+            if db.execute("SELECT 1 FROM sync_peers LIMIT 1").fetchone():
+                return
+            row = db.execute(
+                "SELECT value FROM remote_config WHERE key='sync_remote'").fetchone()
+            if not row or not row["value"]:
+                return
+            remote = row["value"]
+            listener = db.execute(
+                "SELECT value FROM remote_config WHERE key='sync_remote_listener'").fetchone()
+            host = remote.partition(":")[0]
+            name = (host.partition("@")[2] or host) or "remote"
+            db.execute(
+                "INSERT OR IGNORE INTO sync_peers (name, remote, remote_listener, enabled) "
+                "VALUES (?1, ?2, ?3, 1)",
+                (name, remote, listener["value"] if listener else None))
+            db.commit()
+        finally:
+            db.close()
 
     def _db(self):
         db = sqlite3.connect(self.sidecar, timeout=30, check_same_thread=False)
@@ -295,6 +333,24 @@ class Runner:
             (name, remote, remote_listener))
         db.commit()
         db.close()
+
+    def set_peer_enabled(self, name: str, enabled: bool) -> None:
+        """Whether a push includes this peer `[SPEC-MESH-090]`.
+
+        The column has existed since the registry did and nothing ever read
+        it; this is what the checkbox writes. Independent of which peer is
+        *active* -- a node can be the one you pull from and still be left out
+        of a push, which is exactly what you want for a peer that is someone
+        else's to edit.
+        """
+        db = self._db()
+        db.execute("UPDATE sync_peers SET enabled=?1 WHERE name=?2", (1 if enabled else 0, name))
+        db.commit()
+        db.close()
+
+    def peers_for_push(self) -> list:
+        """The enabled peers, in the order the page shows them."""
+        return [p for p in self.list_peers() if p["enabled"]]
 
     def delete_peer(self, name: str) -> None:
         db = self._db()
@@ -410,8 +466,12 @@ class Runner:
         if kind == "remote-pull":
             return self._remote_pull(job_id, target)
 
+        if kind == "apply-reviews":
+            return self._apply_reviews(job_id, target)
         if kind == "remote-push":
             return self._remote_push(job_id, target)
+        if kind == "remote-push-all":
+            return self._remote_push_all(job_id, target)
 
         if kind == "sync-preferences":
             return self._sync_preferences(job_id, target)
@@ -562,7 +622,120 @@ class Runner:
             argv += ["--value", json.dumps(payload["value"])]
         self._run_single_stage(job_id, "resolve", argv)
 
-    def _remote_push(self, job_id: int, target: str):
+    def _apply_reviews(self, job_id: int, target: str):
+        """Fold this library's own reviewed drafts in `[REQ-LIB-175]`,
+        `[SPEC021 §5]` -- the local half of what `_remote_push` then ships.
+
+        **Why this is a button at all, having deliberately not been one.**
+        The rule it appears to bend is `[IMPL-SUI-055]`, "the console never
+        writes the library", and it does not bend it: nothing here touches
+        SQLite through the HTTP handler. This runs the very
+        `apply_boundary_reviews.py` / `apply_reviews.py` the profile page
+        already prints, as subprocesses, through the same job model every
+        other write in this console goes through. What changes is only who
+        types them.
+
+        That distinction matters because the original reasoning conflated two
+        different things. "An edit changes what a passage *is*, and the
+        library is Sampo's to write, not a web click's" is an argument
+        against an edit landing *thoughtlessly* -- as a side effect, on a
+        timer, or folded into some larger workflow that happens to pass
+        through here. It is not an argument for making a deliberate,
+        understood action expensive: a command typed into a rarely-used
+        terminal, against a path the person has to look up, is not safer
+        than a button. It is the same act with worse odds of being done
+        right, and with no record of what happened afterwards.
+        So: a button, never automatic, never chained to another job, refused
+        unless the caller has already been shown exactly what it will write
+        (`/api/pending/detail`) and said yes a second time.
+
+        `target` is JSON -- `{"kinds": [...]}` -- naming which of the three
+        review kinds to fold in, so a person who reviewed only boundaries is
+        never surprised by ninety-nine recording reassignments landing
+        alongside them. The console builds it from what it just displayed,
+        never from a guess about what is pending now.
+
+        Five stages, and the player is genuinely interrupted for the middle
+        three rather than merely warned about `[SPEC-SUI-082]`.
+        """
+        try:
+            kinds = set(json.loads(target or "{}").get("kinds") or [])
+        except (ValueError, TypeError):
+            self._emit(job_id, "error", f"target must be JSON, got {target!r}")
+            return self._finish(job_id, "failed")
+        if not kinds:
+            self._emit(job_id, "error", "no review kinds named")
+            return self._finish(job_id, "failed")
+
+        tools = os.path.dirname(os.path.abspath(__file__))
+        result = {"kinds": sorted(kinds), "boundary": None, "id": None}
+
+        # Was it playing? Asked before the pause, so `resume` can put the
+        # player back as it found it rather than starting music at somebody
+        # who had deliberately stopped it. `player_state` is the player's own
+        # persisted answer, written every few seconds, which is close enough
+        # for a question whose worst wrong answer is a pause that stays.
+        was_playing = False
+        try:
+            c = vaino_db.connect(self.library, vaino_db.ROLE_LISTENER)
+            try:
+                row = c.execute("SELECT playing FROM player_state WHERE id = 1").fetchone()
+                was_playing = bool(row and row[0])
+            finally:
+                c.close()
+        except Exception:
+            pass  # no player_state at all is "not playing", not an error
+
+        self._emit(job_id, "stage", "pause", stage="pause")
+        if vaino_control.pause_vaino():
+            self._emit(job_id, "log",
+                       "player paused" + (" (it was playing)" if was_playing
+                                          else " (it was already stopped)"))
+        else:
+            # Not a failure. Nothing says a player has to be running, and the
+            # write is correct without one -- the player attaches the
+            # catalogue read-only and never writes the half being rewritten.
+            self._emit(job_id, "log", "no local player answering; nothing to interrupt")
+
+        ok = True
+        if "boundary" in kinds:
+            self._emit(job_id, "stage", "boundary", stage="boundary")
+            code, out = self._spawn(job_id, "boundary", [
+                sys.executable, os.path.join(tools, "apply_boundary_reviews.py"),
+                self.library, "--commit", "--json"])
+            result["boundary"] = parse_json_tail(out) or {}
+            ok = ok and code == 0
+        if ok and ({"id", "artist"} & kinds):
+            self._emit(job_id, "stage", "id", stage="id")
+            code, out = self._spawn(job_id, "id", [
+                sys.executable, os.path.join(tools, "apply_reviews.py"),
+                self.library, "--commit", "--json"])
+            result["id"] = parse_json_tail(out) or {}
+            ok = ok and code == 0
+
+        # Reload before resuming, so what starts playing again is the library
+        # as it now is. Asked even when the write failed: a partial apply is
+        # exactly the case where a stale Director is most misleading.
+        self._emit(job_id, "stage", "reload", stage="reload")
+        if vaino_control.reload_vaino_library():
+            self._emit(job_id, "log", "player asked to rebuild against the new library")
+
+        self._emit(job_id, "stage", "resume", stage="resume")
+        if was_playing:
+            self._emit(job_id, "log", "playback resumed" if vaino_control.play_vaino()
+                       else "could not resume playback -- press play in Vaino")
+        else:
+            self._emit(job_id, "log", "left stopped, as it was found")
+
+        self._emit(job_id, "log", _apply_summary(result))
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if ok else "failed")
+
+    def _push_to(self, job_id: int, target: str, tag: str = "",
+                 listener: str | None = None) -> tuple:
         """A GUI over `export_changes.py`/`apply_changes.py --emit-sql`
         `[SPEC-DF-108..112]` -- the *edits* leg (id/boundary/artist reviews),
         not a raw flag push: Sampo never sets a flag itself, only clears one
@@ -590,7 +763,7 @@ class Runner:
         replacement for what used to be a full `scp` copy, nothing more.
         """
         tools = os.path.dirname(os.path.abspath(__file__))
-        work = os.path.join(os.path.dirname(tools), "out", f"remote-push-{job_id}")
+        work = os.path.join(os.path.dirname(tools), "out", f"remote-push-{job_id}{tag}")
         os.makedirs(work, exist_ok=True)
         snapshot_db = os.path.join(work, "remote-snapshot.db")
         changes_json = os.path.join(work, "changes.json")
@@ -599,19 +772,55 @@ class Runner:
         host, sep, remote_path = target.partition(":")
         if not sep or not remote_path:
             self._emit(job_id, "error", f"target must be user@host:/path, got {target!r}")
-            return self._finish(job_id, "failed")
+            return False, {"error": f"target must be user@host:/path, got {target!r}"}
+
+        # **A split peer gets the patch through its LISTENER half.**
+        #
+        # `apply_changes.py --emit-sql` traces statements for both halves:
+        # `UPDATE passages` and `ALTER TABLE passages` are catalogue, while
+        # `CREATE TABLE IF NOT EXISTS id_reviews` and the review-row inserts
+        # are listener. This stage used to run the whole patch against the
+        # catalogue path alone, and `CREATE TABLE` does not follow the attach
+        # chain -- it always targets `main` -- so every push planted the three
+        # review tables inside the catalogue half. Measured 2026-09-11:
+        # vainopi's `library.db` holds `id_reviews` (40) and `boundary_reviews`
+        # (4) beside the real ones in its listener half (99 and 3). That is
+        # the masking shadow `vaino_db` exists to prevent, arriving from the
+        # one direction that had no such guard.
+        #
+        # Opening the LISTENER half as `main` and attaching the catalogue puts
+        # every statement where it belongs, with no change to the patch: a
+        # `CREATE` lands in `main`, which is now the right half, and an
+        # unqualified `passages` resolves down the chain to the catalogue.
+        # Measured both ways before being relied on, the same rule
+        # `vaino_db`'s own module docstring documents.
+        #
+        # Unsplit peers -- no `remote_listener`, or the same file -- keep the
+        # single-file command they always had, with nothing attached.
+        lis_host, _, lis_path = (listener or "").partition(":")
+        split = bool(lis_path) and lis_path != remote_path
+        if split and lis_host != host:
+            msg = (f"the two halves name different hosts ({host} and {lis_host}); "
+                   "a peer's halves must live on one machine")
+            self._emit(job_id, "error", msg)
+            return False, {"error": msg}
+        if split:
+            apply_sql = ("{ echo \"ATTACH DATABASE '" + remote_path + "' AS lib;\"; "
+                         "cat /tmp/vaino-sync-patch.sql; } | sqlite3 " + lis_path)
+        else:
+            apply_sql = "sqlite3 " + remote_path + " < /tmp/vaino-sync-patch.sql"
 
         self._emit(job_id, "stage", "export", stage="export")
         code, _ = self._spawn(job_id, "export", [
             sys.executable, os.path.join(tools, "export_changes.py"), self.library, "-o", changes_json])
         if code != 0:
-            return self._finish(job_id, "failed")
+            return False, {"error": "export failed"}
         self._emit(job_id, "stage", "snapshot", stage="snapshot")
         code, _ = self._spawn(job_id, "snapshot", [
             sys.executable, os.path.join(tools, "remote_snapshot.py"), target, changes_json,
             "-o", snapshot_db, "--json"])
         if code != 0:
-            return self._finish(job_id, "failed")
+            return False, {"error": "could not read the remote"}
         # `--emit-sql`: `snapshot_db` is a disposable comparison, never the
         # target of the write itself `[SPEC-DF-111]` -- the real write to
         # vainopi happens two stages further down, via its own `sqlite3` CLI.
@@ -621,11 +830,7 @@ class Runner:
             "--commit", "--emit-sql", patch_sql, "--clear-flags", "--json"])
         result = parse_json_tail(out) or {}
         if code != 0:
-            db = self._db()
-            db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
-            db.commit()
-            db.close()
-            return self._finish(job_id, "failed")
+            return False, result
 
         # One sentence, not five numbers -- the raw per-change breakdown
         # `apply_changes.py --json` already printed stays in the log exactly
@@ -643,16 +848,13 @@ class Runner:
             # player applied to its live service instead of just its write
             # lock.
             self._emit(job_id, "log", "the remote was not touched.")
-            db = self._db()
-            db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
-            db.commit()
-            db.close()
-            return self._finish(job_id, "done")
+            return True, result
 
         self._emit(job_id, "stage", "send", stage="send")
         code, _ = self._spawn(job_id, "send", ["scp", patch_sql, f"{host}:/tmp/vaino-sync-patch.sql"])
         if code != 0:
-            return self._finish(job_id, "failed")
+            result["error"] = "could not send the patch"
+            return False, result
         # The one command vainopi already has `[SPEC-DF-111]`: stop so the
         # patch is never applied underneath a live writer, apply it through
         # vainopi's own `sqlite3`, restart. Briefly interrupts whatever is
@@ -666,18 +868,87 @@ class Runner:
         # this without a password prompt, the same assumption
         # `VainoPi/deploy-player.sh` already makes for its own `systemctl`
         # calls -- this stage had simply never matched it.
+        # **The restart is unconditional, and that is the whole point.**
+        #
+        # This was `stop && sqlite3 && start`, which reads as a sequence and
+        # behaves as a guard: any failure of the patch skips the `start` and
+        # leaves that node's player stopped, indefinitely, with only a failed
+        # stage in a log to say why. A sync that cannot land its changes is a
+        # disappointment; a sync that silently turns the music off in another
+        # room is a fault.
+        #
+        # It is not hypothetical. `bose` mounts its catalogue half read-only
+        # (`/srv/library`, `ext4 ro`), so `sqlite3` against it fails every
+        # time -- measured 2026-09-11 -- and the old chain would have stopped
+        # bose's player and left it that way.
+        #
+        # So: stop, try, restart whatever happened, and exit with the patch's
+        # own status so the job still reports the failure honestly.
         self._emit(job_id, "stage", "apply-remote", stage="apply-remote")
         code, _ = self._spawn(job_id, "apply-remote", [
             "ssh", host,
-            f"sudo systemctl stop vaino && sqlite3 {remote_path} < /tmp/vaino-sync-patch.sql "
-            f"&& sudo systemctl start vaino"])
+            "sudo systemctl stop vaino; rc=0; "
+            f"{apply_sql} || rc=$?; "
+            "sudo systemctl start vaino; exit $rc"])
         if code == 0:
-            self._emit(job_id, "log", "vainopi now has these changes.")
+            self._emit(job_id, "log", f"{host} now has these changes.")
+        else:
+            result["error"] = ("the remote refused the patch (its player was "
+                               "restarted regardless)")
+        return code == 0, result
+
+    def _remote_push(self, job_id: int, target: str):
+        """One named remote, the shape every existing caller and test uses."""
+        ok, result = self._push_to(job_id, target, listener=self.get_remote_listener())
         db = self._db()
         db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
         db.commit()
         db.close()
-        return self._finish(job_id, "done" if code == 0 else "failed")
+        return self._finish(job_id, "done" if ok else "failed")
+
+    def _remote_push_all(self, job_id: int, target: str):
+        """Every peer whose "include in a push" box is ticked `[SPEC-MESH-090]`.
+
+        One job, not one per peer: the household question is "are the other
+        nodes up to date", and answering it across four machines in four
+        separate logs is how a failure against the third one gets missed.
+
+        A peer that fails does not stop the others. That is deliberate and it
+        is the whole reason the per-peer result is kept separately: an
+        unreachable bose must not silently cancel a push to vainopi that
+        would have worked, and "3 of 4 succeeded" is a true answer that a
+        single aggregate exit code cannot express.
+        """
+        names = json.loads(target or "[]")
+        peers = {p["name"]: p for p in self.list_peers()}
+        per_peer, failed = {}, []
+        for n, name in enumerate(names, 1):
+            peer = peers.get(name)
+            if peer is None:
+                self._emit(job_id, "log", f"{name}: no such peer any more, skipped")
+                per_peer[name] = {"error": "no such peer"}
+                failed.append(name)
+                continue
+            self._emit(job_id, "stage", f"{name}", stage=name)
+            ok, result = self._push_to(job_id, peer["remote"], tag=f"-{n}",
+                                       listener=peer.get("remote_listener"))
+            per_peer[name] = result
+            if not ok:
+                failed.append(name)
+            self._emit(job_id, "log",
+                       f"{name}: " + (_push_summary(result) if ok else
+                                      result.get("error", "failed")))
+        summary = {"peers": per_peer, "attempted": len(names),
+                   "succeeded": len(names) - len(failed), "failed": failed}
+        self._emit(job_id, "log",
+                   f"{summary['succeeded']} of {summary['attempted']} peer(s) updated"
+                   + (f"; failed: {', '.join(failed)}" if failed else "."))
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(summary), job_id))
+        db.commit()
+        db.close()
+        return self._finish(job_id, "done" if not failed else "failed")
+
 
     def _run_single_stage(self, job_id: int, stage: str, argv: list, *, require_ok: bool = True) -> None:
         """Spawn one stage, save its `--json` tail as the job's result, and
@@ -872,6 +1143,38 @@ def parse_json_tail(out: str):
             except json.JSONDecodeError:
                 continue
     return None
+
+
+def _apply_summary(result: dict) -> str:
+    """One sentence for `_apply_reviews`, the same job `_push_summary` does
+    for the push: each tool's own `--json` line stays in the log above this,
+    and its per-passage detail with it -- this is the line a person reads.
+
+    Says "nothing was written" out loud when that is what happened. A run
+    that applies zero edits and says nothing at all is indistinguishable
+    from one that worked, which is the failure mode this whole button exists
+    to avoid.
+    """
+    parts = []
+    b = result.get("boundary") or {}
+    i = result.get("id") or {}
+    if b.get("applied"):
+        part = f"{b['applied']} boundary edit(s) written"
+        if b.get("span_moved"):
+            part += f" ({b['span_moved']} whose span moved)"
+        parts.append(part)
+    if i.get("applied"):
+        parts.append(f"{i['applied']} recording id(s) reassigned")
+    if i.get("artist_applied"):
+        parts.append(f"{i['artist_applied']} artist credit(s) corrected")
+    for label, d in (("boundary", b), ("id", i)):
+        if d.get("error"):
+            parts.append(f"{label}: {d['error']}")
+        if d.get("skipped"):
+            parts.append(f"{d['skipped']} {label} edit(s) skipped")
+    if not parts:
+        return "nothing was written -- there was nothing pending to apply."
+    return ", ".join(parts) + ". These are now eligible to push to a remote."
 
 
 def _push_summary(result: dict) -> str:

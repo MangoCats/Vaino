@@ -315,6 +315,83 @@ def pending_counts(conn) -> dict:
     return counts
 
 
+def pending_detail(conn) -> dict:
+    """*What* is pending, not just how many `[REQ-VIS-275]`.
+
+    The first half of the two-step apply: a person is shown the exact
+    before/after of every edit that is about to be written, from this
+    `mode=ro` connection, and only then offered the button that writes it.
+    A confirmation that says "apply 4 edits?" asks for consent to something
+    unseen; this asks for consent to a list.
+
+    Read-only and re-derived per request. It deliberately does **not** cache:
+    what is pending can change under this page (Vaino's own editor is still
+    running), and a stale list is precisely the thing that would make the
+    second click mean something other than what the first one showed.
+    """
+    have = vaino_db.tables(conn)
+    out = {"boundary": [], "id": [], "artist": []}
+
+    if "boundary_reviews" in have:
+        for r in conn.execute(
+                "SELECT br.passage_id, br.orig_start_ms, br.orig_end_ms, br.start_ms, br.end_ms, "
+                "       br.orig_lead_out_ms, br.lead_out_ms, br.orig_fade_out_ms, br.fade_out_ms, "
+                "       br.decided_at, "
+                "       (SELECT r.title FROM recordings r "
+                "         JOIN passage_recordings pr ON pr.mbid = r.mbid "
+                "        WHERE pr.passage_id = br.passage_id "
+                "        ORDER BY pr.weight DESC LIMIT 1) AS title "
+                "  FROM boundary_reviews br WHERE br.applied_at IS NULL "
+                " ORDER BY br.decided_at"):
+            out["boundary"].append({
+                "passage_id": r["passage_id"], "title": r["title"],
+                "span": [r["orig_start_ms"], r["orig_end_ms"], r["start_ms"], r["end_ms"]],
+                "lead_out": [r["orig_lead_out_ms"], r["lead_out_ms"]],
+                "fade_out": [r["orig_fade_out_ms"], r["fade_out_ms"]],
+                "decided_at": r["decided_at"],
+            })
+
+    if "id_reviews" in have:
+        # Only a `reassigned` row with a chosen id changes anything:
+        # `apply_reviews.py` selects exactly `decision = 'reassigned' AND
+        # chosen_mbid IS NOT NULL`. `kept` and `deferred` record a judgement
+        # and rewrite nothing, and their `applied_at` therefore stays NULL
+        # for ever -- so the raw "pending" count includes rows that no apply
+        # will ever clear. Listing those as things about to be written would
+        # promise 99 changes and deliver 40, which is worse than not offering
+        # the button at all. They are counted separately and explained.
+        for r in conn.execute(
+                "SELECT v.passage_id, v.decision, v.chosen_mbid, v.decided_at, "
+                "       (SELECT r.title FROM recordings r WHERE r.mbid = v.chosen_mbid) AS chosen_title "
+                "  FROM id_reviews v "
+                " WHERE v.applied_at IS NULL AND v.decision = 'reassigned' "
+                "   AND v.chosen_mbid IS NOT NULL "
+                " ORDER BY v.decided_at"):
+            out["id"].append({
+                "passage_id": r["passage_id"], "decision": r["decision"],
+                "chosen_mbid": r["chosen_mbid"], "chosen_title": r["chosen_title"],
+                "decided_at": r["decided_at"],
+            })
+        out["id_recorded_only"] = {
+            d: n for d, n in conn.execute(
+                "SELECT decision, COUNT(*) FROM id_reviews "
+                " WHERE applied_at IS NULL AND NOT (decision = 'reassigned' "
+                "       AND chosen_mbid IS NOT NULL) GROUP BY decision")}
+
+    if "artist_reviews" in have:
+        for r in conn.execute(
+                "SELECT recording_mbid, artist_name, decided_at "
+                "  FROM artist_reviews WHERE applied_at IS NULL ORDER BY decided_at"):
+            out["artist"].append({
+                "recording_mbid": r["recording_mbid"], "artist_name": r["artist_name"],
+                "decided_at": r["decided_at"],
+            })
+
+    out["counts"] = {k: len(v) for k, v in out.items() if isinstance(v, list)}
+    out["total"] = sum(out["counts"].values())
+    return out
+
+
 def profile(conn, pid: int) -> dict:
     """One passage's whole derivation `[SPEC-SUI-040]`.
 
@@ -813,6 +890,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "coverage": completeness(self._db())})
             if p == "/api/pending":
                 return self.send_json(pending_counts(self._db()))
+            if p == "/api/pending/detail":
+                # Step one of two. Read-only, and the only thing that makes
+                # the second step meaningful `[REQ-VIS-275]`.
+                return self.send_json(pending_detail(self._db()))
             if p == "/api/library":
                 return self.send_json(library(
                     self._db(), q=(qs.get("q") or [""])[0],
@@ -838,7 +919,35 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/mesh":
                 return self.send_file("mesh.html", "text/html; charset=utf-8")
             if p == "/api/peers":
-                return self.send_json(STATE["jobs"].list_peers())
+                # `active` is which peer a pull reads, and it is not a column:
+                # `remote_config.sync_remote` has always been that, and giving
+                # the radio group its own second source of truth is how the two
+                # come to disagree. Derived, so they cannot.
+                active = STATE["jobs"].get_remote()
+                peers = STATE["jobs"].list_peers()
+                for peer in peers:
+                    peer["active"] = (peer["remote"] == active)
+                return self.send_json(peers)
+            if p == "/api/peers/reachable":
+                # Asked separately from the list, and never as part of it: a
+                # peer that is down costs this route two seconds, and the list
+                # itself has to stay instant or the page cannot render before
+                # the slowest node on the shelf answers. Probed in parallel
+                # for the same reason.
+                peers = STATE["jobs"].list_peers()
+                out = {}
+                threads = []
+
+                def probe(peer):
+                    out[peer["name"]] = vaino_control.peer_reachable(peer["remote"])
+
+                for peer in peers:
+                    t = threading.Thread(target=probe, args=(peer,), daemon=True)
+                    t.start()
+                    threads.append(t)
+                for t in threads:
+                    t.join(timeout=4)
+                return self.send_json(out)
             if p == "/system":
                 return self.send_file("system.html", "text/html; charset=utf-8")
             if p == "/api/system":
@@ -1046,6 +1155,45 @@ class Handler(BaseHTTPRequestHandler):
                 if not remote:
                     return self.send_json({"error": "no remote configured yet"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("remote-pull", remote)})
+            if p == "/api/apply-reviews":
+                # Step two of two `[REQ-LIB-175]`. The caller names the kinds
+                # it just displayed, so this can never apply something the
+                # person was not shown -- and `confirmed` must be explicit,
+                # so a bare POST (a stray fetch, a replayed request, anything
+                # automated) does nothing. Never chained to another job:
+                # deliberate is the whole point of the button.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                kinds = [k for k in (payload.get("kinds") or [])
+                         if k in ("boundary", "id", "artist")]
+                if not payload.get("confirmed"):
+                    return self.send_json(
+                        {"error": "not confirmed -- review the pending edits first"}, code=400)
+                if not kinds:
+                    return self.send_json({"error": "no review kinds named"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit(
+                    "apply-reviews", json.dumps({"kinds": kinds}))})
+            if p.startswith("/api/peers/") and p.endswith("/enabled"):
+                # The push checkbox. Separate from `/activate` on purpose:
+                # included-in-a-push and read-for-a-pull are different
+                # questions about the same peer, and one node is commonly
+                # one and not the other.
+                name = unquote(p.split("/")[3])
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                payload = json.loads(body or b"{}") or {}
+                STATE["jobs"].set_peer_enabled(name, bool(payload.get("enabled")))
+                return self.send_json({"ok": True, "name": name,
+                                       "enabled": bool(payload.get("enabled"))})
+            if p == "/api/remote/push-all":
+                # Every ticked peer, one job `[SPEC-MESH-090]`. The names are
+                # resolved here rather than in the job so the log says what
+                # was asked for even if a peer is deleted while it runs.
+                names = [pe["name"] for pe in STATE["jobs"].peers_for_push()]
+                if not names:
+                    return self.send_json(
+                        {"error": "no peers are ticked for push"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit(
+                    "remote-push-all", json.dumps(names)), "peers": names})
             if p == "/api/remote/push":
                 # Direction two `[SPEC-DF-108..112]`: whatever review edits
                 # have accumulated locally, landed on the remote through its

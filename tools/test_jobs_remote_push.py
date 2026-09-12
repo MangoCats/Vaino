@@ -215,11 +215,78 @@ def test_snapshot_unreachable_fails_before_compare(tmp: str) -> None:
           f"compare/send/apply-remote must never run once snapshot failed, got {stages}")
 
 
+
+def _apply_cmd_for(tmp: str, name: str, listener: str | None) -> str:
+    """Run a landing push and hand back the shell command `apply-remote` built."""
+    library = os.path.join(tmp, name + ".db")
+    build_library(library)
+    runner = jobmod.Runner(library, os.path.join(tmp, name + ".console.db"))
+    if listener:
+        runner.set_remote_listener(listener)
+    captured = {}
+    runner._spawn = fake_spawn_success(CHANGES_DOC, captured).__get__(runner, jobmod.Runner)
+    job_id = runner.submit("remote-push", "pi@vainopi:/srv/library/library.db")
+    wait_for(runner, job_id)
+    argv = captured.get("apply-remote")
+    return argv[-1] if argv else ""
+
+
+def test_a_split_peer_is_patched_through_its_listener_half(tmp: str) -> None:
+    print()
+    print("a split peer takes the patch through its LISTENER half, catalogue attached")
+    # The bug this pins, measured on a real vainopi 2026-09-11: the whole
+    # patch went to the catalogue path, and `CREATE TABLE` does not follow
+    # the attach chain -- so `id_reviews`/`boundary_reviews`/`artist_reviews`
+    # were created inside `library.db`, shadowing the real ones in the
+    # listener half (40 vs 99 rows, and 4 vs 3).
+    cmd = _apply_cmd_for(tmp, "split", "pi@vainopi:/var/vaino/listener.db")
+    check("sqlite3 /var/vaino/listener.db" in cmd,
+          f"the patch must be applied to the listener half, got: {cmd!r}")
+    check("ATTACH DATABASE '/srv/library/library.db' AS lib;" in cmd,
+          f"with the catalogue attached so catalogue statements still resolve, got: {cmd!r}")
+    check("sqlite3 /srv/library/library.db" not in cmd,
+          f"and never straight at the catalogue, which is what planted the shadows: {cmd!r}")
+
+
+def test_an_unsplit_peer_keeps_the_single_file_command(tmp: str) -> None:
+    print()
+    print("an unsplit peer is unchanged -- one file, nothing attached")
+    cmd = _apply_cmd_for(tmp, "whole", None)
+    check("sqlite3 /srv/library/library.db < /tmp/vaino-sync-patch.sql" in cmd,
+          f"one file, as before, got: {cmd!r}")
+    check("ATTACH" not in cmd,
+          f"an installation that never split must carry none of this, got: {cmd!r}")
+
+
+def test_the_player_restarts_even_when_the_patch_fails(tmp: str) -> None:
+    print()
+    print("the remote's player is restarted whatever the patch did")
+    # `stop && sqlite3 && start` leaves a node stopped for ever the moment
+    # the patch fails -- and against `bose`, whose catalogue half is mounted
+    # `ro`, it fails every single time. A sync that cannot land its changes
+    # is a disappointment; one that silently turns the music off in another
+    # room is a fault.
+    cmd = _apply_cmd_for(tmp, "restart", "pi@vainopi:/var/vaino/listener.db")
+    check("&& sudo systemctl start vaino" not in cmd,
+          f"the restart must not be guarded by the patch succeeding, got: {cmd!r}")
+    check("sudo systemctl start vaino" in cmd, f"and it must still happen, got: {cmd!r}")
+    check("exit $rc" in cmd,
+          f"while still reporting the patch's own failure to the job, got: {cmd!r}")
+    # Deliberately asserted on the command rather than by running it: a
+    # shell here would be this machine's shell, and the thing under test is
+    # the command sent to the *remote*. `bash -n` on the generated string
+    # confirmed the syntax once, by hand; what must not silently come back
+    # is the `&&`, and that is exactly what these three checks pin.
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_push_lands_a_change(tmp)
         test_push_nothing_pending(tmp)
         test_snapshot_unreachable_fails_before_compare(tmp)
+        test_a_split_peer_is_patched_through_its_listener_half(tmp)
+        test_an_unsplit_peer_keeps_the_single_file_command(tmp)
+        test_the_player_restarts_even_when_the_patch_fails(tmp)
 
     print()
     if FAILED:
