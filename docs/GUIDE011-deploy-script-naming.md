@@ -192,8 +192,19 @@ proxy over the thing that actually ships `[GDE-DEP-070]`.
 the old path is named in `HOWTO.md`, BOSE008 and BOSE009 and in people's shell
 history. It passes every argument through unchanged.
 
-**`[GDE-DEP-098]` Open, and surfaced by the merge: appliances are built WITH
-`sampo-support`, and probably should not be.** The two scripts disagreed —
+**`[GDE-DEP-098]` Closed 2026-09-12: appliances build WITHOUT `sampo-support`,
+and every future Pi target does too.** Decided by the project owner as part of
+convergence between the open projects; `deploy-appliance.sh` already defaults
+`FEATURES=""`, `player/Cargo.toml` has `default = []`, and
+`deploy-everywhere.sh` routes `pi@vainopi`/`pi@bose` through that path, so the
+rule is mechanically enforced rather than remembered. Verified by building both
+ways on 2026-09-12: **11,118,944 bytes with, 7,981,512 without — 2.99 MB**,
+against the 3.05 MB `[SPEC-SUI-190]` measured at its own earlier commit. The
+7.98 MB binary was deployed to `vainopi` the same day. The original argument
+follows, because the reasoning is why the rule holds rather than merely what it
+is.
+
+The two scripts disagreed —
 `deploy-vainopi.sh` passed `--features sampo-support`, `deploy.sh` did not — so
 which binary an appliance received depended on which command was typed. Merging
 forced one answer, and it preserves today's fleet behaviour rather than
@@ -208,9 +219,11 @@ machines with a stated memory budget `[REQ-HW-140]`. The flag has been there
 since `968bdca`, the commit that created these scripts, and no document argues
 for it.
 
-Changing it is one line — `VAINO_FEATURES=""` already overrides — but it
-alters what runs on both appliances and deserves a deliberate decision and a
-redeploy, not a quiet edit.
+Changing it was one line — `VAINO_FEATURES=""` already overrode it — but it
+altered what runs on both appliances, so it waited for a deliberate decision
+and a redeploy rather than a quiet edit. Both have now happened. **`bose` is
+still to be redeployed**, and should be: the read-only-catalogue argument above
+bites hardest there.
 
 **`[GDE-DEP-097]` Closed 2026-09-11: `deploy.sh` now cross-checks the durable
 binary.** It asked `/usr/local/bin/vaino --version`, which on an overlay host is
@@ -220,3 +233,44 @@ copy by that point, but it was the weaker of two available checks and the whole
 argument of this document is that the weaker one is what let five days pass. It
 now resolves the `lowerdir` and asks the copy that survives a reboot, saying so
 in the log `[GDE-DEP-060]`.
+
+**`[GDE-DEP-100]` Open, found 2026-09-12: a cross-compile from a git *worktree*
+cannot stamp its commit.** The deployed binary answers `vaino 0.1.0 (unknown)`.
+A worktree's `.git` is a file pointing at the parent repository's
+`.git/worktrees/<name>`, which lies outside the `-v "$REPO_ROOT":/w` bind
+mount, so git inside the container resolves nothing and
+[`player/build.rs`](../player/build.rs) takes its documented `unknown`
+fallback. Demonstrated directly:
+
+```
+fatal: not a git repository: /w/C:/Users/.../Vaino/.git/worktrees/vaino-guide012
+```
+
+This is not a worktree-only curiosity dressed up: **working in a worktree is
+the correct way to build while other agents hold the shared checkout**
+`[GDE-LES-010]`, so the safe habit is exactly what breaks the stamp. The
+binary is otherwise correct — the checksum cross-check is what actually proves
+a deploy, and it passed — but `[REQ-VIS-200]`'s whole purpose is that a running
+player can say which source it is, and here it cannot.
+
+Two candidate fixes, not chosen here. `build.rs` could accept the hash from the
+environment, which also helps container and source-tarball builds; or the
+deploy script could mount the git common directory, which needs no source
+change but must survive a path with spaces in it.
+
+**`[GDE-DEP-110]` Open, found 2026-09-12: the final cross-check blames the
+wrong cause, and it is the same conflation this repository has already been
+caught by once.** `deploy-appliance.sh` greps `--version` for a 12-hex hash and,
+finding none, reports the binary *"predates --version [421f7c1]"*. Under
+`[GDE-DEP-100]` that is false: `--version` ran and answered `unknown`. The
+check conflates **"no `--version` support"** with **"`--version` reported no
+hash"**.
+
+[`build/install-player.sh`](../build/install-player.sh) documents being bitten
+by this exact conflation — an unexecutable staged binary returned "Permission
+denied", *"the empty result was read as 'predates --version', and the guard
+reported itself skipped for a reason it had never checked"*. That lesson was
+fixed in one file and never carried to the other, so the stricter of the two
+guards is now the one excusing its own failure `[GDE-DEP-060]`. Distinguishing
+the two cases is a few lines and wants doing before a real version mismatch is
+read as an old build.
