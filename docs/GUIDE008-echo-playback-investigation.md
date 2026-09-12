@@ -174,6 +174,13 @@ it has to be the same on both. Verifying that on the fleet is Phase 0 of
 
 ## 4. Is re-synchronising once per passage enough?
 
+> **Superseded 2026-09-12 for any pair including `smartboardpc`.** Measured
+> `[LOG-DRIFT-045]`: `bose` +0.432 ppm, Smart **+9.96 ppm**, 9.53 ppm relative
+> — 2.29 ms across a four-minute passage, inside the comb-filtering band. The
+> conditional below was met by `bose` and failed by Smart, exactly as it warned
+> it might. A pair of self-clocked nodes may still qualify; a pair including a
+> host-slaved one does not `[LOG-DRIFT-050]`.
+
 **`[GDE-ECHO-110]` At the drift actually measured, yes — comfortably, and for
 same-room listening.** 0.17 ms accumulated across a four-minute passage is
 inside Sendspin's ±0.2–0.5 ms target, reached with no control loop running at

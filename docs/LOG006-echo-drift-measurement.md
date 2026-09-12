@@ -1,6 +1,6 @@
 # LOG006: Echo Playback — the Phase 1 Drift Campaign
 
-**Experiment Record — opened 2026-09-12, readings in progress**
+**Experiment Record — opened and first two nodes read, 2026-09-12**
 
 `[GUIDE009]`'s Phase 1 `[GDE-ECHO-270]`: measure each candidate node's clock
 rate against the shared timebase, now that Phase 0's chrony is settled
@@ -86,14 +86,56 @@ drift.
 
 ---
 
-## 3. What the readings will settle
+## 2a. Results, 2026-09-12
 
-**`[LOG-DRIFT-050]` Whether per-passage resync suffices for a real pair.**
-`[GDE-ECHO-110]` concluded it does — explicitly conditional on both nodes being
-sub-ppm. `bose` plausibly is. If Smart's clean figure lands anywhere near
-card 0's indicative +17.79 ppm, the pair drifts ~4 ms across a four-minute
-passage, which is inside `[GDE-ECHO-050]`'s comb-filtering band, and that
-conclusion fails for any pair including Smart.
+**`[LOG-DRIFT-045]` Both windows completed undisturbed, through the storm.**
+
+| node | window | drift | instrument floor |
+| :--- | ---: | ---: | ---: |
+| `bose` — HiFiBerry DAC+ Pro, I²S, self-clocked | 21.01 h | **+0.432 ppm** | 0.0003 ppm (quantisation) |
+| `smartboardpc` — ATE1133 USB, `ADAPTIVE`, host-slaved | 20.30 h | **+9.96 ppm** | ±0.096 ppm (read bracket) |
+| **relative** | | **9.53 ppm** | |
+
+`bose`'s `trigger_time` was unchanged across the window, so the stream never
+restarted `[LOG-DRIFT-020]`. Smart's probe stayed alive for 22.9 h of uptime.
+
+`bose` at +0.432 ppm sits close to `[BOS-OPS-020]`'s +0.35 ppm, which is
+reassuring given that figure had a `systemd-timesyncd` baseline and this one is
+against chrony — the ruler changed and the answer barely moved.
+
+Smart's clean figure is **9.96 ppm, not the 17.79 ppm** the PipeWire card-0
+read suggested `[LOG-DRIFT-040]`. Measuring the right card, ALSA-direct, was
+worth doing: the indicative number was wrong by 80 %.
+
+**`[LOG-DRIFT-048]` One hour would have been enough to decide.** The storm
+prompted the question of how long a window must be. Smart's read-bracket floor
+is ±1.94 ppm at one hour — ample to establish a ~10 ppm signal, which is the
+only question that changes the design. The extra nineteen hours bought
+precision (±0.096 ppm), not the decision.
+
+---
+
+## 3. What the readings settle
+
+**`[LOG-DRIFT-050]` Per-passage resync does NOT suffice for this pair, and
+`[GDE-ECHO-110]` is superseded for any pair including Smart.** At 9.53 ppm
+relative:
+
+| | drift |
+| :--- | ---: |
+| across a 4-minute passage | **2.29 ms** |
+| across an hour | **34.3 ms** |
+
+2.29 ms sits inside `[GDE-ECHO-050]`'s **1–5 ms comb-filtering band**, so a
+listener hearing both would hear the colouration deepen across every passage
+and snap back at each boundary — the changing artefact that is more noticeable
+than a constant offset.
+
+`[GDE-ECHO-110]`'s favourable conclusion was explicitly conditional on both
+nodes being sub-ppm. `bose` is, at 0.432. Smart is not, at 9.96. **A
+bose↔Smart pair therefore requires the continuous trim of Phase 5
+`[GDE-ECHO-340]`, not a boundary resync.** A bose↔`teacherslounge` pair might
+still qualify — teacherslounge is self-clocked like bose and unmeasured.
 
 The two nodes are not measuring the same physical thing, which is the point of
 `[GDE-ECHO-440]`: `bose`'s I²S DAC is self-clocked, so its number is a crystal.
@@ -105,9 +147,14 @@ Two different causes, neither predicting the other.
 
 ## 4. Open
 
-**`[LOG-DRIFT-060]` Take the second reads no earlier than 2026-09-13T00:20Z**,
-confirming `state: RUNNING` and, for `bose`, an unchanged `trigger_time`
-first. Record ambient temperature with each `[GDE-ECHO-270]`.
+**`[LOG-DRIFT-060]` Re-read over a longer window, and at a different room
+temperature.** Both figures come from a single ~21 h window at one ambient.
+`[GDE-ECHO-060]` warns that a crystal moves with temperature, and `bose` was at
+60.3 °C at t₀ — a second window in different conditions is what would turn
+these into a range rather than a point. A sampler now appends to
+`/var/vaino/drift-samples.tsv` on `bose` every 5 minutes, on C so it survives a
+reboot, which makes any later pair of rows a fresh window at no further
+effort.
 
 **`[LOG-DRIFT-070]` Three nodes still have no plan.** `vainopi`'s A2DP path
 has no `hw_ptr` to read at all — its output is not a hardware PCM
