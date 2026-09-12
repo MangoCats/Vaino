@@ -1,7 +1,8 @@
 # GUIDE012: Blocking the Same Song Across Different Recordings
 
 **Development Guidance — scoped 2026-09-11 from a live incident on `vainopi`;
-figures replaced 2026-09-12 when the full-library crawl finished**
+figures replaced and the design settled 2026-09-12, the latter by owner
+decision `[GDE-WRK-035]`, which supersedes this document's own recommendation**
 
 The related-recording rotation of `[SPEC-DIR-116]` is fully implemented, fully
 tested, and has never had a row to act on. This document scopes filling it from
@@ -43,43 +44,83 @@ by design. The entity meaning "the same song" is the **Work**.
 
 ---
 
-## 2. The player needs no changes
+## 2. What the player already has
 
-**`[GDE-WRK-030]` This is catalogue work, on Sampo's side of the line.** Stage A
-already implements the rule — [`player/src/director/frequency.rs`](../player/src/director/frequency.rs)
-blocks and damps on `Related`, [`player/src/director/library.rs`](../player/src/director/library.rs)
-loads `recording_relations`, and `Census.related_blocked` already counts the
-exclusions, so a fill shows up in the pool figures the moment it lands. No
-player code is in scope.
+**`[GDE-WRK-030]` The shape exists; the identity design still needs new code.**
+[`player/src/director/frequency.rs`](../player/src/director/frequency.rs)
+already blocks and damps on `Related`,
+[`player/src/director/library.rs`](../player/src/director/library.rs) loads
+`recording_relations`, and `Census.related_blocked` already counts the
+exclusions, so the reporting surface is in place.
+
+An earlier revision of this document said no player code was in scope. That
+held for the junction design, where filling a table the player already read was
+the whole job. `[GDE-WRK-035]`'s tiers are new history maps keyed on
+`passage_id` and work MBID, so the claim no longer holds — see
+`[GDE-WRK-125]` stages 4–6.
 
 ---
 
-## 3. Four constraints the existing schema imposes
+## 3. The rule, decided
 
-**`[GDE-WRK-040]` The junction is asymmetric.** `recording_relations` is keyed
-`(mbid, related_mbid)` in [`sql/schema.sql`](../sql/schema.sql) and the loader
-indexes only on `mbid`. A work class of *N* recordings therefore needs
-**N×(N−1) directed rows**, not N(N−1)/2. Both directions, or the block runs one
-way only.
+**`[GDE-WRK-035]` Three identity tiers, widening, each conditional.** Settled
+2026-09-12 by the project owner, and it supersedes the graded-relation design
+the rest of this document was scoped around. When a passage plays, the block
+covers:
 
-**`[GDE-WRK-045]` `strength` cannot soften a block, only speed a recovery.** In
-`weigh`, a related recording inside the rotation window returns
-`RelatedRotationBlock` *before* strength is read; strength then scales the
-recovery window. `strength: 0.0` still blocks fully — it merely skips the
-damping ramp. **Relating a pair is binary**: they share a full rotation, or
-they do not. There is no "related, but gently."
+1. **the passage itself**, by `passage_id`;
+2. **every passage sharing its recording MBID**, if it has one;
+3. **every passage sharing a work MBID with it**, if it has one.
 
-**`[GDE-WRK-050]` Therefore covers are a policy decision taken before any row
-is written.** A shared Work is exactly what links two artists' versions of one
-song. Relating them means hearing one blocks the other for the recording's full
-rotation, with no dial to soften it. Restricting the pass to same-artist-credit
-classes is the conservative default and is what §6 recommends.
+Each blocked passage then serves **its own** block and recovery ramp — the
+tuning of the passage being blocked, never of the one that played. If Rufus
+Wainwright's "Across the Universe" carries a 12-day rotation, The Beatles' 4
+and David Bowie's 8, then a play of any one of them holds each of the others
+for 12, 4 and 8 days respectively. There is no single shared window.
 
-**`[GDE-WRK-055]` A multi-work recording would chain classes together.** Under
-naive closure, a recording linking to works W1 and W2 pulls every performance
-of both into one class, and through them each other's. Measured rarity below
-makes this cheap to guard; the guard must be *excluding* the relation, since
-`[GDE-WRK-045]` leaves no weaker setting.
+**`[GDE-WRK-036]` So it is evaluated from the candidate's side, and the
+asymmetry costs nothing.** Stage A already weighs one candidate at a time
+against its own `rotation`/`recovery` `[SPEC-DIR-115]`. Asking "when was
+anything identified with *me* last heard, and is that inside *my* window"
+gives per-passage periods for free — no directed rows, no per-pair storage,
+and none of the N×(N−1) bookkeeping the junction model needed.
+
+**`[GDE-WRK-038]` The three tiers are a fallback cascade, not three tests.**
+A play stamps every key the passage has, so the wider key is always at least as
+recent as the narrower one: a passage's own last play cannot be more recent
+than the last play of its recording, nor that than its work's. The effective
+age is therefore the **most recent stamp among the keys the passage has** —
+in practice the work's, where one exists, with the recording and passage tiers
+mattering only when the wider key is absent. A recording in several works
+`[GDE-WRK-070]` takes the most recent across all of them.
+
+**`[GDE-WRK-037]` This is identity, not relation, and that removes most of the
+build.** Tier 3 is the same mechanism as tier 2 one key further out. It needs
+no `recording_relations` rows, no pairwise closure, and no `strength`: a third
+`last_played` map keyed by work MBID, filled the way the recording map already
+is. The junction's asymmetry and its N×(N−1) row cost stop mattering, because
+nothing is written to it.
+
+`strength` was the constraint that made covers an all-or-nothing question
+`[GDE-WRK-050]`. Under identity there is no strength to argue about.
+
+**`[GDE-WRK-050]` Covers block. Decided, against the measurement.** A shared
+Work links two artists' versions of one song, and that is the intent: play
+David Bowie's "Across the Universe" and The Beatles' and Rufus Wainwright's are
+held out for the same rotation. §4 measured the reach before the call was made
+— 88 classes, 200 passages, 2.4% of the library — and the answer is yes.
+
+**`[GDE-WRK-055]` The passage tier is new, and closes a real hole.** History is
+keyed on the recording MBID today, and `note_queued` returns `None` for a
+passage without one — recording nothing at all, so such a passage could repeat
+freely. Every passage currently carries an id, 163 of them synthetic, so this
+changes no behaviour now; it is the invariant that keeps it true.
+
+**`[GDE-WRK-057]` Tuning is stored per recording, not per passage.**
+`listener_preferences` is keyed `(subject_kind, subject_id)` over `recording`
+and `artist` `[SPEC-PREF-010]`. "The ramp associated with that passage"
+therefore resolves through its recording. Genuinely per-passage tuning would
+be a schema and UI change, and is not assumed here.
 
 ---
 
@@ -107,24 +148,14 @@ a derivation step must handle it deliberately. Note that MusicBrainz models the
 incident's own medley, "Funeral for a Friend / Love Lies Bleeding", as a
 **single** Work (`ed2f3608…`), which is the behaviour this rule wants.
 
-**`[GDE-WRK-075]` The artist+title heuristic is far more accurate than expected,
-and that reverses the case for Work.** Of 244 groups:
-
-| | groups |
-| :--- | ---: |
-| Work **confirms** the pairing | 214 |
-| undecidable — a member has no Work at all | 26 |
-| Work **contradicts** — disjoint works | **1** |
-| not fetched | 3 |
-
-Where Work can judge at all, artist+title is wrong **1 time in 215 — 0.5%**.
-The lone contradiction is two recordings titled "I Love You" against two
-distinct work MBIDs *also* both titled "I Love You" — likelier a duplicate
-upstream than a real distinction.
-
-> An earlier reading of the partial data put this at ~14%. That was an artifact
-> of counting *undecidable* groups as disagreements. They are not the same
-> thing, and the corrected figure argues the opposite way.
+**`[GDE-WRK-075]` Work agrees with artist+title almost everywhere it can
+judge.** Of 244 same-artist/same-title groups, Work confirms 214, cannot judge
+26 (a member has no Work), and contradicts exactly **1** — two recordings
+titled "I Love You" against two distinct work MBIDs *also* both titled "I Love
+You", likelier a duplicate upstream than a real distinction. So 0.5%, where an
+earlier reading of partial data had said ~14% by counting the undecidable
+groups as disagreements. Retained as evidence that the Work data is sound, not
+as an argument for the heuristic `[GDE-WRK-100]`.
 
 **`[GDE-WRK-080]` Work's real advantage is recall, not precision — and it is
 large.** Variants carry different titles, so artist+title cannot see them.
@@ -151,64 +182,47 @@ Mode's "Personal Jesus" ×5 — which is the mechanism working.
 span more than one artist**, and they account for 258 of the 1,494 directed
 rows. The probe could not see this at all, being artist-scoped by construction.
 
-These are exactly the case `[GDE-WRK-050]` warned turns into a four-day block:
+At passage level that is **200 passages, 2.4% of the library**, and it is the
+reach `[GDE-WRK-050]` accepted:
 
-| Work | recordings held |
+| Work | passages held together |
 | :--- | :--- |
-| Blowin' in the Wind | Bob Dylan · Peter, Paul & Mary |
+| Little Wing | Jimi Hendrix · Sting · Stevie Ray Vaughan · Derek and the Dominos |
 | Across the Universe | The Beatles · David Bowie · Rufus Wainwright |
-| Let It Be | The Beatles · Nick Cave · Aretha Franklin |
-| I Got You Babe | Sonny & Cher · Chrissie Hynde |
+| Let It Be | The Beatles · Aretha Franklin · Nick Cave |
+| The Star‐Spangled Banner | Jimi Hendrix · U2 · Boston |
 
-Relating those means hearing Aretha Franklin's "Let It Be" silences The
-Beatles' for 4.2 days, with no dial to soften it `[GDE-WRK-045]`. **Same-artist
-only**, and `[GDE-WRK-095]` says at what granularity.
+**`[GDE-WRK-095]` The blast radius is small: a play removes a mean of 1.25
+passages from 8,330.** Median 1, maximum 10. 83.3% of passages block nothing
+but themselves; 16.7% reach further. The work tier is where the value is — it
+widens 1,132 passages where the recording tier reaches only 368, three times
+the effect for the same mechanism.
 
-**`[GDE-WRK-095]` Exclude cross-artist *pairs*, not the classes that contain
-them.** A mixed class often holds a genuine same-artist pair alongside the
-cover, and dropping the whole class discards it:
-
-| policy | directed rows | recordings |
-| :--- | ---: | ---: |
-| drop any class with >1 artist | 1,234 | 878 |
-| **keep same-artist pairs wherever they occur** | **1,260** | **904** |
-
-26 rows over 26 recordings, and not marginal ones — Elton John's two "Goodbye
-Yellow Brick Road", Led Zeppelin's studio and 1969 Paris live "You Shook Me",
-Bob Marley's two "Waiting in Vain". Same safety either way: no cross-artist
-pair is written.
+This is the number that says the rule is safe to adopt whole: the pool does not
+meaningfully shrink, so there is no case for hedging it.
 
 ---
 
-## 5. The cheap option, which the measurement promotes
+## 5. What building it involves
 
-**`[GDE-WRK-100]` Artist+title needs no network and can land today.** It is a
-local query over `recordings` and `recording_artists`, it closes the incident's
-own case, and at 0.5% measured error `[GDE-WRK-075]` it is not the blunt
-instrument it looked like. What it cannot do is see variants under different
-titles, which is half the population `[GDE-WRK-080]`.
+**`[GDE-WRK-100]` Artist+title is no longer the cheap first step.** It was
+proposed as the thing that could land before an eleven-hour crawl
+`[GDE-WRK-075]`. The crawl has since run, so its only remaining use is the
+11% of recordings with no Work `[GDE-WRK-065]` — and under identity those
+cannot be reached by a relation row either, since there is nothing to key on.
+A synthetic grouping key would be needed, which is a separate decision and not
+taken here.
 
-**`[GDE-WRK-105]` The two compose rather than compete**, because
-`recording_relations.source` already distinguishes provenance. Write
-`title:artist-exact` rows now and `work:musicbrainz` rows once stage 1 lands,
-dropping the former where the latter supersedes it. Neither waits for the
-other.
+**`[GDE-WRK-110]` Store the Work; block on it directly.** Add `works` and
+`recording_works`, and have the Director build a third `last_played` map from
+them. There is nothing to derive into `recording_relations` and no policy step
+between the data and the behaviour, which is the main saving of `[GDE-WRK-037]`.
 
----
-
-## 6. What building it involves
-
-**`[GDE-WRK-110]` Store the Work; derive the relations.** Add `works` and
-`recording_works` rather than writing `recording_relations` straight from the
-API. Every policy question in §3 will be revisited, and re-deriving relations
-from a local table is instant where re-fetching is hours. It also keeps the
-`source` column honest.
-
-**`[GDE-WRK-115]` The cache cannot be mined; the pass must be fresh.**
+**`[GDE-WRK-115]` The cache cannot be mined; the pass had to be fresh.**
 `musicbrainz_cache` holds 8,747 rows, all `recording+releases` or
-`release+recordings` — fetched without `inc=work-rels`, so no work data is in
-them. A single pass with `inc=releases+work-rels` refreshes both at once and
-makes the crawl serve two purposes.
+`release+recordings` — fetched without `inc=work-rels`. The crawl therefore
+wrote its own cache, and folding it into `musicbrainz_cache` remains optional
+housekeeping rather than a prerequisite.
 
 **`[GDE-WRK-120]` Cost, now measured rather than budgeted: nine hours.** The
 crawl ran 2026-09-11 20:29 → 2026-09-12 05:36 for 7,448 outstanding recordings
@@ -221,32 +235,38 @@ request.
 
 | stage | state | why here |
 | :--- | :--- | :--- |
-| 1 · `works`/`recording_works` schema | open | nothing is testable without it |
-| 2 · `tools/fetch_works.py`, cache only | **built 2026-09-11** | read-only network, cannot damage anything |
-| 3 · the crawl | **done 2026-09-12** `[GDE-WRK-120]` | 8,004 of 8,008, cached in `data/work_relations.db` |
-| 4 · measure cross-artist collisions | **done** `[GDE-WRK-090]` | a decision against a number, not a guess |
-| 5 · artist+title fill, `source='title:artist-exact'` | open | independent of 1–4; fixes the live case on its own |
-| 6 · derive `work:musicbrainz` rows, same-artist pairs | open, needs 1 | `[GDE-WRK-095]`, and a rule for `[GDE-WRK-070]`'s 68 |
+| 1 · `tools/fetch_works.py`, cache only | **built 2026-09-11** | read-only network, cannot damage anything |
+| 2 · the crawl | **done 2026-09-12** `[GDE-WRK-120]` | 8,004 of 8,008, cached in `data/work_relations.db` |
+| 3 · measure reach, then decide | **done** `[GDE-WRK-090]`/`[GDE-WRK-095]` | a decision against a number, not a guess |
+| 4 · `works`/`recording_works` schema, filled from the cache | open | nothing downstream is testable without it |
+| 5 · passage-id history tier | open | `[GDE-WRK-055]`; independent of 4, and small |
+| 6 · work-MBID history tier in the Director | open, needs 4 | the widest key of `[GDE-WRK-038]`'s cascade |
 
 **`[GDE-WRK-130]` Transport already works, by accident.** `vainopi` carries the
-whole 1.17 GB `library.db`, caches included, so relations ship with the file as
-things stand. [`tools/payload.py`](../tools/payload.py) does **not** carry
-`recording_relations`, so a move to bundle-only sync would need that gap closed
-first.
+whole 1.17 GB `library.db`, caches included, so a `recording_works` table ships
+with the file as things stand. [`tools/payload.py`](../tools/payload.py) carries
+neither it nor `recording_relations`, so a move to bundle-only sync would need
+that gap closed first.
 
 ---
 
 ## 7. Open
 
-- **`[GDE-WRK-200]`** *Resolved 2026-09-12* — cross-artist collisions are
-  measured at 88 classes `[GDE-WRK-090]`, and the rule is same-artist **pairs**
-  `[GDE-WRK-095]`. What remains open is whether a listener ever wants the
-  cover related; `[GDE-WRK-045]` means that can only ever be all or nothing.
-- **`[GDE-WRK-210]`** The 11.0% of recordings with no Work `[GDE-WRK-065]` have
-  no path to relation except artist+title or a hand edit.
-- **`[GDE-WRK-220]`** Whether a `live` or `partial` performance should share a
-  full rotation with the studio take is a listening judgement, not a data
-  question, and `[GDE-WRK-045]` allows only yes or no. 171 `live` relations in
-  the probe's 559 say this is not a rare case.
-- **`[GDE-WRK-230]`** The 68 multi-Work recordings `[GDE-WRK-070]` need a
-  deliberate rule before any derivation runs; none is chosen here.
+- **`[GDE-WRK-200]`** *Resolved 2026-09-12* — covers block `[GDE-WRK-050]`,
+  measured at 88 classes over 200 passages before the call was made.
+- **`[GDE-WRK-210]`** The 11.0% of recordings with no Work `[GDE-WRK-065]` fall
+  back to the recording tier alone `[GDE-WRK-038]`, which is what they get
+  today. No worse, no better.
+- **`[GDE-WRK-220]`** `[GDE-WRK-035]` reads MusicBrainz's relation
+  *attributes* not at all, and some carry real signal. Three recordings of
+  `The Star‐Spangled Banner` — Hendrix's Woodstock instrumental, U2's, Boston's
+  — are one Work and now block each other, and John McLaughlin's recording
+  marked `medley` shares the `Stairway to Heaven` Work with Led Zeppelin's, so
+  a 20-minute medley containing the song blocks the song. Both follow from the
+  rule as stated; neither is obviously wanted. 29 passages are pulled in by a
+  multi-Work membership `[GDE-WRK-070]`, and `live` is common — 171 relations
+  in the probe's 559.
+- **`[GDE-WRK-230]`** Whether the rule belongs in
+  [SPEC037](spec/SPEC037-eligibility-and-frequency.md) as a revision of
+  `[SPEC-DIR-116]`, which currently specifies the graded-relation model this
+  supersedes. It should; that edit is not made here.
