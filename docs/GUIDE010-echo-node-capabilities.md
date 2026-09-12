@@ -186,11 +186,37 @@ badly wrong for a Wi-Fi hiccup in the house, which would trip a fallback and
 diverge a whole passage before rejoining.
 
 Replaced by a rule that needs no threshold: **follow announcements while any
-remain; when the announced queue is exhausted and nothing new has arrived, the
-warm Director resumes selecting.** With `QUEUE_DEPTH`'s five passages typically
-announced, a node can lose contact for roughly twenty minutes before it has to
-decide anything, and a momentary dropout is invisible because the next
-announcement simply arrives before the runway is spent.
+remain, and top the queue up locally rather than letting it drain.** As each
+passage completes the next is taken from the queue; if no announcement has
+arrived to replace it, the warm Director selects one so the queue stays at
+`QUEUE_DEPTH`. The queue never runs dry, so there is no moment of decision and
+no cliff — announced entries drain out of the front while locally-chosen ones
+fill in behind, and the changeover is a blend rather than an event.
+
+With five passages typically announced, a node can lose contact for roughly
+twenty minutes before a single local selection is even needed, and a momentary
+dropout is invisible because the next announcement arrives long before the
+runway is spent.
+
+**`[GDE-ECHO-510]` Rejoining is the mirror of leaving, and it is not
+symmetrical in the obvious way.** When contact returns, the master's announced
+queue **takes precedence immediately** and locally-chosen entries still waiting
+are discarded — they were only ever filling a gap.
+
+But the passage *in progress* is not terminated. It plays to its natural end,
+or until Skip `[REQ-AUD-162]`, and only then does the node take up the master's
+programme. Cutting a passage short to rejoin would make reconnection audible
+for no benefit, and the whole point of the local library is that the node was
+never playing anything wrong — only something different.
+
+By then the master is part-way through a passage of its own, so the node joins
+**mid-passage, at a computed offset**, rather than starting that passage over.
+This is the capability `[GDE-ECHO-330]` had deferred, and the rejoin case
+promotes it from optional to required. It is also cheaper than that deferral
+assumed: it is `[REQ-AUD-162]`'s skip — cut the ring, fade, overlay the
+incoming passage — with the incoming passage opened at a position instead of at
+zero, which `resume_at` and `seek_to` already do `[REQ-AUD-140]`. Both halves
+exist; only their combination is new.
 
 So the transition is a handover, not a restart: no rebuild, no gap, no silence
 `[REQ-AUD-142]`. And because `[GDE-ECHO-030]` logs plays locally throughout the

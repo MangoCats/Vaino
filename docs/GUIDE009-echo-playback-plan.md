@@ -195,8 +195,8 @@ point.
 already exists.** An echo node receiving an anchor for a passage it is not
 playing computes the offset it would need and opens that passage there, through
 the same `resume_at` path a restart already uses `[REQ-AUD-140]`. Mid-passage
-joining is explicitly out of scope for v1: it is the case where the ring's depth
-is hardest to reason about, and nothing is learned by attempting it first.
+joining was deferred here; `[GDE-ECHO-510]`'s rejoin case promotes it to
+required, and it is skip plus a seek, both of which already exist.
 
 Then measure and do not correct. Log the residual offset between the two nodes
 continuously across many passages and compare it against Phase 1's predicted
