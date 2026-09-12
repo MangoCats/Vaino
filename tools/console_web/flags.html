@@ -22,7 +22,7 @@
   </div>
   <div id="list"></div>
 
-  <h2>Apply pending edits to this library</h2>
+  <h2 id="apply">Apply pending edits to this library</h2>
   <p class="empty" style="font-size:.85rem;padding:.2rem 0">
     Vaino's editor records a draft and changes nothing else: an edit is not in
     the library, and cannot be pushed anywhere, until it is folded in here.
@@ -49,8 +49,12 @@
     even over vainopi's own slow WiFi. Push lands whatever
     identification/boundary/artist edits have accumulated here since the last
     push, and clears the flags they answer — batched, on request only:
-    it briefly stops and restarts vainopi's own player, so it never runs on
-    its own, and it still fetches a full comparison copy first.
+    it briefly stops and restarts each node's own player, so it never runs on
+    its own. It reads only what the comparison needs, one small ssh query per
+    change, never a copy of the whole library
+    <code style="font:12px var(--mono)">[SPEC-DF-120]</code>; a node that is
+    split is patched through its listener half with the catalogue attached, so
+    each statement lands in the right file.
     Sync preferences reconciles each side's own hand-tuned artist/recording
     rotation, recovery and restraint — whichever side edited a given one
     more recently wins, and only the ones that actually differ move, in

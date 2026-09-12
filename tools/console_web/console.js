@@ -122,8 +122,15 @@ const S = {
     return;   // a console with no library open yet has nothing to count
   }
   if (!d.total) return;
-  nav.appendChild(S.el('span', {
-    class: 'pill warn', title: 'Saved but not yet applied to the library -- '
-      + 'run tools/apply_boundary_reviews.py / tools/apply_reviews.py --commit',
-  }, `⚠ ${S.n(d.total)} pending edit${d.total === 1 ? '' : 's'}`));
+  // Points at the button that does it, not at a command to type: the flags
+  // page grew one `[REQ-LIB-175]`, and a tooltip still naming the CLI sends
+  // a person to a terminal for something two clicks away. The tools are
+  // still what runs -- the page says so, and says it first.
+  const pill = S.el('a', {
+    class: 'pill warn', href: '/flags#apply',
+    title: 'Saved but not yet applied to the library -- open the flags page '
+      + 'to review them and apply, or run tools/apply_boundary_reviews.py / '
+      + 'tools/apply_reviews.py --commit by hand',
+  }, `⚠ ${S.n(d.total)} pending edit${d.total === 1 ? '' : 's'}`);
+  nav.appendChild(pill);
 })();

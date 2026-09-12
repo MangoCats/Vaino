@@ -316,11 +316,14 @@ function releaseSuggestBox(pid, folder) {
         S.el('p', { style: 'margin:0' },
           'Vaino’s editor records a draft and changes nothing else — it cannot be ',
           'pushed anywhere, and nothing else on this page reflects it, until a separate, ',
-          'deliberate step folds it in: ',
+          'deliberate step folds it in. ',
+          S.el('a', { href: '/flags#apply' }, 'Review and apply them'),
+          ' — you are shown the exact before/after first, and the player is ',
+          'paused while the library is rewritten. By hand it is still ',
           S.el('span', { style: 'font-family:var(--mono)', text: pendingKinds.includes('boundary')
             ? 'python tools/apply_boundary_reviews.py <db> --commit'
             : 'python tools/apply_reviews.py <db> --commit' }),
-          pendingKinds.length > 1 ? ' (run both tools if more than one kind is pending).' : '.')));
+          pendingKinds.length > 1 ? ' (both tools, if more than one kind is pending).' : '.')));
     }
 
     // Flagged "for review" `[REQ-VIS-265]`, and whether local and vainopi
