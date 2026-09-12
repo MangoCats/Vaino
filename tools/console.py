@@ -90,11 +90,23 @@ def already_serving(port: int, timeout: float = 2.0) -> bool:
 # the completeness tick compares against.
 FULL_FLAVOR = 71
 
-STATE = {"db": None, "path": None, "roots": [], "scan": None, "scanned_at": 0, "jobs": None,
+# No "db" here on purpose `[IMPL-SUI-045]`: a connection shared by every
+# handler thread is what wedged this console, so there is no longer anywhere
+# process-wide to put one. `path` is what handlers open their own from.
+STATE = {"path": None, "roots": [], "scan": None, "scanned_at": 0, "jobs": None,
          "build": None, "started_at": None, "port": None}
 
 
 # ---------------------------------------------------------------- database ---
+
+# How long a query waits for a lock before giving up. The player writes the
+# listener half continuously and both halves are WAL, so contention is normal
+# and momentary. What must not happen is waiting *forever*: an error reaches
+# the page as a 500 it can show, where a hang reaches it as nothing at all.
+# Generous enough that an ordinary checkpoint is invisible, short enough that
+# a person is told rather than left watching a spinner.
+BUSY_TIMEOUT = 15.0
+
 
 def ro(db: str) -> sqlite3.Connection:
     """Read-only, and it must stay that way `[IMPL-SUI-040]`.
@@ -109,8 +121,34 @@ def ro(db: str) -> sqlite3.Connection:
     page bootstraps nothing in but reads most of, and putting it in `main`
     means a stray `CREATE` here could only ever shadow a *listener* table,
     which this file never writes. The authorizer refuses that too.
+
+    **One connection per request, never one shared by every thread.** This
+    used to return a single connection held in `STATE["db"]`, opened with
+    `check_same_thread=False` and used by every handler thread at once.
+    `sqlite3` serializes access per connection, so that one handle was a
+    convoy: any request blocked inside SQLite held it, and every other
+    request -- including ones wanting only the catalogue -- queued behind it
+    with no timeout of its own. Observed live 2026-09-11 against a console
+    launched from Vaino's browse page, stacks taken with `py-spy`: the accept
+    loop healthy in `serve_forever`, two handler threads blocked in
+    `conn.execute` on the shared handle, and every later connection
+    accumulating in a five-deep listen backlog until new ones were refused
+    outright. That refusal is what a co-resident Vaino reads as "no Sampo
+    here", so it starts another -- which is how three consoles ended up bound
+    to one port.
+
+    The player made the same call the other way and wrote down why
+    (`web/mod.rs`: *"A path rather than a connection: `rusqlite`'s is not
+    `Sync`, and a request opens its own"*). Sampo was the odd one out.
+    Measured at 1.5 ms warm, against requests that were already costing
+    more than that, so the convoy bought nothing.
+
+    `check_same_thread` goes back to `sqlite3`'s own `True`: a connection
+    opened here is used and closed by the one thread that asked for it, and
+    the stricter default now catches a future handler that tries to share
+    one again.
     """
-    conn = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, check_same_thread=False)
+    conn = vaino_db.connect(db, vaino_db.ROLE_LIBRARY, timeout=BUSY_TIMEOUT)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -710,6 +748,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # Class-level default so the attribute always exists, whatever order a
+    # future handler does things in -- `_close_db` must never be the thing
+    # that raises while unwinding someone else's exception.
+    _conn = None
+
+    # This request's own connection, opened on first use `[IMPL-SUI-045]`.
+    #
+    # Lazy rather than opened up front, for two reasons. Most routes here
+    # serve a static file or read `STATE["jobs"]` and touch no library at
+    # all, so opening one for them would be pure cost. And `stream()` sits
+    # among the API routes but runs for up to fifteen minutes -- opening a
+    # connection before the dispatch below would pin one open for that whole
+    # time, which is the very thing this change exists to stop.
+    def _db(self):
+        if self._conn is None:
+            self._conn = ro(STATE["path"])
+        return self._conn
+
+    def _close_db(self):
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
     def send_file(self, name, ctype):
         path = os.path.join(WEB, name)
         if not os.path.isfile(path):
@@ -728,7 +789,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         p, qs = u.path, parse_qs(u.query)
-        conn = STATE["db"]
+        self._conn = None
         try:
             if p == "/":
                 return self.send_file("index.html", "text/html; charset=utf-8")
@@ -742,21 +803,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file("console.js", "application/javascript; charset=utf-8")
 
             if p == "/api/totals":
-                return self.send_json({"totals": totals(conn), "coverage": completeness(conn)})
+                return self.send_json({"totals": totals(self._db()),
+                                       "coverage": completeness(self._db())})
             if p == "/api/pending":
-                return self.send_json(pending_counts(conn))
+                return self.send_json(pending_counts(self._db()))
             if p == "/api/library":
                 return self.send_json(library(
-                    conn, q=(qs.get("q") or [""])[0], facet=(qs.get("facet") or [""])[0]))
+                    self._db(), q=(qs.get("q") or [""])[0],
+                    facet=(qs.get("facet") or [""])[0]))
             if p.startswith("/api/profile/") and p.endswith("/remote"):
                 pid = int(p.split("/")[3])
-                return self.send_json(remote_status(conn, pid))
+                return self.send_json(remote_status(self._db(), pid))
             if p.startswith("/api/profile/") and p.endswith("/flag"):
                 pid = int(p.split("/")[3])
-                return self.send_json(flag_sync_status(conn, pid))
+                return self.send_json(flag_sync_status(self._db(), pid))
             if p.startswith("/api/profile/"):
                 pid = int(p.rsplit("/", 1)[-1])
-                d = profile(conn, pid)
+                d = profile(self._db(), pid)
                 return self.send_json(d) if d else self.send_error(404)
             if p == "/jobs":
                 return self.send_file("jobs.html", "text/html; charset=utf-8")
@@ -765,7 +828,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/flags":
                 return self.send_file("flags.html", "text/html; charset=utf-8")
             if p == "/api/flags":
-                return self.send_json(flags(conn))
+                return self.send_json(flags(self._db()))
             if p == "/mesh":
                 return self.send_file("mesh.html", "text/html; charset=utf-8")
             if p == "/api/peers":
@@ -788,7 +851,7 @@ class Handler(BaseHTTPRequestHandler):
                 # route sketch showed: a refresh must be harmless, and the
                 # expensive half (hashing) is a job, not this.
                 if STATE["scan"] is None or "refresh" in qs:
-                    STATE["scan"] = scan(conn, STATE["roots"])
+                    STATE["scan"] = scan(self._db(), STATE["roots"])
                     STATE["scanned_at"] = time.time()
                 return self.send_json(STATE["scan"])
             if p == "/api/handoff/ensure":
@@ -802,6 +865,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as e:  # a failed query must report, never render empty
             self.send_json({"error": f"{type(e).__name__}: {e}"}, code=500)
+        finally:
+            # Whatever happened, this request's connection goes back. Held
+            # open it would be the old shared handle again, one per thread.
+            self._close_db()
 
     # Server-sent events, not a WebSocket. A job emits progress in one
     # direction and takes its commands as POSTs, so a duplex socket would be
@@ -832,7 +899,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         p = u.path
-        conn = STATE["db"]
+        self._conn = None
         try:
             if p.startswith("/api/profile/") and p.endswith("/accept-remote"):
                 # [SPEC-DF-116..117]'s one deliberate exception to "the
@@ -847,7 +914,7 @@ class Handler(BaseHTTPRequestHandler):
                 if kind not in ("id_review", "boundary_review") or not isinstance(value, dict):
                     return self.send_json(
                         {"error": "expected {kind: id_review|boundary_review, value: {...}}"}, code=400)
-                row = conn.execute(
+                row = self._db().execute(
                     "SELECT p.kind, p.start_ms, p.end_ms, f.audio_md5 FROM passages p "
                     "JOIN files f USING(file_id) WHERE p.passage_id=?1", (pid,)).fetchone()
                 if row is None:
@@ -863,9 +930,10 @@ class Handler(BaseHTTPRequestHandler):
                 # process, over HTTP, synchronously, in the same request/
                 # response cycle `_peek()`'s own remote check already uses.
                 pid = int(p.split("/")[3])
-                if conn.execute("SELECT 1 FROM passages WHERE passage_id=?1", (pid,)).fetchone() is None:
+                if self._db().execute("SELECT 1 FROM passages WHERE passage_id=?1",
+                                      (pid,)).fetchone() is None:
                     return self.send_json({"error": f"no such passage: {pid}"}, code=404)
-                return self.send_json(unflag_everywhere(conn, pid))
+                return self.send_json(unflag_everywhere(self._db(), pid))
             if p == "/api/flags/unflag":
                 # The Flags list's own "unflag" button `[REQ-VIS-265]` --
                 # given directly, not resolved through a passage, so a row
@@ -1087,6 +1155,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
         except Exception as e:
             self.send_json({"error": f"{type(e).__name__}: {e}"}, code=500)
+        finally:
+            self._close_db()
 
 
 class Server(socketserver.ThreadingTCPServer):
@@ -1121,7 +1191,6 @@ def main() -> int:
               f"open http://127.0.0.1:{args.port}/ , or use --port for a second one",
               file=sys.stderr)
         return 1
-    STATE["db"] = ro(args.db)
     STATE["path"] = os.path.abspath(args.db)
     STATE["roots"] = [os.path.normpath(r) for r in args.root]
     # Beside the library, named after it, exactly as the id-check sidecar is.
@@ -1131,7 +1200,14 @@ def main() -> int:
     STATE["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     STATE["build"] = build_info(REPO_ROOT)
 
-    t = totals(STATE["db"])
+    # Opened, read and closed here: the startup banner is the one library
+    # question asked outside a request, and nothing should hold a connection
+    # for the life of the process `[IMPL-SUI-045]`.
+    boot = ro(STATE["path"])
+    try:
+        t = totals(boot)
+    finally:
+        boot.close()
     print(f"library: {t['files']:,} files, {t['radio']:,} radio passages")
     if STATE["roots"]:
         print(f"roots:   {', '.join(STATE['roots'])}")

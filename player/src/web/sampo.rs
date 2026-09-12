@@ -154,6 +154,13 @@ pub(super) async fn sampo_ensure(State(ui): State<Ui>) -> Response {
             None => (Stdio::null(), Stdio::null()),
         };
         Command::new(py)
+            // Unbuffered, or the log above is empty exactly when it matters.
+            // Python block-buffers stdout when it is a file rather than a
+            // terminal, so a console that starts and then *wedges* flushes
+            // nothing -- measured 2026-09-11, a 0-byte `sampo-launch.log`
+            // beside a Sampo that had been hung for twenty minutes. A log
+            // that only survives a clean exit is not a log.
+            .arg("-u")
             .arg(&script)
             .arg(&db)
             .arg("--port")
