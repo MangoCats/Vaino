@@ -23,9 +23,18 @@ same artist, same title, two different recording MBIDs — `49323205…` at 646.
 and `891cb542…` at 709.7 s — and so two independent rotation histories. The
 second had never played, and nothing suppressed it.
 
-That incident had a second, unrelated cause on the artist side, which is not
-this document's subject. The recording-side cause is: **`recording_relations`
-holds 0 rows**, so a passage can only ever be blocked by its own exact MBID.
+The recording-side cause is: **`recording_relations` holds 0 rows**, so a
+passage can only ever be blocked by its own exact MBID.
+
+**`[GDE-WRK-012]` It had a second cause, on the artist side, fixed 2026-09-12.**
+`vainopi` was restarted 3m46s into that passage. A passage leaves the queue when
+it is admitted to the mixer and does not reach `listener_play_history` until it
+crosses the counted threshold minutes later, so a Director rebuilt in between
+read neither — `Session::adopt` re-notes the queue for exactly this reason and
+the *sounding* passage is not in it. Elton John's last play read as 21 days
+earlier, and an 8-hour artist block never saw a reason to fire. `adopt` now
+takes `head_position()` first. Either fix alone would have prevented the repeat;
+both were real.
 
 **`[GDE-WRK-015]` Identification is not the problem.** All 8,330 radio passages
 carry a recording id — 8,167 real MusicBrainz MBIDs and 163 synthetic
@@ -137,14 +146,13 @@ be a schema and UI change, and is not assumed here.
 
 ## 4. Measured — what a Work pass actually buys
 
-**`[GDE-WRK-060]` Method.** Every recording reachable from a radio passage —
-8,008 of them — fetched from `musicbrainz.org/ws/2/recording?inc=work-rels`,
-one request per second with the same citizenship rules as
-[`tools/fetch_releases.py`](../tools/fetch_releases.py). The crawl ran
-2026-09-11 20:29 to 2026-09-12 05:36; 8,004 returned and 4 errored. A
-559-recording probe sized the work first, and where its figures differed they
-are noted — a sample drawn from *known-duplicated* songs is biased toward
-exactly what it was measuring.
+**`[GDE-WRK-060]` Method.** All 8,008 recordings reachable from a radio passage,
+fetched from `musicbrainz.org/ws/2/recording?inc=work-rels` at one request per
+second on the citizenship rules of
+[`tools/fetch_releases.py`](../tools/fetch_releases.py); 8,004 returned, 4
+errored. A 559-recording probe sized the job first, and where its figures
+differed they are noted — a sample drawn from *known-duplicated* songs is
+biased toward exactly what it measured.
 
 **`[GDE-WRK-065]` Work coverage is 89.0%** — 7,120 of 8,004 recordings carry at
 least one `performance` relation. The 884 without are dominated by instrumental
@@ -168,26 +176,15 @@ earlier reading of partial data had said ~14% by counting the undecidable
 groups as disagreements. Retained as evidence that the Work data is sound, not
 as an argument for the heuristic `[GDE-WRK-100]`.
 
-**`[GDE-WRK-080]` Work's real advantage is recall, not precision — and it is
-large.** Variants carry different titles, so artist+title cannot see them.
-Over the whole library, Work restricted to same-artist pairs `[GDE-WRK-095]`
-against the heuristic it would replace:
+**`[GDE-WRK-080]` Work's advantage is recall, not precision — and it is large.**
+Variants carry different titles, so artist+title cannot see them: over the
+library it groups 250 classes across 509 recordings where Work groups **495
+across 1,074**. The gap is entirely `Candle in the Wind (acoustic)` ↔ `Candle
+in the Wind`, `Tower of Babel` ↔ `Tower of Babel (live)`.
 
-| | classes | recordings covered | directed rows |
-| :--- | ---: | ---: | ---: |
-| artist+title | 250 | 509 | 536 |
-| **Work, same-artist** | **407** | **904** | **1,260** |
-
-**1.8× the recordings brought under a shared rotation**, and 2.4× the rows.
-The gap is entirely variants under a different title:
-`Candle in the Wind (acoustic)` ↔ `Candle in the Wind`,
-`Tower of Babel` ↔ `Tower of Babel (live)`.
-
-**`[GDE-WRK-085]` The table stays small: 495 classes over 1,074 recordings,
-1,494 directed rows.** Most are pairs (422), then 60 of size 3 and 9 of size 4;
-the tail runs longer than the probe suggested, which saw nothing above 3. The
-largest are single-artist version sets — Moby's "Extreme Ways" ×10, Depeche
-Mode's "Personal Jesus" ×5 — which is the mechanism working.
+**`[GDE-WRK-085]` Classes stay small**: 422 pairs, 60 of size 3, 9 of size 4,
+and a tail to ten the probe never saw. The largest are single-artist version
+sets — Moby's "Extreme Ways" ×10 — which is the mechanism working.
 
 **`[GDE-WRK-090]` Cross-artist collision, measured: 88 of 495 classes — 17.8% —
 span more than one artist**, and they account for 258 of the 1,494 directed
@@ -276,6 +273,7 @@ that gap closed first.
   [SPEC037](spec/SPEC037-eligibility-and-frequency.md) `[SPEC-DIR-119]`, and
   `[SPEC-DIR-116]` is marked superseded for the same-song case while its code
   and table stay live for graded relations.
-- **`[GDE-WRK-240]`** `publish_pool` omits `suppressed` from the pool total it
-  shows the browser, so a suppressed passage makes the total read low. Found
-  while adding `work_blocked` to that sum; pre-existing, not fixed here.
+- **`[GDE-WRK-240]`** *Resolved 2026-09-12* — `publish_pool`'s hand-written sum
+  omitted `suppressed`, reading 8,328 of 8,330 on the real library. Replaced by
+  `Census::total`, which destructures the struct so a new field cannot compile
+  without being accounted for.
