@@ -44,6 +44,7 @@ folded into one spec.
 | External backends | [GUIDE007](GUIDE007-external-backends-investigation.md) | [§7 Open](GUIDE007-external-backends-investigation.md#7-open) |
 | Echo drift measurement (Phase 1 campaign, t0 taken 2026-09-12, second reads due 2026-09-13) | [LOG006](LOG006-echo-drift-measurement.md) | [§4 Open](LOG006-echo-drift-measurement.md#4-open) |
 | Echo playback — two or more instances, one programme, each from its own files (investigated 2026-09-11, not yet built) | [GUIDE008](GUIDE008-echo-playback-investigation.md) · [GUIDE009](GUIDE009-echo-playback-plan.md) · [GUIDE010](GUIDE010-echo-node-capabilities.md) | [GUIDE009 §10 Explicitly not in v1](GUIDE009-echo-playback-plan.md#10-explicitly-not-in-v1) |
+| Same-song blocking across different recordings (**built 2026-09-12** — three identity tiers, passage → recording MBID → work MBID, covers included; [SPEC037](spec/SPEC037-eligibility-and-frequency.md) `[SPEC-DIR-119]`) | [GUIDE012](GUIDE012-work-based-song-blocking.md) | [§7 Open](GUIDE012-work-based-song-blocking.md#7-open) |
 | Appliance setup | [VainoPi/IMPL001](../VainoPi/IMPL001-appliance-setup.md) | [§9 Open](../VainoPi/IMPL001-appliance-setup.md#9-open) |
 | Image & partitions | [VainoPi/PI001](../VainoPi/PI001-image-and-partitions.md) | [§7 What is not yet decided](../VainoPi/PI001-image-and-partitions.md#7-what-is-not-yet-decided) |
 | Appliance characterisation | [VainoPi/PI006](../VainoPi/PI006-appliance-characterisation.md) | [§9 What was not measured](../VainoPi/PI006-appliance-characterisation.md#9-what-was-not-measured) |

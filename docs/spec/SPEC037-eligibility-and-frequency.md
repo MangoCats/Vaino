@@ -24,7 +24,29 @@ largest stage of the pipeline and the one with the most rules of its own.
 4. Recording weight multiplies its artist's weight. Related recordings block and damp too, scaled by relation strength.
 5. Drop below `min_weight` → excluded.
 
-**`[SPEC-DIR-116]` Related recordings share a rotation, and each is judged on its own age.** A live take, a remaster and the compilation appearance are the same song to a listener; hearing one should suppress the others. MuLibPlay intended this and never achieved it, in two independent ways:
+**`[SPEC-DIR-119]` `last_played` in step 2 is the freshest of three identity tiers, not the recording's alone.** Built 2026-09-12, superseding `[SPEC-DIR-116]`'s graded relation for the same-song case — see [GUIDE012](../GUIDE012-work-based-song-blocking.md) `[GDE-WRK-035]` for the measurements and the decision.
+
+A play stamps every key the passage has: its `passage_id`, its recording MBID if it has one, and every work MBID that recording performs. The recording pass then reads the **most recent** stamp across the keys *this* passage has, because a wider key can never be staler than a narrower one:
+
+| tier | key | reaches |
+| :--- | :--- | :--- |
+| passage | `passage_id` | this passage only — the sole tier an unidentified passage has |
+| recording | `passage_recordings.mbid` | other passages of the same recording |
+| **work** | `recording_works.work_mbid` | **other recordings of the same song, any artist** |
+
+Three things follow, and each is pinned by test:
+
+1. **The window is the candidate's own.** A passage is weighed from its own side against its own `rotation`/`recovery`, so one play of a shared song holds three recordings of it for three different periods. Nothing is stored per pair, and nothing is directional.
+2. **Covers block.** A shared work is a shared work: hearing David Bowie's "Across the Universe" holds The Beatles' and Rufus Wainwright's. Measured at 88 work classes over 200 passages before the rule was adopted, against a mean blast radius of 1.25 passages per play over a pool of 8,330.
+3. **Relation attributes are not read.** `live`, `cover`, `partial`, `instrumental` and `medley` are all recorded and none is consulted, so a medley containing a song blocks the song `[GDE-WRK-052]`.
+
+A catalogue with no `recording_works` keeps the pre-2026-09-12 behaviour, and the Director says so on load rather than looking like a library that merely has no works.
+
+**`[SPEC-DIR-116]` Related recordings share a rotation, and each is judged on its own age.** A live take, a remaster and the compilation appearance are the same song to a listener; hearing one should suppress the others.
+
+> **Superseded for same-song blocking by `[SPEC-DIR-119]`, 2026-09-12.** `recording_relations` was never filled — it held 0 rows for the life of the mechanism, which is how the incident in [GUIDE012](../GUIDE012-work-based-song-blocking.md) §1 happened — and identity on a work MBID does the job without a pairwise junction. The code below stays live and the table stays in the schema, because a graded relation is still the only way to express "related, but weaker", which identity cannot. Everything from here to the end of this rule is retained as the record of what it was for.
+
+MuLibPlay intended this and never achieved it, in two independent ways:
 
 ```cpp
 QMap<qint32,qreal> relTrk = de.relatedTracks( trackId );
