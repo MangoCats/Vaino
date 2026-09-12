@@ -156,6 +156,51 @@ residual at all.
 
 ---
 
+## 2b. Going independent, when the master goes away
+
+The motivating case is literal: `vainopi` may be installed in a car and driven
+out of range. It must not degrade — it should simply resume choosing for
+itself. Three decisions make that free rather than merely possible.
+
+**`[GDE-ECHO-490]` The Program Director stays loaded and inactive. This costs
+nothing, because it is already the status quo.** Measured on `vainopi`
+2026-09-12 with the Director resident: **118 MB RSS, 25 % of its 464 MB, 234 MB
+still free** — matching `[IMPL-SUI-075]`'s figure exactly, and inside
+`[REQ-HW-100]`'s 150 MB process target. A running player has already paid for
+it. So an echo node does not *acquire* a warm Director; it merely declines to
+discard the one it has, and the 9.86 s `Director::load` a Pi Zero 2W would
+otherwise face `[IMPL-SUI-075]` never arises at all.
+
+**`[GDE-ECHO-495]` The master broadcasts its queue, not just the passage in
+hand.** `[GDE-ECHO-310]`'s schedule announces one passage on mixer admission,
+roughly 15 s of lead — enough to *start* together, not enough to survive a
+departure. Sending the queue costs nothing new: `QUEUE_SHOWN`'s 12 entries
+already go to every connected browser twice a second, so the data and the
+cadence both exist. It also lets an echo node pre-open and pre-decode the way
+`[REQ-AUD-160]` already does locally.
+
+**`[GDE-ECHO-500]` The queue depth is the hysteresis, so there is no timeout to
+tune.** An earlier draft had the node fall back after "2 anchors" of silence —
+about one second at twice-a-second cadence. That is right for a car leaving and
+badly wrong for a Wi-Fi hiccup in the house, which would trip a fallback and
+diverge a whole passage before rejoining.
+
+Replaced by a rule that needs no threshold: **follow announcements while any
+remain; when the announced queue is exhausted and nothing new has arrived, the
+warm Director resumes selecting.** With `QUEUE_DEPTH`'s five passages typically
+announced, a node can lose contact for roughly twenty minutes before it has to
+decide anything, and a momentary dropout is invisible because the next
+announcement simply arrives before the runway is spent.
+
+So the transition is a handover, not a restart: no rebuild, no gap, no silence
+`[REQ-AUD-142]`. And because `[GDE-ECHO-030]` logs plays locally throughout the
+mirrored period, the Director's own eligibility and frequency inputs
+`[SPEC-FREQ-010]` are current at the moment it takes over — it is not resuming
+from stale state, it is resuming from its own honest record of what that room
+has heard.
+
+---
+
 ## 3. What the audio stack actually provides
 
 Everything below was read out of `cpal` 0.15.3's own source rather than inferred

@@ -246,7 +246,7 @@ rather than a silent continuation on stale state:
 | underrun `[REQ-AUD-142]` | frames that were counted were never heard |
 | pause | the device stops; the count stops with it |
 | skip | the ring is cut `[REQ-AUD-158]`, so frames counted are discarded |
-| master silent > 2 anchors | echo node resumes its own Director at the next boundary |
+| master silent | the announced queue runs down, then the warm Director resumes — no timeout `[GDE-ECHO-500]` |
 
 The last row is the important one for `[GDE-ECHO-020]`: an echo node whose
 master disappears must return to being an ordinary player, not stop.
