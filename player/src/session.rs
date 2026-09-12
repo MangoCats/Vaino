@@ -146,12 +146,23 @@ pub struct Handoff {
 /// How much queued audio must be in hand before a live Director rebuild starts
 /// `[IMPL-SUI-075]`.
 ///
-/// Measured by `dircheck`: a rebuild over 8,330 radio passages takes **9.86 s
-/// on the appliance** and 0.89 s on a desktop, so three minutes covers the slow
-/// case eighteen times over. The margin is not really about time — the rebuild
-/// is off the audio path and cannot glitch a note. It is about **I/O**: those
-/// ten seconds are heavy SQLite reading from an SD card, and starting them only
-/// when decode is well ahead keeps the two from contending for the same card.
+/// Measured by `dircheck` over 8,330 radio passages, 2026-09-12: **9.1-11.4 s
+/// on the appliance**, against 11.3-12.1 s for the same library before the work
+/// tier `[GDE-WRK-035]` added a third history map. The ranges overlap, so the
+/// tier costs nothing measurable; a single cold run of either reaches 14 s.
+/// Three minutes covers the slow case a dozen times over. The margin is not
+/// really about time — the rebuild is off the audio path and cannot glitch a
+/// note. It is about **I/O**, heavy SQLite reading from an SD card, and
+/// starting it only when decode is well ahead keeps the two from contending
+/// for the same card.
+///
+/// **Two numbers were wrong here before, the same way.** 9.86 s was measured on
+/// a smaller library and then read as a baseline for a much later change. Its
+/// replacement, "12.9 s against 11.5 s", compared two single cold runs taken at
+/// different times and reported their difference as a 1.4 s cost. Only
+/// interleaved repeats of both binaries, sharing cache state, showed the
+/// spread between runs to be larger than the difference between versions
+/// `[GOV-SRC-020]`. One sample off an SD card is an anecdote.
 ///
 /// The default depth of five passages holds far more than this, so in ordinary
 /// running the rebuild starts at once; the threshold bites only when the queue

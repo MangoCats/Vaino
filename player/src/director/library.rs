@@ -282,45 +282,55 @@ impl Director {
         let mut artist_last_played: HashMap<String, i64> = HashMap::new();
         let mut passage_last_played: HashMap<i64, i64> = HashMap::new();
         let mut work_last_played: HashMap<String, i64> = HashMap::new();
-        // Per play row, not grouped by mbid: the passage tier needs the
-        // passage, and an unidentified passage has no mbid to group by at all.
-        let mut stmt = conn
-            .prepare("SELECT passage_id, mbid, played_at FROM listener_play_history")
-            .map_err(q)?;
-        // **Both columns are nullable**, and on the live listener database 52
-        // of 37,763 rows carry a null `passage_id` -- `player_store.rs` declares
-        // it `INTEGER` with no NOT NULL, so a play can be recorded against a
-        // recording alone. Reading it as `i64` made `Director::load` fail
-        // outright, which no fixture caught because every fixture row has one.
-        let plays = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, Option<i64>>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, i64>(2)?,
-                ))
-            })
-            .map_err(q)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(q)?;
-        drop(stmt);
+        // **Two aggregates, not one scan.** SQLite reduces 37,763 play rows to
+        // about 8,000 of each key before any cross into Rust; pulling every row
+        // and folding them here instead cost a measured 18.3 s on the appliance
+        // against 9.86 s for the query this replaced `[IMPL-SUI-075]`.
+        //
+        // **Both columns are nullable**, and the live listener database carries
+        // 52 rows with a null `passage_id` -- `player_store.rs` declares it
+        // `INTEGER` with no NOT NULL, so a play can be recorded against a
+        // recording alone. Each `WHERE ... IS NOT NULL` is what lets a row feed
+        // whichever tiers it can and be skipped by the rest.
         let bump = |m: &mut HashMap<String, i64>, k: &str, at: i64| {
             let e = m.entry(k.to_string()).or_insert(at);
             *e = (*e).max(at);
         };
-        for (passage_id, mbid, at) in plays {
-            if let Some(passage_id) = passage_id {
-                let e = passage_last_played.entry(passage_id).or_insert(at);
-                *e = (*e).max(at);
-            }
-            let Some(mbid) = mbid else { continue };
+        let mut stmt = conn
+            .prepare(
+                "SELECT passage_id, MAX(played_at) FROM listener_play_history                  WHERE passage_id IS NOT NULL GROUP BY passage_id",
+            )
+            .map_err(q)?;
+        let by_passage = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(q)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(q)?;
+        drop(stmt);
+        for (passage_id, at) in by_passage {
+            passage_last_played.insert(passage_id, at);
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT mbid, MAX(played_at) FROM listener_play_history                  WHERE mbid IS NOT NULL GROUP BY mbid",
+            )
+            .map_err(q)?;
+        let by_recording = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(q)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(q)?;
+        drop(stmt);
+        // Artists and works still fold with `max`: many recordings share one.
+        for (mbid, at) in by_recording {
             if let Some(a) = artist_of.get(&mbid) {
                 bump(&mut artist_last_played, a, at);
             }
             for w in works_of.get(&mbid).into_iter().flatten() {
                 bump(&mut work_last_played, w, at);
             }
-            bump(&mut last_played, &mbid, at);
+            last_played.insert(mbid, at);
         }
 
         let mut relations: HashMap<String, Vec<(String, f64)>> = HashMap::new();
