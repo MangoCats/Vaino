@@ -110,6 +110,22 @@ David Bowie's "Across the Universe" and The Beatles' and Rufus Wainwright's are
 held out for the same rotation. §4 measured the reach before the call was made
 — 88 classes, 200 passages, 2.4% of the library — and the answer is yes.
 
+**`[GDE-WRK-052]` Relation *attributes* are deliberately not read.** MusicBrainz
+marks a performance `live`, `cover`, `partial`, `instrumental`, `medley`.
+`[GDE-WRK-035]` uses none of them: a shared Work is a shared Work. Two
+consequences were put up for review on 2026-09-12 and both were **affirmed** —
+the rule as stated stands:
+
+- `The Star‐Spangled Banner` is one Work over Hendrix's Woodstock
+  instrumental, U2's and Boston's. Playing any one holds the other two.
+- A John McLaughlin recording marked `medley` shares the `Stairway to Heaven`
+  Work with Led Zeppelin's, so a twenty-minute medley containing the song
+  blocks the song, and the song blocks the medley.
+
+29 passages are pulled in by a multi-Work membership `[GDE-WRK-070]`, and
+`live` is common — 171 relations in the probe's 559. Reading attributes would
+mean a graded relation, which `[GDE-WRK-037]` deliberately gave up.
+
 **`[GDE-WRK-055]` The passage tier is new, and closes a real hole.** History is
 keyed on the recording MBID today, and `note_queued` returns `None` for a
 passage without one — recording nothing at all, so such a passage could repeat
@@ -257,15 +273,9 @@ that gap closed first.
 - **`[GDE-WRK-210]`** The 11.0% of recordings with no Work `[GDE-WRK-065]` fall
   back to the recording tier alone `[GDE-WRK-038]`, which is what they get
   today. No worse, no better.
-- **`[GDE-WRK-220]`** `[GDE-WRK-035]` reads MusicBrainz's relation
-  *attributes* not at all, and some carry real signal. Three recordings of
-  `The Star‐Spangled Banner` — Hendrix's Woodstock instrumental, U2's, Boston's
-  — are one Work and now block each other, and John McLaughlin's recording
-  marked `medley` shares the `Stairway to Heaven` Work with Led Zeppelin's, so
-  a 20-minute medley containing the song blocks the song. Both follow from the
-  rule as stated; neither is obviously wanted. 29 passages are pulled in by a
-  multi-Work membership `[GDE-WRK-070]`, and `live` is common — 171 relations
-  in the probe's 559.
+- **`[GDE-WRK-220]`** *Resolved 2026-09-12* — relation attributes stay unread
+  and the medley and national-anthem cases stand `[GDE-WRK-052]`. Reopening it
+  means reopening `[GDE-WRK-037]`.
 - **`[GDE-WRK-230]`** Whether the rule belongs in
   [SPEC037](spec/SPEC037-eligibility-and-frequency.md) as a revision of
   `[SPEC-DIR-116]`, which currently specifies the graded-relation model this
