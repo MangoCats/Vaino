@@ -315,7 +315,9 @@ def _vaino_ready(port: int, started: bool, sampo_build: dict | None = None) -> d
 
 
 def ensure_vaino(port: int = VAINO_PORT, db_path: str | None = None,
-                  sampo_build: dict | None = None) -> dict:
+                  sampo_build: dict | None = None,
+                  listener_path: str | None = None,
+                  library_path: str | None = None) -> dict:
     """Start the co-resident player if one is not already there `[SPEC-SUI-170]`.
 
     `db_path` is `console.STATE["path"]` -- the library Sampo has open --
@@ -345,10 +347,29 @@ def ensure_vaino(port: int = VAINO_PORT, db_path: str | None = None,
                 "error": "no local Vaino binary found -- build player/ first "
                          "(see build/README.md)"}
 
+    # **Both halves, or none of it works** `[PI-OWE-010]`. The player reads its
+    # positional argument as the LISTENER database and takes the catalogue from
+    # `--library`; this passed `db_path` alone, and `db_path` is Sampo's own
+    # path, which is the CATALOGUE half. The player then ran with the catalogue
+    # as its listener database and bootstrapped listener tables into it --
+    # eleven of them, observed live 2026-09-11, which turned `data/library.db`
+    # into something `vaino_db.shape()` reads as WHOLE and every unqualified
+    # listener read into a hit on an empty shadow (37,763 plays reading as 0).
+    #
+    # The two paths come from `console.STATE`, which took them from its own
+    # connection's `PRAGMA database_list` -- what Sampo genuinely has open, not
+    # a filename convention and not a second content sniff, which is the one
+    # thing the contamination above would itself have corrupted. Equal on an
+    # unsplit installation, where `--library` is then correctly omitted.
+    listener = listener_path or db_path
+    library = library_path or db_path
+    argv = [binary, listener]
+    if library and library != listener:
+        argv += ["--library", library]
+    argv += ["--port", str(port)]
     try:
         subprocess.Popen(
-            [binary, db_path, "--port", str(port)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except OSError as e:
         return {"ok": False, "port": port, "error": f"could not start vaino: {e}"}

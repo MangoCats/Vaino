@@ -94,7 +94,13 @@ FULL_FLAVOR = 71
 # handler thread is what wedged this console, so there is no longer anywhere
 # process-wide to put one. `path` is what handlers open their own from.
 STATE = {"path": None, "roots": [], "scan": None, "scanned_at": 0, "jobs": None,
-         "build": None, "started_at": None, "port": None}
+         "build": None, "started_at": None, "port": None,
+         # The two halves as this process actually has them open, read from
+         # `PRAGMA database_list` rather than guessed from a filename or
+         # re-sniffed from content `[PI-OWE-010]`. A player Sampo starts must
+         # be given BOTH, or it treats whichever single path it got as its
+         # listener database -- and Sampo's path is the catalogue.
+         "library": None, "listener": None}
 
 
 # ---------------------------------------------------------------- database ---
@@ -859,7 +865,8 @@ class Handler(BaseHTTPRequestHandler):
                 # the folder scan above: asking twice costs nothing when a
                 # player is already there, which is the common case.
                 return self.send_json(vaino_control.ensure_vaino(
-                    db_path=STATE["path"], sampo_build=STATE["build"]))
+                    db_path=STATE["path"], sampo_build=STATE["build"],
+                    listener_path=STATE["listener"], library_path=STATE["library"]))
             self.send_error(404)
         except BrokenPipeError:
             pass
@@ -1206,6 +1213,12 @@ def main() -> int:
     boot = ro(STATE["path"])
     try:
         t = totals(boot)
+        # `main` is the catalogue (role=ROLE_LIBRARY); the listener half is
+        # the attached one, or `main` again when nothing is split.
+        attached = {row[1]: row[2] for row in boot.execute("PRAGMA database_list")}
+        STATE["library"] = attached.get("main") or STATE["path"]
+        STATE["listener"] = attached.get(vaino_db.ALIAS[vaino_db.ROLE_LISTENER],
+                                         STATE["library"])
     finally:
         boot.close()
     print(f"library: {t['files']:,} files, {t['radio']:,} radio passages")
