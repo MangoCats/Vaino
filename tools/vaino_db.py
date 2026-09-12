@@ -356,11 +356,27 @@ def connect(path: str, role: str, *, writable: bool = False,
 
     # The half this script owns is `main`, whichever one was named.
     main_path, attach_path = (path, peer_path) if this == role else (peer_path, path)
+    # `writable` describes the half the script **owns** -- the `role` half,
+    # which is `main` -- and never whichever file happened to be named.
+    #
+    # This used to swap the two flags when the caller named the peer, on the
+    # reasoning that `writable` belonged to `path`. That reading contradicts
+    # `role`'s own definition three paragraphs up ("the half this script owns
+    # -- the one it writes and creates tables in") and `peer_writable`'s
+    # ("this script writes both halves"), and it fails in the worst possible
+    # direction: the half the script means to write is opened read-only, and
+    # the half it must not touch is opened writable.
+    #
+    # Found live 2026-09-11 by `import_flags.py`, which asks for
+    # `ROLE_LISTENER, writable=True` and was handed the *catalogue* path by
+    # Sampo's job runner -- `attempt to write a readonly database` on its
+    # `listener_flags` INSERT, while `library.db` sat open for writing behind
+    # it. Symmetric, and proven both ways on synthetic halves: a
+    # `ROLE_LIBRARY` writer named with the listener path lost its catalogue
+    # write the same way. It only bites a caller that names the peer *and*
+    # writes, which is why the split's own migration never hit it.
     main_writable = writable
     attach_writable = peer_writable
-    if this != role:
-        # The caller named the peer; its writability follows the peer flag.
-        main_writable, attach_writable = peer_writable, writable
 
     conn = sqlite3.connect(
         f"file:{main_path}" + ("" if main_writable else "?mode=ro"), uri=True,

@@ -290,6 +290,41 @@ def main() -> int:
     conn.close()
 
     print()
+    print("`writable` follows the ROLE, not whichever half was named")
+    # The defect this pins, found live by `import_flags.py` on 2026-09-11:
+    # naming the *peer* swapped the two flags, so the half the script owns
+    # and means to write opened read-only while the half it must not touch
+    # opened writable. Every earlier test here named a script's own half,
+    # which is exactly why it went unseen. Both roles, both namings.
+    def writable_halves(named, role, **kw):
+        """Which halves a connection can actually write, by trying."""
+        conn = vd.connect(named, role, **kw)
+        out = set()
+        for half, stmt in (("listener", "INSERT INTO listener_preferences VALUES ('x', 1.0)"),
+                           ("library", "INSERT INTO recordings (mbid) VALUES ('probe')")):
+            try:
+                conn.execute(stmt)
+                out.add(half)
+            except sqlite3.OperationalError:
+                pass
+        conn.rollback()
+        conn.close()
+        return out
+
+    for role, owns in ((vd.ROLE_LISTENER, "listener"), (vd.ROLE_LIBRARY, "library")):
+        for named in (lis, lib):
+            got = writable_halves(named, role, writable=True)
+            check(got == {owns},
+                  f"role={owns} writable=True naming {os.path.basename(named)} must make "
+                  f"exactly the {owns} half writable, got {sorted(got) or 'nothing'}")
+    # `peer_writable` is still the way to ask for both, from either naming.
+    for named in (lis, lib):
+        got = writable_halves(named, vd.ROLE_LISTENER, writable=True, peer_writable=True)
+        check(got == {"listener", "library"},
+              f"peer_writable=True naming {os.path.basename(named)} must open both, "
+              f"got {sorted(got) or 'nothing'}")
+
+    print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
         return 1
