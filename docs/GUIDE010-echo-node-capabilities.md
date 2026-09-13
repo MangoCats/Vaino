@@ -145,9 +145,43 @@ precisely because a path is not portable between two machines. Any future
 library reconciliation should hash rather than compare names; the figures above
 are path-derived and are evidence of a difference, not proof of one.
 
-**`[GDE-ECHO-460]` The fleet already owns an acoustic instrument, by
-accident.** The ATE1133's *capture* endpoint is asynchronous mono at 48 kHz
-`[SMT-AUD-050]`. A microphone on that input can record two speakers at once and
+**`[GDE-ECHO-460]` The fleet already owns an acoustic instrument, and the best
+one is the laptop.** `teacherslounge` has a working built-in microphone on its
+ALC3246, captures **stereo at up to 192 kHz** — 5.2 µs of sample resolution,
+far finer than this needs — and is portable, which the rest of the fleet is
+not. Proven 2026-09-12: playing a 1 kHz tone through its own speaker while
+recording gave **4500.4** in the 1 kHz bin against 4.1 at 400 Hz and 1.0 at
+1600 Hz, so the microphone is live, it hears the room, and the machine can
+play and record at once — which is the whole requirement.
+
+Smart's ATE1133 also offers an asynchronous mono capture endpoint at 48 kHz
+`[SMT-AUD-050]` and remains a fallback, but a laptop that can be carried into
+the room beats a mini-PC that cannot.
+
+**`[GDE-ECHO-465]` Do not put the microphone on `vainopi`, however tempting.**
+It is the node that cannot be measured any other way `[LOG-DRIFT-058]`, so it
+is the obvious place to attach one — and it is the worst host in the fleet for
+the job. The Pi Zero 2 W's `dwc2` OTG controller has documented trouble with
+isochronous transfers: audio arrives "pitched and sped up, as if some samples
+are missing", reproducing across every capture tool and working correctly on a
+Pi 4 with identical hardware. A dropped sample is the one error a timing
+measurement cannot absorb. Measure vainopi's room *from* the laptop instead.
+
+**`[GDE-ECHO-468]` Keep the correlation differential, and clock accuracy stops
+mattering.** Recording speaker A against speaker B in one capture makes a
+sample-rate error a pure scale factor — 0.25 % of a 20 ms offset is 50 µs,
+irrelevant. Correlating against a locally generated reference over a long
+window turns that same 0.25 % into 25 ms of drift in ten seconds and destroys
+the measurement. So: chirp bursts, both speakers in one recording, short
+windows. This is why no measurement microphone need be bought: calibration and
+frequency response are not what this depends on.
+
+**`[GDE-ECHO-469]` Placement will dominate the error budget, not the
+equipment.** Sound travels ~34 cm per millisecond, so sub-millisecond accuracy
+needs the microphone equidistant from both speakers to within ~10 cm, or the
+geometry measured and subtracted. No specification on any microphone helps
+with this, and it is a larger term than clock drift, noise floor and frequency
+response combined. A microphone on that input can record two speakers at once and
 recover their true offset by cross-correlation — a measurement that depends on
 no software estimate anywhere in either node's stack, and is therefore the
 ground truth `[GOV-SRC-020]` asks for when ranking every other method. It is
@@ -225,56 +259,7 @@ mirrored period, the Director's own eligibility and frequency inputs
 from stale state, it is resuming from its own honest record of what that room
 has heard.
 
----
-
-## 3. What the audio stack actually provides
-
-Everything below was read out of `cpal` 0.15.3's own source rather than inferred
-from its documentation, because the failure modes are all in the fallbacks.
-
-**`[GDE-ECHO-140]` The callback is already handed a timestamp, and Vaino throws
-it away.** In `player/src/output.rs`, all three sample-format arms are
-`move |out, _| fill(...)` — the discarded `_` is `&cpal::OutputCallbackInfo`.
-The hook needed for any of this already exists, at the one place
-`[REQ-AUD-164]` says measurements must be taken.
-
-**`[GDE-ECHO-150]` cpal's ALSA backend does enable hardware timestamping — in a
-clock domain chrony deliberately does not discipline.** It calls
-`set_tstamp_mode(true)` then `set_tstamp_type(TstampType::MonotonicRaw)`, and on
-failure silently retries with `Monotonic`. `CLOCK_MONOTONIC` is frequency-slewed
-by `adjtimex` and therefore *is* disciplined; `CLOCK_MONOTONIC_RAW` is not. So
-cpal's timestamps arrive in one of two domains differing by the system crystal's
-own error — tens of ppm, one to two orders of magnitude larger than the DAC
-error being measured — and the API offers no way to learn which one was given.
-
-**`[GDE-ECHO-160]` The absolute instants are not comparable across machines; the
-difference between them is.** `StreamInstant` is measured from the stream's own
-trigger, so two nodes' values share no epoch. But `playback.duration_since(callback)`
-is computed as `frames_to_duration(status.get_delay())` — the genuine ALSA
-hardware delay, expressed as a duration, and therefore domain-independent and
-directly usable. **Take the difference, never the absolutes** is the whole rule,
-and it is `[GOV-SRC-050]` in miniature: the two values answer different
-questions.
-
-**`[GDE-ECHO-170]` If hardware timestamps are unavailable, cpal substitutes a
-software clock permanently and silently.** At stream open it probes
-`get_htstamp()` once; on `(0, 0)` it stores an `Instant` and every later
-timestamp becomes elapsed time since stream creation — a pure software monotonic
-reading carrying **no information about the DAC at all**, in which drift is
-definitionally invisible. Consumed unknowingly, that is a textbook
-`[GOV-SRC-030]` breach: the weaker source answers in the same shape as the
-stronger one, destroying the evidence that would expose it. Any use of these
-timestamps must detect and declare the fallback.
-
-**`[GDE-ECHO-180]` On Windows the delay term is an estimate by its own
-admission.** cpal's WASAPI backend carries the comment that the returned
-`playback` value "is an estimate that assumes audio is delivered immediately
-after the callback." The desktop can therefore be a master or a controller, but
-must not be assumed measurable as an echo node until someone measures it.
-
-**`[GDE-ECHO-190]` There is a `panic!` on the audio thread in that path.**
-cpal's `stream_timestamp` panics outright if `get_htstamp` precedes
-`get_trigger_htstamp`, and two neighbouring `.expect()` calls abort on
-`StreamInstant` range overflow. Vaino does not currently reach any of them
-because it does not read the timestamp; a design that starts reading it inherits
-them, and must not add a reason to call into that code more often.
+> **What the audio stack will report about any of this** — cpal's timestamps,
+> its silent fallbacks, and which of its numbers survived contact with a real
+> appliance — is its own subject: see
+> [GUIDE013](GUIDE013-audio-stack-reporting.md).

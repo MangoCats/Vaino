@@ -9,7 +9,7 @@ and [SPIN001](../sendspin/SPIN001-protocol-and-integration-analysis.md) evaluate
 their subjects: cost against what already exists here, and no ranking asserted
 without a measurement behind it `[GOV-SRC-020]`.
 
-> **Related:** [GUIDE010](GUIDE010-echo-node-capabilities.md) — what makes a node eligible, and what its audio stack will report · [GUIDE009](GUIDE009-echo-playback-plan.md) — the development plan this concludes in · [SPIN001](../sendspin/SPIN001-protocol-and-integration-analysis.md) — the multi-room protocol this is the cheap alternative to · [BOSE004](../BosePi/BOSE004-operating-health.md) — the drift measurement this rests on · [REQ003](spec/REQ003-audio-playback.md) — the buffer-depth rule that shapes every correction · [SPEC017](spec/SPEC017-what-counts-as-a-play.md) — play logging, unchanged by this · [SPEC035](spec/SPEC035-mesh-library-sync.md) — what makes the files identical in the first place
+> **Related:** [GUIDE010](GUIDE010-echo-node-capabilities.md) — what makes a node eligible · [GUIDE013](GUIDE013-audio-stack-reporting.md) — what its audio stack will actually report · [GUIDE009](GUIDE009-echo-playback-plan.md) — the development plan this concludes in · [SPIN001](../sendspin/SPIN001-protocol-and-integration-analysis.md) — the multi-room protocol this is the cheap alternative to · [BOSE004](../BosePi/BOSE004-operating-health.md) — the drift measurement this rests on · [REQ003](spec/REQ003-audio-playback.md) — the buffer-depth rule that shapes every correction · [SPEC017](spec/SPEC017-what-counts-as-a-play.md) — play logging, unchanged by this · [SPEC035](spec/SPEC035-mesh-library-sync.md) — what makes the files identical in the first place
 
 ---
 
