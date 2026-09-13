@@ -119,16 +119,36 @@ is the real resolution limit.
 | node | before | after |
 | :--- | :--- | :--- |
 | `vainopi` A2DP | `delay=0`, `Software` | **`delay≈15676` (355 ms), `Hardware`** |
-| `bose` I²S | `delay=0`, `Software` | rolled back pending `[GDE-ECHO-547]`'s fix |
+| `bose` I²S | `delay=0`, `Software` | **`delay=2043` (46.3 ms), `Hardware`** |
 | `smartboardpc` | n/a (no player) | probe: all sources agree |
 | desktop, Windows | 48 kHz only | opens the preferred 44100 |
 
 `vainopi` settled to **0 underruns and 0 recoveries for five consecutive
 minutes** at 2048 frames per callback, and is left on the new build.
 
-`bose` is left on **0.15.3**, live and durable copies both restored and
-`/media/root-ro` returned to read-only, until the format fix has been proven
-somewhere it cannot cost a silent room.
+`bose` took the format fix and is on the new build, durable copy persisted and
+`/media/root-ro` read-only. Six minutes at `pcm=RUNNING` with `hw_ptr`
+advancing 13.36 M frames, 0 underruns after the startup transient, 2048 frames
+per callback.
+
+**`[LOG-CPAL-060]` Both halves of `[GDE-ECHO-400]`'s model are now measured on
+both nodes, which is what this upgrade was for.**
+
+| node | presentation offset | rate |
+| :--- | ---: | ---: |
+| `bose` — I²S | **2043 frames, 46.3 ms** | ≈+14 ppm |
+| `vainopi` — A2DP | **15676 frames, 355 ms** | −2.09 vs the ADC |
+| **difference** | **13633 frames, 309 ms** | **+13.47 relative** |
+
+That 309 ms is the quantity `[GDE-ECHO-410]` is built around: `vainopi` must
+submit 309 ms *earlier* than `bose` for the two to be heard together. Against
+the forward schedule's ~15 s of lead `[GDE-ECHO-310]` that is a margin of
+roughly fifty to one, so the compensation the design turns on is not close to
+its limit -- which could only be asserted before today, and is measured now.
+
+`bose`'s offset being almost exactly one period (2043 against a pinned 2048) is
+the expected shape for a buffer of two periods, and it varies, which is why
+`[GDE-ECHO-290]` now says `Hardware` rather than `Software`.
 
 The node the design was least sure could ever echo now reports a presentation
 offset. `[GDE-ECHO-070]` deferred Bluetooth pending exactly this measurement.

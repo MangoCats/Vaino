@@ -18,9 +18,9 @@ remaining work**.
 | phase | gate | status |
 | :--- | :--- | :--- |
 | 0 — shared timebase | node-to-node within 1 ms | **met**; fleet entirely on chrony, `smartboardpc` serving |
-| 1 — measure every node | rate *and* offset per node | rate met; **offset unblocked 2026-09-13** `[LOG-CPAL-030]` |
+| 1 — measure every node | rate *and* offset per node | **met** — both halves, both nodes `[LOG-CPAL-060]` |
 | 2 — the frame clock | agrees with `/proc` within 1 ppm | **met at +0.33 ppm** `[LOG-FIX-050]` |
-| 3 — the wire | — | not started, and **should not start yet** |
+| 3 — the wire | — | **unblocked**; the offset it schedules against is measured |
 | 4 — echo uncorrected | drift matches prediction ×2 | not started |
 | 5 — correction | — | not started, now **mandatory** `[LOG-FIX-040]` |
 | 6 — failure handling | — | designed, not built |
@@ -90,9 +90,11 @@ and a working one, and reaches for `status.get_delay()` only for the timestamp.
 It uses the good call for the thing that would break audibly and the bad one
 for the thing that fails silently `[GOV-SRC-040]`.
 
-**Resolved 2026-09-13.** The upgrade landed on all four nodes and `vainopi`
-now reports `delay≈15676` — 355 ms — and classifies `Hardware`. The rest of
-this section is kept as the diagnosis that got there `[GOV-DOC-050]`.
+**Resolved 2026-09-13** ([LOG009](LOG009-cpal-upgrade.md)). Both nodes report
+a live, varying delay and classify `Hardware`: `bose` 2043 frames (46.3 ms),
+`vainopi` 15676 (355 ms), a difference of 309 ms against roughly 15 s of
+schedule lead `[LOG-CPAL-060]`. The rest of this section is kept as the
+diagnosis that got there `[GOV-DOC-050]`.
 
 **`[GDE-ECHO-535]` The eligibility rule is therefore firing on a broken input,
 and would disqualify the master.** A node whose reported delay never varies is
@@ -226,7 +228,12 @@ correction could be skipped. It cannot `[LOG-FIX-040]`.
    `teacherslounge`'s microphone, which also calibrates the laptop's ADC and
    makes `vainopi`'s −2.089 absolute.
 4. **Then Phase 3.** Not before: a wire built against an assumed-zero offset is
-   the one design `[GDE-ECHO-410]` explicitly rejects.
+   the one design `[GDE-ECHO-410]` explicitly rejects. **Steps 1-3 are done as
+   of 2026-09-13**, so this is the next work rather than the eventual work.
+   What remains outstanding for it is precision, not existence: `vainopi`'s
+   rate is ±0.477 from a 130 s acoustic run where `bose`'s is ±0.003, and
+   `[LOG-CAL-050]`'s electrical read of the laptop ADC would make both
+   absolute.
 
 A second drift window at a different ambient temperature `[LOG-DRIFT-060]` runs
 free alongside all of this, since the sampler is already appending.

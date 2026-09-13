@@ -78,10 +78,10 @@ Probed 2026-09-11.
 
 | node | output | clock | offset | ppm | timestamps |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `bose` | HiFiBerry DAC+ Pro, I²S `[PI-BOS-020]` | self | unmeasured `[LOG-FIX-060]` | **+14** `[LOG-FIX-030]` | `Software` — delay reads 0 |
+| `bose` | HiFiBerry DAC+ Pro, I²S `[PI-BOS-020]` | self | **46.3 ms** (2043 fr) `[LOG-CPAL-060]` | **+14** `[LOG-FIX-030]` | **`Hardware`** |
 | `teacherslounge` | Realtek ALC3246 analog | self | small, expected fixed | — | unknown |
 | `smartboardpc` | ATE1133 USB, adaptive `[SMT-AUD-040]` | host-slaved | medium | **+9.96** `[LOG-DRIFT-045]` | ≥1 ms granularity |
-| `vainopi` | A2DP to the Middleton | remote | large, renegotiates | **−2.09** vs ADC; **+13.47 rel. `bose`** `[LOG-CAL-030]` | `Software` — none |
+| `vainopi` | A2DP to the Middleton | remote | **355 ms** (15676 fr) `[LOG-CPAL-060]` | **−2.09** vs ADC; **+13.47 rel. `bose`** `[LOG-CAL-030]` | **`Hardware`** |
 | desktop (`local`) | Windows WASAPI | self | unknown | — | estimate only `[GDE-ECHO-180]` |
 
 Two numbers in the table are now measured, and they differ by a factor of 23 — one self-clocked, one host-slaved, which is `[GDE-ECHO-440]` arriving as data rather than argument. Three rows remain empty. That is the argument for
