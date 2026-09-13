@@ -13,9 +13,13 @@
 //!
 //!   1. `snd_pcm_status_get_delay()` — the STATUS ioctl's `delay` field. This
 //!      is the one cpal uses, and therefore the one the player sees.
-//!   2. `snd_pcm_delay()` — a different libaries call into a different kernel
+//!   2. `snd_pcm_delay()` — a different library call into a different kernel
 //!      path for the same quantity. If (1) is zero and (2) is not, the fix is
 //!      a one-line change of source.
+//!   2b. `snd_pcm_avail_delay()` — what cpal's own master branch switched to
+//!      after 0.15.3. Asking it here turns "upgrading probably fixes this"
+//!      into a measurement on the hardware in question, before anyone pays
+//!      for an 0.15 -> 0.18 API migration on a working audio path.
 //!   3. `avail` from the same Status, with `buffer - avail` as the arithmetic
 //!      cross-check that needs no delay API at all.
 //!   4. `/proc/asound/.../status`, re-read per iteration — the instrument that
@@ -171,14 +175,15 @@ mod linux {
         }
 
         println!();
-        println!("  {:>8}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}",
-                 "iter", "status", "pcm_delay", "buf-avail", "proc_delay", "proc_avail");
-        println!("  {:>8}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}",
-                 "", "(cpal's)", "", "", "", "");
+        println!("  {:>7}  {:>9}  {:>9}  {:>9}  {:>9}  {:>9}  {:>9}",
+                 "iter", "status", "pcm_delay", "availdly", "buf-avail", "procdly", "procavail");
+        println!("  {:>7}  {:>9}  {:>9}  {:>9}  {:>9}  {:>9}  {:>9}",
+                 "", "(0.15.3)", "", "(master)", "", "", "");
 
         let iters = (seconds * RATE as u64) / period.max(1) as u64;
         let mut status_nonzero = 0u32;
         let mut pcm_delay_nonzero = 0u32;
+        let mut avail_delay_nonzero = 0u32;
         let mut proc_nonzero = 0u32;
         let mut shown = 0;
         for i in 0..iters {
@@ -190,6 +195,9 @@ mod linux {
             let s_delay = st.get_delay();
             let s_avail = st.get_avail();
             let p_delay = pcm.delay().unwrap_or(-1);
+            // What cpal master calls. One call, both numbers, and on this
+            // driver the one that decides whether an upgrade is the fix.
+            let ad = pcm.avail_delay().map(|(_, d)| d).unwrap_or(-1);
             let (pr_delay, pr_avail) = proc_status(pid).unwrap_or((-1, -1));
 
             if s_delay != 0 {
@@ -197,6 +205,9 @@ mod linux {
             }
             if p_delay > 0 {
                 pcm_delay_nonzero += 1;
+            }
+            if ad > 0 {
+                avail_delay_nonzero += 1;
             }
             if pr_delay > 0 {
                 proc_nonzero += 1;
@@ -206,15 +217,16 @@ mod linux {
             // whether it moves, which is the part `[GDE-ECHO-290]` judges on.
             if i % (iters / 10).max(1) == 0 && shown < 12 {
                 shown += 1;
-                println!("  {:>8}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}",
-                         i, s_delay, p_delay, buffer - s_avail, pr_delay, pr_avail);
+                println!("  {:>7}  {:>9}  {:>9}  {:>9}  {:>9}  {:>9}  {:>9}",
+                         i, s_delay, p_delay, ad, buffer - s_avail, pr_delay, pr_avail);
             }
         }
 
         println!();
         println!("  over {iters} periods, readings that were nonzero:");
-        println!("    snd_pcm_status_get_delay() : {status_nonzero}  <- what cpal reads");
+        println!("    snd_pcm_status_get_delay() : {status_nonzero}  <- cpal 0.15.3");
         println!("    snd_pcm_delay()            : {pcm_delay_nonzero}");
+        println!("    snd_pcm_avail_delay()      : {avail_delay_nonzero}  <- cpal master");
         println!("    /proc delay                : {proc_nonzero}");
         status_nonzero > 0
     }

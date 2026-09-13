@@ -71,8 +71,9 @@ device, over 1033 periods:
 
 | source | `bose` | `smartboardpc` (control) |
 | :--- | ---: | ---: |
-| `snd_pcm_status_get_delay()` — *cpal's* | **0 / 1033** | 798 / 798 |
+| `snd_pcm_status_get_delay()` — *cpal 0.15.3* | **0 / 1033** | 798 / 798 |
 | `snd_pcm_delay()` | 1033 / 1033 | 798 / 798 |
+| `snd_pcm_avail_delay()` — *cpal master* | **861 / 861** | — |
 | `/proc` `delay` | 1033 / 1033 | 798 / 798 |
 
 `snd_pcm_delay()` agrees with `/proc` to the frame (51584 against 51584), so
@@ -120,11 +121,15 @@ should be tried:
 1. ~~Find out why `get_delay()` yields 0~~ — **done**; the answer is recorded
    as `[GDE-ECHO-545]`: the driver does not fill the field cpal reads, while
    `snd_pcm_delay()` returns the right value on the same handle. The repair is
-   one line *inside cpal*, `stream.channel.delay()` in place of
-   `status.get_delay()`, which is both better than route 2 and not ours to
-   merge. How to carry it — a pinned fork, a vendored crate, or a patch
-   upstream first — is a decision `[GDE-ECHO-570]` leaves open rather than
-   settles by picking the quickest.
+   **a version bump**. cpal's master already replaced `status.get_delay()`
+   with `handle.avail_delay()`, and a second probe run confirmed that call
+   returns a live delay on this very driver — 861 of 861, tracking `/proc` to
+   within 8 frames. So the repair is upstream already and verified on the
+   hardware, not inferred from a changelog. The cost is an 0.15.3 → 0.18.2 API
+   migration on a working audio path, which is a decision and not a chore;
+   0.18 also brings `LinkSynchronized` cross-timestamps and a fix for
+   timestamps stepping backward after xrun recovery, both of which this project
+   wants `[GDE-ECHO-360]`.
 2. **Read `/proc` `delay` directly** as a documented fallback, ranked below the
    in-process read and *visible as a fallback* rather than silently equivalent
    `[GOV-SRC-040]`. It is a different process reading a different instant, so
