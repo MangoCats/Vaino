@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Generate the click track for an acoustic drift measurement.
 
-    tools/click_emit.py out.wav [minutes] [rate] [channels]
+    tools/click_emit.py out.wav [minutes] [rate] [channels] [amplitude]
 
 Play it on the node under test and record it on a node with a microphone, then
 read the recording with `tools/click_analyze.py`. What comes back is the
@@ -41,7 +41,12 @@ INTERVAL_S = 1.0
 CHIRP_MS = 12.0
 CHIRP_LO = 1000.0
 CHIRP_HI = 6000.0
-AMPLITUDE = 0.9
+# Default level. **Set it for the distance**: 0.9 was needed to carry across a
+# room to a laptop microphone, and the same 0.9 with the speaker beside the
+# microphone is painful to be near and clips the recording -- which costs the
+# measurement too, because a clipped chirp correlates badly against a clean
+# template. Start low, and raise it only if the analyser cannot find a run.
+AMPLITUDE = 0.35
 
 
 def chirp(rate, ms=CHIRP_MS, lo=CHIRP_LO, hi=CHIRP_HI):
@@ -67,6 +72,7 @@ def main(argv):
     minutes = float(argv[1]) if len(argv) > 1 else 10.0
     rate = int(argv[2]) if len(argv) > 2 else 44100
     channels = int(argv[3]) if len(argv) > 3 else 2
+    amplitude = float(argv[4]) if len(argv) > 4 else AMPLITUDE
 
     burst = chirp(rate)
     gap = int(round(INTERVAL_S * rate))
@@ -75,8 +81,8 @@ def main(argv):
         print("chirp longer than the interval; nothing to measure")
         return 1
 
-    print("click track: %d clicks, %.0f s, %d Hz, %d ch, %.1f ms chirp %.0f-%.0f Hz"
-          % (clicks, clicks * INTERVAL_S, rate, channels, CHIRP_MS, CHIRP_LO, CHIRP_HI))
+    print("click track: %d clicks, %.0f s, %d Hz, %d ch, %.1f ms chirp %.0f-%.0f Hz, amp %.2f"
+          % (clicks, clicks * INTERVAL_S, rate, channels, CHIRP_MS, CHIRP_LO, CHIRP_HI, amplitude))
     print("  spacing    : %d samples (exactly %.3f s at nominal rate)" % (gap, INTERVAL_S))
     print("  play with  : aplay -D hw:CARD=<name>,DEV=0 %s" % path)
     print("  NOT through a resampler -- see this file's header.")
@@ -90,7 +96,7 @@ def main(argv):
         # stereo 44.1k is 100 MB of Python floats otherwise.
         period = bytearray()
         for i in range(gap):
-            v = burst[i] * AMPLITUDE if i < len(burst) else 0.0
+            v = burst[i] * amplitude if i < len(burst) else 0.0
             s = struct.pack("<h", int(max(-1.0, min(1.0, v)) * 32767))
             period += s * channels
         period = bytes(period)
