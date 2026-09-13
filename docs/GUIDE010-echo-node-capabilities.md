@@ -79,10 +79,29 @@ Probed 2026-09-11.
 | node | output | clock | offset | ppm | timestamps |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `bose` | HiFiBerry DAC+ Pro, I²S `[PI-BOS-020]` | self | **46.3 ms** (2043 fr) `[LOG-CPAL-060]` | **+14** `[LOG-FIX-030]` | **`Hardware`** |
-| `teacherslounge` | Realtek ALC3246 analog | self | small, expected fixed | — | unknown |
+| `teacherslounge` | Realtek ALC3246 analog | self | **~4080 fr (92 ms)** probe `[GDE-ECHO-458]` | — | **`Hardware`** |
 | `smartboardpc` | ATE1133 USB, adaptive `[SMT-AUD-040]` | host-slaved | medium | **+9.96** `[LOG-DRIFT-045]` | ≥1 ms granularity |
 | `vainopi` | A2DP to the Middleton | remote | **355 ms** (15676 fr) `[LOG-CPAL-060]` | **no single rate**: +3.96 / −2.09 vs ADC in two sessions `[LOG-CAL-080]` | **`Hardware`** |
 | desktop (`local`) | Windows WASAPI | self | unknown | — | estimate only `[GDE-ECHO-180]` |
+
+**`[GDE-ECHO-458]` `teacherslounge` is eligible, and was never affected by the
+HiFiBerry's defect.** Probed 2026-09-13 with the period pinned to the player's
+2048: all four delay sources agree and are live, `status.get_delay()` included
+-- so `[GDE-ECHO-545]`'s missing STATUS field is particular to the HiFiBerry
+driver, not general. cpal reported the delay changing in 7 of 8 callbacks,
+which is a `Hardware` verdict under `[GDE-ECHO-290]`.
+
+Two caveats on the offset. It was measured by `delayprobe` writing in a loop,
+where the delay sits near the full 4096-frame buffer; the player reports from
+*inside* the callback with one period already consumed, which is why `bose`
+reads one period (2043) rather than two. So the figure a running player would
+publish here is likely nearer 46 ms than 92, and the row should be replaced
+when the player actually runs on this node rather than inferred from the shape.
+
+Its **rate** is still unmeasured for playback. `[LOG-CAL-050]`'s campaign
+measures the *capture* clock; on an HDA codec the two directions usually share
+a master clock, which makes that figure a reasonable prior for playback and
+not a measurement of it.
 
 Two numbers in the table are now measured, and they differ by a factor of 23 — one self-clocked, one host-slaved, which is `[GDE-ECHO-440]` arriving as data rather than argument. Three rows remain empty. That is the argument for
 [GUIDE009](GUIDE009-echo-playback-plan.md)'s measurement phase existing, stated as a

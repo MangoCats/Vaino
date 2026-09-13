@@ -9,8 +9,8 @@ does not show. Written because `[GDE-NAM-110]`'s five-step sketch was a
 installed helper executables, twenty-three environment variables, three live
 appliances and mutable data on disk.
 
-Two of the failures below are silent. That is the reason this document is long
-rather than a checklist.
+Four of the failures below are silent. That is the reason this document is
+long rather than a checklist.
 
 > **Related:** [GUIDE015](GUIDE015-naming-and-branding.md) `[GDE-NAM-010]` — why the name changes at all · [tools/check_rename.py](../tools/check_rename.py) — the audit every step is gated on · [GUIDE011](GUIDE011-deploy-script-naming.md) `[GDE-DEP-060]`, `[GDE-DEP-070]` — say what you assume, verify the durable copy · [BOSE009](../BosePi/BOSE009-image-update-runbook.md) `[BOS-RUN-080]` — the split this must not undo
 
@@ -18,7 +18,7 @@ rather than a checklist.
 
 ## 1. What a text search does not show
 
-**`[IMPL-NAM-010]` Twelve surfaces, measured 2026-09-13.** `[GDE-NAM-030]`
+**`[IMPL-NAM-010]` Fourteen surfaces, measured 2026-09-13.** `[GDE-NAM-030]`
 counted 3,360 string occurrences. That number is a workload estimate, not a work
 plan: what matters is which *kind* of thing breaks, because each kind fails
 differently and is gated differently.
@@ -34,6 +34,8 @@ differently and is gated differently.
 | `hosts` | 27 | `vainopi`, `vainoplayer3` — renamed per machine, never atomically |
 | `scripts` | 397 | Superset of the four above |
 | `pytools` | 893 | Including `check_docs.py`'s own `PATH_PREFIXES` — see `[IMPL-NAM-060]` |
+| `pymod` | 262 | `vaino_db` / `vaino_control` and their 47 import sites `[IMPL-NAM-047]` |
+| `vcs` | 10 | `.gitattributes` line-ending rule, `.gitignore` `[IMPL-NAM-045]` |
 | `docs` | 1,699 | Prose, and the cited paths `[GOV-DOC-040]` validates |
 | `paths` | **99** | Tracked files and directories whose own *name* carries it |
 | `remote` | 1 | `git@github.com:MangoCats/Vaino.git` |
@@ -73,7 +75,7 @@ ignored at exactly the step that needed it.
 
 ---
 
-## 3. The three failures this plan exists to prevent
+## 3. The five failures this plan exists to prevent
 
 **`[IMPL-NAM-040]` Twenty-three environment variables, most read with a
 default.** Not the handful a manual read finds:
@@ -108,6 +110,29 @@ rather than tuning, prefer reading it into an explicit `Option` and logging
 which branch was taken, so an unset variable is visible in the log rather than
 inferred from behaviour `[PI-PRE-010]`.
 
+**`[IMPL-NAM-045]` A line-ending rule is keyed to the name, and losing it breaks
+the appliance, not the build.** [.gitattributes](../.gitattributes) line 16
+applies `text eol=lf` to the `vaino-*` scripts inside the appliance folder —
+keyed to *both* the directory name and the `vaino-` prefix, so renaming either
+one stops the rule matching. The scripts it protects
+then get CRLF on a Windows checkout and fail on the Pi with
+`bad interpreter: /bin/sh^M` — at deploy time, on a machine, long after the
+commit that caused it. [.gitignore](../.gitignore) is keyed the same way
+(`vaino.db`, `/.vaino-deploy-build.sh`, `data/vaino_new.db`); its `go/vaino.exe`
+and `go/vaino-arm64` rules are already dead, as no `go/` directory exists, and
+should be deleted rather than renamed.
+
+**`[IMPL-NAM-047]` Renaming the shared Python modules breaks 47 imports and one
+detector that will not complain.** `tools/vaino_db.py` and
+`tools/vaino_control.py` are imported by 47 files as `import vaino_db`. Those
+break loudly. The one that does not is
+[tools/audit_split_readiness.py](../tools/audit_split_readiness.py), which
+detects the dependency by string match — `"import vaino_db" in src` — and after
+a rename reports `uses_vaino_db: False` for every file in the tree, which is
+indistinguishable from a codebase that has been fully migrated off it. Rename
+the modules, their import sites and that predicate in one commit, and prefer
+matching the module by AST or by a named constant afterwards.
+
 **`[IMPL-NAM-050]` The binary and its units must not be renamed in separate
 commits.** `[GDE-NAM-110]`'s step 2 renamed the binary and its step 4 the units.
 Between those commits `main` installs an executable called `lempi` under a unit
@@ -139,7 +164,7 @@ no test. Every gate below is explicit.
 | # | Step | Gate before proceeding |
 | :--- | :--- | :--- |
 | 0 | Commit `check_rename.py` unchanged, old name everywhere | It reports non-zero on every surface, 0 BROKEN |
-| 1 | Cargo package, crate path, binary, **all 23 env vars both sides**, helper names, unit files, install and deploy scripts, sources, tests, fixtures | `env -u CC cargo build --release` **and** `cargo test` green; `--expect-zero cargo code env bin units` |
+| 1 | Cargo package, crate path, binary, **all 23 env vars both sides**, helper names, unit files, install and deploy scripts, sources, tests, fixtures | `env -u CC cargo build --release`, `cargo test` **and** the Python suite under `tools/` green; `--expect-zero cargo code env bin units pymod vcs` |
 | 2 | Docs prose, `VainoPi/` → `LempiPi/`, **`check_docs.py` prefixes**, every citation, the 99 named paths | `check_docs.py --strict` exit 0 **and** `--expect-zero docs pytools paths` |
 | 3 | Per appliance: migrate binaries, helpers, units, `/var/vaino` | §5's per-host procedure, verified on the durable copy |
 | 4 | Per machine: hostname, `/etc/hosts`, mDNS, then SSH config on the four dev checkouts | Host reachable under the new name; deploy list updated |

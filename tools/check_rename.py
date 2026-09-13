@@ -79,6 +79,14 @@ SURFACES = [
      r"vaino", "everything the scripts say and do"),
     ("pytools", ["tools/*.py"], r"vaino|VainoPi",
      "check_docs.py's PATH_PREFIXES above all -- see [IMPL-NAM-060]"),
+    ("pymod", ["tools/*.py"], r"(?-i:vaino_db|vaino_control)",
+     "the shared Python modules and their 47 import sites; "
+     "audit_split_readiness.py detects them by string match, so a module "
+     "rename makes it report False for every file [IMPL-NAM-047]"),
+    ("vcs", [".gitattributes", ".gitignore"], r"vaino|VainoPi",
+     "the `VainoPi/vaino-* text eol=lf` rule -- if it stops matching, those "
+     "shell scripts get CRLF and die on the Pi with bad interpreter "
+     "[IMPL-NAM-045]"),
     ("docs", ["docs/**/*.md", "VainoPi/*.md", "BosePi/*.md", "SmartPC/*.md",
               "sendspin/*.md", "*.md"],
      r"vaino", "prose, and the cited paths check_docs.py validates"),

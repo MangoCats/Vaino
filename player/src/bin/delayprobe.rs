@@ -63,6 +63,14 @@ mod linux {
     use alsa::Direction;
 
     const DEFAULT_DEVICE: &str = "hw:CARD=sndrpihifiberry,DEV=0";
+    /// Match the player, which pins its period rather than taking the device's
+    /// own `[LOG-CPAL-040]`. Without this the probe opens with whatever
+    /// maximum the hardware offers -- 32768 frames on `teacherslounge`, buffer
+    /// a megabyte -- and its delay column is a picture of that buffer filling,
+    /// not of the offset the player would actually see. An instrument that
+    /// does not reproduce the configuration under test measures something
+    /// else, however carefully.
+    const PERIOD_FRAMES: alsa::pcm::Frames = 2048;
     const RATE: u32 = 44100;
     const CHANNELS: u32 = 2;
 
@@ -118,6 +126,18 @@ mod linux {
             hw.set_rate(RATE, alsa::ValueOr::Nearest)?;
             hw.set_format(Format::s16())?;
             hw.set_access(Access::RWInterleaved)?;
+            pcm.hw_params(&hw)?;
+        }
+        {
+            // period = PERIOD_FRAMES, buffer = 2x, which is what
+            // `BufferSize::Fixed` means to cpal's ALSA backend.
+            let hw = HwParams::any(&pcm)?;
+            hw.set_channels(CHANNELS)?;
+            hw.set_rate(RATE, alsa::ValueOr::Nearest)?;
+            hw.set_format(Format::s16())?;
+            hw.set_access(Access::RWInterleaved)?;
+            hw.set_period_size_near(PERIOD_FRAMES, alsa::ValueOr::Nearest)?;
+            hw.set_buffer_size_near(2 * PERIOD_FRAMES)?;
             pcm.hw_params(&hw)?;
         }
         let (buffer, period) = pcm.get_params()?;
