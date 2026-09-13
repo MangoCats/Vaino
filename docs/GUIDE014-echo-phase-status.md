@@ -107,7 +107,11 @@ should be tried:
    clicks `[LOG-DRIFT-062]`, and ±0.10 ppm at ten minutes. It measures the
    whole path to the air, which is the quantity that actually matters, and it
    is the only route that works for `vainopi`, whose A2DP output has no
-   `hw_ptr` at all `[GDE-ECHO-070]`.
+   `hw_ptr` at all `[GDE-ECHO-070]`. `tools/click_emit.py` and
+   `tools/click_analyze.py` carry it, and `tools/test_click_analyze.py` checks
+   the analyser against recordings whose answer is known -- including the
+   spurious-edge-detection case that produced `[LOG-DRIFT-064]`'s
+   +12,574 ppm.
 
 Route 3 is not merely a fallback. It is the independent check that ranks the
 other two `[GOV-SRC-020]`, and the offset question — whether a node's offset
