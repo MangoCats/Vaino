@@ -185,6 +185,31 @@ cost. Phase 2d is separable because the builder shares no binary, no unit and no
 runtime path with the player: by `[SPEC-SA-015]` the two communicate only through
 the SQLite file, so renaming one cannot break the other mid-flight.
 
+**`[IMPL-NAM-077]` Every mechanical edit states how many occurrences it expects
+to change, and fails if the number differs.** `sed -i`, `perl -pi -e` and
+Python's `str.replace` share one defect: **a pattern that matches nothing is not
+an error to them.** They exit 0, change the file not at all, and report nothing.
+
+This is not hypothetical — it happened while these documents were being written.
+A scripted edit searched for a line that an earlier edit had re-wrapped, matched
+nothing, and passed silently; the change was only found on a later read. Across
+4,528 occurrences applied by scripted edits, a no-op that reports success is the
+most likely way this rename half-happens.
+
+The expected count is **exact, not a minimum**. A partial match is the common
+case: a pattern that should hit thirty lines and hits three, because the rest
+wrapped differently or use another case or a variant spelling, is a half-finished
+rename that "at least one" reports as a success.
+
+[tools/rename_edit.py](../tools/rename_edit.py) makes the count part of the
+command and refuses to write on a mismatch; it dry-runs by default, treats an
+empty file set as BROKEN rather than as zero `[IMPL-NAM-030]`, treats an
+unreadable file as a failure rather than as a file without matches, verifies
+after writing that none survive, and preserves exact line endings so a rewrite
+cannot undo `[IMPL-NAM-045]`'s LF rule. `check_rename.py`'s surface counts are
+the coarse proof that a phase finished; this is the fine one that says which edit
+did not.
+
 **`[IMPL-NAM-115]` Phase 1 cannot close while `vainoplayer3` is unplugged.** It
 is physically disconnected, in the garage, and returns before this plan runs. Two
 consequences, recorded so neither is rediscovered: phase 1's gate — *deploy and
