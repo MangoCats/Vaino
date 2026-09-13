@@ -8,7 +8,7 @@ rate against the shared timebase, now that Phase 0's chrony is settled
 survives the session that started it — a reading whose starting point lives
 only in someone's scrollback is not a measurement.
 
-> **Related:** [GUIDE009](GUIDE009-echo-playback-plan.md) — the phase this serves · [GUIDE010](GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-450]` — the roster being filled in · [BOSE004](../BosePi/BOSE004-operating-health.md) `[BOS-OPS-020]` — the instrument, and the prior figure this supersedes
+> **Related:** [GUIDE009](GUIDE009-echo-playback-plan.md) — the phase this serves · [GUIDE010](GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-450]` — the roster being filled in · [BOSE004](../BosePi/BOSE004-operating-health.md) `[BOS-OPS-020]` — the instrument · [LOG007](LOG007-drift-instrument-correction.md) `[LOG-FIX-030]` — **corrects every `bose` figure below**
 
 ---
 
@@ -25,7 +25,7 @@ So:
 
 | node kind | method |
 | :--- | :--- |
-| running Vaino (`bose`) | one read: `(hw_ptr / rate) − (tstamp − trigger_time)` |
+| running Vaino (`bose`) | ~~one read: `(hw_ptr / rate) − (tstamp − trigger_time)`~~ **invalid, see `[LOG-FIX-010]`** |
 | `aplay` probe (`smartboardpc`) | two reads: `(Δhw_ptr / rate) − Δuptime` |
 
 **`[LOG-DRIFT-015]` The delta method is not merely a fallback — for a probe it
@@ -33,6 +33,13 @@ is the correct one.** `aplay` prefills its buffer before the stream triggers,
 so `hw_ptr` counts frames not yet heard and the trigger-anchored form reads
 absurdly high on a short window (+1530 ppm at 18 s on Smart, which is prefill,
 not drift). Differencing two reads cancels the prefill exactly.
+
+That reasoning turned out to understate the problem. The one-read form is not
+merely prefill-contaminated on short windows, it is **circular at every
+window**: `tstamp` is derived from `hw_ptr`, so both sides are the same
+counter. The two-read form is the only valid one for any node. See
+`[LOG-FIX-010]` and `[LOG-FIX-020]`; every `bose` number in this file predates
+that discovery.
 
 **`[LOG-DRIFT-020]` What voids a reading.** Any stream restart, device reopen,
 underrun or reboot resets `trigger_time`/`hw_ptr`. `bose` rebooted four times
@@ -54,7 +61,8 @@ hw_ptr      : 105858716        rate 44100
 temp        : 60.3'C           chrony residual: +0.016 ppm
 ```
 
-Sanity estimate over the 40 minutes elapsed so far: **+0.675 ppm**
+Sanity estimate over the 40 minutes elapsed so far: **+0.675 ppm** — an
+artefact, per `[LOG-FIX-020]`; the true figure is ≈+14 ppm.
 (quantisation 0.0094 ppm, so not the limit). Recorded as a plausibility check,
 **not as the measurement** — it is roughly double `[BOS-OPS-020]`'s 0.35 ppm,
 which is itself superseded because that figure was taken against a
@@ -92,16 +100,18 @@ drift.
 
 | node | window | drift | instrument floor |
 | :--- | ---: | ---: | ---: |
-| `bose` — HiFiBerry DAC+ Pro, I²S, self-clocked | 21.01 h | **+0.432 ppm** | 0.0003 ppm (quantisation) |
+| `bose` — HiFiBerry DAC+ Pro, I²S, self-clocked | 21.01 h | ~~+0.432 ppm~~ **+14** `[LOG-FIX-030]` | 0.0003 ppm (quantisation) |
 | `smartboardpc` — ATE1133 USB, `ADAPTIVE`, host-slaved | 20.30 h | **+9.96 ppm** | ±0.096 ppm (read bracket) |
-| **relative** | | **9.53 ppm** | |
+| **relative** | | ~~9.53~~ **~4 ppm** | |
 
 `bose`'s `trigger_time` was unchanged across the window, so the stream never
 restarted `[LOG-DRIFT-020]`. Smart's probe stayed alive for 22.9 h of uptime.
 
-`bose` at +0.432 ppm sits close to `[BOS-OPS-020]`'s +0.35 ppm, which is
-reassuring given that figure had a `systemd-timesyncd` baseline and this one is
-against chrony — the ruler changed and the answer barely moved.
+`bose` at +0.432 ppm sat close to `[BOS-OPS-020]`'s +0.35 ppm, which read as
+reassuring — the ruler had changed from `systemd-timesyncd` to chrony and the
+answer barely moved. **That agreement was the warning sign, not the
+confirmation**: both figures came from the same circular formula, so neither
+depended on the ruler at all `[LOG-FIX-020]`.
 
 Smart's clean figure is **9.96 ppm, not the 17.79 ppm** the PipeWire card-0
 read suggested `[LOG-DRIFT-040]`. Measuring the right card, ALSA-direct, was
@@ -118,27 +128,28 @@ precision (±0.096 ppm), not the decision.
 ## 3. What the readings settle
 
 **`[LOG-DRIFT-050]` Per-passage resync does NOT suffice for this pair, and
-`[GDE-ECHO-110]` is superseded for any pair including Smart.** At 9.53 ppm
-relative:
+`[GDE-ECHO-110]` is superseded — and, per `[LOG-FIX-040]`, for every pair,
+not only those including Smart.** At the corrected ~4 ppm relative:
 
 | | drift |
 | :--- | ---: |
-| across a 4-minute passage | **2.29 ms** |
-| across an hour | **34.3 ms** |
+| across a 4-minute passage | **~1.0 ms** |
+| across an hour | **~15 ms** |
 
-2.29 ms sits inside `[GDE-ECHO-050]`'s **1–5 ms comb-filtering band**, so a
+~1.0 ms sits inside `[GDE-ECHO-050]`'s **1–5 ms comb-filtering band**, so a
 listener hearing both would hear the colouration deepen across every passage
 and snap back at each boundary — the changing artefact that is more noticeable
 than a constant offset.
 
 The favourable conclusion in `[GDE-ECHO-110]` was explicitly conditional on
-both nodes being sub-ppm. `bose` is, at 0.432. Smart is not, at 9.96. **A
-bose↔Smart pair therefore requires the continuous trim of Phase 5
-`[GDE-ECHO-340]`, not a boundary resync.** A bose↔`teacherslounge` pair might
-still qualify — teacherslounge is self-clocked like bose and unmeasured.
+both nodes being sub-ppm. **Neither is** — `bose` is ≈+14, Smart +9.96
+`[LOG-FIX-030]`. The continuous trim of Phase 5 `[GDE-ECHO-340]` is therefore
+the general requirement, not a concession to one bad node, and no node may be
+adopted as a rate reference on the strength of its clock ownership alone.
 
 The two nodes are not measuring the same physical thing, which is the point of
-`[GDE-ECHO-440]`: `bose`'s I²S DAC is self-clocked, so its number is a crystal.
+`[GDE-ECHO-440]`: `bose`'s I²S DAC is self-clocked, so its number is a crystal
+— and a crystal is free to be inaccurate, which this one is `[LOG-FIX-040]`.
 Smart's USB endpoints are both `ADAPTIVE`, so the device follows the host and
 its number is the Intel USB controller's frame clock against disciplined time.
 Two different causes, neither predicting the other.
@@ -230,9 +241,11 @@ from; the real path drifts, at more than four standard errors from zero. The
 competing explanation `[LOG-DRIFT-058]` recorded — that PipeWire's bounded
 buffer forces the average to match — is now disfavoured by measurement.
 
-It also lands usefully between the others: far below Smart's +9.96 ppm, above
-`bose`'s +0.432. A `bose`↔`vainopi` pair would drift ~2.5 ppm relative, about
-0.6 ms across a four-minute passage — under the comb-filtering threshold. The
+It also lands usefully between the others, though not where this file first
+placed it: below Smart's +9.96 ppm and below `bose`'s corrected ≈+14, so a
+`bose`↔`vainopi` pair drifts **~16 ppm** relative, about 3.9 ms across a
+four-minute passage — the worst pair measured, and well inside the comb band
+rather than under it `[LOG-FIX-030]`. The
 A2DP *offset* stability remains unmeasured and is the separate question
 `[GDE-ECHO-420]` that decides whether Bluetooth can echo at all.
 

@@ -53,8 +53,8 @@ thinks it did.
 
 ## 2. It is playing, and two independent records say so
 
-**`[BOS-OPS-020]` The ALSA frame counter is the ground truth; the service log
-and the database are not independent of the thing they describe.**
+**`[BOS-OPS-020]` The ALSA frame counter is the ground truth for *whether it
+played*; it is not a clock, and must never be its own reference.**
 `[GOV-SRC-010]` applies — rank the sources rather than averaging them.
 
 The HiFiBerry's `pcm0p/sub0/status` (find the card **by name** -- see
@@ -64,14 +64,22 @@ The HiFiBerry's `pcm0p/sub0/status` (find the card **by name** -- see
 | | |
 | :--- | :--- |
 | Frames delivered since the single trigger | 14,126,435,269 |
-| Monotonic time since that trigger | 320,327.218 s |
+| ~~Monotonic time~~ `tstamp − trigger_time` | 320,327.218 s |
 | Audio implied by the frame count @ 44,100 Hz | 320,327.330 s |
-| **Drift over 3.71 days** | **+0.113 s ≈ 0.35 ppm** |
+| ~~**Drift over 3.71 days**~~ **invalid, see below** | ~~+0.113 s ≈ 0.35 ppm~~ |
 
-That 0.113 s is the DAC crystal running fractionally fast against the system
-clock. It is **not** slack in which audio could have gone missing: a single
-underrun leaves a hole here, and a stream restart resets `hw_ptr` and
-`trigger_time` outright. Neither happened. Device ownership sits on `pcmC2D0p`
+**The 0.35 ppm drift figure is withdrawn, 2026-09-13.** The row labelled
+"monotonic time" is `tstamp − trigger_time`, and ALSA derives `tstamp` from
+`hw_ptr` at the nominal rate — so the last two rows are the same counter
+expressed twice, and their difference cannot report a crystal error at all.
+Measured properly against the system clock, `bose` runs **≈+14 ppm**; see
+`[LOG-FIX-010]` and `[LOG-FIX-030]` in
+[LOG007](../docs/LOG007-drift-instrument-correction.md).
+
+What the table still establishes is the part that does not depend on the
+timestamp: the frame count itself. It is **not** slack in which audio could
+have gone missing — a single underrun leaves a hole here, and a stream restart
+resets `hw_ptr` and `trigger_time` outright. Neither happened. Device ownership sits on `pcmC2D0p`
 (`sudo fuser -v /dev/snd/*`) — the HiFiBerry, per `[IMPL-BOS-140]`, not the
 onboard jack.
 

@@ -58,16 +58,20 @@ perfect knowledge of the time of day says nothing about whether the other box's
 44.1 kHz is really 44.1002 kHz. Conflating the two is what makes time-sync
 protocols look more relevant to this than they are.
 
-**`[GDE-ECHO-050]` Measured on `bose`: 0.35 ppm.** `[BOS-OPS-020]` recorded
-14,126,435,269 frames delivered against 320,327.218 s of monotonic time — a
-**+0.113 s divergence over 3.71 days**, on a stream that triggered once and
-never restarted. That is the HiFiBerry DAC+ Pro's crystal against the Pi's
-system clock **as disciplined by `systemd-timesyncd`, which is what `bose` ran
-until 2026-09-11** — a baseline worth stating, because the figure is a ratio
-against that clock and moving the node to chrony `[GDE-ECHO-305]` changes the
-steering without changing the DAC. It should be re-taken once chrony settles. It is between fifty and three hundred times better than the
-±20–100 ppm a generic consumer crystal is quoted at, and it is what the Pro's
-dedicated 44.1/48 kHz oscillators are for.
+**`[GDE-ECHO-050]` Measured on `bose`: ≈+14 ppm** — corrected 2026-09-13,
+see `[LOG-FIX-030]`. The 0.35 ppm this section carried until then, from
+`[BOS-OPS-020]`'s 14,126,435,269 frames against 320,327.218 s of "monotonic
+time", was an artefact: that second figure is `tstamp − trigger_time`, and
+`tstamp` is derived from the frame counter, so the comparison was the counter
+against itself `[LOG-FIX-010]`.
+
+The corrected figure is the HiFiBerry DAC+ Pro's crystal against the Pi's
+chrony-disciplined system clock. It is **ordinary** — comfortably inside the
+±20–100 ppm a generic consumer crystal is quoted at, rather than fifty to
+three hundred times better than it, as this section previously claimed. The
+Pro's dedicated 44.1/48 kHz oscillators buy a clean ratio and low jitter, not
+absolute accuracy. Nothing here should be read as implying a self-clocked
+device is an accurate one `[LOG-FIX-040]`.
 
 What that implies for a pair of nodes, where relative error is roughly the sum
 of each node's own:
@@ -182,11 +186,12 @@ it has to be the same on both. Verifying that on the fleet is Phase 0 of
 ## 4. Is re-synchronising once per passage enough?
 
 > **Superseded 2026-09-12 for any pair including `smartboardpc`.** Measured in
-> `[LOG-DRIFT-045]` — `bose` +0.432 ppm, Smart **+9.96 ppm**, 9.53 ppm relative
-> — 2.29 ms across a four-minute passage, inside the comb-filtering band. The
-> conditional below was met by `bose` and failed by Smart, exactly as it warned
-> it might. A pair of self-clocked nodes may still qualify; a pair including a
-> host-slaved one does not `[LOG-DRIFT-050]`.
+> `[LOG-DRIFT-045]` — Smart **+9.96 ppm**, and `bose` **≈+14** as corrected
+> in `[LOG-FIX-030]`; ~4 ppm relative — ~1.0 ms across a four-minute passage,
+> inside the comb-filtering band. The conditional below required both nodes to
+> be sub-ppm and **neither is**, so it fails for every measured pair, not only
+> those including a host-slaved node `[LOG-DRIFT-050]`. Clock ownership does
+> not predict rate accuracy `[LOG-FIX-040]`.
 
 **`[GDE-ECHO-110]` At the drift actually measured, yes — comfortably, and for
 same-room listening.** 0.17 ms accumulated across a four-minute passage is
