@@ -295,6 +295,109 @@ pub fn trim_decision(
     }
 }
 
+/// What an echo node decides to do about the master's forward schedule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Follow {
+    /// Nothing new to act on -- no schedule, or one already acted on.
+    Idle,
+    /// Begin this passage by submitting sample 0 at this instant.
+    StartAt { passage_id: i64, at: WallNanos },
+    /// The schedule cannot be honoured: submission was already due.
+    ///
+    /// Distinct from `Idle` because it is not nothing happening. A node with a
+    /// large presentation offset misses schedules a low-offset node makes
+    /// comfortably `[GDE-ECHO-410]`, and it must rejoin at the next boundary
+    /// rather than start late and be trimmed towards a master it never caught.
+    Missed { passage_id: i64 },
+    /// The master says it cannot currently place itself in time.
+    ///
+    /// **Hold, do not go independent.** `[GDE-ECHO-500]`'s handover is for a
+    /// master that has gone *away*; this one is present and honest, and will
+    /// re-establish at its own next passage boundary `[GDE-ECHO-360]`.
+    Hold(Voided),
+}
+
+/// An echo node's side of the wire.
+///
+/// Holds no transport and no queue: it decides, and something else acts. That
+/// keeps every branch here reachable from a test, which `[GDE-ECHO-370]`
+/// asks for precisely because a sign error in this arithmetic is inaudible
+/// until hours have passed.
+#[derive(Clone, Debug)]
+pub struct Follower {
+    pub timing: NodeTiming,
+    /// This node's own basis -- its own underruns and reopens, not the
+    /// master's. Both must be sound before a residual means anything.
+    pub basis: Basis,
+    pub deadband: Duration,
+    pub min_trim_interval: Duration,
+    acted: Option<i64>,
+    last_trim: Option<WallNanos>,
+}
+
+impl Follower {
+    pub fn new(timing: NodeTiming, deadband: Duration, min_trim_interval: Duration) -> Self {
+        Self { timing, basis: Basis::default(), deadband, min_trim_interval,
+               acted: None, last_trim: None }
+    }
+
+    /// What to do about the master's schedule, if anything.
+    ///
+    /// Idempotent by passage: the same schedule arriving twice a second for
+    /// fifteen seconds produces one `StartAt` and then `Idle`, which is what
+    /// lets `[GDE-ECHO-320]` repeat every message without a sequence number.
+    pub fn on_state(&mut self, st: &EchoState, now: WallNanos) -> Follow {
+        if let Some(why) = st.voided_by {
+            return Follow::Hold(why);
+        }
+        let Some(sched) = st.schedule else { return Follow::Idle };
+        if self.acted == Some(sched.passage_id) {
+            return Follow::Idle;
+        }
+        self.acted = Some(sched.passage_id);
+        match submit_at(&sched, self.timing, now) {
+            Some(at) => Follow::StartAt { passage_id: sched.passage_id, at },
+            None => Follow::Missed { passage_id: sched.passage_id },
+        }
+    }
+
+    /// Whether to trim, given the master's anchor and this node's own air.
+    ///
+    /// Returns `None` when no comparison is possible at all -- a missing
+    /// anchor, a voided basis on either side, or the two describing *different
+    /// passages*, which is the case a naive implementation would silently
+    /// treat as an enormous error and trim hard against `[GOV-SRC-040]`.
+    pub fn trim_for(
+        &mut self,
+        st: &EchoState,
+        local: Option<&AirPosition>,
+        now: WallNanos,
+    ) -> Option<Trim> {
+        if st.voided_by.is_some() {
+            return None;
+        }
+        let anchor = st.anchor?;
+        let local = local?;
+        if local.passage_id != anchor.passage_id {
+            return None;
+        }
+        // Where the master says this node's own sample should have been heard,
+        // and where it actually was. Both are on the disciplined wall clock,
+        // so the difference is a real offset rather than a clock comparison.
+        let local_heard = local.at;
+        let residual = residual_ns(&anchor, local_heard);
+        let since = self.last_trim.map_or(self.min_trim_interval, |t| {
+            Duration::from_nanos(now.saturating_sub(t))
+        });
+        let t = trim_decision(&self.basis, residual, self.deadband, since,
+                              self.min_trim_interval);
+        if t != Trim::None {
+            self.last_trim = Some(now);
+        }
+        Some(t)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +524,108 @@ mod tests {
         let v = submit_at(&sched, VAINOPI, now).unwrap() + VAINOPI.offset().as_nanos() as u64;
         assert_eq!(b, v, "submit + own offset must land on the same instant");
         assert_eq!(b, sched.sound_at);
+    }
+
+    fn follower(t: NodeTiming) -> Follower {
+        Follower::new(t, Duration::from_micros(500), Duration::from_secs(1))
+    }
+
+    fn state_with(sched: Option<Schedule>, anchor: Option<DriftAnchor>) -> EchoState {
+        EchoState { anchor, schedule: sched, voided_by: None }
+    }
+
+    #[test]
+    fn a_repeated_schedule_is_acted_on_once() {
+        // `[GDE-ECHO-320]` repeats every message rather than sequencing them,
+        // so the follower has to be the thing that makes it idempotent.
+        let sched = Schedule { passage_id: 4, sound_at: 100 * SEC, rate: 44100 };
+        let st = state_with(Some(sched), None);
+        let mut f = follower(BOSE);
+        assert!(matches!(f.on_state(&st, 80 * SEC), Follow::StartAt { passage_id: 4, .. }));
+        for _ in 0..30 {
+            assert_eq!(f.on_state(&st, 80 * SEC), Follow::Idle);
+        }
+    }
+
+    #[test]
+    fn a_high_offset_node_can_miss_what_a_low_offset_node_makes() {
+        // 100 ms of lead: bose can still submit, vainopi needed to 255 ms ago.
+        let sched = Schedule { passage_id: 5, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
+        let st = state_with(Some(sched), None);
+        assert!(matches!(follower(BOSE).on_state(&st, 10 * SEC),
+                         Follow::StartAt { .. }));
+        assert_eq!(follower(VAINOPI).on_state(&st, 10 * SEC),
+                   Follow::Missed { passage_id: 5 });
+    }
+
+    #[test]
+    fn a_master_that_cannot_place_itself_is_held_not_abandoned() {
+        // `[GDE-ECHO-500]`'s handover is for a master that has gone away. This
+        // one is present and saying so, and will recover at its own next
+        // boundary -- going independent here would desynchronise on purpose.
+        let st = EchoState {
+            anchor: None,
+            schedule: Some(Schedule { passage_id: 6, sound_at: 100 * SEC, rate: 44100 }),
+            voided_by: Some(Voided::Underrun),
+        };
+        let mut f = follower(BOSE);
+        assert_eq!(f.on_state(&st, 80 * SEC), Follow::Hold(Voided::Underrun));
+        assert_eq!(f.trim_for(&st, None, 80 * SEC), None, "and no trim while held");
+    }
+
+    #[test]
+    fn anchors_for_a_different_passage_are_not_a_huge_error() {
+        // The trap: the master is on passage 7 and this node still on 6, so
+        // the positions differ by minutes. Trimming against that would drive
+        // the node hard in the wrong direction.
+        let anchor = DriftAnchor {
+            passage_id: 7, sample: 0, heard_at: 500 * SEC, rate: 44100, ppm: 0.0,
+        };
+        let local = AirPosition { passage_id: 6, position_ms: 0, at: 200 * SEC };
+        let st = state_with(None, Some(anchor));
+        let mut f = follower(BOSE);
+        f.basis.establish();
+        assert_eq!(f.trim_for(&st, Some(&local), 500 * SEC), None);
+    }
+
+    #[test]
+    fn a_node_with_no_basis_of_its_own_does_not_trim() {
+        let anchor = DriftAnchor {
+            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: 0.0,
+        };
+        let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC + 5_000_000 };
+        let st = state_with(None, Some(anchor));
+        let mut f = follower(BOSE);           // basis never established
+        assert_eq!(f.trim_for(&st, Some(&local), 100 * SEC), Some(Trim::None));
+    }
+
+    #[test]
+    fn a_late_follower_drops_and_then_waits_out_the_interval() {
+        let anchor = DriftAnchor {
+            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: 0.0,
+        };
+        // 5 ms late.
+        let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC + 5_000_000 };
+        let st = state_with(None, Some(anchor));
+        let mut f = follower(BOSE);
+        f.basis.establish();
+        assert_eq!(f.trim_for(&st, Some(&local), 100 * SEC), Some(Trim::DropFrame));
+        // Immediately after, the rate limit holds even though still 5 ms out.
+        assert_eq!(f.trim_for(&st, Some(&local), 100 * SEC), Some(Trim::None));
+        // A second later it may act again.
+        assert_eq!(f.trim_for(&st, Some(&local), 101 * SEC), Some(Trim::DropFrame));
+    }
+
+    #[test]
+    fn an_early_follower_duplicates() {
+        let anchor = DriftAnchor {
+            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: 0.0,
+        };
+        let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC - 5_000_000 };
+        let st = state_with(None, Some(anchor));
+        let mut f = follower(VAINOPI);
+        f.basis.establish();
+        assert_eq!(f.trim_for(&st, Some(&local), 100 * SEC), Some(Trim::DuplicateFrame));
     }
 
     #[test]
