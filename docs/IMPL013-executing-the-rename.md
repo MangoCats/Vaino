@@ -155,24 +155,37 @@ rename fails instead of skipping.
 
 ---
 
-## 4. Order of work
+## 4. The four phases
 
-**`[IMPL-NAM-070]` Six steps, each gated on a command rather than on judgement.**
-"Green" in `[GDE-NAM-110]` meant `check_docs.py`, which compiles nothing and runs
-no test. Every gate below is explicit.
+**`[IMPL-NAM-070]` Each phase is gated on a command, not on judgement.** "Green"
+in `[GDE-NAM-110]` meant `check_docs.py`, which compiles nothing and runs no
+test. Every gate below is explicit.
 
-| # | Step | Gate before proceeding |
+| Phase | Work | Gate before proceeding |
 | :--- | :--- | :--- |
-| 0 | Commit `check_rename.py` unchanged, old name everywhere | It reports non-zero on every surface, 0 BROKEN |
-| 1 | Cargo package, crate path, binary, **all 23 env vars both sides**, helper names, unit files, install and deploy scripts, sources, tests, fixtures | `env -u CC cargo build --release`, `cargo test` **and** the Python suite under `tools/` green; `--expect-zero cargo code env bin units pymod vcs` |
-| 2 | Docs prose, `VainoPi/` → `LempiPi/`, **`check_docs.py` prefixes**, every citation, the 99 named paths | `check_docs.py --strict` exit 0 **and** `--expect-zero docs pytools paths` |
-| 3 | Per appliance: migrate binaries, helpers, units, `/var/vaino` | §5's per-host procedure, verified on the durable copy |
-| 4 | Per machine: hostname, `/etc/hosts`, mDNS, then SSH config on the four dev checkouts | Host reachable under the new name; deploy list updated |
-| 5 | GitHub remote, and re-point the four checkouts | `--expect-zero remote` |
+| **1** | Finish the echo work under the old name: merge current development to `main`, test, deploy, test the deployments. **Add `vainoplayer3` to the fleet list first** `[IMPL-NAM-110]` | All three appliances deployed and verified playing |
+| **2a** | Commit `check_rename.py` unchanged, old name everywhere | Reports non-zero on every surface, 0 BROKEN |
+| **2b** | Cargo package, crate path, binary, **all 23 env vars both sides**, helper names, unit files, the shared Python modules and their 47 importers, install and deploy scripts, sources, tests, fixtures | `env -u CC cargo build --release`, `cargo test` **and** the Python suite green; `--expect-zero cargo code env bin units pymod vcs` |
+| **2c** | Docs prose, `VainoPi/` → `LempiPi/`, **`check_docs.py` prefixes**, every citation, the 99 named paths, `.gitattributes` and `.gitignore` | `check_docs.py --strict` exit 0 **and** `--expect-zero docs pytools paths` |
+| **3** | Roll out to the fleet, one node at a time | [IMPL014](IMPL014-completing-the-rename.md) §1-§3 |
+| **4** | Initialise the new repository | [IMPL014](IMPL014-completing-the-rename.md) §4 |
 
-Step 1 is large and deliberately so — `[IMPL-NAM-050]` is what a smaller step
-would cost. Steps 3 and 4 are per machine and never atomic with a commit, so the
-tree must tolerate both names throughout them.
+Phase 2b is large deliberately — `[IMPL-NAM-050]` is what a smaller step would
+cost.
+
+**`[IMPL-NAM-075]` Phase 2 lands on `main` within hours, and the node rollout
+proceeds from `main`.** The branch is short-lived on purpose. This repository
+took **280 commits in the last seven days** across two worktrees and several
+agents; the rename rewrites 387 files. A branch held open across a physical
+three-node rollout would accumulate days of divergence against a change that
+touches nearly every file, and the reconciliation would be done by whoever is
+least placed to notice that a `VAINO_*` variable was silently reverted on one
+side `[IMPL-NAM-040]`.
+
+So: phase 2 is verified locally, merged to `main` and pushed in one short
+window during which nothing else merges. Everything committed afterwards is
+Lempi-named by default, and phase 3's per-node findings land on `main` as small
+targeted commits that do not conflict with feature work.
 
 Per `[GDE-DEP-060]`, each commit message states what it assumes about the
 targets it touches. A rename that half-happened reads exactly like one that
@@ -180,60 +193,7 @@ fully happened.
 
 ---
 
-## 5. The appliance migration, per host
-
-**`[IMPL-NAM-080]` One host at a time, install-beside then cut over, never a
-rename in place.** For each of `vainopi`, `bose`, `vainoplayer3`:
-
-1. Install the new binary, the thirteen renamed helpers and the new unit
-   **alongside** the existing ones. Nothing is removed yet.
-2. `systemctl stop` the old unit. Confirm stopped, not merely asked to stop.
-3. Migrate `/var/vaino` → `/var/lempi` by **copy, verify, then remove** — never
-   `mv` as the first act. It holds `listener.db`, `unlock/request`,
-   `touch-calibration.toml` and `listener-backups/`.
-4. Start the new unit. Confirm audio is actually playing, from the speaker.
-5. `systemctl disable --now` the old unit and delete its file, then delete the
-   old binaries. **A stale enabled unit is two processes contending for one
-   audio device**, which presents as intermittent silence rather than as an
-   error.
-6. Re-run the host's own preflight `[PI-PRE-010]` and confirm it reports the new
-   paths, with versions.
-
-**`[IMPL-NAM-090]` On `bose`, every write goes through both layers.** `bose` has
-an overlay root: an ordinary write to `/` lands in tmpfs, survives a restart,
-passes every check, and is gone at the next reboot. Use
-[build/install-config.sh](../build/install-config.sh) or
-`sudo overlayroot-chroot`, and verify the durable copy under `/media/root-ro`,
-never the running one `[GDE-DEP-070]`. `vainopi` and `vainoplayer3` have plain
-writable roots and do not need this — and each script must say which it assumes
-before acting.
-
----
-
-## 6. Hostnames
-
-**`[IMPL-NAM-100]` Hostnames move last, per machine, and cannot be atomic with a
-commit.** `vainopi` and `vainoplayer3` both carry the name. A hostname rename
-reaches well beyond this tree: `/etc/hostname` and `/etc/hosts` on the box, its
-mDNS `.local` name, the `http://vaino/` entry point on :80, SSH `config` and
-`known_hosts` on all four development machines, `pi@vainopi` in the deploy
-scripts, the `VainoPi/` documentation folder, and assertion strings such as the
-one in [player/src/echo.rs](../player/src/echo.rs).
-
-Because the repository and the machines cannot change in the same instant, each
-host is renamed only after its §5 migration is verified, and the deploy scripts
-must accept both names until the last machine is done.
-
-**`[IMPL-NAM-110]` The fleet list is already incomplete — fix it before
-propagating it.** [build/deploy-everywhere.sh](../build/deploy-everywhere.sh)
-declares `APPLIANCES="pi@vainopi pi@bose"`. `vainoplayer3` runs the player and is
-not in it. That is the same gap that let `bose` sit four commits behind while
-`vainopi` was kept current. Add it first, so the rename does not carry an
-incomplete inventory forward.
-
----
-
-## 7. Deliberately not renamed
+## 5. Deliberately not renamed
 
 **`[IMPL-NAM-120]` The database files keep their names.** The split
 `[BOS-RUN-080]` already made them name-neutral: the live unit names
@@ -245,22 +205,23 @@ gain, since no listener ever sees the filename. Move `/var/vaino` → `/var/lemp
 and leave the files alone. Treat surviving `vaino.db` mentions as triage: delete
 or mark historical, one at a time.
 
-**`[IMPL-NAM-130]` Historical documents keep the old name.**
-[GUIDE001](GUIDE001-lineage-and-lessons.md) records a lineage in which this
-project *was* Vaino; rewriting it would falsify the record. GUIDE015, this
-document and `check_rename.py` likewise. These are the audit's allowlist, and
-the list is part of the script rather than a convention, so a future reader can
-see exactly which occurrences are meant to survive.
+**`[IMPL-NAM-130]` Dated findings are rewritten to the current name, not
+preserved under the old one.** The old name was temporary and the project is
+continuous: this player *is* the one those measurements were taken on, so
+"Lempi measured -2.09 ppm" is the true statement and carries no asterisk.
+[GUIDE001](GUIDE001-lineage-and-lessons.md)'s lineage therefore survives almost
+intact as MuLibPlay → McRhythm → Lempi v1 → Lempi. Only the naming conflict
+itself needs the old name, and in the new repository that is the **single**
+historical document `[IMPL-NAM-160]` — not an allowlist of four files.
 
 ---
 
-## 8. Rollback
+## 6. Rollback
 
-**`[IMPL-NAM-140]` Steps 0–2 revert with `git revert`; steps 3–5 do not.** The
-repository steps are ordinary commits. The machine steps are not, which is why
-step 3 copies before it removes and why each host is finished and verified
-before the next is started: at any moment at most one appliance is mid-migration,
-and the previous host is a known-good reference to compare against. If a host
-fails at step 3.4, the old unit and binaries are still present and still
-correct — re-enable them, and the migration is undone by starting what was never
-deleted.
+**`[IMPL-NAM-140]` Phases 1 and 2 revert with `git revert`; phases 3 and 4 do
+not.** The repository phases are ordinary commits, and because phase 2 lands on
+`main` as a small number of large commits rather than a long branch, reverting
+is a single operation rather than an unpick. The machine and repository-cutover
+phases are not revertible that way — [IMPL014](IMPL014-completing-the-rename.md)
+§5 carries their own rollback, which is why phase 3 copies before it removes and
+why the new repository is seeded only after the fleet is verified.
