@@ -38,10 +38,10 @@ import wave
 # expectation to find them, but an exact integer spacing means the emitted
 # sample index of click n is n * rate with no rounding to argue about later.
 INTERVAL_S = 1.0
-CHIRP_MS = 4.0
+CHIRP_MS = 12.0
 CHIRP_LO = 1000.0
 CHIRP_HI = 6000.0
-AMPLITUDE = 0.5
+AMPLITUDE = 0.9
 
 
 def chirp(rate, ms=CHIRP_MS, lo=CHIRP_LO, hi=CHIRP_HI):

@@ -62,8 +62,32 @@ term reads **0**. The kernel, on the same PCM at the same time, does not:
 So the quantity exists, is live, and swings ~1650 frames across each period
 cycle. The player's path to it — cpal's `playback − callback`, which is
 `status.get_delay()` converted to a duration `[GDE-ECHO-160]` — returns
-nothing. The cause is not yet known and is not worth guessing at: the
-plugin-chain explanation is already ruled out by the device name.
+nothing.
+
+**`[GDE-ECHO-545]` Found, 2026-09-13: the STATUS ioctl's `delay` field is not
+populated by this driver, and it is the only one cpal reads.** `delayprobe`
+`[GDE-ECHO-570]` asked the same question four ways in one process, on the same
+device, over 1033 periods:
+
+| source | `bose` | `smartboardpc` (control) |
+| :--- | ---: | ---: |
+| `snd_pcm_status_get_delay()` — *cpal's* | **0 / 1033** | 798 / 798 |
+| `snd_pcm_delay()` | 1033 / 1033 | 798 / 798 |
+| `/proc` `delay` | 1033 / 1033 | 798 / 798 |
+
+`snd_pcm_delay()` agrees with `/proc` to the frame (51584 against 51584), so
+nothing is wrong with the hardware or the kernel's accounting — only with which
+call is asked. The control on `smartboardpc` matters as much as the failure:
+the same binary, the same code path, a USB device, and all three sources agree
+there. This is particular to the HiFiBerry driver, not to cpal in general.
+
+`get_avail()` is empty on `bose` too — the `buf − avail` column sat at the full
+131072 throughout — so it is the whole dynamic half of the `Status` struct that
+this driver leaves unfilled. That also explains why playback works at all:
+cpal sizes its callback buffer from `pcm.avail()`, which is a different call
+and a working one, and reaches for `status.get_delay()` only for the timestamp.
+It uses the good call for the thing that would break audibly and the bad one
+for the thing that fails silently `[GOV-SRC-040]`.
 
 **`[GDE-ECHO-535]` The eligibility rule is therefore firing on a broken input,
 and would disqualify the master.** A node whose reported delay never varies is
@@ -93,15 +117,19 @@ accident instead of by choice.
 **Phase 2b — make the offset measurable.** Three routes, in the order they
 should be tried:
 
-1. **Find out why `get_delay()` yields 0 through cpal on a raw hw device.**
-   Cheapest, and it fixes the reported verdict as a side effect. A short probe
-   linked against the same `alsa` crate cpal uses, opening the same device and
-   printing `status.get_delay()`, separates "the kernel will not tell cpal"
-   from "cpal will not tell us" in a single run.
+1. ~~Find out why `get_delay()` yields 0~~ — **done**; the answer is recorded
+   as `[GDE-ECHO-545]`: the driver does not fill the field cpal reads, while
+   `snd_pcm_delay()` returns the right value on the same handle. The repair is
+   one line *inside cpal*, `stream.channel.delay()` in place of
+   `status.get_delay()`, which is both better than route 2 and not ours to
+   merge. How to carry it — a pinned fork, a vendored crate, or a patch
+   upstream first — is a decision `[GDE-ECHO-570]` leaves open rather than
+   settles by picking the quickest.
 2. **Read `/proc` `delay` directly** as a documented fallback, ranked below the
    in-process read and *visible as a fallback* rather than silently equivalent
    `[GOV-SRC-040]`. It is a different process reading a different instant, so
-   it is worse — but it is not zero.
+   it is worse — but it is not zero, and it is available today without waiting
+   on anyone else's release.
 3. **Acoustic calibration** `[GDE-ECHO-460]`. Already proven on this fleet:
    `teacherslounge`'s microphone gave `vainopi` −2.089 ppm ±0.477 from 130 s of
    clicks `[LOG-DRIFT-062]`, and ±0.10 ppm at ten minutes. It measures the
