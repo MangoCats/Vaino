@@ -497,7 +497,26 @@ impl Output {
     /// without replacing the buffer the mixer writes into. Swapping the state
     /// too would leave the mixer filling a ring that nothing reads, which is a
     /// worse failure than the one being recovered from `[IMPL-AUD-020]`.
+    /// Try with the period pinned, and fall back to the device's own choice.
+    ///
+    /// A node that will not open at all is a worse failure than one that
+    /// underruns, and `[GDE-ECHO-545]`'s upgrade showed that cpal validates a
+    /// fixed period against the device and refuses cleanly when it is out of
+    /// range. So the refusal is caught here rather than left to strand an
+    /// appliance, and it is reported rather than absorbed `[GOV-SRC-040]`.
     fn attach(name: Option<&str>, ring: &OutputRing)
+        -> Result<(cpal::Stream, String), OutputError>
+    {
+        match Self::attach_with(name, ring, true) {
+            Err(OutputError::Build(e)) => {
+                eprintln!("output: a {PREFERRED_PERIOD_FRAMES}-frame period was refused ({e}); falling back to the device's own, which on a slow or Bluetooth sink may underrun");
+                Self::attach_with(name, ring, false)
+            }
+            other => other,
+        }
+    }
+
+    fn attach_with(name: Option<&str>, ring: &OutputRing, pin_period: bool)
         -> Result<(cpal::Stream, String), OutputError>
     {
         let state = Arc::clone(&ring.state);
@@ -523,7 +542,10 @@ impl Output {
             .map_err(|e| OutputError::Config(e.to_string()))?;
         let supported = pick_config(&device, &default_cfg);
         let sample_format = supported.sample_format();
-        let config: StreamConfig = supported.into();
+        let mut config: StreamConfig = supported.into();
+        if pin_period {
+            config.buffer_size = cpal::BufferSize::Fixed(PREFERRED_PERIOD_FRAMES);
+        }
         let channels = config.channels as usize;
         let sample_rate = config.sample_rate;
         // Speak only when something is wrong. `path.rs` already prints the
@@ -752,6 +774,22 @@ impl Output {
 /// silently move the node to an uncharacterised clock and resample every
 /// passage to get there.
 pub const PREFERRED_RATE: u32 = 44_100;
+
+/// Frames per callback to ask for, when the device will say whether it can.
+///
+/// cpal 0.18's ALSA backend reads `BufferSize::Fixed(x)` as *period* = x and
+/// buffer = 2x. Its `Default` path is the problem this constant exists for:
+/// it takes PipeWire's chosen period and clamps the buffer to two of them,
+/// where cpal 0.15 left PipeWire's much larger buffer alone. On `vainopi` that
+/// came out as a 512-frame period and a 1024-frame buffer -- **23 ms of slack
+/// on an A2DP path carrying 321 ms of latency, fed by a Pi Zero 2W** -- and
+/// the result was 895 underruns in eight minutes and audibly broken playback.
+///
+/// 2048 frames is 46 ms per callback and a 93 ms buffer, which is what cpal
+/// 0.15 negotiated on that node for months without complaint. It is a floor
+/// under the weakest node rather than a tuning preference: a wired DAC does
+/// not care, and Bluetooth does.
+const PREFERRED_PERIOD_FRAMES: u32 = 2048;
 
 /// The device's own default, unless it can give `PREFERRED_RATE` instead.
 ///
