@@ -42,6 +42,7 @@ pub mod cue;
 pub mod db;
 pub mod director;
 pub mod decoder;
+pub mod echo;
 pub mod engine;
 pub mod fade;
 /// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
