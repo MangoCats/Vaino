@@ -153,6 +153,19 @@ the expected shape for a buffer of two periods, and it varies, which is why
 The node the design was least sure could ever echo now reports a presentation
 offset. `[GDE-ECHO-070]` deferred Bluetooth pending exactly this measurement.
 
+**`[LOG-CPAL-070]` The upgrade did not move the rate it was measured with.**
+Worth checking rather than assuming: the period changed from 1472 frames to a
+pinned 2048, and an instrument that quietly shifts its own measurement is the
+fault this project has already been bitten by twice `[LOG-FIX-010]`.
+
+| `bose` stream | window | ppm |
+| :--- | ---: | ---: |
+| 0.15.3 | 3,302 s | +12.974 |
+| 0.15.3 | 58,532 s | +13.965 |
+| **0.18.2, pinned period** | 3,601 s | **+13.216** |
+
+The new figure sits inside the old range. Same crystal, same answer.
+
 ## 5. How it was nearly missed
 
 **`[LOG-CPAL-050]` The fault was called a regression, then not a regression,

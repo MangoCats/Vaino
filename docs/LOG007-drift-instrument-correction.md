@@ -134,8 +134,22 @@ from the second window onward.
 
 ## 5. Open
 
+**`[LOG-FIX-080]` The temperature question cannot be answered by waiting, and
+250 samples now show why.** `[LOG-DRIFT-060]` asked for a second window at a
+different ambient, on the reasoning that a crystal moves with temperature. The
+sampler has since logged 16.5 continuous hours, and the slope over 2-hour
+windows is **−0.82 ± 2.77 ppm per °C** — |slope|/se of 0.30, which is no
+measurement at all.
+
+The reason is not noise but leverage: `bose` sits in a case at a near-constant
+58–61 °C, so the *window means* spread over only **0.82 °C**. A campaign that
+waits will accumulate precision about a temperature that never changes.
+Answering it needs the ambient deliberately moved, which is an experiment
+rather than an observation, and it stays open as one.
+
 **`[LOG-FIX-060]` `delay` reads 0 on every callback, while `/proc` reports
-3540.** `tick_clock` takes `playback.duration_since(&callback)`, which is
+3540.** *Resolved 2026-09-13 by the cpal upgrade; see
+[LOG009](LOG009-cpal-upgrade.md).* `tick_clock` takes `playback.duration_since(&callback)`, which is
 cpal's `status.get_delay()` clamped at zero; the hw subdevice simultaneously
 reports `delay: 3540` frames (80 ms). Whatever the player opens is not
 reporting the delay the hardware knows about. This is why Phase 1's
