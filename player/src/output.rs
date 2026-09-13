@@ -133,13 +133,19 @@ pub enum Timestamps {
     Undetermined,
 }
 
-/// Callbacks to observe before calling a never-varying delay `Software`.
+/// Audio to observe, in frames, before calling a never-varying delay
+/// `Software`.
 ///
-/// A real delay moves every period as the buffer fills and drains. Several
-/// hundred callbacks is a second or two of audio -- long enough that "it never
-/// moved" means something, short enough that a node does not sit
-/// `Undetermined` for a noticeable part of its startup.
-const TIMESTAMP_VERDICT_AFTER: u64 = 500;
+/// A real delay moves every period as the buffer fills and drains. Two seconds
+/// is long enough that "it never moved" means something, and short enough that
+/// a node does not sit `Undetermined` through a noticeable part of its startup.
+///
+/// **Counted in frames rather than callbacks, because callbacks stopped being
+/// a fixed amount of time.** This was 500 callbacks, documented as "a second
+/// or two" -- true at the buffer size cpal used to pick, and 23 seconds once
+/// the period was pinned to 2048 `[LOG-CPAL-040]`. Frames say the same thing
+/// however they are delivered.
+const TIMESTAMP_VERDICT_AFTER_FRAMES: u64 = 44_100 * 2;
 
 impl FrameClock {
     /// Frames out, and the disciplined-clock reading taken with them. Returned
@@ -156,7 +162,7 @@ impl FrameClock {
     pub fn timestamps(&self) -> Timestamps {
         if self.delay_changes.load(Ordering::Relaxed) > 0 {
             Timestamps::Hardware
-        } else if self.callbacks.load(Ordering::Relaxed) >= TIMESTAMP_VERDICT_AFTER {
+        } else if self.frames.load(Ordering::Relaxed) >= TIMESTAMP_VERDICT_AFTER_FRAMES {
             Timestamps::Software
         } else {
             Timestamps::Undetermined
@@ -1018,7 +1024,7 @@ mod tests {
         // varies. It must be named, not mistaken for an unusually stable
         // device `[GOV-SRC-030]`.
         let c = FrameClock::default();
-        for _ in 0..TIMESTAMP_VERDICT_AFTER {
+        for _ in 0..(TIMESTAMP_VERDICT_AFTER_FRAMES / 441) {
             c.tick(441, 0);
         }
         assert_eq!(c.timestamps(), Timestamps::Software);
@@ -1027,11 +1033,11 @@ mod tests {
     #[test]
     fn the_verdict_waits_rather_than_guessing_early() {
         let c = FrameClock::default();
-        for _ in 0..(TIMESTAMP_VERDICT_AFTER - 1) {
+        for _ in 0..(TIMESTAMP_VERDICT_AFTER_FRAMES / 441 - 1) {
             c.tick(441, 0);
         }
         assert_eq!(c.timestamps(), Timestamps::Undetermined,
-                   "one callback short of the threshold is not yet an answer");
+                   "one period short of the threshold is not yet an answer");
     }
 
     #[test]

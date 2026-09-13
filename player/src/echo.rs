@@ -54,7 +54,7 @@ impl NodeTiming {
 /// roughly 15 s before anyone hears it. That lead is the whole reason an
 /// arbitrary presentation offset is compensable, and it exists only because an
 /// echo node holds the file locally and knows the queue `[GDE-ECHO-420]`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Schedule {
     pub passage_id: i64,
     /// When sample 0 reaches the **air**, not the device.
@@ -69,7 +69,7 @@ pub struct Schedule {
 /// engine's own `audible_ms` subtracts the ring but **not** the device delay,
 /// which is imperceptible for a display and is not for `vainopi`'s 355 ms --
 /// so an anchor must subtract [`NodeTiming::offset`] as well.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DriftAnchor {
     pub passage_id: i64,
     pub sample: u64,
@@ -177,11 +177,28 @@ pub fn schedule_for_admission(
     Schedule { passage_id, sound_at: now + ahead_ns, rate }
 }
 
+/// What a master publishes for echo nodes, on the snapshot's own cadence.
+///
+/// `[GDE-ECHO-310]` puts both messages on the WebSocket the browser snapshot
+/// already uses, which is why the transport is uninteresting: it exists.
+///
+/// `voided_by` is carried rather than implied by a missing anchor. A node that
+/// receives nothing cannot tell "the master is quiet" from "the master cannot
+/// currently place itself", and those call for different behaviour -- the
+/// second means hold position and wait for the next passage boundary
+/// `[GDE-ECHO-360]`, not go independent `[GDE-ECHO-500]`.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct EchoState {
+    pub anchor: Option<DriftAnchor>,
+    pub schedule: Option<Schedule>,
+    pub voided_by: Option<Voided>,
+}
+
 /// Everything that voids the frame clock as a basis for an anchor.
 ///
 /// `[GDE-ECHO-360]`. Each of these must force a rejoin at the next passage
 /// boundary rather than a silent continuation on stale state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum Voided {
     /// Frame counter and stream epoch both reset `[SPEC-APS-010]`.
     DeviceReopen,

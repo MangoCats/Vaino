@@ -76,6 +76,10 @@ pub struct PlayerState {
     /// mixed figure would resume ~14 s late every time.
     pub position_ms: u64,
     pub queue_len: usize,
+    /// What an echo node needs from this one `[GDE-ECHO-310]`. Empty on a
+    /// node that cannot place itself in time, which is a fact rather than an
+    /// omission -- see `EchoState::voided_by`.
+    pub echo: crate::echo::EchoState,
     /// What is coming, in play order.
     pub queue: Vec<QueueEntry>,
     /// How many of those the mixer already holds, and so cannot be edited
@@ -257,6 +261,21 @@ pub struct Engine {
     /// because the two answer different questions at different rates: one
     /// serves a browser, the other serves a measurement `[GDE-ECHO-280]`.
     clock_log_at: Option<std::time::Instant>,
+    /// Whether the frame clock may still be compared against an echo anchor,
+    /// and the counters that decide it `[GDE-ECHO-360]`.
+    ///
+    /// Derived from counters rather than hooked into each event, deliberately:
+    /// a device reopen, an underrun and a pause are raised in three different
+    /// places and a fourth could be added without anyone remembering this.
+    /// Watching the numbers move catches every path, including ones not
+    /// anticipated here.
+    echo_basis: crate::echo::Basis,
+    /// The most recent forward schedule, republished until superseded. Every
+    /// message is absolute and idempotent `[GDE-ECHO-320]`, so repeating one
+    /// costs nothing and a node that missed the first simply uses this.
+    echo_schedule: Option<crate::echo::Schedule>,
+    echo_seen_recoveries: u64,
+    echo_seen_underruns: u64,
     /// The audible passage as last published, so a change can bypass the clock.
     published: Option<i64>,
     /// Set when a command rearranged the queue, so that too can bypass the
@@ -454,6 +473,10 @@ impl Engine {
             out_room: 0,
             publish_at: None,
             clock_log_at: None,
+            echo_basis: crate::echo::Basis::default(),
+            echo_schedule: None,
+            echo_seen_recoveries: 0,
+            echo_seen_underruns: 0,
             published: None,
             queue_edited: false,
             last_lock_failures: 0,
@@ -577,9 +600,36 @@ impl Engine {
             self.publish_at = Some(now + Self::PUBLISH_EVERY);
             self.publish();
         }
+        self.update_echo_basis();
         self.log_clock(now);
         self.persist(false);
         submitted
+    }
+
+    /// Void the echo basis if anything has happened that the frame clock
+    /// cannot be compared across `[GDE-ECHO-360]`.
+    ///
+    /// Only a clean passage boundary re-establishes it, which is what makes a
+    /// disturbance force a rejoin rather than a silent continuation on stale
+    /// state. Each cause is recorded rather than collapsed into "invalid", so
+    /// a node that stops correcting can say why.
+    fn update_echo_basis(&mut self) {
+        use crate::echo::Voided;
+        let r = self.path.recoveries();
+        if r != self.echo_seen_recoveries {
+            self.echo_seen_recoveries = r;
+            self.echo_basis.void(Voided::DeviceReopen);
+        }
+        if let Some(ring) = self.path.ring.as_ref() {
+            let u = ring.counts.underruns();
+            if u != self.echo_seen_underruns {
+                self.echo_seen_underruns = u;
+                self.echo_basis.void(Voided::Underrun);
+            }
+        }
+        if !self.playing {
+            self.echo_basis.void(Voided::Pause);
+        }
     }
 
     /// Where the current passage is **in the air**, for an echo anchor.
@@ -628,28 +678,44 @@ impl Engine {
         if self.clock_log_at.is_some_and(|t| now < t) {
             return;
         }
-        self.clock_log_at = Some(now + Self::CLOCK_LOG_EVERY);
-        if let Some(r) = self.path.ring.as_ref() {
+        // Read everything out before arming the timer, so the borrow ends.
+        let Some(snap) = self.path.ring.as_ref().map(|r| {
             let (frames, at_nanos) = r.clock.sample();
-            // Nothing has left the device yet -- a stream that has just opened,
-            // or one that never will. Saying so beats logging a zero that
-            // reads like a measurement `[GOV-SRC-040]`.
-            if frames == 0 {
-                return;
-            }
-            eprintln!(
-                "clock: frames={} at_nanos={} delay={} rate={} ts={:?} callbacks={}",
-                frames, at_nanos, r.clock.delay_frames(), r.sample_rate(),
-                r.clock.timestamps(), r.clock.callbacks()
-            );
+            (frames, at_nanos, r.clock.delay_frames(), r.sample_rate(),
+             r.clock.timestamps(), r.clock.callbacks())
+        }) else {
+            return;
+        };
+        // Nothing has left the device yet -- a stream that has just opened, or
+        // one that never will. Saying so beats logging a zero that reads like
+        // a measurement `[GOV-SRC-040]`.
+        //
+        // The timer is armed only once there is something to say. It used to
+        // be armed first, so a player whose clock was still empty on the very
+        // first tick went quiet for a full five minutes and looked identical
+        // to one with nothing to report.
+        if snap.0 == 0 {
+            return;
         }
+        self.clock_log_at = Some(now + Self::CLOCK_LOG_EVERY);
+        eprintln!(
+            "clock: frames={} at_nanos={} delay={} rate={} ts={:?} callbacks={}",
+            snap.0, snap.1, snap.2, snap.3, snap.4, snap.5
+        );
         // The backward anchor `[GDE-ECHO-310]`, at the same cadence for now.
         // Phase 3 raises this to twice a second on the snapshot's own
         // WebSocket; logging it first makes the arithmetic observable on a
         // real node before anything depends on it being right.
-        if let Some(a) = self.air_position() {
-            eprintln!("echo-anchor: passage={} position_ms={} at_nanos={}",
-                      a.passage_id, a.position_ms, a.at);
+        match (self.echo_basis.is_valid(), self.air_position()) {
+            (true, Some(a)) => eprintln!(
+                "echo-anchor: passage={} position_ms={} at_nanos={}",
+                a.passage_id, a.position_ms, a.at),
+            // Saying why nothing was emitted beats emitting nothing, which
+            // reads the same as a node that is simply quiet `[GOV-SRC-040]`.
+            (false, _) => eprintln!(
+                "echo-anchor: withheld, basis voided by {:?} until the next passage",
+                self.echo_basis.voided_by()),
+            (true, None) => {}
         }
     }
 
@@ -835,6 +901,9 @@ impl Engine {
     /// incoming one rises from `skip_lead_ms`, the two overlapping for the
     /// difference.
     fn skip(&mut self) {
+        // The ring is cut `[REQ-AUD-158]`, so frames already counted were
+        // never heard and no anchor may be compared across this.
+        self.echo_basis.void(crate::echo::Voided::Skip);
         if self.live.is_empty() {
             return;
         }
@@ -1058,6 +1127,8 @@ impl Engine {
         // where the ~15 s of lead exists: everything already in the ring plays
         // before this passage's first sample can sound, and that lead is what
         // makes an arbitrary presentation offset compensable.
+        // A passage boundary reached cleanly is the only way back in.
+        self.echo_basis.establish();
         if let Some(r) = self.path.ring.as_ref() {
             if r.clock.timestamps() == crate::output::Timestamps::Hardware {
                 if let Ok(d) = std::time::SystemTime::now()
@@ -1072,6 +1143,7 @@ impl Engine {
                     );
                     eprintln!("echo-schedule: passage={} sound_at={} rate={}",
                               s.passage_id, s.sound_at, s.rate);
+                    self.echo_schedule = Some(s);
                 }
             }
         }
@@ -1385,7 +1457,20 @@ impl Engine {
     /// Write the snapshot everything else reads.
     fn publish(&mut self) {
         self.published = self.shown.as_ref().map(|(e, _)| e.passage_id);
+        // Built before taking the lock: `air_position` reads the ring and the
+        // live list, and holding the snapshot mutex across that would put the
+        // engine's own state behind the lock a browser thread waits on.
+        let echo = crate::echo::EchoState {
+            anchor: if self.echo_basis.is_valid() {
+                self.air_position().map(|a| a.anchor(self.out_rate, 0.0))
+            } else {
+                None
+            },
+            schedule: self.echo_schedule,
+            voided_by: self.echo_basis.voided_by(),
+        };
         if let Ok(mut s) = self.state.lock() {
+            s.echo = echo;
             s.playing = self.playing;
             s.current = self.shown.as_ref().map(|(e, _)| e.clone());
             s.position_ms = self.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);

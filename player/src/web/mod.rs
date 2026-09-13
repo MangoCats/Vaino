@@ -202,6 +202,13 @@ pub struct Snapshot {
     pub position_ms: u64,
     pub duration_ms: u64,
     pub queue_len: usize,
+    /// The echo messages `[GDE-ECHO-310]`, riding the snapshot rather than a
+    /// socket of their own. A browser ignores the field; an echo node reads
+    /// only this one. That is what makes the transport choice uninteresting
+    /// `[GDE-ECHO-320]`: every message here is absolute and idempotent, so a
+    /// dropped snapshot costs nothing and a stale one is discarded by its own
+    /// timestamps.
+    pub echo: crate::echo::EchoState,
     /// What is coming, in play order.
     pub queue: Vec<QueueItem>,
     /// Master level in dB relative to full scale, `-72.0` to `0.0`
@@ -308,6 +315,7 @@ impl From<&PlayerState> for Snapshot {
             position_ms: s.position_ms,
             duration_ms: s.current.as_ref().map(|e| e.duration_ms()).unwrap_or(0),
             queue_len: s.queue_len,
+            echo: s.echo.clone(),
             queue: s
                 .queue
                 .iter()
