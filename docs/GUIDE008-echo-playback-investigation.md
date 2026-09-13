@@ -111,9 +111,16 @@ it does not yet have the audio to start with. A large fixed latency is a
 scheduling constant.
 
 What actually disqualifies a node is offset *variability*, not offset
-*magnitude*, and the two were conflated. The open question for `vainopi` is
-therefore how far and how often its A2DP latency moves, and whether a move can
-be detected — a measurement nobody has taken. The model that replaces the
+*magnitude*, and the two were conflated.
+
+> **Measured 2026-09-12, and the blocker turns out to be neither.** `vainopi`
+> is *unobservable* by software: no hardware PCM to read, cpal reporting
+> `Software`, and a frame clock that measures PipeWire's timer rather than the
+> speaker `[LOG-DRIFT-058]`. Variability is not the obstacle — being unable to
+> see it at all is. So the deferral stands, on evidence rather than caution,
+> and for a different reason than this paragraph first gave. The acoustic
+> cross-correlation `[GDE-ECHO-460]` is promoted from useful to the only
+> instrument that can reach this node. The model that replaces the
 device-class reasoning is in
 [GUIDE010](GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-420]`.
 

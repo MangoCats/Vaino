@@ -175,6 +175,35 @@ knows that here is that the code was made to say so `[GOV-SRC-030]`.
 the more interesting one, since a `Software` result there would mean no
 software instrument reaches it at all.
 
+**`[LOG-DRIFT-058]` `vainopi` cannot be measured by software at all, and the
+number that proves it looks like a success.** Given the same build 2026-09-12,
+it reported **+0.0073 ppm over 4.08 h** — 107 µs of divergence in four hours,
+a clock sixty times better than `bose`'s HiFiBerry DAC+ Pro, reached over
+Bluetooth. That is not credible as a measurement of a Bluetooth speaker.
+
+What it is measuring is the system clock against itself. PipeWire paces
+Vaino's callback from a system timer, resamples downstream, and absorbs the
+sink's real rate on the far side — so Vaino is feeding PipeWire, not the
+speaker, and the counter advances at exactly the rate the clock it is being
+compared against says it should. Zero by construction.
+
+With `ts=Software` beside it (`delay=0` across 322,991 callbacks), every
+software path into that node is now closed:
+
+| instrument | result on `vainopi` |
+| :--- | :--- |
+| `/proc/asound` `hw_ptr` | no hardware PCM — only `vc4hdmi`, closed |
+| cpal timestamps | `Software`; no delay information at all |
+| the frame clock | PipeWire's timer, not the sink |
+
+**A competing explanation is possible and does not change the conclusion.**
+PipeWire's buffer is bounded, so one could argue Vaino's average consumption
+must equal the sink's rate over hours, making +0.0073 ppm real. Adaptive
+resampling exists precisely to decouple those two sides, so this is unlikely —
+but it is unproven either way, and a measurement that cannot distinguish "the
+clock is excellent" from "I am measuring nothing" is not a measurement
+`[GOV-SRC-020]`.
+
 ---
 
 ## 4. Open
