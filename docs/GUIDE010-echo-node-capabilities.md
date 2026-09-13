@@ -81,7 +81,7 @@ Probed 2026-09-11.
 | `bose` | HiFiBerry DAC+ Pro, I²S `[PI-BOS-020]` | self | small, fixed | **+0.432** `[LOG-DRIFT-045]` | hardware (cpal enables it) |
 | `teacherslounge` | Realtek ALC3246 analog | self | small, expected fixed | — | unknown |
 | `smartboardpc` | ATE1133 USB, adaptive `[SMT-AUD-040]` | host-slaved | medium | **+9.96** `[LOG-DRIFT-045]` | ≥1 ms granularity |
-| `vainopi` | A2DP to the Middleton | remote | large, renegotiates | **unmeasurable** `[LOG-DRIFT-058]` | `Software` — none |
+| `vainopi` | A2DP to the Middleton | remote | large, renegotiates | **−2.09** acoustic `[LOG-DRIFT-062]` | `Software` — none |
 | desktop (`local`) | Windows WASAPI | self | unknown | — | estimate only `[GDE-ECHO-180]` |
 
 Two numbers in the table are now measured, and they differ by a factor of 23 — one self-clocked, one host-slaved, which is `[GDE-ECHO-440]` arriving as data rather than argument. Three rows remain empty. That is the argument for

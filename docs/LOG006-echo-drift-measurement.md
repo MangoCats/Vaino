@@ -204,6 +204,64 @@ but it is unproven either way, and a measurement that cannot distinguish "the
 clock is excellent" from "I am measuring nothing" is not a measurement
 `[GOV-SRC-020]`.
 
+## 3b. The acoustic method works, and vainopi is not zero after all
+
+**`[LOG-DRIFT-062]` Measured acoustically 2026-09-12: `vainopi` runs
+−2.089 ppm ±0.477 against `teacherslounge`'s ADC.** Opportunistic — the
+Middleton happened to be placed beside the laptop — and it reaches the quantity
+`[LOG-DRIFT-058]` had just concluded no instrument could.
+
+Method: `vainopi` played a click track through the Middleton (one impulse per
+44,100 samples, mixed with the music by PipeWire so nothing was interrupted)
+while `teacherslounge` recorded at 48 kHz. The **spacing** between clicks is
+what is read, not their arrival time, so the speaker-to-microphone distance
+cancels entirely and `[GDE-ECHO-469]`'s placement problem does not apply to a
+rate measurement.
+
+```
+clean run       : 130 intervals
+fitted interval : 47999.8997 samples (expected 48000)
+per-click jitter: 2.1 samples = 44 us
+```
+
+**So the software figure was an artefact, confirmed rather than suspected.**
++0.0073 ppm was PipeWire's timer measured against the clock it is derived
+from; the real path drifts, at more than four standard errors from zero. The
+competing explanation `[LOG-DRIFT-058]` recorded — that PipeWire's bounded
+buffer forces the average to match — is now disfavoured by measurement.
+
+It also lands usefully between the others: far below Smart's +9.96 ppm, above
+`bose`'s +0.432. A `bose`↔`vainopi` pair would drift ~2.5 ppm relative, about
+0.6 ms across a four-minute passage — under the comb-filtering threshold. The
+A2DP *offset* stability remains unmeasured and is the separate question
+`[GDE-ECHO-420]` that decides whether Bluetooth can echo at all.
+
+**`[LOG-DRIFT-064]` The first analysis of this same recording said +12,574 ppm,
+and the data was never the problem.** Computing the rate from the first and
+last detected click let three spurious detections — music transients passing
+the threshold — set both endpoints. The tell was in the same output: a median
+gap of *exactly* 48000.0 samples, which is a perfect result sitting beside an
+absurd one. The correct estimator is a least-squares fit over the longest run
+of consecutive clean gaps; endpoints are the one thing a span-based figure
+cannot afford to get wrong. Recorded because the wrong number was plausible
+enough to have been believed.
+
+**`[LOG-DRIFT-066]` 44 µs of jitter sets the duration for any future run.**
+A2DP's codec smears each transient, but smears every one the same way, so the
+systematic part cancels and only jitter costs precision.
+
+| span | precision |
+| :--- | ---: |
+| 130 s (this run) | ±0.48 ppm |
+| 5 min | ±0.21 ppm |
+| **10 min** | **±0.10 ppm** |
+| 30 min | ±0.03 ppm |
+
+Ten minutes buys a figure comparable to the `/proc`-based ones. The number
+above is relative to `teacherslounge`'s own converter, whose rate is unknown;
+recording `bose` the same way cancels it, since `bose`'s true rate is already
+known `[LOG-DRIFT-045]` — one session, two unknowns, both resolved.
+
 ---
 
 ## 4. Open
