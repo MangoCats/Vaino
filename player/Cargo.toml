@@ -32,7 +32,7 @@ fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "de
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
 rubato = "0.15"
-cpal = "0.15"
+cpal = "0.18"
 # bundled: compiles SQLite from source rather than needing libsqlite3-dev for
 # every target. Costs build time, buys a working cross-compile [REQ-HW-145].
 md5 = "0.7"
@@ -91,15 +91,20 @@ image = { version = "0.25", optional = true, default-features = false, features 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# `delayprobe` only `[GDE-ECHO-540]`. cpal already resolves and compiles
-# alsa 0.9.1 on Linux, so naming it here adds no crate to the build graph --
-# it only makes the already-compiled one callable, the same trade
-# `tokio-tungstenite` above is declared for. The probe has to reach the raw
-# `snd_pcm_status_get_delay()` that cpal reaches, because whether that call
-# or cpal's handling of it loses the presentation offset is precisely the
-# question `[GDE-ECHO-530]` cannot answer through cpal alone.
+# `delayprobe` only `[GDE-ECHO-540]`. cpal already resolves and compiles this
+# on Linux, so naming it here adds no crate to the build graph -- it only makes
+# the already-compiled one callable, the same trade `tokio-tungstenite` above
+# is declared for. The probe has to reach the raw `snd_pcm_status_get_delay()`
+# that cpal reaches, because whether that call or cpal's handling of it loses
+# the presentation offset is precisely the question `[GDE-ECHO-530]` cannot
+# answer through cpal alone.
+#
+# **This version must track cpal's own.** `alsa-sys` carries `links = "alsa"`,
+# and cargo permits exactly one package in the graph to claim a given `links`
+# value -- so a mismatch is not a duplicate compile, it is a hard resolution
+# failure. cpal 0.18 wants `^0.11`; cpal 0.15 wanted `^0.9`. Bump them together.
 [target.'cfg(target_os = "linux")'.dependencies]
-alsa = "0.9"
+alsa = "0.11"
 
 [[bin]]
 name = "vaino"

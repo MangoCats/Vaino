@@ -8,7 +8,7 @@
 //! Phase 1's offset column stays empty on every node and `[GDE-ECHO-290]`'s
 //! eligibility rule disqualifies `bose` itself `[GDE-ECHO-535]`.
 //!
-//! This probe reads the same number four ways, from one process, as close to
+//! This probe reads the same number five ways, from one process, as close to
 //! the same instant as a process can manage:
 //!
 //!   1. `snd_pcm_status_get_delay()` — the STATUS ioctl's `delay` field. This
@@ -16,13 +16,13 @@
 //!   2. `snd_pcm_delay()` — a different library call into a different kernel
 //!      path for the same quantity. If (1) is zero and (2) is not, the fix is
 //!      a one-line change of source.
-//!   2b. `snd_pcm_avail_delay()` — what cpal's own master branch switched to
-//!      after 0.15.3. Asking it here turns "upgrading probably fixes this"
-//!      into a measurement on the hardware in question, before anyone pays
-//!      for an 0.15 -> 0.18 API migration on a working audio path.
-//!   3. `avail` from the same Status, with `buffer - avail` as the arithmetic
+//!   3. `snd_pcm_avail_delay()` — what cpal switched to after 0.15.3. Asking
+//!      it here turns "upgrading probably fixes this" into a measurement on
+//!      the hardware in question, before anyone pays for an 0.15 -> 0.18 API
+//!      migration on a working audio path.
+//!   4. `avail` from the same Status, with `buffer - avail` as the arithmetic
 //!      cross-check that needs no delay API at all.
-//!   4. `/proc/asound/.../status`, re-read per iteration — the instrument that
+//!   5. `/proc/asound/.../status`, re-read per iteration — the instrument that
 //!      disagreed in the first place, kept in the comparison so that the
 //!      disagreement is reproduced here rather than taken on trust
 //!      `[GOV-SRC-020]`.
@@ -142,7 +142,9 @@ mod linux {
         Ok((pcm, buffer as i64, period as i64))
     }
 
-    fn phase_a(device: &str, seconds: u64) -> bool {
+    /// `None` when the device could not be opened at all -- distinct from
+    /// `Some(false)`, which means it opened and the delay really was zero.
+    fn phase_a(device: &str, seconds: u64) -> Option<bool> {
         println!("\n=== Phase A: raw ALSA, opened as cpal opens it ===");
         let (pcm, buffer, period) = match open_like_cpal(device) {
             Ok(v) => v,
@@ -152,7 +154,7 @@ mod linux {
                     eprintln!("  the device is in use -- stop vaino first:");
                     eprintln!("    sudo systemctl stop vaino && delayprobe && sudo systemctl start vaino");
                 }
-                return false;
+                return None;
             }
         };
         println!("  device      : {device}");
@@ -228,7 +230,7 @@ mod linux {
         println!("    snd_pcm_delay()            : {pcm_delay_nonzero}");
         println!("    snd_pcm_avail_delay()      : {avail_delay_nonzero}  <- cpal master");
         println!("    /proc delay                : {proc_nonzero}");
-        status_nonzero > 0
+        Some(status_nonzero > 0)
     }
 
     fn phase_b(device: &str, seconds: u64) {
@@ -242,7 +244,7 @@ mod linux {
         let mut chosen = None;
         if let Ok(devices) = host.output_devices() {
             for d in devices {
-                let name = d.name().unwrap_or_default();
+                let name = d.to_string();
                 if want.map(|w| name.contains(w)).unwrap_or(false) || name == device {
                     chosen = Some(d);
                     break;
@@ -256,11 +258,11 @@ mod linux {
                 return;
             }
         };
-        println!("  cpal device : {}", dev.name().unwrap_or_default());
+        println!("  cpal device : {dev}");
 
         let config = cpal::StreamConfig {
             channels: CHANNELS as u16,
-            sample_rate: cpal::SampleRate(RATE),
+            sample_rate: RATE,
             buffer_size: cpal::BufferSize::Default,
         };
         let calls = Arc::new(AtomicU64::new(0));
@@ -270,18 +272,15 @@ mod linux {
         let (c, n, l, d) = (calls.clone(), nonzero.clone(), last.clone(), distinct.clone());
 
         let stream = dev.build_output_stream(
-            &config,
+            config,
             move |out: &mut [i16], info: &cpal::OutputCallbackInfo| {
                 out.iter_mut().for_each(|v| *v = 0);
                 let ts = info.timestamp();
                 // The player's own arithmetic, character for character, so that
                 // a difference here is a difference in the platform and not in
                 // how the two were written `[GDE-ECHO-280]`.
-                let delay = ts
-                    .playback
-                    .duration_since(&ts.callback)
-                    .map(|x| (x.as_secs_f64() * RATE as f64) as u64)
-                    .unwrap_or(0);
+                let delay =
+                    (ts.playback.duration_since(ts.callback).as_secs_f64() * RATE as f64) as u64;
                 c.fetch_add(1, Ordering::Relaxed);
                 if delay != 0 {
                     n.fetch_add(1, Ordering::Relaxed);
@@ -332,6 +331,17 @@ mod linux {
         phase_b(&device, seconds);
 
         println!("\n=== Verdict ===");
+        // `false` used to mean both "ran, saw zero" and "never got to look",
+        // and the second printed as the first -- the conflation CLAUDE.md
+        // section 5 exists to forbid, committed here in the one tool whose
+        // whole job is to report an absence honestly. Caught by a transient
+        // EBUSY on smartboardpc.
+        let Some(raw_saw_delay) = raw_saw_delay else {
+            println!("  Phase A never opened the device, so nothing above is a");
+            println!("  measurement of anything. Free the device and run it again;");
+            println!("  do not read this as a delay of zero `[GDE-DEP-060]`.");
+            return;
+        };
         if raw_saw_delay {
             println!("  Raw ALSA reports a delay through the same call cpal makes.");
             println!("  If Phase B still shows delay == 0, the loss is inside cpal's");

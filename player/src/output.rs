@@ -508,14 +508,16 @@ impl Output {
                 let want = want.to_lowercase();
                 host.output_devices()
                     .map_err(|e| OutputError::Config(e.to_string()))?
-                    .find(|d| {
-                        d.name().map(|n| n.to_lowercase().contains(&want)).unwrap_or(false)
-                    })
+                    .find(|d| d.to_string().to_lowercase().contains(&want))
                     .ok_or(OutputError::NoDevice)?
             }
             None => host.default_output_device().ok_or(OutputError::NoDevice)?,
         };
-        let device_name = device.name().unwrap_or_else(|_| "<unnamed>".into());
+        // cpal 0.18 replaced `name() -> Result<String>` with `description()`
+        // and a `Display` impl. Display is the right one here: a device that
+        // cannot describe itself still has to appear in the startup line, and
+        // "<unnamed>" was only ever standing in for that.
+        let device_name = device.to_string();
         let default_cfg = device
             .default_output_config()
             .map_err(|e| OutputError::Config(e.to_string()))?;
@@ -523,7 +525,7 @@ impl Output {
         let sample_format = supported.sample_format();
         let config: StreamConfig = supported.into();
         let channels = config.channels as usize;
-        let sample_rate = config.sample_rate.0;
+        let sample_rate = config.sample_rate;
         // Speak only when something is wrong. `path.rs` already prints the
         // device, rate and channel count at startup, and a second identical
         // line teaches people to skim both. This fires on the exceptional case
@@ -559,7 +561,7 @@ impl Output {
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
                 device.build_output_stream(
-                &config,
+                config,
                 move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     fill(&cb_state, &cb_vol, out, &cb_silent, &cb_counts);
                     tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
@@ -574,7 +576,7 @@ impl Output {
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
                 device.build_output_stream(
-                    &config,
+                    config,
                     move |out: &mut [i16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
                         fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
@@ -594,7 +596,7 @@ impl Output {
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
                 device.build_output_stream(
-                    &config,
+                    config,
                     move |out: &mut [u16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
                         fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
@@ -716,7 +718,7 @@ impl Output {
     pub fn list_devices() -> Vec<String> {
         cpal::default_host()
             .output_devices()
-            .map(|ds| ds.filter_map(|d| d.name().ok()).collect())
+            .map(|ds| ds.map(|d| d.to_string()).collect())
             .unwrap_or_default()
     }
 
@@ -765,15 +767,15 @@ pub const PREFERRED_RATE: u32 = 44_100;
 fn pick_config(device: &cpal::Device, default_cfg: &cpal::SupportedStreamConfig)
     -> cpal::SupportedStreamConfig
 {
-    if default_cfg.sample_rate().0 == PREFERRED_RATE {
-        return default_cfg.clone();
+    if default_cfg.sample_rate() == PREFERRED_RATE {
+        return *default_cfg;
     }
     let Ok(ranges) = device.supported_output_configs() else {
-        return default_cfg.clone();
+        return *default_cfg;
     };
     let usable: Vec<_> = ranges
         .filter(|r| {
-            r.min_sample_rate().0 <= PREFERRED_RATE && PREFERRED_RATE <= r.max_sample_rate().0
+            r.min_sample_rate() <= PREFERRED_RATE && PREFERRED_RATE <= r.max_sample_rate()
         })
         .collect();
     let exact = usable.iter().find(|r| {
@@ -781,17 +783,19 @@ fn pick_config(device: &cpal::Device, default_cfg: &cpal::SupportedStreamConfig)
             && r.channels() == default_cfg.channels()
     });
     match exact.or_else(|| usable.first()) {
-        Some(r) => (*r).with_sample_rate(cpal::SampleRate(PREFERRED_RATE)),
-        None => default_cfg.clone(),
+        Some(r) => (*r).with_sample_rate(PREFERRED_RATE),
+        None => *default_cfg,
     }
 }
 
 fn tick_clock(clock: &FrameClock, info: &cpal::OutputCallbackInfo,
               samples: usize, channels: usize, rate: u32) {
     let ts = info.timestamp();
-    let delay = ts.playback.duration_since(&ts.callback)
-        .map(|d| (d.as_secs_f64() * rate as f64) as u64)
-        .unwrap_or(0);
+    // cpal 0.18 returns a saturating `Duration` rather than an `Option`, so
+    // the "playback is somehow before callback" case is folded into zero by
+    // the library instead of by us. Zero still means the same thing it did:
+    // no delay was reported `[GDE-ECHO-290]`.
+    let delay = (ts.playback.duration_since(ts.callback).as_secs_f64() * rate as f64) as u64;
     clock.tick((samples / channels.max(1)) as u64, delay);
 }
 
