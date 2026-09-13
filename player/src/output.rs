@@ -632,7 +632,32 @@ impl Output {
                     None,
                 )
             }
-            other => return Err(OutputError::Config(format!("unsupported format {other:?}"))),
+            SampleFormat::I32 => {
+                // The HiFiBerry's own format `[PI-BOS-020]`, and cpal 0.18's
+                // default for it. The ring is f32, whose 24-bit mantissa is
+                // the real limit here -- widening to i32 neither adds nor
+                // costs resolution, it just stops asking the driver to convert.
+                let mut scratch: Vec<f32> = Vec::new();
+                let cb_vol = volume.clone();
+                let cb_silent = Arc::clone(&silent);
+                let cb_counts = ring.counts.clone();
+                let cb_clock = ring.clock.clone();
+                device.build_output_stream(
+                    config,
+                    move |out: &mut [i32], info: &cpal::OutputCallbackInfo| {
+                        scratch.resize(out.len(), 0.0);
+                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
+                        for (o, s) in out.iter_mut().zip(scratch.iter()) {
+                            *o = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            other => return Err(OutputError::Config(format!(
+                "unsupported format {other:?}; this build renders {RENDERABLE:?}"))),
         }
         .map_err(|e| OutputError::Build(e.to_string()))?;
 
@@ -802,10 +827,21 @@ const PREFERRED_PERIOD_FRAMES: u32 = 2048;
 /// Among ranges that can do the wanted rate, the one that matches the device
 /// default's format and channel count wins, so this changes the rate and
 /// nothing else.
+/// The sample formats the callback below can actually write, best first.
+///
+/// This list is the whole reason `pick_config` inspects formats at all. cpal
+/// 0.18 reports more of them than 0.15 did -- on `bose` the *default* became
+/// `I32`, which the HiFiBerry natively is -- and a config naming a format the
+/// callback has no arm for cannot be opened at all. That failure is loud, but
+/// on an appliance loud still means silent `[GDE-ECHO-547]`.
+const RENDERABLE: [SampleFormat; 4] =
+    [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16, SampleFormat::U16];
+
 fn pick_config(device: &cpal::Device, default_cfg: &cpal::SupportedStreamConfig)
     -> cpal::SupportedStreamConfig
 {
-    if default_cfg.sample_rate() == PREFERRED_RATE {
+    let renderable = |f: SampleFormat| RENDERABLE.contains(&f);
+    if default_cfg.sample_rate() == PREFERRED_RATE && renderable(default_cfg.sample_format()) {
         return *default_cfg;
     }
     let Ok(ranges) = device.supported_output_configs() else {
@@ -813,14 +849,22 @@ fn pick_config(device: &cpal::Device, default_cfg: &cpal::SupportedStreamConfig)
     };
     let usable: Vec<_> = ranges
         .filter(|r| {
-            r.min_sample_rate() <= PREFERRED_RATE && PREFERRED_RATE <= r.max_sample_rate()
+            r.min_sample_rate() <= PREFERRED_RATE
+                && PREFERRED_RATE <= r.max_sample_rate()
+                && renderable(r.sample_format())
         })
         .collect();
-    let exact = usable.iter().find(|r| {
-        r.sample_format() == default_cfg.sample_format()
-            && r.channels() == default_cfg.channels()
+    // Best renderable format the device offers at the wanted rate, preferring
+    // the channel count the device would have chosen for itself. Ordering by
+    // RENDERABLE rather than taking whatever comes first keeps the choice
+    // stable across cpal versions that enumerate in a different order.
+    let best = RENDERABLE.iter().find_map(|want| {
+        usable
+            .iter()
+            .find(|r| r.sample_format() == *want && r.channels() == default_cfg.channels())
+            .or_else(|| usable.iter().find(|r| r.sample_format() == *want))
     });
-    match exact.or_else(|| usable.first()) {
+    match best {
         Some(r) => (*r).with_sample_rate(PREFERRED_RATE),
         None => *default_cfg,
     }

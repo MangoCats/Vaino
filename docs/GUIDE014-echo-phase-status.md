@@ -18,7 +18,7 @@ remaining work**.
 | phase | gate | status |
 | :--- | :--- | :--- |
 | 0 — shared timebase | node-to-node within 1 ms | **met**; fleet entirely on chrony, `smartboardpc` serving |
-| 1 — measure every node | rate *and* offset per node | **rate half met, offset half blocked** |
+| 1 — measure every node | rate *and* offset per node | rate met; **offset unblocked 2026-09-13** `[LOG-CPAL-030]` |
 | 2 — the frame clock | agrees with `/proc` within 1 ppm | **met at +0.33 ppm** `[LOG-FIX-050]` |
 | 3 — the wire | — | not started, and **should not start yet** |
 | 4 — echo uncorrected | drift matches prediction ×2 | not started |
@@ -90,6 +90,10 @@ and a working one, and reaches for `status.get_delay()` only for the timestamp.
 It uses the good call for the thing that would break audibly and the bad one
 for the thing that fails silently `[GOV-SRC-040]`.
 
+**Resolved 2026-09-13.** The upgrade landed on all four nodes and `vainopi`
+now reports `delay≈15676` — 355 ms — and classifies `Hardware`. The rest of
+this section is kept as the diagnosis that got there `[GOV-DOC-050]`.
+
 **`[GDE-ECHO-535]` The eligibility rule is therefore firing on a broken input,
 and would disqualify the master.** A node whose reported delay never varies is
 using software timestamps and may not echo, per `[GDE-ECHO-290]`. `bose`'s
@@ -118,8 +122,10 @@ accident instead of by choice.
 **Phase 2b — make the offset measurable.** Three routes, in the order they
 should be tried:
 
-1. ~~Find out why `get_delay()` yields 0~~ — **done**; the answer is recorded
-   as `[GDE-ECHO-545]`: the driver does not fill the field cpal reads, while
+1. ~~Find out why `get_delay()` yields 0~~ — **done, and collected**: cpal is
+   upgraded to 0.18.2 and the offset reads on hardware now
+   ([LOG009](LOG009-cpal-upgrade.md)). The answer was `[GDE-ECHO-545]`: the
+   driver does not fill the field cpal reads, while
    `snd_pcm_delay()` returns the right value on the same handle. The repair is
    **a version bump**. cpal's master already replaced `status.get_delay()`
    with `handle.avail_delay()`, and a second probe run confirmed that call
