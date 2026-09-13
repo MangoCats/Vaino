@@ -49,7 +49,9 @@ evidence; either one alone is not `[LOG-DRIFT-064]`.
 ## 3. What this gives directly
 
 **`[LOG-CAL-030]` `bose` ↔ `vainopi` is +13.47 ppm ± 0.48, and the microphone
-cancels out of it.** Both nodes were measured against the *same* ADC, so
+cancels out of it.** *Superseded by `[LOG-CAL-080]` the same day: the
+subtraction is right, the ± is not, because `vainopi` has no single rate to
+subtract. Read the pair as 7–14 ppm.* Both nodes were measured against the *same* ADC, so
 subtracting the two readings removes it entirely:
 
     bose − ADC        = +11.384 ± 0.003   (this run)
@@ -79,6 +81,54 @@ run neither adds to nor subtracts from it.
 
 What would settle it is in `[LOG-CAL-050]` below.
 
+## 4a. `vainopi` heard the same way, 2026-09-13
+
+Twelve minutes with the Middleton beside the microphone, played through the
+same PipeWire → A2DP path the music takes.
+
+**`[LOG-CAL-070]` `vainopi` − ADC = +3.959 ppm ± 0.029** over the settled
+window (243–394 s), residual 15.7 µs rms. That is sixteen times tighter than
+`[LOG-DRIFT-062]`'s ±0.477 from 130 seconds — and it does not agree with it.
+The earlier figure was **−2.089**; these are six ppm apart and both error bars
+are far too small to cover it.
+
+**`[LOG-CAL-080]` The explanation is that `vainopi` does not have *a* rate.**
+Three observations from this one run, each measured rather than inferred:
+
+| | |
+| :--- | :--- |
+| first 30 s of playback | **+1586 ppm** |
+| across a 90 s window, by thirds | +194 → +131 → **+73 ppm** |
+| within the settled 151 s, by sixths | +2.3 … +6.0 ppm |
+
+PipeWire's adaptive resampler chases the Bluetooth sink's clock, takes
+**minutes** to converge after playback starts, and then continues to wander by
+a couple of ppm. Where it settles is a property of the session, not of the
+hardware — which is why two honest measurements of the same node disagree by
+six ppm. Neither is wrong; the quantity is not constant.
+
+So `bose` ↔ `vainopi` is **+7.4 ppm this session and +13.5 the last**, and
+`[LOG-CAL-030]`'s single figure should be read as a range of roughly 7–14 ppm
+rather than a measurement. `bose`'s own ±0.003 is not the limit on that pair
+and never was.
+
+For the design this sharpens `[GDE-ECHO-420]` rather than answering it: a
+Bluetooth node cannot be given a rate constant, needs the continuous trim of
+Phase 5 unconditionally, and needs **minutes of settling** before its rate
+means anything — which bears directly on the rejoin case `[GDE-ECHO-510]`,
+where a node returning to the fleet would otherwise be trimmed against a figure
+taken during its own convergence.
+
+**`[LOG-CAL-090]` `vaino-speaker.timer` will interrupt an acoustic run on
+`vainopi`.** It fires every 30 s to keep the speaker attached, and from 480 s
+into this run it began moving the PipeWire stream out from under `aplay` —
+detections fell from 119 per 120 s to zero. It runs whether or not `vaino` is
+running, so a future run should stop the timer, not just the player.
+
+Level matters too, in both directions: 0.9 amplitude beside a microphone is
+painful and clips the capture, while 0.04 detected 90 of 90 at close range.
+`click_emit.py` takes amplitude as an argument for this reason.
+
 ## 5. Open
 
 **`[LOG-CAL-050]` Measure `teacherslounge`'s ADC electrically and every figure
@@ -90,8 +140,13 @@ gives `bose` acoustically, independently of the frame clock and of `/proc` on
 `bose`. Two instruments sharing no code and no machine, which is the standard
 `[GDE-ECHO-280]` was written to hold things to.
 
-It needs a capture stream held open for hours on a laptop that sleeps, so it is
-worth starting deliberately rather than opportunistically.
+**Started 2026-09-13**, `arecord` to `/dev/null` with
+`tools/drift_sample.sh` appending every 5 minutes to `/home/sw/adc-drift.tsv`.
+Preliminary at 30 minutes: +3.98 ppm by endpoint, +1.98 by least squares, and
+`drift_analyze.py` refuses to report either because `/proc/uptime`'s 0.01 s
+quantisation is a 5.6 ppm floor at that window. Both bracket the +2.6 ppm
+predicted independently in section 4, which is encouraging and not yet a
+result. Hours, not minutes.
 
 **`[LOG-CAL-060]` 132 detections fell outside the clean run.** The fit is
 sound — 426 consecutive at 6.5 µs — but a fifth of the track was disturbed,
