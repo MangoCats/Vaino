@@ -9,7 +9,7 @@ measurements and the design of the correction is not settled until it has them.
 The timebase comes first, because every measurement after it is expressed
 against it `[GDE-ECHO-305]`.
 
-> **Related:** [GUIDE008](GUIDE008-echo-playback-investigation.md) — the findings this rests on · [GUIDE010](GUIDE010-echo-node-capabilities.md) — the node model Phase 1 fills in · [REQ003](spec/REQ003-audio-playback.md) — the buffer-depth rule every correction obeys · [SPEC011](spec/SPEC011-audio-path-supervisor.md) — the device lifecycle that invalidates a frame clock · [BOSE004](../BosePi/BOSE004-operating-health.md) — the independent instrument Phase 2 is validated against · [PI026](../VainoPi/PI026-startup-preflight.md) — the preflight shape Phase 0 borrows
+> **Related:** [GUIDE014](GUIDE014-echo-phase-status.md) `[GDE-ECHO-520]` — **where each phase actually stands, and the revised critical path** · [GUIDE008](GUIDE008-echo-playback-investigation.md) — the findings this rests on · [GUIDE010](GUIDE010-echo-node-capabilities.md) — the node model Phase 1 fills in · [REQ003](spec/REQ003-audio-playback.md) — the buffer-depth rule every correction obeys · [SPEC011](spec/SPEC011-audio-path-supervisor.md) — the device lifecycle that invalidates a frame clock · [BOSE004](../BosePi/BOSE004-operating-health.md) — the independent instrument Phase 2 is validated against · [PI026](../VainoPi/PI026-startup-preflight.md) — the preflight shape Phase 0 borrows
 
 ---
 
@@ -56,23 +56,18 @@ the fleet together rather than splitting it: one shared server makes its own
 error **common-mode**, and common-mode cancels in the node-to-node comparison
 that is the only one echo depends on. Differential error does not.
 
-**`bose` is outstanding.** The attempt to add it is `[IMPL-BOS-175]`: the
-lock-in escape hatch does not leave A writable and took the appliance off the
-network. `overlayroot-chroot` `[IMPL-BOS-180]` is the correct instrument.
+**`bose` joined 2026-09-12** through `overlayroot-chroot` `[IMPL-BOS-180]`,
+after the escape hatch took it off the network `[IMPL-BOS-175]`. Gate met.
 
 **`[GDE-ECHO-305]` The timebase precedes the measurement, and an earlier
-revision of this plan had that backwards.** It listed measurement as Phase 0 and
-the timebase as Phase 2, which cannot work: a node's ppm is expressed *against*
-the clock discipline in force, so measuring first and installing chrony
-afterwards invalidates the measurement without changing the hardware. The DAC
-would not have moved; the ruler would.
-
-Observed directly on `smartboardpc`, minutes apart: residual frequency
-**+305.427 ppm, then −213.530 ppm, with skew still at 10⁶ ppm** — chrony's way
-of saying it has no estimate yet. Any ppm figure taken in that window measures
-chrony, not the hardware. The fleet must therefore be **entirely on chrony and
-settled** before Phase 1 begins, and a mixed fleet — some nodes on chrony, some
-on timesyncd — cannot be compared across at all `[GOV-SRC-020]`.
+revision of this plan had that backwards.** A node's ppm is expressed
+*against* the clock discipline in force, so measuring first and installing
+chrony afterwards invalidates the measurement without changing the hardware —
+the DAC would not move; the ruler would. Observed on `smartboardpc` minutes
+apart: residual frequency **+305.427 ppm, then −213.530 ppm, skew still at
+10⁶ ppm** — chrony saying it has no estimate yet. The fleet must be **entirely
+on chrony and settled** before Phase 1 begins, and a mixed fleet cannot be
+compared across at all `[GOV-SRC-020]`.
 
 **Gate.** Node-to-node wall-clock agreement within 1 ms, sustained, across a
 reboot of each node and across a Wi-Fi reconnect. If Wi-Fi proves too unstable
@@ -85,11 +80,14 @@ designed, because it changes how often the anchor in Phase 3 must be resent.
 
 **`[GDE-ECHO-270]` A per-node ppm campaign, using the instrument that already
 exists, before any player code changes.** For each node that might participate,
-read the running stream's frame counter against monotonic time exactly as
-`[BOS-OPS-020]` did — the card found **by name**, per `[BOS-PWR-050]` — at two
-points at least 24 hours apart, and compute ppm from the difference. Record
-ambient temperature at both readings, because a crystal moves with it and a
-single-temperature figure is what `[GDE-ECHO-060]` warns against.
+read the running stream's `hw_ptr` — the card found **by name**, per
+`[BOS-PWR-050]` — at two points at least 24 hours apart and difference it
+against `/proc/uptime`, using `tools/drift_analyze.py`. **Never against the
+status file's `tstamp`**, which ALSA derives from `hw_ptr` itself: that is
+circular, and is how this phase's first results came out wrong by a factor of
+33 `[LOG-FIX-010]`. Record ambient temperature at both readings, because a
+crystal moves with it and a single-temperature figure is what `[GDE-ECHO-060]`
+warns against.
 
 Each node must yield **both halves of `[GDE-ECHO-400]`'s model**, not ppm
 alone: its rate error, its presentation offset, whether that offset holds across
@@ -108,7 +106,8 @@ rest `[GOV-SRC-020]`.
 planned. Any intended node above 20 ppm: proceed, but Phase 5 becomes mandatory
 rather than optional, and `[GDE-ECHO-110]`'s "per-passage resync would have been
 enough" conclusion is void for that pair. A node that cannot be measured at all
-is not a candidate.
+is not a candidate. **Outcome: the middle case, and the offset half is
+blocked** — see `[GDE-ECHO-530]` in [GUIDE014](GUIDE014-echo-phase-status.md).
 
 ---
 
@@ -136,14 +135,16 @@ delay never varies across many callbacks, it is not coming from hardware.
 Publish the verdict as a three-state fact — hardware, software, undetermined —
 surfaced the way every other audio-path fact already is `[REQ-VIS-250]`. A node
 reporting anything but *hardware* is not eligible to echo, and says so. Absent
-is not zero `[GOV-SRC-040]`.
+is not zero `[GOV-SRC-040]`. **This currently disqualifies every node, `bose`
+included** — the delay term reads a constant 0 while the kernel reports a live
+one; the rule is right and its input is broken `[GDE-ECHO-535]`.
 
-**Gate.** The in-process frame clock agrees with `/proc/asound`'s independent
-counter within 1 ppm over 24 hours on `bose`. This is the point of building it
-here rather than in Phase 3: two instruments, different mechanisms, one answer —
-the same standard `[BOS-OPS-020]` held itself to. Disagreement means the new
-instrument is wrong, and it is far cheaper to learn that now than to debug it
-later through a network.
+**Gate.** The in-process frame clock agrees with `/proc/asound`'s `hw_ptr`
+within 1 ppm over 24 hours on `bose`, **both referred to the system clock** —
+`hw_ptr` is independent only when it is not compared against a timestamp
+derived from itself `[LOG-FIX-010]`. Two instruments, one answer.
+**Met, at +0.33 ppm** `[LOG-FIX-050]`; it first appeared to fail by 13.19 ppm,
+which was the reference and not the instrument.
 
 ---
 
@@ -215,7 +216,10 @@ after hours, which is the hardest kind to find.
 places, and separating them is what makes the ring's depth stop mattering.** A
 *rate* error accumulates slowly and is corrected by trimming: drop or duplicate
 one frame on submission into the output ring, on the mixer thread, at whatever
-interval the measured ppm calls for — roughly one frame per minute at 0.4 ppm.
+interval the measured ppm calls for — one frame every 5.7 s at the ~4 ppm now
+measured for `bose`↔`smartboardpc`, and every 1.4 s for `bose`↔`vainopi`, not
+the one per minute this plan assumed from the discredited 0.4 ppm
+`[GDE-ECHO-550]`.
 That the correction is heard fifteen seconds later is irrelevant, because what
 is being corrected is a slope, not a position. An *offset* error is corrected
 only at a passage boundary, by opening the next passage a few milliseconds
