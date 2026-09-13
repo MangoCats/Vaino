@@ -18,7 +18,7 @@ long rather than a checklist.
 
 ## 1. What a text search does not show
 
-**`[IMPL-NAM-010]` Fourteen surfaces, measured 2026-09-13.** `[GDE-NAM-030]`
+**`[IMPL-NAM-010]` Sixteen surfaces, measured 2026-09-13.** `[GDE-NAM-030]`
 counted 3,360 string occurrences. That number is a workload estimate, not a work
 plan: what matters is which *kind* of thing breaks, because each kind fails
 differently and is gated differently.
@@ -36,13 +36,22 @@ differently and is gated differently.
 | `pytools` | 893 | Including `check_docs.py`'s own `PATH_PREFIXES` — see `[IMPL-NAM-060]` |
 | `pymod` | 262 | `vaino_db` / `vaino_control` and their 47 import sites `[IMPL-NAM-047]` |
 | `vcs` | 10 | `.gitattributes` line-ending rule, `.gitignore` `[IMPL-NAM-045]` |
-| `docs` | 1,699 | Prose, and the cited paths `[GOV-DOC-040]` validates |
-| `paths` | **99** | Tracked files and directories whose own *name* carries it |
+| `docs` | 1,720 | Prose, and the cited paths `[GOV-DOC-040]` validates |
+| `builder` | 432 | **Sampo → Vipunen** in code, SQL and the console `[GDE-NAM-025]` |
+| `builderdocs` | 433 | SPEC007's identity, LICENSING.md's two-work table, every doc naming the builder |
+| `paths` | **105** | Tracked files and directories whose own *name* carries either |
 | `remote` | 1 | `git@github.com:MangoCats/Vaino.git` |
 
-The 99 is the one `[GDE-NAM-030]` understated. It listed four path renames; there
-are ninety-nine, including `VainoPi/vaino-common.sh`, `vaino-rocker.sh`,
-`vaino-speaker.sh` and `setup-vainopi.sh`.
+The 105 is the one `[GDE-NAM-030]` understated. It listed four path renames;
+there are a hundred and five, including `VainoPi/vaino-common.sh`,
+`vaino-rocker.sh`, `vaino-speaker.sh` and `setup-vainopi.sh`.
+
+**Two renames run together, on separate surfaces.** The builder moves Sampo →
+Vipunen in the same migration `[GDE-NAM-025]`, because its register position is
+worse than the player's was and because doing it later costs a second migration
+of everything below. Its 865 occurrences are tracked apart from the player's so
+that neither can mask a half-finished rename of the other — a single combined
+count reaching zero would say nothing about which of the two got there.
 
 ---
 
@@ -163,15 +172,32 @@ test. Every gate below is explicit.
 
 | Phase | Work | Gate before proceeding |
 | :--- | :--- | :--- |
-| **1** | Finish the echo work under the old name: merge current development to `main`, test, deploy, test the deployments. **Add `vainoplayer3` to the fleet list first** `[IMPL-NAM-110]` | All three appliances deployed and verified playing |
+| **1** | Finish the echo work under the old names: merge current development to `main`, test, deploy, test the deployments. **Add `vainoplayer3` to the fleet list first** `[IMPL-NAM-110]` | All three appliances deployed and verified playing — **blocked until `vainoplayer3` returns** `[IMPL-NAM-115]` |
 | **2a** | Commit `check_rename.py` unchanged, old name everywhere | Reports non-zero on every surface, 0 BROKEN |
 | **2b** | Cargo package, crate path, binary, **all 23 env vars both sides**, helper names, unit files, the shared Python modules and their 47 importers, install and deploy scripts, sources, tests, fixtures | `env -u CC cargo build --release`, `cargo test` **and** the Python suite green; `--expect-zero cargo code env bin units pymod vcs` |
-| **2c** | Docs prose, `VainoPi/` → `LempiPi/`, **`check_docs.py` prefixes**, every citation, the 99 named paths, `.gitattributes` and `.gitignore` | `check_docs.py --strict` exit 0 **and** `--expect-zero docs pytools paths` |
+| **2c** | Docs prose, `VainoPi/` → `LempiPi/`, **`check_docs.py` prefixes**, every citation, the 105 named paths, `.gitattributes` and `.gitignore` | `check_docs.py --strict` exit 0 **and** `--expect-zero docs pytools paths` |
+| **2d** | Sampo → Vipunen: `tools/` code and console, SQL, SPEC007's identity section, [LICENSING.md](../LICENSING.md)'s two-work table, the AGPL attribution | Python suite green; `--expect-zero builder builderdocs` |
 | **3** | Roll out to the fleet, one node at a time | [IMPL014](IMPL014-completing-the-rename.md) §1-§3 |
 | **4** | Initialise the new repository | [IMPL014](IMPL014-completing-the-rename.md) §4 |
 
 Phase 2b is large deliberately — `[IMPL-NAM-050]` is what a smaller step would
-cost.
+cost. Phase 2d is separable because the builder shares no binary, no unit and no
+runtime path with the player: by `[SPEC-SA-015]` the two communicate only through
+the SQLite file, so renaming one cannot break the other mid-flight.
+
+**`[IMPL-NAM-115]` Phase 1 cannot close while `vainoplayer3` is unplugged.** It
+is physically disconnected, in the garage, and returns before this plan runs. Two
+consequences, recorded so neither is rediscovered: phase 1's gate — *deploy and
+test the deployments* — is **not satisfiable** until it is back, so the rename
+does not start on a partially-verified fleet; and when it returns it will be many
+commits behind, which is exactly the condition that let `bose` drift four commits
+`[IMPL-NAM-110]`. It gets a catch-up deploy and verification of its own before it
+counts as current.
+
+Add it to the fleet list **now** rather than on its return, with a comment
+marking it expected-absent. A node missing from the list is invisible; a node in
+the list that cannot be reached is loud `[GDE-DEP-060]`, and being forgotten is
+how it came to be missing in the first place.
 
 **`[IMPL-NAM-075]` Phase 2 lands on `main` within hours, and the node rollout
 proceeds from `main`.** The branch is short-lived on purpose. This repository

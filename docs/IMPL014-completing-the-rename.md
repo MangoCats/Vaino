@@ -20,8 +20,10 @@ the decision it encodes is which parts of the record travel.
 **`[IMPL-NAM-080]` One host at a time, install-beside then cut over, never a
 rename in place.** For each of `vainopi`, `bose`, `vainoplayer3`, in that order —
 `bose` second because its overlay root makes it the most likely to teach
-something, and `vainoplayer3` last because its framebuffer UI is the newest and
-least settled:
+something, and `vainoplayer3` last — both because its framebuffer UI is the
+newest and least settled, and because it is physically unplugged until shortly
+before this runs `[IMPL-NAM-115]`. Its catch-up deploy happens in phase 1; this
+is its second visit, not its first.
 
 1. Install the new binary, the thirteen renamed helpers and the new unit
    **alongside** the existing ones. Nothing is removed yet.
@@ -111,12 +113,14 @@ migration working papers; their durable residue is one short note. Delete them
 from the seed rather than rewriting them.
 
 **`[IMPL-NAM-160]` One historical document, and it is a writing job.** A single
-short file under `docs/` — proposed as `GUIDE016-the-earlier-name.md`, the
-number being whatever is free at seed time — recording that development proceeded for a time under an
-earlier name, that a conflict search found a trademarked commercial product of
-the same name in the same category, and that the project renamed rather than
-contest it. It is the only place in the new repository where the old name
-appears.
+short file under `docs/` — proposed as `GUIDE016-the-earlier-names.md`, the
+number being whatever is free at seed time — recording that development
+proceeded for a time under earlier names, that a conflict search found
+trademarked commercial products of the same names in the same categories, and
+that the project renamed rather than contest them. It covers **both** renames,
+the player's and the builder's, in one note: they were dropped for the same
+reason, and separating them would put a second old name in a second file. It is
+the only place in the new repository where either old name appears.
 
 Everything else is rewritten to the current name rather than preserved under the
 old one, per `[IMPL-NAM-130]`: the project is continuous and the earlier name was
@@ -135,11 +139,11 @@ alongside this project would find a commercial product of the same name and
 infer a relationship that does not exist; the citation's job is to let the
 maintainer verify a measurement, not to be a search term.
 
-**`[IMPL-NAM-180]` The guard reads the forbidden token from the one document
-that is allowed to contain it.** A checker cannot search for a string without
-holding it, which would put the old name in a second file. Instead the guard
-extracts the token from `[IMPL-NAM-160]`'s document at run time and fails if it
-appears anywhere else in the tree. The name then lives in exactly one place, and
+**`[IMPL-NAM-180]` The guard reads the forbidden tokens from the one document
+that is allowed to contain them.** A checker cannot search for a string without
+holding it, which would put an old name in a second file. Instead the guard
+extracts **both** tokens from `[IMPL-NAM-160]`'s document at run time and fails
+if either appears anywhere else in the tree. The name then lives in exactly one place, and
 the guard stays permanently useful: it catches the name creeping back in through
 a copied snippet or a restored file. It runs in CI alongside `check_docs.py`,
 and like `check_rename.py` before it, **a surface it cannot scan reports BROKEN
@@ -148,8 +152,10 @@ rather than clean** `[IMPL-NAM-030]`.
 **`[IMPL-NAM-190]` Licence text and attribution.** [LICENSE](../LICENSE) carries
 `Copyright (c) 2026 Vaino Project Contributors` — a copyright notice, not
 branding, and therefore changed deliberately rather than by substitution.
-[LICENSING.md](../LICENSING.md) names both works and both licences; the two-work,
-two-licence split is unchanged by any of this. The 141 SPDX headers carry licence
+[LICENSING.md](../LICENSING.md) names both works and both licences: its table
+becomes Lempi (MIT) and **Vipunen** (AGPL-3.0-or-later). The two-work,
+two-licence split itself is unchanged — only the names are, and the AGPL work's
+name changes with it. The 141 SPDX headers carry licence
 identifiers only and need no edit.
 
 A single initial commit authored as `MangoCat <mangocats@gmail.com>` is the whole

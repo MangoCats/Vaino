@@ -29,13 +29,47 @@ different-field argument available here, and no amount of having-been-here-first
 that survives contact with a registered mark — we were not first in any sense a
 register recognises.
 
-**`[GDE-NAM-020]` Sampo does not move with it.** Sampo is a separate project by
-`[SPEC-SA-010]`, runs only on an x86 desktop, and never ships to a listener as a
-product. Its neighbours — Sampo plc (Finnish insurance), Sampo Corp (Taiwanese
-consumer electronics), and a French instrument-augmentation device also called
-Sampo — are real but sit in other categories and do not touch a Python tool that
-never leaves the workbench. The name stays. Revisit only if Sampo is ever
-distributed as a product in its own right.
+**`[GDE-NAM-020]` Sampo moves too, and becomes Vipunen. Corrected 2026-09-13.**
+An earlier revision of this section said Sampo's neighbours "sit in other
+categories and do not touch a Python tool that never leaves the workbench," and
+kept the name. Both halves were wrong, and the method that produced them is the
+error worth recording: Sampo was screened with a web search rather than the
+register — the precise mistake `[GDE-NAM-050]` exists to prevent, applied to the
+player's name but not the builder's.
+
+The register says **91 exact SAMPO marks, 52 live, 16 of them in classes 9, 41
+or 42**:
+
+| Office | Classes | Owner |
+| :--- | :--- | :--- |
+| **FR** | **9, 15, 41** | Alexander Mihalic (2015) — the Sampo instrumental-augmentation device |
+| CN ×4, IN, IT, KR | 9 (IT also 11) | **Sampo Corporation** — Taiwanese consumer electronics, from 1982 |
+| FI | 9, 41 | Fennica Gaming Oy |
+| FI | 6, 7, 8, **9**, 11, 17, 21, 28 | Metso Outotec Oyj, filed **1936** |
+
+The French mark is the disqualifying one: **class 15 is musical instruments**,
+held alongside software and entertainment by the maker of a device that
+processes musical audio in software. That is Väinö's shape exactly.
+
+The second half was also wrong on our own evidence: `[SPEC-SA-010]` declares
+Sampo **a separate project with its own repository, licence and platform
+envelope** — built to be distributed, not a workbench tool.
+
+**`[GDE-NAM-025]` Vipunen is the replacement, and it fits better than Sampo
+did.** Antero Vipunen is the ancient giant who had swallowed all the world's
+songs; Väinämöinen descended into his belly to take the words he lacked. That is
+what the builder does — extract knowledge from raw material and hand it over —
+where "a mill that grinds abundance" was always a loose metaphor for feature
+extraction. `[SPEC-SA-010]`'s own phrase, *a separate artifact the bard depends
+on but never contains*, becomes literally true of a separate being he must enter.
+
+It is also the cleanest name in this entire investigation: **one exact mark
+worldwide, not live**, zero in any relevant class, and crates.io, PyPI, npm,
+`vipunen.app`, `.fm`, `.io` and `.dev` all free. The one namesake is
+`vipunen.fi`, the Finnish education ministry's statistics portal — a government
+service, no mark, no category overlap. **Sammas**, the Estonian cognate of
+Sampo, is the fallback if the milling metaphor is worth keeping: 8 live marks,
+none in classes 9, 41 or 42.
 
 ---
 

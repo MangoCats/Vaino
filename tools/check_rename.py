@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-Rename audit `[IMPL-NAM-020]`: what still carries the old name, by surface.
+Rename audit `[IMPL-NAM-020]`: what still carries an old name, by surface.
+
+Two renames are in flight: the player Vaino -> Lempi, and the library builder
+Sampo -> Vipunen `[GDE-NAM-025]`. They are tracked on separate surfaces so
+either can be gated to zero without the other masking it.
 
 Written BEFORE the Vaino -> Lempi rename begins, deliberately, while the old
 name is still everywhere. An audit written afterwards that reports zero is
@@ -32,17 +36,21 @@ import re
 import subprocess
 import sys
 
-OLD = re.compile(r"vaino", re.IGNORECASE)
+OLD = re.compile(r"vaino|sampo", re.IGNORECASE)
 
 # Files where the old name is correct and must survive the rename: the record
 # of why it changed, the lineage documents, and this script. Listing them is
 # not a convenience -- an audit that cannot distinguish a live reference from a
 # historical one produces a number nobody can act on.
+# GUIDE001 is deliberately NOT here. [IMPL-NAM-130] rewrites dated findings to
+# the current name rather than preserving them under the old one, so its lineage
+# becomes MuLibPlay -> McRhythm -> Lempi v1 -> Lempi and it has real work to do.
+# Allowlisting it would hide that work behind a zero.
 ALLOW = {
     "tools/check_rename.py",
     "docs/GUIDE015-naming-and-branding.md",
     "docs/IMPL013-executing-the-rename.md",
-    "docs/GUIDE001-lineage-and-lessons.md",
+    "docs/IMPL014-completing-the-rename.md",
 }
 
 # (name, globs, pattern, what breaks if this is non-zero at cutover)
@@ -90,6 +98,16 @@ SURFACES = [
     ("docs", ["docs/**/*.md", "VainoPi/*.md", "BosePi/*.md", "SmartPC/*.md",
               "sendspin/*.md", "*.md"],
      r"vaino", "prose, and the cited paths check_docs.py validates"),
+    # The builder rename (Sampo -> Vipunen) is tracked on its own surfaces so it
+    # can be gated independently, rather than folded into the player's counts
+    # where a half-finished rename of one would be masked by the other.
+    ("builder", ["tools/*.py", "tools/console_web/*", "sql/*.sql",
+                 "player/src/**/*.rs"],
+     r"sampo", "the library builder's name in code, SQL and the console"),
+    ("builderdocs", ["docs/**/*.md", "VainoPi/*.md", "BosePi/*.md",
+                     "SmartPC/*.md", "sendspin/*.md", "*.md"],
+     r"sampo", "SPEC007's identity section, LICENSING.md's two-work table, "
+     "and every doc that names the builder"),
 ]
 
 
