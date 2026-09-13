@@ -516,13 +516,23 @@ impl Output {
             None => host.default_output_device().ok_or(OutputError::NoDevice)?,
         };
         let device_name = device.name().unwrap_or_else(|_| "<unnamed>".into());
-        let supported = device
+        let default_cfg = device
             .default_output_config()
             .map_err(|e| OutputError::Config(e.to_string()))?;
+        let supported = pick_config(&device, &default_cfg);
         let sample_format = supported.sample_format();
         let config: StreamConfig = supported.into();
         let channels = config.channels as usize;
         let sample_rate = config.sample_rate.0;
+        // Speak only when something is wrong. `path.rs` already prints the
+        // device, rate and channel count at startup, and a second identical
+        // line teaches people to skim both. This fires on the exceptional case
+        // -- including a *recovery* that lands on a different rate than the
+        // stream it replaced, which the startup line cannot cover at all
+        // `[GDE-DEP-060]`.
+        if sample_rate != PREFERRED_RATE {
+            eprintln!("output: {device_name} opened at {sample_rate} Hz, not the preferred {PREFERRED_RATE} -- every passage will be resampled, and this node's measured ppm describes the {PREFERRED_RATE} clock and not this one");
+        }
 
         let cb_state = Arc::clone(&state);
 
@@ -731,6 +741,51 @@ impl Output {
 /// have passed without it moving `[GDE-ECHO-290]`. That is the intended
 /// outcome: a node whose delay never varies must say so, not quietly look
 /// like one whose delay happens to be steady.
+/// The rate the library is in and the rate the fleet was measured at.
+///
+/// Not a preference. `[GDE-ECHO-050]`'s DAC+ Pro carries *separate* 44.1 and
+/// 48 kHz oscillators, so the two rates are two different crystals with two
+/// different ppm errors -- `bose`'s measured +14 `[LOG-FIX-030]` describes the
+/// 44.1 one and says nothing about the other. Letting the device pick would
+/// silently move the node to an uncharacterised clock and resample every
+/// passage to get there.
+pub const PREFERRED_RATE: u32 = 44_100;
+
+/// The device's own default, unless it can give `PREFERRED_RATE` instead.
+///
+/// Written against cpal 0.15.3, which reports whatever the device calls its
+/// default. cpal 0.17 changed that default to prefer 48 kHz, so this stops
+/// being a no-op on most hardware the moment the dependency moves -- which is
+/// exactly why it is here first, as its own change, rather than bundled into
+/// the upgrade where a rate shift would be one variable among several.
+///
+/// Among ranges that can do the wanted rate, the one that matches the device
+/// default's format and channel count wins, so this changes the rate and
+/// nothing else.
+fn pick_config(device: &cpal::Device, default_cfg: &cpal::SupportedStreamConfig)
+    -> cpal::SupportedStreamConfig
+{
+    if default_cfg.sample_rate().0 == PREFERRED_RATE {
+        return default_cfg.clone();
+    }
+    let Ok(ranges) = device.supported_output_configs() else {
+        return default_cfg.clone();
+    };
+    let usable: Vec<_> = ranges
+        .filter(|r| {
+            r.min_sample_rate().0 <= PREFERRED_RATE && PREFERRED_RATE <= r.max_sample_rate().0
+        })
+        .collect();
+    let exact = usable.iter().find(|r| {
+        r.sample_format() == default_cfg.sample_format()
+            && r.channels() == default_cfg.channels()
+    });
+    match exact.or_else(|| usable.first()) {
+        Some(r) => (*r).with_sample_rate(cpal::SampleRate(PREFERRED_RATE)),
+        None => default_cfg.clone(),
+    }
+}
+
 fn tick_clock(clock: &FrameClock, info: &cpal::OutputCallbackInfo,
               samples: usize, channels: usize, rate: u32) {
     let ts = info.timestamp();
