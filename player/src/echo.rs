@@ -112,6 +112,71 @@ pub fn residual_ns(anchor: &DriftAnchor, local_heard_at: WallNanos) -> i64 {
     local_heard_at as i64 - anchor.heard_at as i64
 }
 
+/// Where a passage actually is **in the air**, and when that was true.
+///
+/// Distinct from the engine's `audible_ms`, which subtracts the output ring
+/// but not the device: those differ by the presentation offset, which is 46 ms
+/// on `bose` and 355 on `vainopi` `[LOG-CPAL-060]`. Imperceptible for a
+/// display, and a third of a second for echo.
+///
+/// `audible_ms` is deliberately **not** changed to match. It drives the UI and
+/// the resume point, and moving those by 355 ms to serve echo would be the
+/// tail wagging the dog `[REQ-AUD-164]`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AirPosition {
+    pub passage_id: i64,
+    pub position_ms: u64,
+    pub at: WallNanos,
+}
+
+/// What is being heard, from what the mixer has produced and what is queued
+/// ahead of the air.
+///
+/// Saturates at zero rather than wrapping: early in a passage the ring plus
+/// the device delay exceed what has been mixed, and the honest answer is that
+/// none of this passage is audible yet.
+pub fn air_position(
+    passage_id: i64,
+    played_ms: u64,
+    ring_frames: u64,
+    device_delay_frames: u64,
+    rate: u32,
+    at: WallNanos,
+) -> AirPosition {
+    let ahead_ms = (ring_frames + device_delay_frames) * 1000 / rate.max(1) as u64;
+    AirPosition { passage_id, position_ms: played_ms.saturating_sub(ahead_ms), at }
+}
+
+impl AirPosition {
+    /// The backward anchor this position supports.
+    pub fn anchor(&self, rate: u32, ppm: f64) -> DriftAnchor {
+        DriftAnchor {
+            passage_id: self.passage_id,
+            sample: self.position_ms * rate as u64 / 1000,
+            heard_at: self.at,
+            rate,
+            ppm,
+        }
+    }
+}
+
+/// When a passage admitted to the mixer **now** will start to sound.
+///
+/// Everything already in the ring plays first, then the device's own delay.
+/// That sum is the ~15 s of lead `[REQ-AUD-160]` gives, and it is the entire
+/// reason an arbitrary presentation offset is compensable `[GDE-ECHO-310]`:
+/// the announcement goes out long before anybody could hear it.
+pub fn schedule_for_admission(
+    passage_id: i64,
+    ring_frames: u64,
+    device_delay_frames: u64,
+    rate: u32,
+    now: WallNanos,
+) -> Schedule {
+    let ahead_ns = (ring_frames + device_delay_frames) * 1_000_000_000 / rate.max(1) as u64;
+    Schedule { passage_id, sound_at: now + ahead_ns, rate }
+}
+
 /// Everything that voids the frame clock as a basis for an anchor.
 ///
 /// `[GDE-ECHO-360]`. Each of these must force a rejoin at the next passage
@@ -279,6 +344,66 @@ mod tests {
         assert!(residual_ns(&a, 5 * SEC + 1_000_000) > 0, "later than master is positive");
         assert!(residual_ns(&a, 5 * SEC - 1_000_000) < 0, "earlier than master is negative");
         assert_eq!(residual_ns(&a, 5 * SEC), 0);
+    }
+
+    // `[REQ-AUD-160]`'s ring is ~15 s at 44100.
+    const RING: u64 = 44100 * 15;
+
+    #[test]
+    fn the_air_lags_the_mixer_by_the_ring_and_the_device() {
+        let a = air_position(9, 30_000, RING, BOSE.presentation_offset_frames, 44100, 7 * SEC);
+        // 30 s mixed, less 15 s of ring and 46 ms of device.
+        assert_eq!(a.position_ms, 30_000 - 15_000 - 46);
+        assert_eq!(a.at, 7 * SEC);
+    }
+
+    #[test]
+    fn the_device_delay_is_what_separates_air_from_audible_ms() {
+        // The engine's audible_ms subtracts the ring only. On bose that is a
+        // 46 ms difference and on vainopi 355 -- one is a rounding error in a
+        // display, the other is not `[LOG-CPAL-060]`.
+        let b = air_position(1, 60_000, RING, BOSE.presentation_offset_frames, 44100, 0);
+        let v = air_position(1, 60_000, RING, VAINOPI.presentation_offset_frames, 44100, 0);
+        assert_eq!(b.position_ms - v.position_ms, 355 - 46);
+    }
+
+    #[test]
+    fn early_in_a_passage_nothing_is_audible_yet_rather_than_negative() {
+        // 2 s mixed against 15 s of ring: saturates, does not wrap.
+        let a = air_position(2, 2_000, RING, VAINOPI.presentation_offset_frames, 44100, 0);
+        assert_eq!(a.position_ms, 0);
+    }
+
+    #[test]
+    fn an_admission_is_announced_about_a_ring_ahead_of_being_heard() {
+        let now = 500 * SEC;
+        let s = schedule_for_admission(5, RING, BOSE.presentation_offset_frames, 44100, now);
+        let lead_ms = (s.sound_at - now) / 1_000_000;
+        assert!((15_000..=15_100).contains(&lead_ms), "lead was {lead_ms} ms");
+        // And that lead is what makes every node's offset compensable.
+        for node in [BOSE, VAINOPI] {
+            assert!(submit_at(&s, node, now).is_some());
+        }
+    }
+
+    #[test]
+    fn an_anchor_round_trips_through_the_sample_number() {
+        let a = air_position(3, 10_000, 0, 0, 44100, 12 * SEC);
+        let anchor = a.anchor(44100, -2.09);
+        assert_eq!(anchor.sample, 441_000);           // 10 s at 44100
+        assert_eq!(anchor.heard_at, 12 * SEC);
+        assert_eq!(residual_ns(&anchor, 12 * SEC), 0);
+    }
+
+    #[test]
+    fn two_nodes_agreeing_on_the_air_have_no_residual() {
+        // The property echo is trying to hold: different offsets, same sound.
+        let sched = Schedule { passage_id: 8, sound_at: 900 * SEC, rate: 44100 };
+        let now = 880 * SEC;
+        let b = submit_at(&sched, BOSE, now).unwrap() + BOSE.offset().as_nanos() as u64;
+        let v = submit_at(&sched, VAINOPI, now).unwrap() + VAINOPI.offset().as_nanos() as u64;
+        assert_eq!(b, v, "submit + own offset must land on the same instant");
+        assert_eq!(b, sched.sound_at);
     }
 
     #[test]

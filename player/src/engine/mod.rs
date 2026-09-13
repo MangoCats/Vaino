@@ -582,6 +582,38 @@ impl Engine {
         submitted
     }
 
+    /// Where the current passage is **in the air**, for an echo anchor.
+    ///
+    /// `audible_ms` stops at the ring; this goes on to subtract the device's
+    /// own delay, which is what separates "left for the device" from "was
+    /// heard" -- 46 ms on `bose` and 355 on `vainopi` `[LOG-CPAL-060]`.
+    /// `audible_ms` is left alone on purpose: it drives the display and the
+    /// resume point, and shifting those to serve echo would be backwards.
+    ///
+    /// `None` while the delay is unknown. A node whose timestamps are not
+    /// `Hardware` cannot place itself in time, and guessing zero would put it
+    /// a third of a second out while looking exactly like a measurement
+    /// `[GOV-SRC-040]`.
+    pub(crate) fn air_position(&self) -> Option<crate::echo::AirPosition> {
+        let r = self.path.ring.as_ref()?;
+        if r.clock.timestamps() != crate::output::Timestamps::Hardware {
+            return None;
+        }
+        let l = self.live.first()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos() as u64;
+        Some(crate::echo::air_position(
+            l.entry.passage_id,
+            self.played_ms(l),
+            self.out_buffered_frames() as u64,
+            r.clock.delay_frames(),
+            r.sample_rate(),
+            now,
+        ))
+    }
+
     /// Write the frame clock out, periodically.
     ///
     /// Deliberately a log line and not a snapshot field: the snapshot is
@@ -610,6 +642,14 @@ impl Engine {
                 frames, at_nanos, r.clock.delay_frames(), r.sample_rate(),
                 r.clock.timestamps(), r.clock.callbacks()
             );
+        }
+        // The backward anchor `[GDE-ECHO-310]`, at the same cadence for now.
+        // Phase 3 raises this to twice a second on the snapshot's own
+        // WebSocket; logging it first makes the arithmetic observable on a
+        // real node before anything depends on it being right.
+        if let Some(a) = self.air_position() {
+            eprintln!("echo-anchor: passage={} position_ms={} at_nanos={}",
+                      a.passage_id, a.position_ms, a.at);
         }
     }
 
@@ -1014,6 +1054,27 @@ impl Engine {
         // `live`, where `live[0]` is what is sounding. Keeping a passage in
         // both places would mean two answers to "what is playing".
         let Some(entry) = self.queue.advance() else { return };
+        // The forward schedule `[GDE-ECHO-310]`, emitted here because here is
+        // where the ~15 s of lead exists: everything already in the ring plays
+        // before this passage's first sample can sound, and that lead is what
+        // makes an arbitrary presentation offset compensable.
+        if let Some(r) = self.path.ring.as_ref() {
+            if r.clock.timestamps() == crate::output::Timestamps::Hardware {
+                if let Ok(d) = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                {
+                    let s = crate::echo::schedule_for_admission(
+                        entry.passage_id,
+                        self.out_buffered_frames() as u64,
+                        r.clock.delay_frames(),
+                        r.sample_rate(),
+                        d.as_nanos() as u64,
+                    );
+                    eprintln!("echo-schedule: passage={} sound_at={} rate={}",
+                              s.passage_id, s.sound_at, s.rate);
+                }
+            }
+        }
         let origin = self.pending_resume.take();
 
         // The prepared passage is the queue head already opened at its start,

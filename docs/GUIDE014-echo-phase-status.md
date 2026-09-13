@@ -20,7 +20,7 @@ remaining work**.
 | 0 — shared timebase | node-to-node within 1 ms | **met**; fleet entirely on chrony, `smartboardpc` serving |
 | 1 — measure every node | rate *and* offset per node | **met** — both halves, both nodes `[LOG-CPAL-060]` |
 | 2 — the frame clock | agrees with `/proc` within 1 ppm | **met at +0.33 ppm** `[LOG-FIX-050]` |
-| 3 — the wire | — | **unblocked**; the offset it schedules against is measured |
+| 3 — the wire | — | **master side built** `[LOG-CPAL-060]`; transport next |
 | 4 — echo uncorrected | drift matches prediction ×2 | not started |
 | 5 — correction | — | not started, now **mandatory** `[LOG-FIX-040]` |
 | 6 — failure handling | — | designed, not built |
