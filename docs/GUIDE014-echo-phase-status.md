@@ -174,13 +174,33 @@ drift actually measured:
 | `bose` ↔ `vainopi` | ~16 ppm | 1.4 s |
 
 A single dropped or duplicated frame once a minute is inaudible by inspection.
-**Once every 1.4 s is not obviously inaudible**, particularly on sustained
-tonal material, and the plan should stop assuming it is. This does not change
-the *architecture* — rate is still a slope corrected on submission, offset
-still a position corrected at passage boundaries `[GDE-ECHO-340]` — but it
-turns "drop a frame" into a choice between frame trimming and fractional
-resampling, to be settled with a listening test in Phase 5 rather than by
-assertion now.
+Once every 1.7 s was **not** obviously inaudible, so the plan stopped assuming
+it and the question went to a listening test rather than an argument.
+
+**`[GDE-ECHO-555]` Answered 2026-09-13: frame trimming is inaudible at the
+rate this fleet needs, and Phase 5 does not require fractional resampling.**
+Six 20-second segments, blind, four of them trimmed once every 1.7 s — two
+dropping and two duplicating, about 47 trim events — played on the desktop and
+again through `vainopi`'s production A2DP chain. The listener reported every
+segment clean on both, including the four that were not.
+
+The signal was chosen to be the worst case and not a fair one: a sustained
+220/277/330 Hz triad, where a removed sample leaves a bare phase discontinuity
+with no transient to hide behind. Measured, that step is **2.9 % of peak** —
+about −31 dB, lasting one sample — which is why it survives inspection and not
+hearing. Real music has more to mask it, not less.
+
+Two limits on the claim, stated because the result is convenient. It was a
+casual listen rather than a forced-choice discrimination, and neither path was
+sample-exact: the desktop went through the WASAPI shared mixer and Middleton
+through SBC. What the casual condition costs in rigour it buys back in
+relevance — the design question is whether a listener in a room *notices*, not
+whether one hunting for ticks can detect. A confirmation on `bose`'s raw I²S
+would close it properly `[GDE-ECHO-570]`.
+
+`tools/trim_audibility.py` builds the test, prints an answer key it does not
+show the listener, and is in the repository so the confirmation runs the same
+way.
 
 The deadband in `[GDE-ECHO-350]` also needs a real number rather than an
 adjective. The measurement noise it must sit outside is now known: hourly
