@@ -190,6 +190,14 @@ clearing it:
 
 ## 6. Carrying out the rename
 
+> **The executable plan is [IMPL013](IMPL013-executing-the-rename.md).** The
+> sketch below is the shape; IMPL013 is what gets run. A review on 2026-09-13
+> found this section covers the documentation surface and misses five others —
+> the compiled artifact, 23 environment variables, thirteen installed helpers,
+> live appliance data, and the hostnames. Two of those fail silently: see
+> the env-var trap `[IMPL-NAM-040]` and the governance gap `[IMPL-NAM-060]`.
+> Read IMPL013 before touching anything.
+
 **`[GDE-NAM-110]` The directory renames and their citations must land in one
 commit.** `[GOV-DOC-040]` checks that every doc-cited path exists in the tree. A
 commit that renames `VainoPi/` without rewriting the documents citing it, or the
