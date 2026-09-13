@@ -108,6 +108,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `MSA` — Music Assistant: where Vaino/Sampo might fit in that ecosystem, see [sendspin/SPIN003-music-assistant-ecosystem-fit.md](../sendspin/SPIN003-music-assistant-ecosystem-fit.md)
 - `DRIFT` — The Phase 1 clock-rate campaign: per-node readings, their method and what voids them, see [LOG006](LOG006-echo-drift-measurement.md)
 - `DEP` — Deploy scripts: what each acts on, what its name should say, and the signposting that makes a wrong assumption visible, see [GUIDE011](GUIDE011-deploy-script-naming.md)
+- `NAM` — The project's own name: the conflict that forced the rename from Vaino to Lempi, the five-gate screen a replacement must survive, and what the rename touches, see [GUIDE015](GUIDE015-naming-and-branding.md)
 - `ECHO` — Echo playback: two or more instances playing the same passage at the same moment from their own local files, see [GUIDE008](GUIDE008-echo-playback-investigation.md) (the investigation) and [GUIDE009](GUIDE009-echo-playback-plan.md) (the development plan)
 - `SMT` — `smartboardpc` ("Smart"), the x86_64 node that is both a build host and an intended playback target, see [SmartPC/SMART001](../SmartPC/SMART001-survey.md). Per-machine like `BOS`, and in its own folder for the same reason — but not an appliance
 
@@ -140,6 +141,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-EXT-*]` | The Director driving other players; why streaming is closed | [GUIDE006-director-as-a-guest.md](GUIDE006-director-as-a-guest.md) |
 | `[GDE-BAK-*]` | Measured cost of an MPD / OpenSubsonic backend, and its containment | [GUIDE007-external-backends-investigation.md](GUIDE007-external-backends-investigation.md) |
 | `[GDE-WRK-*]` | Blocking the same song across different recordings: MusicBrainz Works vs artist+title, measured | [GUIDE012-work-based-song-blocking.md](GUIDE012-work-based-song-blocking.md) |
+| `[GDE-NAM-*]` | Why the project renames from Vaino to Lempi, the screen that decided it, and what the rename touches | [GUIDE015-naming-and-branding.md](GUIDE015-naming-and-branding.md) |
 | `[SPEC-MPD-050]` | Extending MPD through its sticker database, without patching it | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#4-extending-mpd-without-patching-mpd) |
 | `[SPEC-MPD-060]` | Mapping a Vaino passage to an MPD URI | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#5-the-mapping-which-is-the-hard-part) |
 | `[SPEC-MPD-092]` | MPD's measured protocol behaviour, as against its documentation | [SPEC016-mpd-protocol-findings.md](spec/SPEC016-mpd-protocol-findings.md) |
