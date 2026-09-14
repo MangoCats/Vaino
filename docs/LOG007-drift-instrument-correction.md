@@ -73,8 +73,12 @@ artefact rather than as the whole method failing.
 
 ## 3. Corrected figures
 
-**`[LOG-FIX-030]` `bose` runs about +14 ppm fast, not +0.432 ppm.** Four
-estimates, two instruments, two separate streams:
+**`[LOG-FIX-030]` `bose` runs about +14 ppm fast, not +0.432 ppm.**
+*Independently confirmed 2026-09-13 by a route sharing no code and no machine
+with this one: `[LOG-CAL-110]` puts it at +12.3 ± 0.2 acoustically, and the
+discredited +0.432 would have required `teacherslounge`'s ADC to be −10.95 ppm
+where it measures +0.9.* Four estimates here, two instruments, two separate
+streams:
 
 | estimate | window | ppm |
 | :--- | ---: | ---: |

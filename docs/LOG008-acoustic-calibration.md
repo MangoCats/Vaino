@@ -140,13 +140,42 @@ gives `bose` acoustically, independently of the frame clock and of `/proc` on
 `bose`. Two instruments sharing no code and no machine, which is the standard
 `[GDE-ECHO-280]` was written to hold things to.
 
-**Started 2026-09-13**, `arecord` to `/dev/null` with
-`tools/drift_sample.sh` appending every 5 minutes to `/home/sw/adc-drift.tsv`.
-Preliminary at 30 minutes: +3.98 ppm by endpoint, +1.98 by least squares, and
-`drift_analyze.py` refuses to report either because `/proc/uptime`'s 0.01 s
-quantisation is a 5.6 ppm floor at that window. Both bracket the +2.6 ppm
-predicted independently in section 4, which is encouraging and not yet a
-result. Hours, not minutes.
+**Answered 2026-09-13** -- `arecord` to `/dev/null` with
+`tools/drift_sample.sh` appending every 5 minutes, run for **9.67 continuous
+hours, 117 samples**.
+
+**`[LOG-CAL-100]` `teacherslounge`'s ADC is +0.9 ppm.** Least squares
++0.999 +/- 0.139, endpoint +0.761, residual 15.2 ms rms -- which is the read
+skew between `/proc/uptime` and the status file, not instability. Hourly
+windows scatter +/-8 ppm and are useless individually, exactly as
+`[LOG-FIX-070]` predicted; the long window is the measurement.
+
+**`[LOG-CAL-110]` This settles `[LOG-CAL-040]`, which could not settle
+itself.** That entry said an acoustic run alone cannot choose between `bose` at
++14 and the discredited +0.43, because both are consistent with *some* ADC. The
+ADC is now measured rather than assumed:
+
+| | |
+| :--- | ---: |
+| `bose` - ADC, acoustically | +11.384 +/- 0.003 |
+| ADC, electrically | **+0.9 +/- 0.2** |
+| **`bose` absolute, by the acoustic route** | **+12.3 +/- 0.2 ppm** |
+| `bose` absolute, electrically | +13.7 (range 12.97-14.33) |
+| what +0.432 would have required of the ADC | **-10.95 ppm** |
+
+Two instruments sharing no code and no machine -- one counting frames against
+`/proc`, one counting clicks through the air -- agree on about +13 ppm and
+exclude +0.43 by some sixty standard errors. `[LOG-FIX-010]`'s correction is
+independently confirmed.
+
+The 1.4 ppm between the two routes is not a disagreement to resolve. `bose`'s
+own hourly scatter is sd 2.87 ppm `[LOG-FIX-030]` and the acoustic figure comes
+from a single 425 s window inside that. Both routes say "about +13", and
+neither can say more than that about a clock which moves a few ppm from hour to
+hour.
+
+**`[LOG-CAL-120]` `vainopi` absolute, for both sessions: -1.2 ppm and
++4.9 ppm.** The spread is the finding, not the mean `[LOG-CAL-080]`.
 
 **`[LOG-CAL-060]` 132 detections fell outside the clean run.** The fit is
 sound — 426 consecutive at 6.5 µs — but a fifth of the track was disturbed,
