@@ -1,10 +1,10 @@
 # IMPL015: Rehearsing the Rename
 
-**Implementation Guide — two rehearsals run 2026-09-13, both against throwaway copies. Nothing here touched the repository.**
+**Implementation Guide — three rehearsals run 2026-09-13, all against throwaway copies. Nothing here touched the repository.**
 
 The rename is applied to a disposable tree first, and both checkers are run
-against the result. Two rehearsals found **seven** defects, three of them in the
-guards written to catch exactly this class of problem. None would have been
+against the result. Three rehearsals found **eight** defects, four of them in
+the guards written to catch exactly this class of problem. None would have been
 found by reading.
 
 This document is the procedure, what it found, and the accounting that lets a
@@ -38,14 +38,16 @@ occurrence is explained by a decision someone made on purpose."
 8. Run `check_docs.py --strict` and `check_rename.py`, then account for every
    survivor `[IMPL-NAM-350]`.
 
-Excluded from the blanket pass: both guards, and the three naming working papers
-(GUIDE015, IMPL013, IMPL014) which keep the old name on purpose.
+Excluded from the blanket pass: both guards, and the four naming working papers
+(GUIDE015, IMPL013, IMPL014 and this one) which keep the old name on purpose.
+They are listed in `check_rename.py`'s `ALLOW`, and an omission there is
+finding 8.
 
 ---
 
 ## 2. What the rehearsals found
 
-**`[IMPL-NAM-305]` Seven defects, in the order they surfaced.**
+**`[IMPL-NAM-305]` Eight defects, in the order they surfaced.**
 
 | # | Found | Fix |
 | :--- | :--- | :--- |
@@ -56,6 +58,7 @@ Excluded from the blanket pass: both guards, and the three naming working papers
 | 5 | **Excluding a document strands its links.** GUIDE015 correctly kept its prose, but its targets `spec/SPEC007-sampo-architecture.md` and `../BosePi/vaino-bose.service` had moved — `check_docs.py --strict` failed with 2 errors | Link targets in allowlisted documents are repointed even though their prose is not |
 | 6 | The driver, living **inside** the tree, had its own substitution literals rewritten mid-run — the table degenerated to `Lempi -> Lempi` | Driver lives outside; `rename_edit.py` caught it as "the replacement may reproduce the pattern" |
 | 7 | The driver read an argparse rejection as **"0 matches, nothing to do"** and reported a whole rename as complete | A probe that yields no count is a harness failure, not a zero |
+| 8 | `check_rename.py`'s own `ALLOW` list omitted `rename_edit.py` and IMPL015 — two files that keep the old name on purpose — so the audit counted them as residue that could never be cleared | Both added to `ALLOW` |
 
 **`[IMPL-NAM-310]` Finding 5 is the one to remember.** Not renaming a file and
 not updating its links are different decisions, and conflating them is silent
@@ -72,43 +75,50 @@ cannot fail loudly is worth no more than the edit it is checking.
 ## 3. What a clean run looks like
 
 **`[IMPL-NAM-350]` Clean is "nothing unexplained", not "the audit reports
-zero".** The second rehearsal's final state — 324 protected, **4,750
-substituted**, 324 restored, 36 paths renamed:
+zero".** Third rehearsal, with a remote set so that surface can resolve: **111 database
+paths resolved by evidence, 213 protected, 4,750 substituted, 36 paths renamed,
+4 stranded link targets repointed.**
 
 | Result | |
 | :--- | :--- |
 | `check_docs.py --strict` | **0 errors**, exit 0 |
-| `check_rename.py` | no surface BROKEN except `remote`, which a copy with no origin cannot read — an artefact of the rehearsal, not of the rename |
+| `check_rename.py` | **0 surfaces BROKEN**; 12 of 16 surfaces at zero |
 | Unexplained occurrences | **0** |
 
-Every surviving occurrence falls in one of three buckets, each by an explicit
+Every surviving occurrence falls in one of two buckets, each by an explicit
 decision:
 
 | Count | Bucket | Why it survives |
 | ---: | :--- | :--- |
-| 324 | Database-name text | `[IMPL-NAM-120]` — editorial triage, see §4 |
-| 129 | The three naming working papers | They keep the old name on purpose; deleted entirely at the new-repo seed `[IMPL-NAM-150]` |
-| 38 | The two guards | Excluded so they cannot invert, finding 1 |
+| 213 | Database-name text | Needs a person, see §4 |
+| 169 | Guards and naming working papers | They keep the old name on purpose; the papers are deleted entirely at the new-repo seed `[IMPL-NAM-150]`, the guards stay |
 
 A run that cannot produce this table has not finished, whatever the totals say.
+**The mechanism is clean; the content is not yet**, and those are different
+claims. The rename cannot reach zero until §4 is worked.
 
 ---
 
 ## 4. The one bucket that is not mechanical
 
-**`[IMPL-NAM-360]` The 324 database-name occurrences need judgement, not
-substitution.** They were assumed to be mostly stale pre-split prose. Reading
-them showed otherwise: they are overwhelmingly **usage strings and comments**
-across 40 Python files, 18 Rust files and the documentation — `dircheck
-<vaino.db>`, `usage: flavorcheck <vaino.db> [samples]`, `expected
-user@host:/path/to/vaino.db` — where the name is standing in for *"the database
-file"*.
+**`[IMPL-NAM-360]` What is left needs reading, because the name means five
+different things.** 111 of the 324 were resolved mechanically and safely,
+because their *path* says which database they are: `/srv/library/vaino.db` is
+the catalogue and becomes `library.db`, `/var/vaino/vaino.db` is the listener
+store and becomes `listener.db` `[BOS-RUN-080]`. Those needed no judgement.
 
-That makes all three mechanical options wrong. Renaming them to `lempi.db` names
-a file that has not existed since the split. Leaving them keeps the old name in
-the new repository. Deleting them removes a usage string a person needs.
+The remaining **213 cannot be resolved by pattern at all**, because the bare
+name carries at least five distinct meanings:
 
-The correct treatment is per-occurrence: each becomes whichever of `listener.db`
-or `library.db` it actually means, or a generic placeholder where it means
-either `[BOS-RUN-080]`. Roughly 300 occurrences of reading, and the reason this
-bucket is protected through the blanket pass rather than swept along with it.
+| Meaning | Example | Correct treatment |
+| :--- | :--- | :--- |
+| The **pre-split monolith** | `split_database.py vaino.db --library-out` | A file that no longer exists under any name; rewrite as the pre-split database |
+| A **real backup on disk** | `` `vaino.db.pre-split-2026…` ``, `` `vaino.db.bak-pre-mulibplay` `` | **Must not change** — these artefacts exist under these names |
+| A **live code literal** | `db_path = os.path.join(tmp, "vaino.db")` | Rename with the code |
+| A **CLI placeholder** | `usage: import_bundle <vaino.db> <bundle-dir>` | Becomes whichever db the argument actually is |
+| A **measurement of the old file** | `` | `vaino.db` | 1.08 GB | `` | Historical; rewrite or retire the row |
+
+The backup row is why no blanket mapping is safe: renaming that text would make
+the documentation describe files that do not exist, which is worse than leaving
+the old name visible. This bucket is protected through the blanket pass
+precisely so a later reader has to choose, one occurrence at a time.

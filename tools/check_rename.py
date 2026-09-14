@@ -48,9 +48,11 @@ OLD = re.compile(r"vaino|sampo", re.IGNORECASE)
 # Allowlisting it would hide that work behind a zero.
 ALLOW = {
     "tools/check_rename.py",
+    "tools/rename_edit.py",
     "docs/GUIDE015-naming-and-branding.md",
     "docs/IMPL013-executing-the-rename.md",
     "docs/IMPL014-completing-the-rename.md",
+    "docs/IMPL015-rehearsing-the-rename.md",
 }
 
 # (name, globs, pattern, what breaks if this is non-zero at cutover)
