@@ -206,30 +206,11 @@ cannot undo `[IMPL-NAM-045]`'s LF rule. `check_rename.py`'s surface counts are
 the coarse proof that a phase finished; this is the fine one that says which edit
 did not.
 
-**`[IMPL-NAM-079]` Rehearse the whole rename on a throwaway copy first.**
-`git archive HEAD | tar -x -C <tmp>` gives a complete tree to destroy. Apply the
-ordered substitutions and the path renames there, then run both checkers. The
-first rehearsal, 2026-09-13, applied 4,995 substitutions across 12 ordered
-patterns and renamed 36 paths, and found four defects that reading would not
-have:
-
-| Found | Consequence |
-| :--- | :--- |
-| The pass **rewrites the guards themselves** — `check_rename.py`'s own patterns became `lempi\|vipunen` | The audit inverts: it reports a successful rename as total failure and a failed one as clean. `ALLOW` excludes a file from being *scanned*, not from being *edited*; the mechanical pass needs its own never-rewrite list |
-| Extension globs missed **16 extensionless files** — all 14 `vaino-*` helper executables, plus `LICENSE`; also `.css`, `.conf`, `.log`, `.bat` | Files renamed, contents untouched. The file list comes from `git ls-files` filtered by content, **never** a guessed extension list |
-| `check_rename.py` had the same blind spot and reported `bin`/`scripts` clean while three helpers held 38 occurrences | Fixed: directory-scoped globs, and BROKEN is now **per-glob**, so one stale glob cannot hide behind a healthy sibling |
-| A blanket pass produced **189 `lempi.db`** | Violates `[IMPL-NAM-120]`. Database names are excluded from substitution and triaged **before** the blanket pass, not renamed by it |
-
-Two results worth keeping: the most-specific-first ordering is correct — `vaino`
-is a substring of `vainopi` and `vainoplayer3`, and all twelve patterns applied
-at exact counts — and **`check_docs.py --strict` passed with 0 errors** on the
-rehearsed tree, so the documentation graph survives the path renames intact when
-the checker moves with them `[IMPL-NAM-060]`.
-
-The rehearsal also confirmed the converse: pointed at the rehearsed tree, the
-fixed audit reports **8 surfaces BROKEN** because its globs still name
-`VainoPi/`. Any guard whose globs name a directory this rename moves must move in
-the same commit — `check_docs.py` and `check_rename.py` alike.
+**`[IMPL-NAM-079]` Rehearse the whole rename on a throwaway copy before
+touching the branch.** Two rehearsals found seven defects that reading would not
+have, three of them in the guards themselves. The procedure, the findings and
+the accounting that makes a run *provably* clean are in
+[IMPL015](IMPL015-rehearsing-the-rename.md).
 
 **`[IMPL-NAM-115]` Phase 1 cannot close while `vainoplayer3` is unplugged.** It
 is physically disconnected, in the garage, and returns before this plan runs. Two

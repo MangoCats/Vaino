@@ -69,12 +69,18 @@ def main():
     ap.add_argument("--ignore-case", action="store_true",
                     help="off by default: a case-insensitive rename pattern is "
                          "how the audit once double-counted a whole surface")
+    ap.add_argument("--exclude", action="append", default=[], metavar="SUBSTR",
+                    help="skip paths containing this substring; repeatable. "
+                         "The guards must be excluded: a blanket pass rewrites "
+                         "check_rename.py's own patterns to hunt the new name "
+                         "and inverts it [IMPL-NAM-079]")
     ap.add_argument("--write", action="store_true",
                     help="apply the edit; without it this only reports")
     ap.add_argument("paths", nargs="+", help="file globs")
     args = ap.parse_args()
 
-    files = collect(args.paths)
+    files = [f for f in collect(args.paths)
+             if not any(x in f for x in args.exclude)]
     if not files:
         print(f"BROKEN  no files matched {args.paths} -- refusing to report a "
               f"count of zero for a file set that does not exist")

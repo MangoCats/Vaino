@@ -144,6 +144,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-NAM-*]` | Why the project renames from Vaino to Lempi, the screen that decided it, and what the rename touches | [GUIDE015-naming-and-branding.md](GUIDE015-naming-and-branding.md) |
 | `[IMPL-NAM-010..140]` | Executing that rename in the repository: the fourteen surfaces, the five silent failures, the four phases and the audit each is gated on | [IMPL013-executing-the-rename.md](IMPL013-executing-the-rename.md) |
 | `[IMPL-NAM-150..210]` | Completing it: per-host fleet rollout, the mixed-fleet deploy handshake, hostnames, and seeding the new repository | [IMPL014-completing-the-rename.md](IMPL014-completing-the-rename.md) |
+| `[IMPL-NAM-300..360]` | Rehearsing the rename on a throwaway tree: the procedure, the seven defects two rehearsals found, and the accounting that makes a run provably clean | [IMPL015-rehearsing-the-rename.md](IMPL015-rehearsing-the-rename.md) |
 | `[SPEC-MPD-050]` | Extending MPD through its sticker database, without patching it | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#4-extending-mpd-without-patching-mpd) |
 | `[SPEC-MPD-060]` | Mapping a Vaino passage to an MPD URI | [SPEC015-mpd-director.md](spec/SPEC015-mpd-director.md#5-the-mapping-which-is-the-hard-part) |
 | `[SPEC-MPD-092]` | MPD's measured protocol behaviour, as against its documentation | [SPEC016-mpd-protocol-findings.md](spec/SPEC016-mpd-protocol-findings.md) |
