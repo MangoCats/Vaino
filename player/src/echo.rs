@@ -398,6 +398,89 @@ impl Follower {
     }
 }
 
+/// Where a queue entry came from, which is the whole of what a rejoin needs
+/// to know about it `[GDE-ECHO-510]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// Announced by the master.
+    Announced,
+    /// Chosen locally to keep the queue full while no announcement had
+    /// arrived. Discarded the moment the master is heard from again -- it was
+    /// only ever filling a gap.
+    Local,
+}
+
+/// What the queue should become, and what the local Director still owes it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueuePlan {
+    /// The queue in play order, after reconciliation.
+    pub queue: Vec<(i64, Origin)>,
+    /// Entries the warm Director must supply to reach the configured depth.
+    ///
+    /// `[GDE-ECHO-500]`'s hysteresis: the queue is **topped up** rather than
+    /// allowed to drain, so there is no moment of decision and no threshold to
+    /// tune. Announced entries leave from the front while local ones fill in
+    /// behind, and the changeover is a blend rather than an event.
+    pub want_local: usize,
+    /// Locally-chosen entries dropped because the master was heard from.
+    pub discarded_local: usize,
+}
+
+/// Reconcile the local queue against what the master has announced.
+///
+/// **Announcements win outright.** `[GDE-ECHO-510]` is explicit that when
+/// contact returns the master's queue takes precedence immediately and
+/// locally-chosen entries still waiting are discarded. Discarding entries that
+/// are about to be re-chosen looks wasteful and is the specified behaviour:
+/// they were gap-fillers, and a node rejoining the fleet should be playing the
+/// fleet's programme rather than a blend of two.
+///
+/// With no announcement at all this keeps what is there and reports the
+/// shortfall, which is the going-independent path `[GDE-ECHO-500]` -- and it
+/// is the same code, not a mode.
+pub fn reconcile_queue(local: &[(i64, Origin)], announced: &[i64], depth: usize) -> QueuePlan {
+    if announced.is_empty() {
+        let kept: Vec<_> = local.to_vec();
+        let want = depth.saturating_sub(kept.len());
+        return QueuePlan { queue: kept, want_local: want, discarded_local: 0 };
+    }
+    let discarded = local.iter().filter(|(_, o)| *o == Origin::Local).count();
+    let queue: Vec<_> = announced.iter().map(|id| (*id, Origin::Announced)).collect();
+    let want = depth.saturating_sub(queue.len());
+    QueuePlan { queue, want_local: want, discarded_local: discarded }
+}
+
+/// What to do with what is sounding when the master's programme returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rejoin {
+    /// Let the current passage finish. The master's programme is taken up at
+    /// its natural end, or at a Skip `[REQ-AUD-162]`.
+    ///
+    /// Cutting a passage short to rejoin would make reconnection audible for
+    /// no benefit: the node was never playing anything *wrong*, only something
+    /// different `[GDE-ECHO-510]`.
+    PlayOut,
+    /// Nothing is sounding, so join the master's passage **mid-passage**, at
+    /// the offset it has already reached.
+    ///
+    /// This is the capability `[GDE-ECHO-330]` deferred; the rejoin case
+    /// promotes it from optional to required, because by the time a node
+    /// rejoins the master is always part-way through something.
+    JoinMidPassage { passage_id: i64, at_ms: u64 },
+}
+
+/// Decide between playing out and joining, given what is sounding here and
+/// where the master is.
+pub fn rejoin_action(sounding: Option<i64>, master: Option<&AirPosition>) -> Option<Rejoin> {
+    let m = master?;
+    match sounding {
+        // Already on the master's passage: nothing to rejoin to.
+        Some(id) if id == m.passage_id => None,
+        Some(_) => Some(Rejoin::PlayOut),
+        None => Some(Rejoin::JoinMidPassage { passage_id: m.passage_id, at_ms: m.position_ms }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +709,83 @@ mod tests {
         let mut f = follower(VAINOPI);
         f.basis.establish();
         assert_eq!(f.trim_for(&st, Some(&local), 100 * SEC), Some(Trim::DuplicateFrame));
+    }
+
+    use Origin::{Announced, Local};
+
+    #[test]
+    fn silence_tops_the_queue_up_rather_than_letting_it_drain() {
+        // `[GDE-ECHO-500]`: no timeout, no threshold. The queue simply never
+        // runs dry, so there is no moment of decision.
+        let local = vec![(1, Announced), (2, Announced)];
+        let p = reconcile_queue(&local, &[], 5);
+        assert_eq!(p.queue, local, "nothing announced, nothing replaced");
+        assert_eq!(p.want_local, 3, "the Director owes three to reach depth");
+        assert_eq!(p.discarded_local, 0);
+    }
+
+    #[test]
+    fn a_node_out_of_contact_ends_up_entirely_local_without_a_cliff() {
+        // Five announced passages is roughly twenty minutes of runway. Drain
+        // them one at a time and the queue refills locally behind -- the
+        // changeover is a blend rather than an event.
+        let mut q: Vec<(i64, Origin)> = (1..=5).map(|i| (i, Announced)).collect();
+        for step in 0..5 {
+            q.remove(0); // a passage completes
+            let p = reconcile_queue(&q, &[], 5);
+            assert_eq!(p.want_local, 1, "exactly one selection per completion");
+            q = p.queue;
+            q.push((100 + step, Local));
+            assert_eq!(q.len(), 5, "never below depth");
+        }
+        assert!(q.iter().all(|(_, o)| *o == Local), "fully independent, gradually");
+    }
+
+    #[test]
+    fn announcements_win_and_gap_fillers_are_discarded() {
+        // `[GDE-ECHO-510]`: the master's queue takes precedence immediately.
+        let local = vec![(90, Announced), (101, Local), (102, Local)];
+        let p = reconcile_queue(&local, &[7, 8, 9, 10, 11], 5);
+        assert_eq!(p.queue.len(), 5);
+        assert!(p.queue.iter().all(|(_, o)| *o == Announced));
+        assert_eq!(p.queue[0].0, 7, "in the master's order");
+        assert_eq!(p.discarded_local, 2, "both gap-fillers dropped");
+        assert_eq!(p.want_local, 0);
+    }
+
+    #[test]
+    fn a_short_announcement_is_topped_up_behind_rather_than_padded_with_locals() {
+        // Discarding entries that are about to be re-chosen looks wasteful and
+        // is the specified behaviour: a rejoining node plays the fleet's
+        // programme, not a blend of two.
+        let local = vec![(101, Local), (102, Local)];
+        let p = reconcile_queue(&local, &[7, 8], 5);
+        assert_eq!(p.queue, vec![(7, Announced), (8, Announced)]);
+        assert_eq!(p.discarded_local, 2);
+        assert_eq!(p.want_local, 3, "fresh selections, behind the announced");
+    }
+
+    #[test]
+    fn rejoining_never_cuts_the_passage_in_progress_short() {
+        // The node was never playing anything wrong, only something different.
+        let master = AirPosition { passage_id: 42, position_ms: 95_000, at: 0 };
+        assert_eq!(rejoin_action(Some(7), Some(&master)), Some(Rejoin::PlayOut));
+    }
+
+    #[test]
+    fn with_nothing_sounding_it_joins_mid_passage_not_at_the_start() {
+        // `[GDE-ECHO-330]` deferred mid-passage joining; the rejoin case makes
+        // it required, because the master is always part-way through by then.
+        let master = AirPosition { passage_id: 42, position_ms: 95_000, at: 0 };
+        assert_eq!(rejoin_action(None, Some(&master)),
+                   Some(Rejoin::JoinMidPassage { passage_id: 42, at_ms: 95_000 }));
+    }
+
+    #[test]
+    fn a_node_already_on_the_masters_passage_has_nothing_to_rejoin() {
+        let master = AirPosition { passage_id: 42, position_ms: 95_000, at: 0 };
+        assert_eq!(rejoin_action(Some(42), Some(&master)), None);
+        assert_eq!(rejoin_action(Some(7), None), None, "and no master, no action");
     }
 
     #[test]
