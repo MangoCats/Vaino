@@ -62,28 +62,30 @@ SURFACES = [
               "player/examples/*.rs", "player/build.rs"],
      r"vaino[-_]player|vaino_player",
      "library crate path; the build fails until every use site moves"),
-    ("env", ["player/src/**/*.rs", "player/build.rs", "build/*.sh",
-             "VainoPi/*.sh", "BosePi/*.sh"],
+    ("env", ["player/src/**/*.rs", "player/build.rs", "build/!doc",
+             "VainoPi/!doc", "BosePi/!doc"],
      # Case-sensitive deliberately: a bare VAINO_[A-Z_]+ under IGNORECASE also
      # matches `vaino_player`, which double-counts the `code` surface. Found by
      # running this script against the tree it was written for.
      r"(?-i:VAINO_[A-Z_]+)",
      "VAINO_NULL_OUTPUT and friends read via env::var().is_ok() -- a half "
      "rename does not error, it silently takes the real-audio path"),
-    ("bin", ["build/*.sh", "BosePi/*.sh", "VainoPi/*.sh", "BosePi/*.service"],
+    ("bin", ["build/!doc", "BosePi/!doc", "VainoPi/!doc"],
      r"/usr/local/bin/vaino[a-z-]*",
      "the installed executables, main and the thirteen vaino-* helpers"),
-    ("units", ["BosePi/*.service", "VainoPi/*.service"],
+    # Only BosePi/ ships unit files; vainopi's unit is documented inline in
+    # IMPL001 rather than committed. Listing a VainoPi/*.service glob made the
+    # surface report BROKEN for a directory that never had one.
+    ("units", ["BosePi/*.service"],
      r"vaino",
      "systemd units; an old enabled unit contends for the audio device"),
-    ("runtime", ["build/*.sh", "BosePi/*.sh", "VainoPi/*.sh",
-                 "BosePi/*.service"],
+    ("runtime", ["build/!doc", "BosePi/!doc", "VainoPi/!doc"],
      r"/var/vaino|/srv/library/vaino",
      "data directories on live appliances -- a migration, not an edit"),
-    ("hosts", ["build/*.sh", "BosePi/*.sh", "VainoPi/*.sh"],
+    ("hosts", ["build/!doc", "BosePi/!doc", "VainoPi/!doc"],
      r"vainopi|vainoplayer3",
      "deploy targets; these are renamed per machine, never atomically"),
-    ("scripts", ["build/*.sh", "BosePi/*.sh", "VainoPi/*.sh"],
+    ("scripts", ["build/!doc", "BosePi/!doc", "VainoPi/!doc"],
      r"vaino", "everything the scripts say and do"),
     ("pytools", ["tools/*.py"], r"vaino|VainoPi",
      "check_docs.py's PATH_PREFIXES above all -- see [IMPL-NAM-060]"),
@@ -112,16 +114,45 @@ SURFACES = [
 
 
 def tracked_files(patterns):
-    out = []
+    """Expand globs. A pattern ending in `/!doc` means every non-Markdown file
+    under that directory, at any depth.
+
+    That form exists because extension globs have a blind spot this script fell
+    into: `VainoPi/*.sh` matches none of the fourteen extensionless helper
+    executables (`vaino-preflight`, `vaino-db-recover`, ...), so `bin`,
+    `scripts` and `units` all reported clean while those files were untouched.
+    Found by rehearsing the rename against a throwaway copy -- the audit's own
+    version of the `check_docs.py` PATH_PREFIXES failure `[IMPL-NAM-060]`.
+
+    It is deliberately keyed to the directory and not to the name: a glob like
+    `VainoPi/vaino-*` would stop matching the moment the rename it is auditing
+    succeeds, which is the same trap as `[IMPL-NAM-045]`'s .gitattributes rule.
+    """
+    out, empty = [], []
     for pat in patterns:
-        out.extend(glob.glob(pat, recursive=True))
-    return sorted({p.replace("\\", "/") for p in out if os.path.isfile(p)})
+        before = len(out)
+        if pat.endswith("/!doc"):
+            d = pat[:-len("/!doc")]
+            found = glob.glob(f"{d}/**/*", recursive=True)
+            out.extend(p for p in found if not p.endswith(".md"))
+        else:
+            out.extend(glob.glob(pat, recursive=True))
+        if len(out) == before:
+            empty.append(pat)
+    # Per-glob, not per-surface. A surface with several globs would otherwise
+    # look healthy while one of them silently matched nothing -- which is what
+    # happened when `VainoPi/` became `LempiPi/` and `BosePi/` kept the surface
+    # non-empty. Any glob naming a directory the rename moves must move with it,
+    # in the same commit, exactly as `[IMPL-NAM-060]` requires of check_docs.py.
+    return sorted({p.replace("\\", "/") for p in out if os.path.isfile(p)}), empty
 
 
 def scan(name, patterns, pattern, verbose):
     """Return (count, files_hit, broken). broken=True means nothing to scan."""
-    files = tracked_files(patterns)
-    if not files:
+    files, empty_globs = tracked_files(patterns)
+    if not files or empty_globs:
+        if empty_globs:
+            print(f"BROKEN {name:9} glob(s) matched nothing: {', '.join(empty_globs)}")
         return 0, [], True
     rx = re.compile(pattern, re.IGNORECASE)
     count, hits = 0, []
@@ -184,8 +215,8 @@ def main():
         results[name] = count
         if is_broken:
             broken.append(name)
-            print(f"BROKEN {name:9} matched no files at all -- this surface is "
-                  f"NOT being checked. Fix the globs before trusting any run.")
+            print(f"       {name:9} is NOT being checked. Fix the globs before "
+                  f"trusting any run.")
             continue
         print(f"{count:6}  {name:9} {consequence}")
         if hits and args.verbose:

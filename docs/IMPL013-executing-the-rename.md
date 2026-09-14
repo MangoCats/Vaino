@@ -18,8 +18,9 @@ long rather than a checklist.
 
 ## 1. What a text search does not show
 
-**`[IMPL-NAM-010]` Sixteen surfaces, measured 2026-09-13.** `[GDE-NAM-030]`
-counted 3,360 string occurrences. That number is a workload estimate, not a work
+**`[IMPL-NAM-010]` Sixteen surfaces, re-measured 2026-09-13 after the rehearsal
+`[IMPL-NAM-079]` corrected the audit's extensionless blind spot.**
+`[GDE-NAM-030]` counted 3,360 string occurrences. That number is a workload estimate, not a work
 plan: what matters is which *kind* of thing breaks, because each kind fails
 differently and is gated differently.
 
@@ -27,12 +28,12 @@ differently and is gated differently.
 | :--- | ---: | :--- |
 | `cargo` | 3 | Package `vaino-player`, binary `vaino` — every `ExecStart` downstream |
 | `code` | 101 | The `vaino_player::` library path; build fails until every use site moves |
-| `env` | 51 | **23 distinct `VAINO_*` variables** — see `[IMPL-NAM-040]` |
-| `bin` | 35 | `/usr/local/bin/vaino` and thirteen `vaino-*` helpers |
+| `env` | 103 | **23 distinct `VAINO_*` variables** — see `[IMPL-NAM-040]` |
+| `bin` | 43 | `/usr/local/bin/vaino` and thirteen `vaino-*` helpers |
 | `units` | 18 | systemd units; a stale enabled unit contends for the audio device |
-| `runtime` | 39 | `/var/vaino/`, `/srv/library/vaino*` — live data, a migration |
-| `hosts` | 27 | `vainopi`, `vainoplayer3` — renamed per machine, never atomically |
-| `scripts` | 397 | Superset of the four above |
+| `runtime` | 84 | `/var/vaino/`, `/srv/library/vaino*` — live data, a migration |
+| `hosts` | 64 | `vainopi`, `vainoplayer3` — renamed per machine, never atomically |
+| `scripts` | 890 | Superset of the four above |
 | `pytools` | 893 | Including `check_docs.py`'s own `PATH_PREFIXES` — see `[IMPL-NAM-060]` |
 | `pymod` | 262 | `vaino_db` / `vaino_control` and their 47 import sites `[IMPL-NAM-047]` |
 | `vcs` | 10 | `.gitattributes` line-ending rule, `.gitignore` `[IMPL-NAM-045]` |
@@ -190,16 +191,11 @@ to change, and fails if the number differs.** `sed -i`, `perl -pi -e` and
 Python's `str.replace` share one defect: **a pattern that matches nothing is not
 an error to them.** They exit 0, change the file not at all, and report nothing.
 
-This is not hypothetical — it happened while these documents were being written.
-A scripted edit searched for a line that an earlier edit had re-wrapped, matched
-nothing, and passed silently; the change was only found on a later read. Across
-4,528 occurrences applied by scripted edits, a no-op that reports success is the
-most likely way this rename half-happens.
-
-The expected count is **exact, not a minimum**. A partial match is the common
-case: a pattern that should hit thirty lines and hits three, because the rest
-wrapped differently or use another case or a variant spelling, is a half-finished
-rename that "at least one" reports as a success.
+Not hypothetical: a scripted edit while writing these documents searched for a
+line an earlier edit had re-wrapped, matched nothing, and passed silently. The
+count is **exact, not a minimum** — a pattern that should hit thirty lines and
+hits three, because the rest wrapped differently or use another case, is a
+half-finished rename that "at least one" reports as success.
 
 [tools/rename_edit.py](../tools/rename_edit.py) makes the count part of the
 command and refuses to write on a mismatch; it dry-runs by default, treats an
@@ -209,6 +205,31 @@ after writing that none survive, and preserves exact line endings so a rewrite
 cannot undo `[IMPL-NAM-045]`'s LF rule. `check_rename.py`'s surface counts are
 the coarse proof that a phase finished; this is the fine one that says which edit
 did not.
+
+**`[IMPL-NAM-079]` Rehearse the whole rename on a throwaway copy first.**
+`git archive HEAD | tar -x -C <tmp>` gives a complete tree to destroy. Apply the
+ordered substitutions and the path renames there, then run both checkers. The
+first rehearsal, 2026-09-13, applied 4,995 substitutions across 12 ordered
+patterns and renamed 36 paths, and found four defects that reading would not
+have:
+
+| Found | Consequence |
+| :--- | :--- |
+| The pass **rewrites the guards themselves** — `check_rename.py`'s own patterns became `lempi\|vipunen` | The audit inverts: it reports a successful rename as total failure and a failed one as clean. `ALLOW` excludes a file from being *scanned*, not from being *edited*; the mechanical pass needs its own never-rewrite list |
+| Extension globs missed **16 extensionless files** — all 14 `vaino-*` helper executables, plus `LICENSE`; also `.css`, `.conf`, `.log`, `.bat` | Files renamed, contents untouched. The file list comes from `git ls-files` filtered by content, **never** a guessed extension list |
+| `check_rename.py` had the same blind spot and reported `bin`/`scripts` clean while three helpers held 38 occurrences | Fixed: directory-scoped globs, and BROKEN is now **per-glob**, so one stale glob cannot hide behind a healthy sibling |
+| A blanket pass produced **189 `lempi.db`** | Violates `[IMPL-NAM-120]`. Database names are excluded from substitution and triaged **before** the blanket pass, not renamed by it |
+
+Two results worth keeping: the most-specific-first ordering is correct — `vaino`
+is a substring of `vainopi` and `vainoplayer3`, and all twelve patterns applied
+at exact counts — and **`check_docs.py --strict` passed with 0 errors** on the
+rehearsed tree, so the documentation graph survives the path renames intact when
+the checker moves with them `[IMPL-NAM-060]`.
+
+The rehearsal also confirmed the converse: pointed at the rehearsed tree, the
+fixed audit reports **8 surfaces BROKEN** because its globs still name
+`VainoPi/`. Any guard whose globs name a directory this rename moves must move in
+the same commit — `check_docs.py` and `check_rename.py` alike.
 
 **`[IMPL-NAM-115]` Phase 1 cannot close while `vainoplayer3` is unplugged.** It
 is physically disconnected, in the garage, and returns before this plan runs. Two
