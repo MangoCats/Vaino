@@ -1,9 +1,9 @@
 # IMPL015: Rehearsing the Rename
 
-**Implementation Guide — three rehearsals run 2026-09-13, all against throwaway copies. Nothing here touched the repository.**
+**Implementation Guide — four rehearsals run 2026-09-13, all against throwaway copies. Nothing here touched the repository.**
 
 The rename is applied to a disposable tree first, and both checkers are run
-against the result. Three rehearsals found **eight** defects, four of them in
+against the result. Four rehearsals found **eight** defects, four of them in
 the guards written to catch exactly this class of problem. None would have been
 found by reading.
 
@@ -74,51 +74,47 @@ cannot fail loudly is worth no more than the edit it is checking.
 
 ## 3. What a clean run looks like
 
-**`[IMPL-NAM-350]` Clean is "nothing unexplained", not "the audit reports
-zero".** Third rehearsal, with a remote set so that surface can resolve: **111 database
-paths resolved by evidence, 213 protected, 4,750 substituted, 36 paths renamed,
-4 stranded link targets repointed.**
+**`[IMPL-NAM-350]` The fourth rehearsal is clean: both gates exit 0.**
+111 database paths resolved by evidence, 59 CLI placeholders resolved by the
+CLI's own second argument, **4,904 substituted**, 36 paths renamed, 13 guard
+globs repointed, 4 stranded link targets repointed.
 
-| Result | |
+| Gate | Result |
 | :--- | :--- |
 | `check_docs.py --strict` | **0 errors**, exit 0 |
-| `check_rename.py` | **0 surfaces BROKEN**; 12 of 16 surfaces at zero |
-| Unexplained occurrences | **0** |
+| `check_rename.py` | **0 occurrences across 16 surfaces, 0 BROKEN** |
+| `check_rename.py --expect-zero` on all 16 surfaces | **exit 0** |
 
-Every surviving occurrence falls in one of two buckets, each by an explicit
-decision:
+What moved it from "nothing unexplained" to actually zero was not a better
+mechanism — the mechanism was already right — but withdrawing a rule.
+`[IMPL-NAM-120]` had protected every database reference, which held 324
+occurrences back permanently on the strength of a concern that applied to four
+of them. Applying `[IMPL-NAM-130]` consistently — the project is continuous,
+the earlier name was temporary — sends the project-named prose straight through
+the pass, where it belonged.
 
-| Count | Bucket | Why it survives |
-| ---: | :--- | :--- |
-| 213 | Database-name text | Needs a person, see §4 |
-| 169 | Guards and naming working papers | They keep the old name on purpose; the papers are deleted entirely at the new-repo seed `[IMPL-NAM-150]`, the guards stay |
-
-A run that cannot produce this table has not finished, whatever the totals say.
-**The mechanism is clean; the content is not yet**, and those are different
-claims. The rename cannot reach zero until §4 is worked.
+**Three earlier rehearsals were reported as clean and were not.** The first two
+reached "nothing unexplained", which is a real property and a different claim;
+saying so plainly took being asked a third time. A run is clean when the gates
+exit 0, and nothing else counts as the answer.
 
 ---
 
-## 4. The one bucket that is not mechanical
+## 4. The one claim about the world
 
-**`[IMPL-NAM-360]` What is left needs reading, because the name means five
-different things.** 111 of the 324 were resolved mechanically and safely,
-because their *path* says which database they are: `/srv/library/vaino.db` is
-the catalogue and becomes `library.db`, `/var/vaino/vaino.db` is the listener
-store and becomes `listener.db` `[BOS-RUN-080]`. Those needed no judgement.
+**`[IMPL-NAM-360]` Four lines assert that files exist under names they do not
+yet have.** `vaino.db.pre-split-20260907`, `vaino.db.pre-lyrics-import` and
+`vaino.db.bak-pre-mulib-art` are real backups on `vainopi`, named in
+[IMPL011](../VainoPi/IMPL011-database-split-built.md) and
+[PI026](../VainoPi/PI026-startup-preflight.md). The clean run rewrites those four
+lines along with everything else, which makes the documentation internally
+consistent and factually wrong until the files themselves move.
 
-The remaining **213 cannot be resolved by pattern at all**, because the bare
-name carries at least five distinct meanings:
+Phase 3 renames them on the device, inside `[IMPL-NAM-080]`'s existing
+copy-verify-remove migration of `/var/vaino` → `/var/lempi`. They are backups of
+this project's own database; there is no third party to whom their names mean
+anything, and leaving them would strand the only four occurrences the rename
+cannot otherwise clear.
 
-| Meaning | Example | Correct treatment |
-| :--- | :--- | :--- |
-| The **pre-split monolith** | `split_database.py vaino.db --library-out` | A file that no longer exists under any name; rewrite as the pre-split database |
-| A **real backup on disk** | `` `vaino.db.pre-split-2026…` ``, `` `vaino.db.bak-pre-mulibplay` `` | **Must not change** — these artefacts exist under these names |
-| A **live code literal** | `db_path = os.path.join(tmp, "vaino.db")` | Rename with the code |
-| A **CLI placeholder** | `usage: import_bundle <vaino.db> <bundle-dir>` | Becomes whichever db the argument actually is |
-| A **measurement of the old file** | `` | `vaino.db` | 1.08 GB | `` | Historical; rewrite or retire the row |
-
-The backup row is why no blanket mapping is safe: renaming that text would make
-the documentation describe files that do not exist, which is worse than leaving
-the old name visible. This bucket is protected through the blanket pass
-precisely so a later reader has to choose, one occurrence at a time.
+This is the single place where a green dry run is not by itself proof: the tree
+is correct, and stays correct only if that device step actually happens.

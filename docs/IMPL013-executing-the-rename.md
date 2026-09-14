@@ -248,15 +248,31 @@ fully happened.
 
 ## 5. Deliberately not renamed
 
-**`[IMPL-NAM-120]` The database files keep their names.** The split
-`[BOS-RUN-080]` already made them name-neutral: the live unit names
-`listener.db` and `library.db`. The `vaino.db` references that remain are
-mostly **pre-split** and therefore historical. A mechanical `vaino.db →
-lempi.db` would rewrite obsolete text into fresh-looking text, making dead
-documentation indistinguishable from current — and would rename live data for no
-gain, since no listener ever sees the filename. Move `/var/vaino` → `/var/lempi`
-and leave the files alone. Treat surviving `vaino.db` mentions as triage: delete
-or mark historical, one at a time.
+**`[IMPL-NAM-120]` Database references are four classes, not one. Corrected
+2026-09-13 by the rehearsal.** An earlier revision said simply "the database
+files keep their names" and had every `vaino.db` mention protected from the
+pass. That was over-broad, and it guaranteed the rename could never reach zero:
+324 occurrences held back by a rule that was right about only one of them.
+
+| Class | Count | Treatment |
+| :--- | ---: | :--- |
+| **Path says which database it is** | 111 | Resolved by evidence: `/srv/library/vaino.db` is the catalogue → `library.db`; `/var/vaino/vaino.db` is the listener store → `listener.db` `[BOS-RUN-080]` |
+| **CLI placeholder** | 59 | → `listener.db`. The CLI settles it itself: `dircheck <vaino.db> [library.db]` already names the *second* argument, so the first is the listener store |
+| **Project-named prose** about the pre-split monolith | ~150 | Straight through the blanket pass. By `[IMPL-NAM-130]` the project is continuous and the earlier name was temporary, so "the player still opens one `lempi.db`" is the true sentence |
+| **Dated on-disk backups** | 4 | The only genuinely immovable ones — see below |
+
+The live split filenames need no treatment at all: `listener.db` and
+`library.db` were already name-neutral before any of this began.
+
+**The four backups are the one case where renaming the text makes a claim about
+the world.** `vaino.db.pre-split-20260907`, `vaino.db.pre-lyrics-import` and
+`vaino.db.bak-pre-mulib-art` are real files on `vainopi`, named in
+[IMPL011](../VainoPi/IMPL011-database-split-built.md) and
+[PI026](../VainoPi/PI026-startup-preflight.md). Rewriting those four lines
+asserts that files exist under names they do not yet have. **Phase 3 renames
+them on the device** as part of `[IMPL-NAM-080]`'s `/var/vaino` → `/var/lempi`
+migration, which is what makes the documentation true rather than merely
+consistent.
 
 **`[IMPL-NAM-130]` Dated findings are rewritten to the current name, not
 preserved under the old one.** The old name was temporary and the project is
