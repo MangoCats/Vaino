@@ -649,15 +649,31 @@ impl Engine {
         if r.clock.timestamps() != crate::output::Timestamps::Hardware {
             return None;
         }
-        let l = self.live.first()?;
+        // `shown`, not `live.first()`. They differ for a whole ring's depth
+        // after every admission, and during that window `live.first()` is a
+        // passage nobody can hear yet -- `[REQ-AUD-164]` is explicit that a
+        // passage becomes current when its first sample LEAVES the ring.
+        //
+        // Observed on `bose` before this was fixed: an anchor naming passage
+        // 7830 at position 0, taken fourteen seconds before that passage's own
+        // schedule said it would sound. An echo node would have declined to
+        // act on it -- the follower refuses to compare across passages -- so
+        // the fault was safe, silent, and wrong.
+        //
+        // `shown` also outlives `live`, which is the other half of being
+        // right: a passage stays audible for a ring's depth after the mixer
+        // has finished with it.
+        let (entry, audible_ms) = self.shown.as_ref()?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_nanos() as u64;
         Some(crate::echo::air_position(
-            l.entry.passage_id,
-            self.played_ms(l),
-            self.out_buffered_frames() as u64,
+            entry.passage_id,
+            // Already ring-subtracted, so there is no ring left to remove --
+            // only the device's own delay stands between this and the air.
+            *audible_ms,
+            0,
             r.clock.delay_frames(),
             r.sample_rate(),
             now,
