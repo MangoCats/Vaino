@@ -80,7 +80,33 @@ The same applies to checks: a guard that cannot run must say so loudly, not
 report a plausible reason it was skipped. One written here did exactly that
 and went unnoticed through a full fleet deploy.
 
-## 6. Several agents may be working here at once
+## 6. An empty result with a zero status is not success
+
+**Check what a command actually did, not what its exit code says** — and be
+especially suspicious when the output is empty. This cost time three times in
+one session, in three disguises:
+
+- a cross-compile reported exit 0 and built nothing, because Docker was not
+  running and the output went through `grep`, so the status was grep's
+- a settle curve read `0 underruns, 0 recoveries` for five minutes on an audio
+  stream that had **never opened** — a stream that does not exist cannot
+  underrun `[GDE-ECHO-547]`
+- a database-split rehearsal printed nothing and exited 0 through `| tail`,
+  while Python had exited 1 on a full disk `[IMPL-VP3-120]`
+
+Two habits fix all three. **Do not pipe a command through `grep`/`tail` and
+then read `$?`** — that is the filter's status, not the command's. For anything
+long-running, redirect to a file and append an explicit marker:
+
+```
+sh -c 'thing > /tmp/out.log 2>&1; echo EXIT=$? >> /tmp/out.log'
+```
+
+And **verify the thing itself, not a proxy for it**: that the PCM is open and
+its `hw_ptr` advancing, that the binary's timestamp moved, that the output file
+exists. "No errors" and "it worked" are different claims.
+
+## 7. Several agents may be working here at once
 
 **Never `git add -A` or `git commit -a`. Stage the paths you actually
 changed.** Another agent's in-progress work lives in the same working tree,

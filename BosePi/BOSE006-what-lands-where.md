@@ -12,6 +12,26 @@ Split from [BOSE002](BOSE002-image-build.md) on 2026-09-10, which had reached
 
 > **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §1-2 and §4 in [BOSE002](BOSE002-image-build.md), §3 in [BOSE006](BOSE006-what-lands-where.md).
 
+## 2a. The four bind mounts, which are not optional
+
+**`[BOS-LAND-060]` A read-only root needs four directories bound from the
+state partition, and until 2026-09-15 that was recorded only in `bose`'s live
+`fstab`.**
+
+    /var/vaino/log            /var/log
+    /var/vaino/etc-ssh        /etc/ssh
+    /var/vaino/home-pi        /home/pi
+    /var/vaino/nm-connections /etc/NetworkManager/system-connections
+
+Without them logs vanish at every boot and NetworkManager can never save a
+change -- and that last path is exactly what stranded this machine in
+`[IMPL-BOS-175]`. They total about 1.3 MB to seed.
+
+Written down because a plan to give another node this same shape compared the
+*partition tables*, found them identical, and concluded the conversion was "a
+package and a kernel parameter" `[IMPL-VP3-160]`. The tables were identical.
+The fstab was not, and nothing outside the machine said so.
+
 ## 3. What lands where
 
 **A — system, read-only.** Kernel, Bookworm Lite, `vaino` binary and unit,

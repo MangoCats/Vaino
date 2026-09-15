@@ -160,6 +160,14 @@ through a pipe: the first attempt printed nothing and exited 0, because the
 status came from `tail` rather than from Python. Run it to a log with an
 explicit `EXIT=` marker.
 
+**`[IMPL-VP3-140]` A source still being written reads as a short copy, and
+sends you hunting the wrong fault.** Rehearsing against the live database gave
+`listener_play_history has 37974 rows, source has 37975` -- accurate, and it
+looks like the copy lost a row. The cause was the player appending a play
+mid-run. Same numbers, opposite remedy: stop the writer, do not distrust the
+tool. `split_database.py` now counts the source before and after and says so,
+which is what the code comments citing this tag refer to.
+
 **`[IMPL-VP3-130]` `[BOS-RUN-060]` never exercises the split tool's own
 rehearsal, and should say so.** Its command is
 

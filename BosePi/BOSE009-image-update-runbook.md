@@ -145,6 +145,16 @@ databases.
 5. `systemctl start vaino`, then **hear it play** before calling it done,
    which is `[IMPL-BOS-120]`'s own rule and not a new one.
 
+**`[BOS-RUN-070]` Step 2 above never exercises the split tool's own
+rehearsal, and did not on `bose`.** `--check` belongs to
+`attended-import.sh` and dry-runs the *mount window*; `--commit` is present in
+both passes, and `--commit` writes straight to the real destinations without
+ever touching a temp directory. So `split_database.py`'s rehearsal mode went
+unrun here. Rehearsing it on `lempiplay3` afterwards found two real faults
+first time out -- see `[IMPL-VP3-120]` and `[IMPL-VP3-140]` in
+[IMPL016](../docs/IMPL016-converting-vainoplayer3.md). Run the rehearsal
+without `--commit` before the real pass on any future node.
+
 **`[BOS-RUN-065]` A power cut mid-split is survivable at every point**,
 which is worth stating on a machine that is switched off by having its power
 removed. Before step 4 the unit still names `vaino.db`, which
