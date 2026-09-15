@@ -182,8 +182,78 @@ def test_a_missing_optional_table_is_skipped_not_an_error():
         os.unlink(src)
 
 
+def test_a_source_that_changes_mid_run_is_named_rather_than_blamed_on_the_copy():
+    """The live-write race, which cost a real rehearsal a false diagnosis.
+
+    A player still appending plays makes the copy one row short of the
+    source, and the old message -- "listener_play_history has 37974 rows,
+    source has 37975" -- reads like the copy lost one and sends whoever sees
+    it hunting for corruption. Same numbers, opposite remedy: stop the
+    writer `[IMPL-VP3-140]`.
+
+    Simulated by counting the source, then appending to it before asking
+    whether it drifted -- which is exactly what a concurrent writer does.
+    """
+    src = source_db()
+    before = sd.table_counts(src)
+    conn = sqlite3.connect(src)
+    conn.execute("INSERT INTO listener_play_history VALUES (2, 'mb-1', 1700000001)")
+    conn.commit()
+    conn.close()
+
+    moved = sd.source_drift(src, before)
+    check(moved, "a source that gained a row must be reported as having drifted")
+    tables = {t for t, _, _ in moved}
+    check(tables == {"listener_play_history"},
+          f"only the table that changed should be named, got {sorted(tables)}")
+    for t, was, now in moved:
+        check(now == was + 1, f"{t}: expected {was}+1, reported {was} -> {now}")
+
+    # And a source that holds still must not be accused of moving.
+    steady = source_db()
+    check(sd.source_drift(steady, sd.table_counts(steady)) == [],
+          "an unchanged source must report no drift")
+    os.unlink(src)
+    os.unlink(steady)
+
+
+def test_the_rehearsal_workdir_lands_beside_each_output():
+    """Rehearsing in /tmp is what made a 1.17 GB split fail on a 452 MB tmpfs
+    while proving nothing `[IMPL-VP3-120]`. Beside the destination, the
+    rehearsal fits exactly when the real run would.
+    """
+    src = source_db()
+    lib, lis = out_paths()
+    lis_dir = tempfile.mkdtemp()          # a SEPARATE partition, in effect
+    lis = os.path.join(lis_dir, "listener.db")
+
+    seen = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def spy(*a, **kw):
+        seen.append(kw.get("dir"))
+        return real_mkdtemp(*a, **kw)
+
+    tempfile.mkdtemp = spy
+    old_argv = sys.argv
+    try:
+        sys.argv = ["split_database.py", src, "--library-out", lib, "--listener-out", lis]
+        rc = sd.main()
+    finally:
+        tempfile.mkdtemp = real_mkdtemp
+        sys.argv = old_argv
+    check(rc == 0, f"rehearsal should pass, returned {rc}")
+    check(os.path.dirname(os.path.abspath(lib)) in seen,
+          f"a workdir should sit beside the library output; dirs were {seen}")
+    check(os.path.dirname(os.path.abspath(lis)) in seen,
+          f"and another beside the listener output; dirs were {seen}")
+    os.unlink(src)
+
+
 def main() -> int:
     test_rehearsal_writes_neither_output_file()
+    test_a_source_that_changes_mid_run_is_named_rather_than_blamed_on_the_copy()
+    test_the_rehearsal_workdir_lands_beside_each_output()
     test_commit_produces_two_correct_files_and_leaves_the_source_alone()
     test_refuses_to_overwrite_an_existing_output_file()
     test_a_missing_optional_table_is_skipped_not_an_error()

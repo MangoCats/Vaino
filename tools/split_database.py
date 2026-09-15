@@ -143,6 +143,35 @@ def build_half(source_path: str, out_path: str, tables: list) -> dict:
     return counts
 
 
+def table_counts(source_path: str) -> dict:
+    """Row counts for every table this split touches, read-only.
+
+    Taken once before the copy and once after, so that a source which is
+    still being written can be *named* as such rather than showing up as a
+    short copy `[IMPL-VP3-140]`.
+    """
+    counts = {}
+    con = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    try:
+        for table in LIBRARY_TABLES + LISTENER_TABLES + BOTH:
+            if table_exists(con, table):
+                counts[table] = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    finally:
+        con.close()
+    return counts
+
+
+def source_drift(source_path: str, before: dict) -> list:
+    """Tables whose row count in the SOURCE moved while the copy ran.
+
+    Returns `(table, before, after)` triples; empty means the source held
+    still, which is the only condition under which a row-count comparison
+    against it means anything.
+    """
+    after = table_counts(source_path)
+    return [(t, n, after.get(t)) for t, n in before.items() if after.get(t) != n]
+
+
 def verify(source_path: str, library_path: str, listener_path: str) -> list:
     """Every check before anything is promoted `[IMPL002 §8]`: row counts
     match table-for-table, `PRAGMA integrity_check` passes on both new
@@ -202,11 +231,34 @@ def main() -> int:
             say("remove it first, or choose a different --library-out/--listener-out.")
             return 1
 
-    workdir = tempfile.mkdtemp(prefix="vaino-split-") if not args.commit else None
-    library_path = args.library_out if args.commit else os.path.join(workdir, "library.db")
-    listener_path = args.listener_out if args.commit else os.path.join(workdir, "listener.db")
+    # Rehearse ON THE DESTINATION, not in /tmp `[IMPL-VP3-120]`.
+    #
+    # The default `tempfile` location is often a small tmpfs -- 452 MB on a
+    # Pi 3 with 905 MB of RAM -- and a full catalogue here is 1.17 GB, so the
+    # rehearsal died of a full disk having proved nothing. Putting each half's
+    # workdir beside its OWN destination fixes that and buys a check this tool
+    # did not previously make: the rehearsal now fits exactly when the real
+    # run would fit, so it pre-flights the destination's free space instead of
+    # some unrelated partition's.
+    #
+    # It matters that the two halves are taken separately. They routinely land
+    # on different partitions -- the catalogue on a large one, the listener
+    # store on a small state partition -- and a single shared workdir would
+    # test whichever it happened to sit on.
+    workdirs = []
+    if args.commit:
+        library_path, listener_path = args.library_out, args.listener_out
+    else:
+        def beside(out: str, name: str) -> str:
+            d = tempfile.mkdtemp(prefix=".split-rehearsal-",
+                                 dir=os.path.dirname(os.path.abspath(out)) or ".")
+            workdirs.append(d)
+            return os.path.join(d, name)
+        library_path = beside(args.library_out, "library.db")
+        listener_path = beside(args.listener_out, "listener.db")
 
     try:
+        source_before = table_counts(args.source)
         say(f"{'writing' if args.commit else 'rehearsing (no files written outside a temp dir)'}:")
         say(f"  library.db ({len(LIBRARY_TABLES) + len(BOTH)} tables) <- {args.source}")
         lib_counts = build_half(args.source, library_path, LIBRARY_TABLES + BOTH)
@@ -214,6 +266,22 @@ def main() -> int:
         listener_counts = build_half(args.source, listener_path, LISTENER_TABLES + BOTH)
 
         say("verifying...")
+        # Did the SOURCE move while we were reading it? `[IMPL-VP3-140]`
+        #
+        # Without this the answer comes back as "listener_play_history has
+        # 37974 rows, source has 37975", which reads like the copy lost one --
+        # and sends whoever sees it looking for corruption. The true cause is
+        # that a player was still running and appended a play mid-copy. Same
+        # numbers, opposite remedy: stop the writer, do not distrust the tool.
+        moved = {t: (n, m) for t, n, m in source_drift(args.source, source_before)}
+        if moved:
+            say("THE SOURCE CHANGED WHILE IT WAS BEING READ -- this run proves nothing:")
+            for t, (before, after) in moved.items():
+                say(f"  - {t}: {before} rows when this started, {after} now")
+            say("something is still writing to the source. Stop it and run again;")
+            say("for an appliance that is `systemctl stop vaino`.")
+            return 1
+
         problems = verify(args.source, library_path, listener_path)
         if problems:
             say("PROBLEMS FOUND -- nothing should be trusted from this run:")
@@ -236,8 +304,8 @@ def main() -> int:
             say("rehearsal only -- re-run with --commit to write the real files.")
         return 0
     finally:
-        if workdir:
-            shutil.rmtree(workdir, ignore_errors=True)
+        for d in workdirs:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
