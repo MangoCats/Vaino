@@ -144,6 +144,40 @@ against and **no conclusion is drawn here**. It is recorded because the two
 numbers differ by more than three times and somebody should find out which one
 describes the node, not because it is yet a regression.
 
+## 4c. Step 2 rehearsals, 2026-09-15
+
+**`[IMPL-VP3-120]` The rehearsal will not run in `/tmp` on this node, and
+failing to notice would have meant never rehearsing at all.** `/tmp` here is a
+**452 MB tmpfs** on a Pi 3 with 905 MB of RAM; `vaino.db` is **1.18 GB**.
+`split_database.py` puts its work directory wherever `tempfile.mkdtemp()`
+points, so the first attempt died with `sqlite3.OperationalError: database or
+disk is full` after filling RAM.
+
+The fix is one environment variable — `TMPDIR=/srv/library/.split-tmp`, on the
+partition with 56 GB free. The finding is not the fix. It is that **a rehearsal
+which cannot run looks exactly like one that passed** if its output is read
+through a pipe: the first attempt printed nothing and exited 0, because the
+status came from `tail` rather than from Python. Run it to a log with an
+explicit `EXIT=` marker.
+
+**`[IMPL-VP3-130]` `[BOS-RUN-060]` never exercises the split tool's own
+rehearsal, and should say so.** Its command is
+
+```
+attended-import.sh --check -- ssh pi@bose "... split_database.py ... --commit"
+```
+
+where `--check` dry-runs `attended-import.sh`'s **mount window**, not the
+split — and `--commit` is present in both passes. `--commit` writes straight
+to the real destinations and never touches a temp directory, so
+`split_database.py`'s rehearsal mode has most likely never been run against a
+full-size database on any node in this fleet. `bose`'s own `/tmp` is 923 MB,
+which would also have failed.
+
+That is not an argument against the bose runbook, which worked. It is an
+argument for rehearsing here **before** `--commit` rather than after, since
+this is the first node where the rehearsal has been tried at all.
+
 ## 5. The traps, all of them already paid for once
 
 **`[IMPL-VP3-050]` Record `cmdline.txt` verbatim before touching it.**
