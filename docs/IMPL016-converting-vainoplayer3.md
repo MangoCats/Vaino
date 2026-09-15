@@ -85,6 +85,36 @@ Step 4 is last because after it they are not ordinary at all.
 Step 1 is also worth doing **immediately and on its own**: it is what
 `[IMPL-NAM-115]` has been waiting for, and it is reversible.
 
+## 4a. Step 3 done early, deliberately and alone, 2026-09-15
+
+**`[IMPL-VP3-045]` The hostname was changed on its own, ahead of steps 1 and
+2, and nothing else from [IMPL013](IMPL013-executing-the-rename.md) went with
+it.** Directed rather than discovered: the larger rename waits for the echo
+work to reach a stopping point, and this one change was wanted now.
+
+| | |
+| :--- | :--- |
+| changed | `/etc/hostname`, and the `127.0.1.1` line of `/etc/hosts` |
+| backups | `/etc/hostname.pre-rename`, `/etc/hosts.pre-rename`, on the device |
+| **not** changed | `/var/vaino`, the database filenames, the folder layouts, the unit names, and every line of prose — all still `[IMPL013]`'s |
+| router name | `vp3-wifi` → `lp3-wifi` at the next re-lease; until then use **192.168.67.27** |
+| verified | `hostname` and `hostnamectl --static` agree; `vaino` and `fbui` both active; PCM `RUNNING` with `hw_ptr` advancing at ~44.1 kHz |
+| **not** verified | **the screen** — `[IMPL-VP3-090]` says only a person present can confirm that, and nobody has |
+
+**Nothing in the repository broke, because nothing executable referred to the
+old name.** All eleven occurrences are prose, source comments, or
+`[IMPL013]`'s own audit; no script in `build/` or `tools/` reaches that host by
+name. The rename was genuinely isolated, which is why it could be taken out of
+order safely.
+
+Taking it out of order costs nothing here: `[IMPL-VP3-040]`'s constraint is
+that root writes precede the overlay, and the root is still writable. Steps 1
+and 2 remain ahead of step 4 exactly as before.
+
+**For whoever runs [IMPL013](IMPL013-executing-the-rename.md): this host is
+already renamed.** Its hostname needs no pass, its `/var/vaino` still does, and
+`[IMPL-NAM-115]`'s blocker — that the machine was unplugged — has cleared.
+
 ## 5. The traps, all of them already paid for once
 
 **`[IMPL-VP3-050]` Record `cmdline.txt` verbatim before touching it.**
