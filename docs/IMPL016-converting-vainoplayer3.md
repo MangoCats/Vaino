@@ -115,6 +115,35 @@ and 2 remain ahead of step 4 exactly as before.
 already renamed.** Its hostname needs no pass, its `/var/vaino` still does, and
 `[IMPL-NAM-115]`'s blocker — that the machine was unplugged — has cleared.
 
+## 4b. Step 1 done, 2026-09-15
+
+**`[IMPL-VP3-046]` The current build is on, with the touchscreen intact, and
+this node needed none of the fixes the other two did.** Built `--features fbui`
+without `sampo-support`, both binaries; `build/install-player.sh` handles only
+the player, so `fbui` was installed beside it.
+
+| | |
+| :--- | :--- |
+| build | `e4eb18fddefd`, clean — replacing `a76715eb685d+dirty` |
+| period / buffer | **2048 / 4096, accepted** — no fallback line, so the pin was not refused |
+| format | `S16_LE`, unchanged; `pick_config` chose the same one the device already had |
+| audio | `pcm=RUNNING`, **0 underruns** across 80 s |
+| verdict | `ts=Hardware`, `delay=1804` |
+| screen | `480x320 framebuffer opened`, art decoded, **a render completed** |
+
+That last row is worth separating from "the service is active", which is all
+`[IMPL-VP3-045]` could claim. A completed render is evidence the display
+pipeline works end to end. It is still not evidence the **panel is lit** — a
+render to `/dev/fb0` succeeds with nothing attached — so `[IMPL-VP3-090]` is
+only partly discharged and a person still has to look.
+
+**`[IMPL-VP3-047]` One render at 66.8 ms against `[SPEC-FBUI-040]`'s measured
+20 ms, from a single cold sample that included a 245 ms art decode.** `fbui`
+logs only its first render, so there is no steady-state distribution to compare
+against and **no conclusion is drawn here**. It is recorded because the two
+numbers differ by more than three times and somebody should find out which one
+describes the node, not because it is yet a regression.
+
 ## 5. The traps, all of them already paid for once
 
 **`[IMPL-VP3-050]` Record `cmdline.txt` verbatim before touching it.**
@@ -134,7 +163,14 @@ deliberately do not, but do not arrive at it by accident.
 checksums the lower one; anything else needs `build/install-config.sh`. Five
 days of `bose` deploys were lost to this.
 
-**`[IMPL-VP3-080]` Ask whether `fbui` writes anything.** It draws to the
+**`[IMPL-VP3-080]` Answered 2026-09-15: `fbui`'s state is already on the
+partition that survives.** Its own startup line says so —
+`using existing calibration at /var/vaino/touch-calibration.toml` — which is
+the f2fs partition, not the root. The overlay will not take it away, and the
+question below is settled rather than outstanding.
+
+The original wording is kept because the reasoning still applies to anything
+else added later. **Ask whether `fbui` writes anything.** It draws to the
 framebuffer and reads a WebSocket, which needs no writable root — but this has
 not been checked, and a cache or state file would silently stop persisting the
 moment the overlay goes on. Check before step 4, not after.
