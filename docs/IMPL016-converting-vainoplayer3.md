@@ -178,6 +178,55 @@ That is not an argument against the bose runbook, which worked. It is an
 argument for rehearsing here **before** `--commit` rather than after, since
 this is the first node where the rehearsal has been tried at all.
 
+## 4d. Steps 2 and 4 done, 2026-09-15
+
+**`[IMPL-VP3-150]` The node is `bose`-shaped and playing.** Databases split,
+root on an overlay, everything that was preserved still works.
+
+| | |
+| :--- | :--- |
+| `library.db` | 1,066,520 rows, 1.17 GB, on `/srv/library` |
+| `listener.db` | 42,833 rows, 7.1 MB, on `/var/vaino` |
+| `vaino.db` | untouched, 1.18 GB — the rollback |
+| `/` | `overlay`, `lowerdir=/media/root-ro`, `upperdir` in tmpfs |
+| `/media/root-ro` | `ext4 ro` — the real root, now read-only |
+| verified playing | `hw_ptr` +266,365 frames in 6 s, ≈44.4 kHz |
+| screen | confirmed by eye: drawing, counter advancing, **touch responding** |
+
+**`[IMPL-VP3-160]` Section 1 was wrong that this is "a package and a kernel
+parameter", and the omission was the important half.** `bose`'s real `fstab`
+carries four bind mounts that make a read-only root *livable*:
+
+    /var/vaino/log            /var/log
+    /var/vaino/etc-ssh        /etc/ssh
+    /var/vaino/home-pi        /home/pi
+    /var/vaino/nm-connections /etc/NetworkManager/system-connections
+
+Without them logs vanish every boot and NetworkManager can never save a
+change — and that last path is precisely what stranded `bose` in
+`[IMPL-BOS-175]`. Only 1.3 MB had to move. The plan missed it because
+section 1 compared *partition tables*, which were identical, and stopped
+there.
+
+**`[IMPL-VP3-170]` It was done in two reboots, not one, and that is the part
+worth copying.** Binds first with the root still writable, so a mistake was
+fixable over ssh; the overlay only after that reboot proved clean. Each reboot
+tested exactly one change.
+
+Three faults were caught *before* a reboot could punish them, by testing the
+thing rather than trusting it:
+
+- `overlayroot`'s install regenerated a **Pi 5** initramfs in its visible
+  output. Both flavours were in fact rebuilt, and `lsinitramfs` confirmed
+  `scripts/init-bottom/overlayroot` inside the `v8` image this Pi actually
+  boots — but "the package is installed" is not "the boot will use it".
+- The binds were activated with `mount -a` and **`sshd` restarted from the
+  bound `/etc/ssh`** before rebooting. Had the host keys not copied, that is a
+  lockout discovered at boot instead of a reconnect test.
+- `/etc/overlayroot.conf` was written garbled by a `printf` quoting slip —
+  `overlayroot_cfgdisk="disabled"noverlayroot=""n` on one line — and read back
+  before, not after, the reboot that would have parsed it.
+
 ## 5. The traps, all of them already paid for once
 
 **`[IMPL-VP3-050]` Record `cmdline.txt` verbatim before touching it.**
