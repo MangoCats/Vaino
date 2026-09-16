@@ -78,24 +78,37 @@ evidence of a crash.** `ckpt_flags` is `0x44` — `CP_CRC_RECOVERY` plus
 flag, so `dump.f2fs` says this on every healthy live filesystem. Recorded
 because it looks alarming and will be found again by whoever next looks.
 
-## 2. Two prior events, and what they actually were
+## 2. Three events, and what they actually were
 
-**`[SD-RISK-050]` The fleet's one deliberate cut passed, and its one real-world
-failure was never corruption.** These are the only two data points that exist.
+**`[SD-RISK-050]` The fleet's deliberate cuts have passed, and its one
+real-world failure was never corruption.** These are the only data points that
+exist.
 
 - `bose`, 2026-09-10 `[BOS-PWR-010]`: one cut while playing. `quick_check` ok,
   page count identical, every row count moved up. f2fs rolled forward 13
   fsynced dnodes with `err = 0` `[BOS-PWR-020]`.
-- `vainopi`, 2026-09-08 `[PI3-FOUND-120]`: a power cut left a hot rollback
-  journal, the read-only attach could not roll it back, and `Restart=always`
-  turned that into a 23-restart crash loop. **Nothing was corrupted.** The
-  database was fine; the recovery was structurally impossible.
 
-That second one is fixed on both nodes, and the fix removes what was by far the
-largest term in the per-cut risk: `vaino.service` now runs `vaino-preflight`
-then `vaino-db-recover` as `ExecStartPre`, so every start performs the one
-read-write open SQLite needs. Both verified today. **A failure that used to be
-near-certain per cut is now near-zero.**
+**`[SD-RISK-160]` The first cut observed since this document existed landed
+where the document said the risk is, and passed.** `bose`, 2026-09-15: power
+removed while playing, off ten seconds, back on.
+
+`listener.db-wal` stood at **4,120,032 bytes** at the moment of the cut --
+within 2 kB of the 4 MB autocheckpoint `[SD-RISK-020]` measures, which is the
+only interval in which SQLite documents a WAL as corruptible. Clean on every
+axis: `vaino-db-recover` reported *"un-checkpointed WAL on
+/var/vaino/listener.db, replaying"*, `integrity_check` returned `ok` over
+40,964 rows, the kernel logged **zero** filesystem errors, and playback resumed
+on the same passage.
+
+It settles something checksums could not. `[IMPL-BOS-185]` cost five days of
+deploys that verified fine and vanished at reboot; after this cut the live
+**and** lower copies both still read `1aced9fe...`. The durable write survives a
+real power cut, not merely an `md5sum`.
+
+It corroborates nothing statistically. At `[SD-RISK-100]`'s ~1x10^-2 per-cut
+estimate a clean cut is the *expected* result, so one distinguishes no
+hypothesis. What it establishes is that the recovery path runs end to end on an
+unannounced cut rather than in principle.
 
 ## 3. The four layers, and which of them a filesystem can help with
 
