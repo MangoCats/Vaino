@@ -99,10 +99,63 @@ def report(label, pairs, rate):
               % (len(hourly), mean, sd, min(hourly), max(hourly)))
 
 
+def segment_clock(pairs, rate):
+    """Split `clock:` samples wherever the frame counter stopped being a clock.
+
+    `frames` counts frames the audio callback has produced, so it is only a
+    clock while one stream is open and running. Two things break that, and
+    both are silent in the numbers:
+
+    * a **device reopen** resets the counter to zero `[SPEC-APS-010]`, which
+      across a first/last endpoint looks like an enormous negative rate;
+    * a **pause** stops the counter while wall time keeps going, which looks
+      like the device running slow for exactly as long as nobody was listening.
+
+    Neither is a rate error and averaging through either invents one. So the
+    span is cut wherever the implied rate leaves a generous window around
+    nominal, and each surviving segment is reported on its own.
+    """
+    segs, cur = [], [pairs[0]]
+    for prev, cur_pt in zip(pairs, pairs[1:]):
+        dt = cur_pt[0] - prev[0]
+        df = cur_pt[1] - prev[1]
+        implied = (df / dt) if dt > 0 else -1.0
+        if df <= 0 or not (0.5 * rate < implied < 1.5 * rate):
+            segs.append(cur)
+            cur = []
+        cur.append(cur_pt)
+    segs.append(cur)
+    return [s for s in segs if len(s) >= 3]
+
+
 def main(argv):
     if not argv:
         print(__doc__)
         return 2
+    if argv[0] == "--clock":
+        # Clock-log-only mode: the player's own `clock:` lines are a better
+        # instrument than the external sampler -- the pair is stored inside one
+        # callback, so it carries none of the read skew `[LOG-FIX-070]` -- and
+        # on a long-running node the data already exists in the journal.
+        if len(argv) < 2:
+            print("usage: drift_analyze.py --clock <clock-log.txt> [rate]")
+            return 2
+        rate = int(argv[2]) if len(argv) > 2 else 44100
+        fc = read_clock_log(argv[1])
+        if len(fc) < 3:
+            print("%s: %d clock samples -- too few to fit" % (argv[1], len(fc)))
+            return 1
+        segs = segment_clock(fc, rate)
+        total = fc[-1][0] - fc[0][0]
+        kept = sum(s[-1][0] - s[0][0] for s in segs)
+        print("%s: %d clock samples over %.1f h, %d usable segment(s) covering %.1f h"
+              % (argv[1], len(fc), total / 3600, len(segs), kept / 3600))
+        if not segs:
+            print("  no segment survived: the counter never ran clean for 3 samples")
+            return 1
+        for k, seg in enumerate(segs):
+            report("frames vs at_nanos [%d/%d]" % (k + 1, len(segs)), seg, rate)
+        return 0
     rows = read_samples(argv[0])
     if not rows:
         print("no RUNNING samples in %s" % argv[0])
