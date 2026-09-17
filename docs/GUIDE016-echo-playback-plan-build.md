@@ -21,9 +21,15 @@ too late to act.
 **The schedule, forward-looking.** *Passage P, sample 0, will be heard at wall
 time T.* Emitted when the master admits P to the mixer — which by
 `[REQ-AUD-160]` and the ring's depth is roughly **15 s before anyone hears it**,
-against an A2DP buffer of at most a few hundred ms. That lead is what makes an
-arbitrary offset compensable, and it exists only because an echo node holds the
-file locally and knows the queue `[GDE-ECHO-420]`. Each node schedules its own
+against an A2DP buffer of at most a few hundred ms. That lead is measured at
+**15.046 s** and is the output ring at capacity plus the device delay
+`[LOG-ECHO-020]`; it exists only because an echo node holds the file locally and
+knows the queue `[GDE-ECHO-420]`. It buys tolerance of **network and scheduling
+lateness**, which spends ring depth a second per second — sixty-fold is right
+for that. It does *not* make an arbitrary offset compensable: in steady state a
+follower's ring is full of the previous passage, so offsets are absorbed by
+running the ring at different depths, and `depth <= capacity` requires the
+master to hold the fleet's smallest device delay `[LOG-ECHO-030]`. Each node schedules its own
 submission at `T − presentation_offset`.
 
 **The drift anchor, backward-looking.** *Sample N of P was heard at T*, repeated

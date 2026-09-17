@@ -109,6 +109,73 @@ pub fn submit_at(sched: &Schedule, node: NodeTiming, now: WallNanos) -> Option<W
     Some(submit)
 }
 
+/// Where sample 0 must sit in this node's output ring at admission.
+///
+/// **`submit_at` says *when* sample 0 must reach the device; it does not say
+/// how a node makes that happen, and the obvious reading is wrong.** Admitting
+/// the passage to the mixer at `submit_at` puts sample 0 at the *back* of a
+/// ring that is 15.0 s deep `[LOG-ECHO-020]`, so it would sound a full ring
+/// late. The knob is not when to admit -- it is how much audio sits ahead of
+/// sample 0 when it does.
+///
+/// In steady state admission is not a free choice anyway: the ring is full of
+/// the previous passage, and sample 0 goes in where that passage ends. Two
+/// nodes admitting at the same point in the same programme therefore differ in
+/// air time by exactly their device delays, permanently, and waiting cannot
+/// correct it because waiting only makes a node later. Running the ring at
+/// different depths can, which is feasible only because a ring fills at decode
+/// speed rather than in real time -- it drains in real time, it does not fill
+/// that way.
+///
+/// The consequence is a constraint on which node may be master
+/// `[LOG-ECHO-030]`: `depth <= capacity` forces the fleet's common
+/// submit-to-air total to be at most `capacity + min(device delay)`. A master
+/// running a full ring must therefore hold the fleet's *smallest* device delay,
+/// or run its own ring short by the difference. `bose` at 46 ms and `vainopi`
+/// at 355 ms `[LOG-CPAL-060]` satisfy this with `bose` as master and fail it
+/// reversed -- `bose` would need 15.309 s of depth against a 15.0 s ring.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Placement {
+    /// Admit with exactly this many frames ahead of sample 0 in the ring.
+    Depth(u64),
+    /// This node cannot be late enough: the master's submit-to-air distance
+    /// exceeds this node's ring plus its device delay. Reported rather than
+    /// clamped, because a clamped depth plays *early* on every passage and
+    /// looks like a working fleet with a drift problem.
+    TooShallow { short_by_frames: u64 },
+    /// The instant has passed -- the schedule arrived later than this node's
+    /// own device delay leaves room for.
+    Late { by: Duration },
+}
+
+pub fn placement(
+    sched: &Schedule,
+    node: NodeTiming,
+    ring_capacity_frames: u64,
+    now: WallNanos,
+) -> Placement {
+    let rate = node.rate.max(1) as u64;
+    let Some(ahead_ns) = sched.sound_at.checked_sub(now) else {
+        return Placement::Late { by: Duration::from_nanos(now - sched.sound_at) };
+    };
+    // Round to nearest, not down. `sound_at` was itself built from a frame
+    // count divided into nanoseconds, so truncating here loses whatever that
+    // division dropped -- and it loses it in one direction, making every node
+    // a frame or two shallow and therefore early. 23 us is inaudible; a
+    // systematic sign is still worth not having `[GOV-SRC-040]`.
+    let ahead_frames = (ahead_ns.saturating_mul(rate) + 500_000_000) / 1_000_000_000;
+    let Some(depth) = ahead_frames.checked_sub(node.presentation_offset_frames) else {
+        // The sound is nearer than this node's device delay: even a depth of
+        // zero is too late.
+        let short = node.presentation_offset_frames - ahead_frames;
+        return Placement::Late { by: frames_to_duration(short, node.rate) };
+    };
+    if depth > ring_capacity_frames {
+        return Placement::TooShallow { short_by_frames: depth - ring_capacity_frames };
+    }
+    Placement::Depth(depth)
+}
+
 /// How far this node is from the master, in nanoseconds, for the same sample.
 ///
 /// Positive means **this node is late** -- its audio reached the air after the
@@ -557,6 +624,60 @@ mod tests {
 
     // `[REQ-AUD-160]`'s ring is ~15 s at 44100.
     const RING: u64 = 44100 * 15;
+
+    /// The trap the type exists to stop: admitting at `submit_at` would put
+    /// sample 0 a full ring late. Depth, not admission time, is the knob.
+    #[test]
+    fn placement_is_a_depth_not_an_admission_time() {
+        let now = 100 * SEC;
+        // A master with `bose`'s pipeline: 15.0 s of ring plus 46 ms of device.
+        let s = schedule_for_admission(7, RING, BOSE.presentation_offset_frames, 44100, now);
+        // The follower is the same node shape, so it runs a full ring.
+        assert_eq!(placement(&s, BOSE, RING, now), Placement::Depth(RING));
+        // And `submit_at` is a *device* instant, one device delay before the
+        // sound -- not the moment to admit. The two differ by the whole ring.
+        let submit = submit_at(&s, BOSE, now).unwrap();
+        assert_eq!(submit - now, frames_to_duration(RING, 44100).as_nanos() as u64);
+    }
+
+    /// `[LOG-ECHO-030]`: a larger device delay is absorbed by running shallower.
+    #[test]
+    fn a_slower_device_runs_a_shallower_ring() {
+        let now = 100 * SEC;
+        let s = schedule_for_admission(7, RING, BOSE.presentation_offset_frames, 44100, now);
+        // vainopi's 355 ms of A2DP comes out of its ring, exactly.
+        let want = RING + BOSE.presentation_offset_frames - VAINOPI.presentation_offset_frames;
+        assert_eq!(placement(&s, VAINOPI, RING, now), Placement::Depth(want));
+        assert_eq!(RING - want, 13633, "vainopi runs 309 ms shallower than bose");
+    }
+
+    /// The reverse pairing is not a tight margin, it is unreachable -- and it
+    /// must say so rather than clamp to a full ring and play early forever.
+    #[test]
+    fn a_master_with_the_larger_delay_is_unreachable() {
+        let now = 100 * SEC;
+        let s = schedule_for_admission(7, RING, VAINOPI.presentation_offset_frames, 44100, now);
+        match placement(&s, BOSE, RING, now) {
+            Placement::TooShallow { short_by_frames } => {
+                assert_eq!(short_by_frames,
+                    VAINOPI.presentation_offset_frames - BOSE.presentation_offset_frames);
+            }
+            other => panic!("expected TooShallow, got {other:?}"),
+        }
+    }
+
+    /// Network lateness spends the ring, and there is ~15 s of it to spend --
+    /// which is the margin `[GDE-ECHO-310]` claims, correctly, once it is
+    /// measured against latency rather than against the offset.
+    #[test]
+    fn lateness_spends_depth_and_there_is_plenty() {
+        let emitted = 100 * SEC;
+        let s = schedule_for_admission(7, RING, BOSE.presentation_offset_frames, 44100, emitted);
+        // Five seconds late: still fine, just a shallower ring.
+        assert_eq!(placement(&s, BOSE, RING, emitted + 5 * SEC), Placement::Depth(RING - 44100 * 5));
+        // Past the sound itself: named, not clamped.
+        assert!(matches!(placement(&s, BOSE, RING, emitted + 20 * SEC), Placement::Late { .. }));
+    }
 
     #[test]
     fn the_air_lags_the_mixer_by_the_ring_and_the_device() {

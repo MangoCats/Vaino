@@ -1,0 +1,113 @@
+# LOG011: The Lead Is a Ring, and What That Constrains
+
+**Experiment Record — 2026-09-17**
+
+Twenty-five consecutive passage admissions on `bose`, to test a load-bearing
+claim in `[GDE-ECHO-310]`: that the schedule's lead leaves ample room for any
+node's presentation offset. It does, but not for the reason the guide gives,
+and the real reason constrains which node may be master.
+
+> **Related:** [GUIDE016](GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-310]` — the claim under test · [GUIDE010](GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-410]` — the offset arithmetic · [LOG009](LOG009-cpal-upgrade.md) `[LOG-CPAL-060]` — the two nodes' measured offsets
+
+---
+
+## 1. What was measured
+
+`bose` logs `echo-schedule: passage=… sound_at=… rate=…` at every admission.
+`sound_at` is absolute, so the lead is `sound_at` minus the journal's own
+timestamp for that line — no extra instrument, and six hours of it already on
+disk.
+
+**`[LOG-ECHO-010]` The first reading was 0.9 s too generous, and the instrument
+was my own `awk`.** It split the journal timestamp on `.` and used the integer
+seconds, flooring it — which adds a uniform 0–1 s to every lead. The
+distribution gave it away: leads spread evenly across 15.04–15.97 s, and a
+*uniform* spread is the signature of a quantisation artefact, not of queueing
+delay, which is one-sided with a floor. This is `[LOG-FIX-010]`'s lesson in
+miniature — the first number a new instrument produces deserves a check against
+what its error distribution ought to look like.
+
+## 2. Result
+
+| | |
+| :--- | ---: |
+| admissions | 25 |
+| mean lead | **15.0028 s** |
+| max lead | 15.0459 s |
+| min lead | 14.9326 s |
+| ring capacity, `BUFFER_FRAMES * 2` | 15.0000 s |
+| `bose` device delay `[LOG-CPAL-060]` | 0.0463 s |
+| **predicted ceiling** | **15.0463 s** |
+
+**`[LOG-ECHO-020]` The lead is the output ring, at capacity, plus the device
+delay — 15.046 s, with the maximum observed 0.4 ms under it.** The ring is
+therefore full at every admission, as the mixer's fill-to-capacity policy
+intends. Shortfalls below the ceiling are the ring being a few thousand frames
+short at that instant; journald latency can only ever make the figure *smaller*,
+so the maximum is the estimator that matters here, not the mean.
+
+## 3. What the lead is actually made of
+
+The guide sizes the lead against the *offset* — 15 s against a few hundred ms of
+A2DP, "roughly sixty-fold". That comparison is sound, but only against
+**network and scheduling lateness**, which spends the follower's ring depth one
+second per second. There is about 15 s of it to spend, and the margin is as
+large as claimed.
+
+It is not the comparison that governs the offset, because a follower's own ring
+is not a cost it pays in wall-clock time. **A ring drains in real time; it does
+not fill that way.** A follower can deepen its ring at decode speed, so the
+question is never "can it wait long enough" but "can it place sample 0 deep
+enough".
+
+**`[LOG-ECHO-030]` In steady state, ring depth is the only knob, and it bounds
+which node may be master.** Admission is not a free choice once a programme is
+running: the ring is full of the previous passage and sample 0 goes in where
+that passage ends. Two nodes admitting at the same point of the same programme
+differ in air time by exactly their device delays, permanently — and waiting
+cannot correct it, because waiting only makes a node later. Running the rings at
+different depths can:
+
+    depth(node) = Total - device_delay(node),   Total common to the fleet
+    depth <= capacity   =>   Total <= capacity + min(device_delay)
+
+So the node running a full ring must hold the fleet's **smallest** device delay.
+With `bose` at 46 ms and `vainopi` at 355 ms, `bose` as master works and
+`vainopi` runs 13 633 frames (309 ms) shallower. Reversed, it is not a tight
+margin but an unreachable one: `bose` would need 15.309 s of depth against a
+15.000 s ring, and would play 309 ms early on every passage, forever. That looks
+like a fleet with a drift problem rather than a misconfigured master, which is
+why `placement` reports `TooShallow` instead of clamping.
+
+This independently supports the choice of `bose` as master, which was made on
+other grounds (`[LOG-CAL-110]`'s stable frame clock, and its wired DAC).
+
+## 4. A trap in the existing arithmetic
+
+**`[LOG-ECHO-040]` `submit_at` returns the instant sample 0 must reach the
+*device*, and admitting the passage at that instant is wrong by a whole ring.**
+The name and the type invite it — `Follow::StartAt { at }` reads as "start the
+passage at this wall time" — but a passage admitted to the mixer at `at` puts
+sample 0 behind 15.0 s of ring and sounds 15.0 s late.
+
+`placement()` is the missing half: it converts a schedule into the depth sample 0
+must sit at, and names the two ways that can fail rather than returning a number
+that reads like an instruction `[GOV-SRC-040]`. Four tests cover it, including
+the round-trip that exposed a systematic one-frame bias — `sound_at` is built
+from frames divided into nanoseconds, and truncating on the way back made every
+node a frame shallow, hence early. 23 µs is inaudible; a consistent sign is
+still worth not having.
+
+## 5. Open
+
+**`[LOG-ECHO-050]` Nothing yet runs its ring at a commanded depth.** `placement`
+computes the target and is tested against it, but the mixer has no way to be
+told "fill to 13 633 frames short of capacity" — it fills to capacity. Phase 4
+needs that lever before a follower can hold sync across a passage boundary,
+and it is the smallest remaining piece of engine work that echo depends on.
+
+**`[LOG-ECHO-060]` The 15.0 s capacity is a constant, not a measurement.** Both
+nodes take it from `BUFFER_FRAMES`, so the fleet-wide `Total` happens to be
+uniform. A node built with a different constant would break the arithmetic
+silently, because nothing publishes its capacity. If node shapes ever diverge,
+capacity belongs on the wire beside the offset.

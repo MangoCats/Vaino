@@ -69,6 +69,7 @@ async fn main() {
 
     let mut seen = 0u64;
     let mut last_report = String::new();
+    let mut last_sched: Option<i64> = None;
 
     loop {
         let ws = match tokio_tungstenite::connect_async(&url).await {
@@ -101,7 +102,7 @@ async fn main() {
                 }
             };
             seen += 1;
-            report(&mut follower, &snap.echo, seen, &mut last_report);
+            report(&mut follower, &snap.echo, seen, &mut last_report, &mut last_sched);
         }
         eprintln!("echoprobe: disconnected; retrying in 3s");
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -111,10 +112,31 @@ async fn main() {
 /// Print only when the answer changes. At the snapshot's own cadence this
 /// would otherwise emit twice a second forever, and a log nobody can read is
 /// the same as no log.
-fn report(f: &mut Follower, st: &EchoState, seen: u64, last: &mut String) {
+fn report(f: &mut Follower, st: &EchoState, seen: u64, last: &mut String,
+          last_sched: &mut Option<i64>) {
     let now = now_nanos();
     let follow = f.on_state(st, now);
     let trim = f.trim_for(st, None, now);
+
+    // How far ahead of the sound does the schedule actually arrive?
+    //
+    // `[GDE-ECHO-310]` sizes the lead against the *offset spread* and calls the
+    // margin sixty-fold. That comparison leaves out the follower's own ring: if
+    // this node also needs ~15 s to push sample 0 through to its device, and it
+    // learns of the passage 15 s before the sound, the usable margin is not
+    // sixty-fold, it is whatever is left after subtracting a ring. Measure it
+    // rather than assume either way.
+    if let Some(sched) = st.schedule {
+        if Some(sched.passage_id) != *last_sched {
+            *last_sched = Some(sched.passage_id);
+            let lead_ms = (sched.sound_at as i64 - now as i64) as f64 / 1e6;
+            let offset_ms = f.timing.offset().as_millis() as f64;
+            println!(
+                "[{seen:>6}] SCHEDULE passage {} -- sound in {lead_ms:.0} ms; this node needs {offset_ms:.0} ms for the device, leaving {:.0} ms for its own ring",
+                sched.passage_id, lead_ms - offset_ms
+            );
+        }
+    }
 
     let line = match (&follow, st.anchor) {
         (Follow::Hold(why), _) => format!("HOLD -- master reports {why:?}"),
