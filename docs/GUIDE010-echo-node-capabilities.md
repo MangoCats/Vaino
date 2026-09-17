@@ -59,7 +59,10 @@ the sink's internal buffering is opaque to the host, so a residual remains that
 the stack will not report. `presentation_offset` is therefore *measured delay +
 calibrated residual*, the residual established once per node and re-established
 whenever the link renegotiates. A node that reports only the measured half is
-declaring a number it cannot support `[GOV-SRC-030]`.
+declaring a number it cannot support `[GOV-SRC-030]`. The calibrated half is set
+by hand where nothing can measure it, and its default is ranked by what actually
+knows the delay -- [SPEC020](spec/SPEC020-node-delay-control.md)
+`[SPEC-DLY-040]`.
 
 **`[GDE-ECHO-440]` Clock ownership has three cases, and they drift for unrelated
 reasons.** *Self-clocked* — an I²S DAC or an asynchronous USB device — drifts by
