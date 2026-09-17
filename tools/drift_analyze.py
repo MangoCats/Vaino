@@ -84,7 +84,15 @@ def report(label, pairs, rate):
         if dt > 1800:
             hourly.append(((pairs[j][1] - pairs[i][1]) / dt / rate - 1) * 1e6)
         i = j
-    print("  %-22s %8.0f s  n=%3d   %+8.3f ppm" % (label, span, len(pairs), endpoint))
+    # Both estimators, always. The endpoint uses two samples and inherits
+    # whatever those two happened to be doing; the fit uses all of them. On a
+    # clock that wanders a couple of ppm hour to hour `[LOG-FIX-070]` the two
+    # differ by a few tenths, and printing only the endpoint -- as this did --
+    # hides the more robust number in exactly the case where nothing looks
+    # wrong. Adding one sample to `bose`'s 15 h moved the endpoint 0.64 ppm and
+    # the fit almost not at all.
+    print("  %-22s %8.0f s  n=%3d   endpoint %+7.3f   fit %+7.3f ppm"
+          % (label, span, len(pairs), endpoint, fit))
     # A large endpoint/fit gap means the rate is not constant across the
     # window; report it rather than averaging the disagreement away
     # `[GOV-SRC-040]`. On clean data the two agree to a fraction of a ppm.

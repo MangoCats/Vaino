@@ -55,28 +55,45 @@ different instrument, which is the more useful half of the agreement: it says
 the hour-to-hour wander is the clock's own and not an artefact of how it is
 being watched. Any single hour is worth ±2 ppm and no more `[LOG-FIX-070]`.
 
-## 2a. `lempiplay3`, 45 minutes — preliminary
+## 2a. `lempiplay3`, 3.9 hours, and the pair
 
-| | |
+| | endpoint | **least squares** |
+| :--- | ---: | ---: |
+| `bose`, 15.0 h, n=181 | +14.000 | **+13.669 ppm** |
+| `lempiplay3`, 3.9 h, n=46 | −0.262 | **+0.168 ppm** |
+| **pair** | | **+13.50 ppm** |
+
+**`[LOG-P4-060]` The pair is +13.50 ppm — one trimmed frame every 1.68 s.**
+`lempiplay3`'s frame clock is essentially nominal, which is the whole of the
+difference: `bose`'s HiFiBerry runs +13.7 and the Pi's own analog output runs
+within a fifth of a ppm of rate. The pair figure is therefore almost entirely
+`bose`'s crystal.
+
+**`[LOG-P4-065]` Report the fit, not the endpoint, and this tool now prints
+both.** The endpoint estimator uses two samples and inherits whatever those two
+were doing. Adding a single sample to `bose`'s 15 h moved it from +13.365 to
++14.000 — 0.64 ppm from one reading — while the fit stayed near +13.7. The
+tool showed only the endpoint unless the two disagreed by more than 1 ppm, which
+hid the more robust number in exactly the case where nothing looks wrong.
+`bose`'s fit of +13.669 now sits on top of the electrical +13.7 `[LOG-FIX-030]`.
+
+**`[LOG-P4-070]` Short windows are worth far less than they look, and the error
+bars quoted for them here were themselves too tight.** Three readings of the
+same `lempiplay3` clock:
+
+| window | figure |
 | :--- | ---: |
-| samples | 10, after 2 dropped inside the prefill window |
-| span | 2700 s (45 min) |
-| **rate error** | **+3.669 ppm** |
+| one 5-minute interval | −17.3 ppm |
+| 45 minutes | +3.7 ppm |
+| 3.9 hours | **+0.2 ppm** |
 
-**`[LOG-P4-060]` The pair is `bose` − `lempiplay3` = +9.70 ppm, which is one
-trimmed frame every 2.34 s.** That sits inside the 7–14 ppm `[LOG-CAL-030]`
-established for `bose`↔`vainopi`, though it is a different pair and the
-agreement is coincidence rather than corroboration. It is **not yet a gated
-figure**: 45 minutes against `bose`'s hourly sd of 2.157 ppm is worth perhaps
-±3 ppm, so the pair is +9.7 ± 3 and wants a night.
-
-**`[LOG-P4-070]` A single five-minute window is worth about ±20 ppm and must
-not be quoted.** The first two post-step samples gave −17.3 ppm; the 45-minute
-fit gives +3.7. Nothing changed but the window. The pair `frames`/`at_nanos` is
-stored inside one callback so there is no read skew `[LOG-FIX-070]`, but there
-is still millisecond-scale jitter in where within the callback the clock is
-read, and 6 ms over 300 s is 20 ppm. `bose`'s hourly sd of 2.157 is the same
-statement at a longer window.
+Nothing changed but the window. The 45-minute figure was published above with
+an estimated ±3 ppm; it moved 3.5 ppm, so that bar was optimistic rather than
+conservative. `lempiplay3`'s hourly sd is **4.270 ppm**, nearly twice `bose`'s
+2.539, so this node needs several hours before a figure means anything. The
+`frames`/`at_nanos` pair carries no read skew `[LOG-FIX-070]`, but
+millisecond-scale jitter in where the clock is read within a callback is 20 ppm
+over 300 s.
 
 ## 2b. The delay is where the two nodes actually differ
 
@@ -85,8 +102,8 @@ by 0.09 ms.** Same field, same code, same five-minute cadence:
 
 | node | n | mean | spread | sd |
 | :--- | ---: | ---: | ---: | ---: |
-| `bose`, HiFiBerry I²S | 180 over 14.9 h | 2042.9 | **4 fr (0.09 ms)** | 0.6 |
-| `lempiplay3`, bcm2835 analog | 13 over 0.9 h | 1789.8 | **400 fr (9.07 ms)** | 128.8 |
+| `bose`, HiFiBerry I²S | 181 over 15.0 h | 2042.9 | **4 fr (0.09 ms)** | 0.5 |
+| `lempiplay3`, bcm2835 analog | 49 over 3.9 h | 1861.4 | **413 fr (9.37 ms)** | 108.1 |
 
 This matters more than either rate figure. `[GDE-ECHO-420]` makes *variability*,
 not magnitude, the disqualifying property, and the working assumption has been
@@ -98,6 +115,12 @@ between two speakers in one room, not a rounding concern.
 It also bears on `[SPEC-DLY-040]`: on this node the "known delay" is a
 distribution rather than a number, so a default taken from one reading would
 store whatever the device happened to report that second.
+
+**`[LOG-P4-085]` Four hours did not shrink it.** At 49 samples the spread is
+413 frames against 13 samples' 400, and the sd only fell from 128.8 to 108.1.
+This is the node's behaviour, not a startup transient, and it is the finding
+that most threatens `bose`↔`lempiplay3` as an echo pair: trimming corrects a
+*slope* `[GDE-ECHO-340]`, and 9 ms of delay wander is not one.
 
 **`[LOG-P4-090]` The variation is structured, not noise, and 13 samples is too
 few to say what it is.** The sequence runs 1639, 1655, 1670, 1686, 1704, 1702 —
