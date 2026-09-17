@@ -163,9 +163,36 @@ rather than a silent continuation on stale state:
 | pause | the device stops; the count stops with it |
 | skip | the ring is cut `[REQ-AUD-158]`, so frames counted are discarded |
 | master silent | the announced queue runs down, then the warm Director resumes — no timeout `[GDE-ECHO-500]` |
+| wall-clock step | the shared datum moves under every timestamp at once `[GDE-ECHO-365]` |
 
-The last row is the important one for `[GDE-ECHO-020]`: an echo node whose
-master disappears must return to being an ordinary player, not stop.
+The last row of the original set is the important one for `[GDE-ECHO-020]`: an
+echo node whose master disappears must return to being an ordinary player, not
+stop.
+
+**`[GDE-ECHO-365]` A wall-clock step is different in kind from the rest, and no
+node in this fleet has a clock that cannot step.** Every other row voids the
+*frame* clock — a count of frames, local to one node's audio path. A step voids
+the *shared datum*: `heard_at`, `sound_at` and `submit_at` are absolute
+`SystemTime`, so a step makes all of them wrong simultaneously on a node whose
+audio never faltered and whose frame clock is perfect.
+
+Observed on `lempiplay3`, 2026-09-17. It has **no RTC** — nor do `bose` or
+`vainopi` — so it booted with a restored time of Sep 15 22:35 and NTP stepped it
+about two days forward roughly 130 s into the boot. The signature was systemd
+reporting `vaino` started two days *before* the machine booted, with
+`NRestarts=0`. The step is bounded only by how long a node sat powered off.
+
+Three requirements follow:
+
+- **Intervals come from a monotonic clock**; only the shared datum is wall time.
+  A rate regressed across a step is not a rate.
+- **A step voids the basis**, exactly as an underrun does, and forces a rejoin at
+  the next passage boundary.
+- **A node publishes no echo state until its clock is synchronised.** Before
+  that it is not a node with an unknown time, it is a node with a confidently
+  wrong one, which is the worse of the two `[GOV-SRC-040]`. A master that steps
+  announces a `sound_at` two days out and every follower reports `Missed`
+  indefinitely.
 
 ---
 

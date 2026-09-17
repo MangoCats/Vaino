@@ -128,12 +128,18 @@ node is currently the master.
 
 ## 5. Open
 
-**`[SPEC-DLY-120]` Where the control lives is not settled here.** Each node
-serves its own web UI, which is the obvious first home and needs nothing new.
-A fleet-wide view showing every node's delay together would suit the actual
-task — aligning speakers against each other — but needs a roster surface that
-does not yet exist. Starting per-node costs nothing a later aggregate view would
-have to undo.
+**`[SPEC-DLY-120]` The control lives in the per-node Vaino skin settings
+page** — `#panel-settings` in
+[skin.html](../../player/src/web/skins/vaino/skin.html), served by
+[settings.rs](../../player/src/web/settings.rs). Each node therefore carries its
+own, reached the same way every other per-node setting is, and nothing new is
+needed to surface it.
+
+What remains open is only the *aggregate*: a fleet-wide view showing every
+node's delay side by side would suit the actual task — aligning speakers against
+each other, which is a comparison — but it needs a roster surface that does not
+yet exist. Per-node costs nothing that view would later have to undo, since the
+value is the node's own either way `[SPEC-DLY-070]`.
 
 **`[SPEC-DLY-130]` Nothing yet measures whether 1 ms is the right step for this
 room.** The figure is taken from the general limit of interaural discrimination,
