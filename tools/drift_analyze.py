@@ -154,7 +154,22 @@ def main(argv):
             print("  no segment survived: the counter never ran clean for 3 samples")
             return 1
         for k, seg in enumerate(segs):
-            report("frames vs at_nanos [%d/%d]" % (k + 1, len(segs)), seg, rate)
+            # The prefill exclusion belongs on `frames`, not on wall time.
+            # `frames` IS the count since this stream started, so
+            # `frames / rate` is exactly how far into the stream a sample sits
+            # -- no guessing from where a segment happens to begin. That
+            # distinction matters because a segment boundary is not always a
+            # stream restart: a clock step `[GDE-ECHO-365]` splits the data
+            # without restarting anything, and skipping 900 s after one of
+            # those would discard good samples for no reason.
+            kept = [p for p in seg if p[1] / rate >= SKIP_AFTER_TRIGGER_S]
+            dropped = len(seg) - len(kept)
+            label = "frames vs at_nanos [%d/%d]" % (k + 1, len(segs))
+            if dropped:
+                print("  (segment %d: dropped %d sample(s) inside the first %d s "
+                      "of the stream `[LOG-FIX-050]`)" % (k + 1, dropped,
+                                                          SKIP_AFTER_TRIGGER_S))
+            report(label, kept if len(kept) >= 3 else seg, rate)
         return 0
     rows = read_samples(argv[0])
     if not rows:
