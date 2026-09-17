@@ -127,13 +127,19 @@ pub fn submit_at(sched: &Schedule, node: NodeTiming, now: WallNanos) -> Option<W
 /// speed rather than in real time -- it drains in real time, it does not fill
 /// that way.
 ///
-/// The consequence is a constraint on which node may be master
-/// `[LOG-ECHO-030]`: `depth <= capacity` forces the fleet's common
-/// submit-to-air total to be at most `capacity + min(device delay)`. A master
-/// running a full ring must therefore hold the fleet's *smallest* device delay,
-/// or run its own ring short by the difference. `bose` at 46 ms and `vainopi`
-/// at 355 ms `[LOG-CPAL-060]` satisfy this with `bose` as master and fail it
-/// reversed -- `bose` would need 15.309 s of depth against a 15.0 s ring.
+/// So each node runs at `depth = Total - device_delay`, for one `Total` common
+/// to the fleet, and `depth <= capacity` caps `Total` at
+/// `capacity + min(device delay)` `[LOG-ECHO-030]`. That is a property of the
+/// **fleet**, not a constraint on which node may be master: the node with the
+/// smallest delay simply runs the fullest ring, and any node may announce
+/// `[GDE-ECHO-315]`.
+///
+/// `TooShallow` therefore reports a `Total` this node cannot reach, which in
+/// practice means the announcer computed it from its own full ring instead of
+/// from the fleet's cap -- exactly what `schedule_for_admission` does today.
+/// With `bose` at 46 ms and `vainopi` at 355 ms `[LOG-CPAL-060]`, a `vainopi`
+/// announcing off a full ring asks for 15.355 s and `bose` can reach 15.046 s;
+/// the fix is the announced total, not the choice of master.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Placement {
     /// Admit with exactly this many frames ahead of sample 0 in the ring.
@@ -651,10 +657,13 @@ mod tests {
         assert_eq!(RING - want, 13633, "vainopi runs 309 ms shallower than bose");
     }
 
-    /// The reverse pairing is not a tight margin, it is unreachable -- and it
-    /// must say so rather than clamp to a full ring and play early forever.
+    /// A total computed off a full ring by the *slower* node is unreachable for
+    /// the faster one -- and must say so rather than clamp and play early
+    /// forever. This is a defect in the announced total, not in who announces
+    /// `[GDE-ECHO-315]`; the same pair works at a total the fleet can meet, as
+    /// the next test shows.
     #[test]
-    fn a_master_with_the_larger_delay_is_unreachable() {
+    fn a_total_announced_off_a_full_ring_can_be_unreachable() {
         let now = 100 * SEC;
         let s = schedule_for_admission(7, RING, VAINOPI.presentation_offset_frames, 44100, now);
         match placement(&s, BOSE, RING, now) {
@@ -664,6 +673,25 @@ mod tests {
             }
             other => panic!("expected TooShallow, got {other:?}"),
         }
+    }
+
+    /// `[GDE-ECHO-315]`: the slower node announcing is fine, and is in fact the
+    /// preferred arrangement, so long as it announces the fleet's total rather
+    /// than its own full ring. `vainopi` then runs the shallow ring it would
+    /// have run anyway, and `bose` runs full -- the same two depths as when
+    /// `bose` announces. Who announces does not enter the arithmetic.
+    #[test]
+    fn the_slower_node_may_announce_at_the_fleets_total() {
+        let now = 100 * SEC;
+        // The fleet's cap: capacity + the SMALLEST device delay. vainopi holds
+        // the larger, so it announces off a ring short by the difference.
+        let vainopi_depth = RING + BOSE.presentation_offset_frames
+            - VAINOPI.presentation_offset_frames;
+        let s = schedule_for_admission(
+            7, vainopi_depth, VAINOPI.presentation_offset_frames, 44100, now);
+        assert_eq!(placement(&s, BOSE, RING, now), Placement::Depth(RING),
+            "the smallest-delay node runs the fullest ring, whoever announced");
+        assert_eq!(placement(&s, VAINOPI, RING, now), Placement::Depth(vainopi_depth));
     }
 
     /// Network lateness spends the ring, and there is ~15 s of it to spend --

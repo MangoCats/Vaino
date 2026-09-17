@@ -28,9 +28,9 @@ knows the queue `[GDE-ECHO-420]`. It buys tolerance of **network and scheduling
 lateness**, which spends ring depth a second per second — sixty-fold is right
 for that. It does *not* make an arbitrary offset compensable: in steady state a
 follower's ring is full of the previous passage, so offsets are absorbed by
-running the ring at different depths, and `depth <= capacity` requires the
-master to hold the fleet's smallest device delay `[LOG-ECHO-030]`. Each node schedules its own
-submission at `T − presentation_offset`.
+running the ring at different depths, and `depth <= capacity` caps the fleet's
+common submit-to-air total at `capacity + min(device delay)` `[LOG-ECHO-030]`.
+Each node schedules its own submission at `T − presentation_offset`.
 
 **The drift anchor, backward-looking.** *Sample N of P was heard at T*, repeated
 periodically, carrying the master's measured ppm. Computed from `audible_ms`,
@@ -42,11 +42,55 @@ anchor, matching the existing snapshot rate, costs nothing new because it rides
 the WebSocket the browser snapshot already uses. The schedule is emitted on
 admission rather than on a clock.
 
-**The binding constraint is lead time against offset spread, and it is never
+**The binding constraint is lead time against *lateness*, and it is never
 close.** A node can only start as early as its foreknowledge allows; with ~15 s
 of lead against a worst-case spread of a few hundred ms, the margin is roughly
 sixty-fold. A design that instead treated the master's offset as zero would have
 worked in one direction only.
+
+**`[GDE-ECHO-315]` Any node may be master, and the best default is the node with
+the fleet's *longest* device delay.** `[LOG-ECHO-035]` shows the depth cap is a
+fleet property and says nothing about the announcing role. Two things then argue
+for the slowest device announcing. A follower's working room is
+`depth = Total − device_delay`, so the shorter a node's delay the more ring it
+has to manoeuvre in; putting the longest delay on the master leaves every
+follower the most room, and costs the master the least, since the master
+originates each change and learns of it first. And for the resync of
+`[GDE-ECHO-325]`, a longest-delay master's naive *as soon as I can* target is by
+construction reachable by every follower — a shortest-delay master's is not.
+
+What a master must **not** do is derive its announcement from its own full ring.
+That hard-wires `Total = capacity + its own delay`, which any shorter-delay
+follower then cannot reach. `schedule_for_admission` does exactly this today and
+must take the fleet's cap instead `[LOG-ECHO-070]`.
+
+**`[GDE-ECHO-325]` A planned transition holds sync; a skip or seek buys it back
+going forward, and may be briefly out.** The two cases are not the same promise
+and should not be given the same mechanism.
+
+A passage-to-passage transition that the queue already knew about is *planned*:
+every node has the file, the lead, and the depth arithmetic, so synchrony is
+maintained straight through it with no audible event.
+
+A skip or seek is user input arriving with no lead at all. Here the fleet is
+permitted a bounded interval of asynchrony — **nominally up to 5 s** — during
+which no claim is made about what any node is playing. What each node targets is
+synchrony *from a stated point onward*: the master announces a target of the
+form *passage P, offset 3000 ms, at wall time T*, picks the soonest `T` it can
+itself meet, and fills toward it; every follower does the same against the same
+target. Nothing coordinates the journey, only the destination. This is why the
+schedule must carry a **start sample** rather than implying sample 0 — a seek is
+the same message with a non-zero offset and a nearer `T`, not a new message
+type.
+
+**`[GDE-ECHO-335]` A queue edit outside the ring's window has no synchrony
+consequence at all.** Reordering, inserting or removing anything that is neither
+playing now nor already scheduled within the ring's depth arrives in time to be
+absorbed by the ordinary planned transition, and is therefore invisible to
+synchrony. Only an edit reaching *into* the ring window — which is a skip in
+everything but name — falls under `[GDE-ECHO-325]`. This keeps the common case
+of a user rearranging what plays next entirely off the synchrony path, and is
+the invariant `reconcile_queue` `[GDE-ECHO-500]` has to preserve.
 
 **`[GDE-ECHO-320]` Every message is absolute, idempotent and independently
 sufficient, so a lost one is harmless.** No deltas, no sequence-dependent state,

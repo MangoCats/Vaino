@@ -60,8 +60,10 @@ not fill that way.** A follower can deepen its ring at decode speed, so the
 question is never "can it wait long enough" but "can it place sample 0 deep
 enough".
 
-**`[LOG-ECHO-030]` In steady state, ring depth is the only knob, and it bounds
-which node may be master.** Admission is not a free choice once a programme is
+**`[LOG-ECHO-030]` In steady state, ring depth is the only knob, and it caps
+the fleet's common submit-to-air total.** *The second half of this entry as
+first written -- that the cap constrains which node may be master -- is wrong
+and is superseded by `[LOG-ECHO-035]` the same day.* Admission is not a free choice once a programme is
 running: the ring is full of the previous passage and sample 0 goes in where
 that passage ends. Two nodes admitting at the same point of the same programme
 differ in air time by exactly their device delays, permanently — and waiting
@@ -71,16 +73,33 @@ different depths can:
     depth(node) = Total - device_delay(node),   Total common to the fleet
     depth <= capacity   =>   Total <= capacity + min(device_delay)
 
-So the node running a full ring must hold the fleet's **smallest** device delay.
-With `bose` at 46 ms and `vainopi` at 355 ms, `bose` as master works and
-`vainopi` runs 13 633 frames (309 ms) shallower. Reversed, it is not a tight
-margin but an unreachable one: `bose` would need 15.309 s of depth against a
-15.000 s ring, and would play 309 ms early on every passage, forever. That looks
-like a fleet with a drift problem rather than a misconfigured master, which is
-why `placement` reports `TooShallow` instead of clamping.
+So the node running the fullest ring is the one with the **smallest** device
+delay. With `bose` at 46 ms and `vainopi` at 355 ms, the cap is 15.046 s, `bose`
+runs full and `vainopi` runs 13 633 frames (309 ms) shallower.
 
-This independently supports the choice of `bose` as master, which was made on
-other grounds (`[LOG-CAL-110]`'s stable frame clock, and its wired DAC).
+**`[LOG-ECHO-035]` That cap is a property of the fleet, not a constraint on who
+may be master.** The derivation above holds `depth <= capacity` for *every*
+node, master included, so it yields a bound on the common total and nothing
+about the announcing role. Reading it as a rule about the master conflated *who
+announces* with *whose ring runs full*, which are independent.
+
+What is actually defective in the reversed pairing is the **announcement**:
+`schedule_for_admission` derives `sound_at` from the announcer's own full ring,
+hard-wiring `Total = capacity + device_delay(announcer)`. A `vainopi` announcing
+that way asks for 15.355 s, which `bose` cannot reach, and `bose` would play
+309 ms early on every passage forever -- looking like a drift problem rather
+than a misconfigured total, which is why `placement` reports `TooShallow`
+instead of clamping. Announcing the fleet's cap instead makes the same pair work
+with the same two depths, whoever announces; there is a test to that effect.
+
+The preference in fact runs the *other* way `[GDE-ECHO-315]`. A follower's
+working room is `depth = Total - device_delay`, so the smaller a node's delay
+the more ring it has to manoeuvre in. Putting the fleet's **longest** delay on
+the master gives every follower the most room, and costs the master the least,
+because the master originates the change and learns of it first. It is also the
+safer default for the transient of `[GDE-ECHO-325]`: a longest-delay master's
+naive "as soon as I can" target is reachable by every follower, where a
+shortest-delay master's is not.
 
 ## 4. A trap in the existing arithmetic
 
@@ -105,6 +124,15 @@ computes the target and is tested against it, but the mixer has no way to be
 told "fill to 13 633 frames short of capacity" — it fills to capacity. Phase 4
 needs that lever before a follower can hold sync across a passage boundary,
 and it is the smallest remaining piece of engine work that echo depends on.
+
+**`[LOG-ECHO-070]` `schedule_for_admission` announces off its own full ring.**
+It takes the announcer's ring depth and device delay and adds them, which fixes
+`Total = capacity + device_delay(announcer)`. That is correct only when the
+announcer happens to hold the fleet's smallest delay. It must instead announce
+the fleet's cap, `capacity + min(device delay)`, which means the master needs to
+know the roster's delays rather than only its own `[GDE-ECHO-450]` — a small
+change, but one that has to land before a second node acts on a schedule, since
+until then nothing reveals the error.
 
 **`[LOG-ECHO-060]` The 15.0 s capacity is a constant, not a measurement.** Both
 nodes take it from `BUFFER_FRAMES`, so the fleet-wide `Total` happens to be
