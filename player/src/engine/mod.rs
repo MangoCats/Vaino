@@ -1478,7 +1478,9 @@ impl Engine {
         // engine's own state behind the lock a browser thread waits on.
         let echo = crate::echo::EchoState {
             anchor: if self.echo_basis.is_valid() {
-                self.air_position().map(|a| a.anchor(self.out_rate, 0.0))
+                // None, not 0.0: nothing here measures the master's own rate
+                // error yet, and saying zero would be a claim `[GOV-SRC-040]`.
+                self.air_position().map(|a| a.anchor(self.out_rate, None))
             } else {
                 None
             },

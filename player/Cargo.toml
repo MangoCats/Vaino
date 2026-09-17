@@ -28,6 +28,10 @@ sampo-support = ["dep:reqwest"]
 # extra in the build graph, it only makes the already-compiled crate
 # nameable from this bin's own client-side code `[SPEC-FBUI-015]`.
 fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "dep:futures-util", "dep:u8g2-fonts", "dep:image"]
+# `echoprobe` `[GDE-ECHO-310]`: an echo node's side of the wire, as an
+# observer. Both crates are already in the graph via `fbui` and via axum's
+# own `ws` feature, so this names them rather than adding them.
+echo-client = ["dep:tokio-tungstenite", "dep:futures-util"]
 
 [dependencies]
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
@@ -142,6 +146,11 @@ required-features = ["mpd"]
 name = "fbui"
 path = "src/bin/fbui.rs"
 required-features = ["fbui"]
+
+[[bin]]
+name = "echoprobe"
+path = "src/bin/echoprobe.rs"
+required-features = ["echo-client"]
 
 [[bin]]
 name = "flavorcheck"

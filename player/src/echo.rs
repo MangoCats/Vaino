@@ -54,7 +54,7 @@ impl NodeTiming {
 /// roughly 15 s before anyone hears it. That lead is the whole reason an
 /// arbitrary presentation offset is compensable, and it exists only because an
 /// echo node holds the file locally and knows the queue `[GDE-ECHO-420]`.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Schedule {
     pub passage_id: i64,
     /// When sample 0 reaches the **air**, not the device.
@@ -69,14 +69,20 @@ pub struct Schedule {
 /// engine's own `audible_ms` subtracts the ring but **not** the device delay,
 /// which is imperceptible for a display and is not for `vainopi`'s 355 ms --
 /// so an anchor must subtract [`NodeTiming::offset`] as well.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DriftAnchor {
     pub passage_id: i64,
     pub sample: u64,
     pub heard_at: WallNanos,
     pub rate: u32,
     /// The master's own measured rate error, parts per million, signed.
-    pub ppm: f64,
+    ///
+    /// `None` when nothing has measured it, which is **not** the same claim as
+    /// `Some(0.0)` `[GOV-SRC-040]`. A follower reading a bare `+0.00` would
+    /// reasonably take it for "the master checked and found no error"; this
+    /// makes "nobody has computed this" a thing the wire can say. Caught by
+    /// the first client that ever read one.
+    pub ppm: Option<f64>,
 }
 
 fn frames_to_duration(frames: u64, rate: u32) -> Duration {
@@ -149,7 +155,7 @@ pub fn air_position(
 
 impl AirPosition {
     /// The backward anchor this position supports.
-    pub fn anchor(&self, rate: u32, ppm: f64) -> DriftAnchor {
+    pub fn anchor(&self, rate: u32, ppm: Option<f64>) -> DriftAnchor {
         DriftAnchor {
             passage_id: self.passage_id,
             sample: self.position_ms * rate as u64 / 1000,
@@ -187,7 +193,7 @@ pub fn schedule_for_admission(
 /// currently place itself", and those call for different behaviour -- the
 /// second means hold position and wait for the next passage boundary
 /// `[GDE-ECHO-360]`, not go independent `[GDE-ECHO-500]`.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EchoState {
     pub anchor: Option<DriftAnchor>,
     pub schedule: Option<Schedule>,
@@ -198,7 +204,7 @@ pub struct EchoState {
 ///
 /// `[GDE-ECHO-360]`. Each of these must force a rejoin at the next passage
 /// boundary rather than a silent continuation on stale state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Voided {
     /// Frame counter and stream epoch both reset `[SPEC-APS-010]`.
     DeviceReopen,
@@ -542,7 +548,7 @@ mod tests {
     #[test]
     fn residual_sign_says_late_is_positive() {
         let a = DriftAnchor {
-            passage_id: 4, sample: 44100, heard_at: 5 * SEC, rate: 44100, ppm: 0.0,
+            passage_id: 4, sample: 44100, heard_at: 5 * SEC, rate: 44100, ppm: None,
         };
         assert!(residual_ns(&a, 5 * SEC + 1_000_000) > 0, "later than master is positive");
         assert!(residual_ns(&a, 5 * SEC - 1_000_000) < 0, "earlier than master is negative");
@@ -592,7 +598,7 @@ mod tests {
     #[test]
     fn an_anchor_round_trips_through_the_sample_number() {
         let a = air_position(3, 10_000, 0, 0, 44100, 12 * SEC);
-        let anchor = a.anchor(44100, -2.09);
+        let anchor = a.anchor(44100, Some(-2.09));
         assert_eq!(anchor.sample, 441_000);           // 10 s at 44100
         assert_eq!(anchor.heard_at, 12 * SEC);
         assert_eq!(residual_ns(&anchor, 12 * SEC), 0);
@@ -662,7 +668,7 @@ mod tests {
         // the positions differ by minutes. Trimming against that would drive
         // the node hard in the wrong direction.
         let anchor = DriftAnchor {
-            passage_id: 7, sample: 0, heard_at: 500 * SEC, rate: 44100, ppm: 0.0,
+            passage_id: 7, sample: 0, heard_at: 500 * SEC, rate: 44100, ppm: None,
         };
         let local = AirPosition { passage_id: 6, position_ms: 0, at: 200 * SEC };
         let st = state_with(None, Some(anchor));
@@ -674,7 +680,7 @@ mod tests {
     #[test]
     fn a_node_with_no_basis_of_its_own_does_not_trim() {
         let anchor = DriftAnchor {
-            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: 0.0,
+            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
         };
         let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC + 5_000_000 };
         let st = state_with(None, Some(anchor));
@@ -685,7 +691,7 @@ mod tests {
     #[test]
     fn a_late_follower_drops_and_then_waits_out_the_interval() {
         let anchor = DriftAnchor {
-            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: 0.0,
+            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
         };
         // 5 ms late.
         let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC + 5_000_000 };
@@ -702,7 +708,7 @@ mod tests {
     #[test]
     fn an_early_follower_duplicates() {
         let anchor = DriftAnchor {
-            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: 0.0,
+            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
         };
         let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC - 5_000_000 };
         let st = state_with(None, Some(anchor));
