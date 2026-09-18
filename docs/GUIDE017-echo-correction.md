@@ -201,6 +201,26 @@ as `r·T`, and at 30 ms of scatter and 13.92 ppm they cross near 130 s at about
 2 ms each. The deadband follows the filter down, from 40 ms to 8 ms. Anything
 that steps the residual clears the window, exactly as it clears the rate fit.
 
+**`[GDE-ECHO-351]` A log computed at a different point from the action is not
+evidence of the action.** The coarse/fine split `[GDE-ECHO-347]` shipped with
+the shift *consumed before the split that used it*, so the fine half was always
+zero and **every late correction did nothing for four commits** -- while the
+log line, which derived its own split a few lines earlier, dutifully reported
+`500 ms into the passage` each time. A listener heard no change, the residual
+did not move, and the log said the work was done.
+
+The measurement that exposed it was not the log: `tools/echo_skew.sh` read
+483, 544, 555, 512 ms across several minutes while corrections were "applied"
+at every transition. A number that refuses to move under treatment is worth
+more than a line that says treatment occurred.
+
+The test written afterwards asserts on the **passage's actual origin** rather
+than on a log line, and fails with `opened at 0 ms` against the old code. That
+is the shape every test here should have taken: `[GDE-ECHO-343]`,
+`[GDE-ECHO-344]` and this one all passed their unit tests while the system was
+broken, because they asserted on what the code intended rather than on what
+reached the audio.
+
 **`[GDE-ECHO-346]` A fitted slope is the error in the correction, not the
 drift, and applying it as an absolute settles at half.** The residual being
 fitted is what remains *after* the current trim, so a loop that sends the fit

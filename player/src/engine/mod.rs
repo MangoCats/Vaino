@@ -1386,11 +1386,19 @@ impl Engine {
         let Some(entry) = self.queue.advance() else { return };
         // Spent. A correction left in place would be applied again at every
         // boundary, turning a one-off nudge into a standing rate error.
+        // **Split once, before it is spent.** An earlier version consumed
+        // `echo_next_shift_ms` here and re-derived the split further down,
+        // where it was already zero -- so the fine half was silently dropped
+        // and every late correction did nothing at all, while this very line
+        // logged the value it was about to discard. A log computed at a
+        // different point from the action is not evidence of the action
+        // `[GDE-ECHO-347]`.
+        let (_, fine) = self.echo_split();
         if self.echo_next_shift_ms != 0 {
-            let (coarse, fine) = self.echo_split();
-            eprintln!("echo-offset: passage {} shifted {} ms {} ({} ms admission, {} ms into the passage)", entry.passage_id, self.echo_next_shift_ms.abs(),
+            eprintln!("echo-offset: passage {} shifted {} ms {} ({} ms into the passage)",
+                      entry.passage_id, self.echo_next_shift_ms.abs(),
                       if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
-                      coarse, fine);
+                      fine);
             self.echo_next_shift_ms = 0;
         }
         // The forward schedule `[GDE-ECHO-310]`, emitted here because here is
@@ -1405,7 +1413,6 @@ impl Engine {
         // wrong audio at the right time `[GDE-ECHO-325]`.
         // A listener's own resume point outranks alignment; otherwise the
         // fine half of the offset correction goes here `[GDE-ECHO-347]`.
-        let fine = self.echo_split().1;
         let origin = self.pending_resume.take().or(if fine > 0 { Some(fine) } else { None });
         if let Some(r) = self.path.ring.as_ref() {
             if r.clock.timestamps() == crate::output::Timestamps::Hardware {
@@ -2423,6 +2430,42 @@ mod tests {
     /// default features already bring a RIFF reader and a PCM codec, so silence
     /// can simply be written on the spot. Silence decodes to frames like
     /// anything else, and frames are what the clock counts.
+    /// An offset correction must actually reach the audio `[GDE-ECHO-347]`.
+    ///
+    /// Written after a regression that logged the correction it was about to
+    /// discard: the shift was consumed before the split that used it, so the
+    /// fine half was always zero and every late correction did nothing, while
+    /// the log said otherwise for four commits. Asserting on the *passage's
+    /// origin* rather than on a log line is the difference.
+    #[test]
+    fn a_late_correction_opens_the_next_passage_further_in() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(30_000);
+        let mut a = entry(1, wav.to_str().unwrap());
+        a.end_ms = 30_000;
+        let mut b = entry(2, wav.to_str().unwrap());
+        b.end_ms = 30_000;
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |e| e.shown.is_some()), "it should be playing");
+
+        // 120 ms late: all of it belongs on the fine knob, because the coarse
+        // one cannot step smaller than a mix chunk.
+        h.send(Command::EchoCorrectNextStart(120));
+        e.drain_commands();
+        assert_eq!(e.echo_split(), (0, 120));
+
+        // Run to the transition and check where passage 2 actually opened.
+        assert!(tick_until(&mut e, |e| e.live.iter().any(|l| l.entry.passage_id == 2)),
+                "the second passage should be admitted");
+        let opened = e.live.iter().find(|l| l.entry.passage_id == 2).unwrap().origin_ms;
+        assert_eq!(opened, 120, "opened at {opened} ms, so the correction never reached it");
+        assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
+        let _ = std::fs::remove_file(&wav);
+    }
+
     /// A skip that opens a passage part-way in reports THAT position, not
     /// zero.
     ///
