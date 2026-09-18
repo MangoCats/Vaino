@@ -159,13 +159,19 @@ fixed by where sample 0 was placed plus the device rate; the next passage is
 appended contiguously, so its alignment is inherited and changing the ring's
 depth mid-stream shifts nothing. Depth decides alignment at a *fresh start* and
 nowhere else, which is why `[LOG-ECHO-030]` holds at a join and why this
-correction must change **content** timing instead. Opening the next passage a
-few milliseconds further in is the only knob that does.
+correction must move the **transition** instead.
 
-That knob is one-directional, which the plan did not say. A node that is late
-skips into the lead-in and is level from there. A node that is **early** would
-have to open the passage at a negative position; there is no such thing, so it
-takes a scheduled start instead and places its first sample afresh.
+*A first attempt moved the position inside the file — opening the next passage
+a few milliseconds further in — and was one-directional, since there is no
+negative position to open at.* The knob that actually serves is **where the
+incoming passage sits inside the overlap**. Every transition has one, and
+starting the passage earlier overlaps a few milliseconds more and catches up,
+while starting it later overlaps a few less and waits. Nothing is skipped and
+nothing is repeated, so it is inaudible in both directions and symmetric by
+construction — there is no negative position, but there is always a slightly
+smaller overlap. It is a signed nudge to `should_admit`'s threshold, clamped so
+it can neither ask for audio that does not exist nor narrow through zero into a
+gap, which would be a worse fault than the offset it was correcting.
 
 **`[GDE-ECHO-345]` The anchor's precision, not the ear's, sets how well this can
 work.** The residual is measured from a `DriftAnchor`, whose position comes from

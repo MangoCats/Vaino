@@ -269,21 +269,21 @@ pub fn local_at_sample(local: &AirPosition, anchor: &DriftAnchor) -> i64 {
 pub enum OffsetFix {
     /// Inside the deadband. Leave it alone `[GDE-ECHO-350]`.
     Hold,
-    /// Open the next passage this many milliseconds further in.
+    /// Start the next passage this many milliseconds **earlier**; negative is
+    /// later.
     ///
-    /// The whole of `[GDE-ECHO-340]`'s offset correction: a node that is late
-    /// skips that much of the next passage's opening and is level from there.
-    /// Inaudible by construction -- a few tens of milliseconds at a passage
-    /// start is inside the lead-in, before anything a listener could name has
-    /// begun.
-    SkipInto(u64),
+    /// The whole of `[GDE-ECHO-340]`'s offset correction, and symmetric:
+    /// where the incoming passage sits inside the transition is free in both
+    /// directions. Earlier overlaps a little more and catches up, later
+    /// overlaps a little less and waits. No content is skipped or repeated
+    /// either way `[should_admit_nudged]`.
+    ShiftStart(i64),
     /// Start the next passage from the master's schedule instead.
     ///
-    /// For the two cases `SkipInto` cannot serve: an offset too large to hide
-    /// in a lead-in, and **any** offset the wrong way. A node that is early
-    /// would have to open the passage at a negative position, and there is no
-    /// such thing; the only way back is to place its first sample afresh,
-    /// which is what a scheduled start does `[GDE-ECHO-330]`.
+    /// For an offset too large to absorb in a transition: past that, the
+    /// overlap would have to grow beyond the audio that exists or shrink
+    /// through zero into a gap. The only way back is to place the first sample
+    /// afresh, which is what a scheduled start does `[GDE-ECHO-330]`.
     Rejoin,
 }
 
@@ -299,8 +299,11 @@ pub fn offset_fix(residual: i64, deadband: Duration, max_hidden: Duration) -> Of
     if residual.unsigned_abs() <= deadband.as_nanos() as u64 {
         return OffsetFix::Hold;
     }
-    if residual > 0 && (residual as u64) <= max_hidden.as_nanos() as u64 {
-        return OffsetFix::SkipInto((residual as u64) / 1_000_000);
+    if residual.unsigned_abs() <= max_hidden.as_nanos() as u64 {
+        // Late is positive, and a late node starts the next passage EARLIER --
+        // the sign survives unchanged, which is worth saying because it is the
+        // kind of thing that reads either way at a glance.
+        return OffsetFix::ShiftStart(residual / 1_000_000);
     }
     OffsetFix::Rejoin
 }
@@ -887,19 +890,21 @@ mod tests {
         assert_eq!(local_at_sample(&late, &m) - m.heard_at as i64, 5_000_000);
     }
 
-    /// `[GDE-ECHO-340]`: late hides in a lead-in, early cannot, and far is a
-    /// rejoin either way.
+    /// `[GDE-ECHO-340]`: a transition absorbs an offset either way, and far is
+    /// a rejoin.
     #[test]
     fn an_offset_is_hidden_when_it_can_be_and_rejoined_when_it_cannot() {
         let dead = Duration::from_millis(5);
         let hide = Duration::from_millis(50);
         assert_eq!(offset_fix(4_000_000, dead, hide), OffsetFix::Hold);
         assert_eq!(offset_fix(-4_000_000, dead, hide), OffsetFix::Hold);
-        assert_eq!(offset_fix(20_000_000, dead, hide), OffsetFix::SkipInto(20));
-        // Too far to hide.
+        // Late: start the next passage earlier, overlapping a little more.
+        assert_eq!(offset_fix(20_000_000, dead, hide), OffsetFix::ShiftStart(20));
+        // Early: start it later, overlapping a little less. Symmetric.
+        assert_eq!(offset_fix(-20_000_000, dead, hide), OffsetFix::ShiftStart(-20));
+        // Past what a transition can absorb, either way.
         assert_eq!(offset_fix(400_000_000, dead, hide), OffsetFix::Rejoin);
-        // Early at all: there is no negative position to open at.
-        assert_eq!(offset_fix(-20_000_000, dead, hide), OffsetFix::Rejoin);
+        assert_eq!(offset_fix(-400_000_000, dead, hide), OffsetFix::Rejoin);
     }
 
     /// The master moves while this node prepares, so a mid-passage join aims

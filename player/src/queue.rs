@@ -234,8 +234,33 @@ pub fn overlap_ms(a: &QueueEntry, b: &QueueEntry) -> u64 {
 /// makes the overlap depend on how fast the consumer happens to drain, which
 /// silently vanishes without back-pressure and varies under load.
 pub fn should_admit(current: &QueueEntry, played_ms: u64, next: &QueueEntry) -> bool {
-    let remaining = current.duration_ms().saturating_sub(played_ms);
-    remaining <= overlap_ms(current, next)
+    should_admit_nudged(current, played_ms, next, 0)
+}
+
+/// The same, with the overlap widened or narrowed by `nudge_ms`.
+///
+/// **This is how an echo node sheds an offset** `[GDE-ECHO-340]`. Where the
+/// incoming passage sits inside the transition is free in both directions:
+/// starting it earlier overlaps a few milliseconds more and catches up,
+/// starting it later overlaps a few less and waits. No content is skipped or
+/// repeated either way, which is what makes it inaudible and, unlike a
+/// position offset inside the file, what makes it *symmetric* -- there is no
+/// negative position to open at, but there is always a slightly smaller
+/// overlap.
+///
+/// Clamped to a real overlap: widening past the shorter passage would ask for
+/// audio that does not exist, and narrowing past zero would open a gap, which
+/// is a worse fault than the offset being corrected.
+pub fn should_admit_nudged(
+    current: &QueueEntry,
+    played_ms: u64,
+    next: &QueueEntry,
+    nudge_ms: i64,
+) -> bool {
+    let overlap = overlap_ms(current, next);
+    let ceiling = current.duration_ms().min(next.duration_ms());
+    let want = (overlap as i64).saturating_add(nudge_ms).clamp(0, ceiling as i64) as u64;
+    current.duration_ms().saturating_sub(played_ms) <= want
 }
 
 /// The upcoming passages, in order.
@@ -608,6 +633,41 @@ mod tests {
         assert!(!should_admit(&a, 55_000, &b), "1s too early");
         assert!(should_admit(&a, 56_000, &b), "exactly at the lead-out point");
         assert!(should_admit(&a, 58_000, &b), "and after it");
+    }
+
+    /// `[GDE-ECHO-340]`'s offset correction, both ways. A late node admits
+    /// sooner and overlaps more; an early one admits later and overlaps less.
+    /// Neither skips or repeats a sample.
+    #[test]
+    fn a_nudge_moves_the_transition_either_way() {
+        let a = entry(1, 60_000, 0, 4_000);
+        let b = entry(2, 60_000, 6_000, 0); // overlap = 4s
+        // Late by 40 ms: start 40 ms earlier than the plain rule would.
+        assert!(should_admit_nudged(&a, 55_960, &b, 40));
+        assert!(!should_admit_nudged(&a, 55_959, &b, 40));
+        // Early by 40 ms: wait 40 ms longer.
+        assert!(!should_admit_nudged(&a, 56_000, &b, -40), "the plain point is now too soon");
+        assert!(should_admit_nudged(&a, 56_040, &b, -40));
+        // Zero is exactly the plain rule.
+        assert_eq!(should_admit_nudged(&a, 56_000, &b, 0), should_admit(&a, 56_000, &b));
+    }
+
+    /// Narrowing through zero would open a gap, and widening past the audio
+    /// would ask for overlap that does not exist. Both clamp.
+    #[test]
+    fn a_nudge_cannot_open_a_gap_or_invent_audio() {
+        let a = entry(1, 10_000, 0, 0);
+        let b = entry(2, 10_000, 0, 0); // no overlap at all
+        // A negative nudge cannot push the handover past the end.
+        assert!(should_admit_nudged(&a, 10_000, &b, -5_000),
+                "clamped at zero: still a gapless handover");
+        // A huge positive nudge caps at the shorter passage, which is a full
+        // overlap and therefore admission at once -- extreme, but bounded, and
+        // it cannot ask for audio that is not there.
+        assert!(should_admit_nudged(&a, 0, &b, 999_000), "capped at the full duration");
+        let long = entry(3, 600_000, 0, 0);
+        assert!(!should_admit_nudged(&long, 0, &b, 999_000),
+                "the cap is the SHORTER of the two, not whatever was asked for");
     }
 
     #[test]

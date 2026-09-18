@@ -86,11 +86,11 @@ const MID_JOIN_MARGIN: Duration = Duration::from_secs(1);
 /// smaller number here.
 const OFFSET_DEADBAND: Duration = Duration::from_millis(40);
 
-/// The most that can be shed by opening a passage further in.
+/// The most a single transition may be asked to absorb.
 ///
-/// A quarter second is still inside the quiet opening of most passages, and an
-/// offset larger than this is better fixed by placing the first sample afresh
-/// `[GDE-ECHO-340]`.
+/// Beyond this the overlap would have to grow past the audio that exists or
+/// shrink through zero into a gap, and placing the first sample afresh is both
+/// cleaner and, at that size, no longer inaudible anyway `[GDE-ECHO-340]`.
 const OFFSET_MAX_HIDDEN: Duration = Duration::from_millis(250);
 
 /// This node's own anchor, as it publishes it to anyone following *it*.
@@ -248,20 +248,21 @@ async fn act(
                                         residual as f64 / 1e6));
             match crate::echo::offset_fix(residual, OFFSET_DEADBAND, OFFSET_MAX_HIDDEN) {
                 crate::echo::OffsetFix::Hold => {}
-                crate::echo::OffsetFix::SkipInto(ms) => {
+                crate::echo::OffsetFix::ShiftStart(ms) => {
                     *corrected = Some(m.passage_id);
                     note(last, format!(
-                        "echo-offset: {:+.0} ms out; opening the next passage {ms} ms in",
-                        residual as f64 / 1e6));
+                        "echo-offset: {:+.0} ms out; starting the next passage {} ms {}",
+                        residual as f64 / 1e6, ms.abs(),
+                        if ms > 0 { "earlier" } else { "later" }));
                     handle.send(Command::EchoCorrectNextStart(ms));
                 }
-                // Early, or too far to hide. Saying so beats a silent hold --
-                // this is the case a listener would otherwise hear and not be
-                // able to explain `[GOV-SRC-040]`.
+                // Too far for one transition to absorb. Saying so beats a
+                // silent hold -- this is the case a listener would otherwise
+                // hear and not be able to explain `[GOV-SRC-040]`.
                 crate::echo::OffsetFix::Rejoin => {
                     *corrected = Some(m.passage_id);
                     note(last, format!(
-                        "echo-offset: {:+.0} ms out, too far or the wrong way to hide; waiting for a scheduled start", residual as f64 / 1e6));
+                        "echo-offset: {:+.0} ms out, more than one transition can absorb; waiting for a scheduled start", residual as f64 / 1e6));
                 }
             }
         }

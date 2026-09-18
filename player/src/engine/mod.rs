@@ -17,7 +17,7 @@ use crate::db::PlayerStore;
 use crate::decoder::PassageDecoder;
 use crate::fade::{Curve, Envelope, Fade};
 use crate::mixer::{mix, Stream};
-use crate::queue::{should_admit, Queue, QueueEntry};
+use crate::queue::{should_admit_nudged, Queue, QueueEntry};
 use crate::resample::Resampler;
 use crate::BUFFER_FRAMES;
 
@@ -231,14 +231,13 @@ pub enum Command {
     /// Join at once, or wait for the followed node's next passage
     /// `[SPEC-ECHO-030]`.
     SetEchoJoinNow(bool),
-    /// Open the next passage this many ms further in, to shed an offset
-    /// `[GDE-ECHO-340]`.
+    /// Start the next passage this many ms earlier, negative for later, to
+    /// shed an offset `[GDE-ECHO-340]`.
     ///
-    /// Applied once, to the next admission, and only when nothing else has
-    /// asked for a resume position -- a listener's own resume point is a
-    /// statement about where to play from and outranks a few milliseconds of
-    /// alignment.
-    EchoCorrectNextStart(u64),
+    /// Spends the transition's overlap rather than the passage's content:
+    /// nothing is skipped or repeated, and it works in both directions
+    /// `[should_admit_nudged]`. Applied once, to the next admission.
+    EchoCorrectNextStart(i64),
     /// Begin this passage, this far in, at this wall-clock instant
     /// `[GDE-ECHO-330]`.
     ///
@@ -375,8 +374,10 @@ pub struct Engine {
     /// Join at once, or wait for the followed node's next passage
     /// `[SPEC-ECHO-030]`.
     pub(crate) echo_join_now: bool,
-    /// An offset correction waiting for the next admission `[GDE-ECHO-340]`.
-    pub(crate) echo_next_start_ms: Option<u64>,
+    /// An offset correction waiting for the next admission, ms earlier
+    /// `[GDE-ECHO-340]`. Zero is no correction, which is also the resting
+    /// state of a node that is already level.
+    pub(crate) echo_next_shift_ms: i64,
     /// A start instant committed to but not yet reached `[GDE-ECHO-330]`.
     echo_start: Option<(QueueEntry, u64, u64)>,
     echo_seen_recoveries: u64,
@@ -584,7 +585,7 @@ impl Engine {
             echo_delay_trim_ms: 0,
             echo_follow_host: String::new(),
             echo_join_now: true,
-            echo_next_start_ms: None,
+            echo_next_shift_ms: 0,
             echo_start: None,
             echo_seen_recoveries: 0,
             echo_seen_underruns: 0,
@@ -873,7 +874,7 @@ impl Engine {
                     }
                 }
                 Ok(Command::EchoCorrectNextStart(ms)) => {
-                    self.echo_next_start_ms = Some(ms);
+                    self.echo_next_shift_ms = ms;
                 }
                 Ok(Command::SetEchoJoinNow(now)) => {
                     self.echo_join_now = now;
@@ -1270,7 +1271,12 @@ impl Engine {
     fn admit_due(&mut self) {
         let due = match (self.queue.peek(), self.live.last()) {
             (Some(next), Some(l)) => {
-                should_admit(&l.entry, self.played_ms(l), next)
+                // The offset correction rides here `[GDE-ECHO-340]`: a node
+                // that is late admits a few ms sooner, overlapping more and
+                // catching up; one that is early admits later. Spending the
+                // transition costs no content in either direction.
+                should_admit_nudged(
+                    &l.entry, self.played_ms(l), next, self.echo_next_shift_ms)
             }
             (Some(_), None) => true,
             _ => false,
@@ -1282,6 +1288,14 @@ impl Engine {
         // `live`, where `live[0]` is what is sounding. Keeping a passage in
         // both places would mean two answers to "what is playing".
         let Some(entry) = self.queue.advance() else { return };
+        // Spent. A correction left in place would be applied again at every
+        // boundary, turning a one-off nudge into a standing rate error.
+        if self.echo_next_shift_ms != 0 {
+            eprintln!("echo-offset: passage {} admitted {} ms {} to shed an offset",
+                      entry.passage_id, self.echo_next_shift_ms.abs(),
+                      if self.echo_next_shift_ms > 0 { "early" } else { "late" });
+            self.echo_next_shift_ms = 0;
+        }
         // The forward schedule `[GDE-ECHO-310]`, emitted here because here is
         // where the ~15 s of lead exists: everything already in the ring plays
         // before this passage's first sample can sound, and that lead is what
@@ -1292,14 +1306,7 @@ impl Engine {
         // passage part-way in, and a schedule announcing sample 0 for a
         // passage that begins at 3 minutes tells every follower to play the
         // wrong audio at the right time `[GDE-ECHO-325]`.
-        // A listener's resume point wins; the correction fills the gap when
-        // there is none, which at an ordinary passage boundary is always.
-        let origin = self.pending_resume.take().or_else(|| {
-            self.echo_next_start_ms.take().inspect(|ms| {
-                eprintln!("echo-offset: opening passage {} {ms} ms in to shed an offset",
-                          entry.passage_id);
-            })
-        });
+        let origin = self.pending_resume.take();
         if let Some(r) = self.path.ring.as_ref() {
             if r.clock.timestamps() == crate::output::Timestamps::Hardware {
                 if let Ok(d) = std::time::SystemTime::now()
