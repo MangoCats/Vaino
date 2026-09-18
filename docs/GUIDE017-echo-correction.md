@@ -94,6 +94,35 @@ the window, because a straight line through a step reads as a large rate that
 never happened: a 40 ms correction inside a half-hour window fits to about
 33 ppm.
 
+**`[GDE-ECHO-341]` Every correction must shrink the error it was given, which
+means an offset is bitten off and never escalated.** Found by running two
+nodes: `lempiplay3` sat a steady **0.9 s** behind `bose` while correcting
+continuously and reducing it not at all.
+
+The loop had two moves and reached for the wrong one. A shift spends the
+transition's overlap and always reduces the offset by however much it spends. A
+rejoin throws the node's first sample down afresh -- and *inherits whatever
+error that placement carries*. When the residual exceeded what one transition
+could absorb the loop escalated to a rejoin, the rejoin landed with the same
+systematic bias, and the next measurement found the same offset again. It could
+run for ever without converging, and did.
+
+So a large offset is now corrected by taking the largest bite the transition
+allows and coming back for the rest: 886 ms is two transitions at half a second
+each, monotonically. `Rejoin` is reserved for a residual past five seconds,
+where the node is probably not playing what it thinks it is and placing the
+first sample afresh is the honest answer rather than a smaller correction.
+
+**`[GDE-ECHO-342]` The join bias itself is real and not yet fixed.** A
+commanded start lands late by a variable few hundred milliseconds to a second.
+`skip_lead_ms` is compensated `[GDE-ECHO-337]`, but before cutting the ring the
+engine synchronously tops the incoming decoder up, and that takes as long as it
+takes -- "seconds", on an appliance seeking into a long capture
+`[PI-CHR-075]`. A correction loop that always converges makes this survivable
+rather than fatal, which is why it is recorded here and not patched in a hurry:
+the durable fix is to place the incoming audio at a computed ring depth
+`[placement]` rather than to fire early by a constant and hope.
+
 **`[GDE-ECHO-350]` Hysteresis and a rate limit, or the loop will hunt.** Trim
 only while the estimated offset exceeds a deadband comfortably larger than the
 measurement noise, never more than one frame per correction interval, and never

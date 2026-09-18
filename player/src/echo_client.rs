@@ -100,10 +100,14 @@ const OFFSET_DEADBAND: Duration = Duration::from_millis(40);
 
 /// The most a single transition may be asked to absorb.
 ///
-/// Beyond this the overlap would have to grow past the audio that exists or
-/// shrink through zero into a gap, and placing the first sample afresh is both
-/// cleaner and, at that size, no longer inaudible anyway `[GDE-ECHO-340]`.
-const OFFSET_MAX_HIDDEN: Duration = Duration::from_millis(250);
+/// Half a second of a crossfade made longer or shorter is not something a
+/// listener can point at, and a larger offset is simply taken in more than one
+/// bite `[GDE-ECHO-341]`.
+const OFFSET_MAX_BITE: Duration = Duration::from_millis(500);
+
+/// Beyond this a node is probably not playing what it thinks it is, and
+/// placing its first sample afresh is the honest answer `[GDE-ECHO-341]`.
+const OFFSET_REJOIN_BEYOND: Duration = Duration::from_secs(5);
 
 /// The rate fit's window, and what it takes before it means anything.
 ///
@@ -396,7 +400,8 @@ async fn act(
             // from now needs a baseline to fail against.
             set_status(handle, &format!("Following, {:+.0} ms from that node.",
                                         residual as f64 / 1e6));
-            match crate::echo::offset_fix(residual, OFFSET_DEADBAND, OFFSET_MAX_HIDDEN) {
+            match crate::echo::offset_fix(
+                residual, OFFSET_DEADBAND, OFFSET_MAX_BITE, OFFSET_REJOIN_BEYOND) {
                 crate::echo::OffsetFix::Hold => {}
                 crate::echo::OffsetFix::ShiftStart(ms) => {
                     fs.corrected = Some(m.passage_id);
@@ -424,7 +429,7 @@ async fn act(
                     // residual just as a nudge does.
                     fs.rate.clear();
                     note(&mut fs.note, format!(
-                        "echo-offset: {:+.0} ms out, more than one transition can absorb; waiting for a scheduled start", residual as f64 / 1e6));
+                        "echo-offset: {:+.0} ms out, which is not an offset any more; waiting for a scheduled start", residual as f64 / 1e6));
                 }
             }
         }

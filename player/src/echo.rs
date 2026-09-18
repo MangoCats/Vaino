@@ -507,10 +507,14 @@ pub enum OffsetFix {
     ShiftStart(i64),
     /// Start the next passage from the master's schedule instead.
     ///
-    /// For an offset too large to absorb in a transition: past that, the
-    /// overlap would have to grow beyond the audio that exists or shrink
-    /// through zero into a gap. The only way back is to place the first sample
-    /// afresh, which is what a scheduled start does `[GDE-ECHO-330]`.
+    /// **Only for an offset so large the node is probably not playing what it
+    /// thinks it is.** A rejoin is not a smaller correction than a shift, it
+    /// is a *different* one: it throws the first sample down afresh and
+    /// inherits whatever error that placement carries, where a shift always
+    /// reduces the error it was given. Reaching for it to fix an ordinary
+    /// offset is how a follower thrashes -- observed on `lempiplay3`
+    /// 2026-09-18, rejoining every few seconds and holding a steady 0.9 s of
+    /// lag it never once reduced `[GDE-ECHO-341]`.
     Rejoin,
 }
 
@@ -522,17 +526,30 @@ pub enum OffsetFix {
 /// because an offset is a position rather than a slope: it does not grow
 /// while nobody is looking, which is exactly the property `[GDE-ECHO-340]`
 /// separates it from rate for.
-pub fn offset_fix(residual: i64, deadband: Duration, max_hidden: Duration) -> OffsetFix {
+pub fn offset_fix(
+    residual: i64,
+    deadband: Duration,
+    max_bite: Duration,
+    rejoin_beyond: Duration,
+) -> OffsetFix {
     if residual.unsigned_abs() <= deadband.as_nanos() as u64 {
         return OffsetFix::Hold;
     }
-    if residual.unsigned_abs() <= max_hidden.as_nanos() as u64 {
-        // Late is positive, and a late node starts the next passage EARLIER --
-        // the sign survives unchanged, which is worth saying because it is the
-        // kind of thing that reads either way at a glance.
-        return OffsetFix::ShiftStart(residual / 1_000_000);
+    if residual.unsigned_abs() > rejoin_beyond.as_nanos() as u64 {
+        return OffsetFix::Rejoin;
     }
-    OffsetFix::Rejoin
+    // **Bitten off, never escalated.** An offset larger than one transition can
+    // absorb is corrected by taking the largest bite the transition allows and
+    // coming back for the rest, which reduces the error every time. Escalating
+    // to a rejoin instead re-places the first sample and inherits that
+    // placement's own error, so a node with a systematic join bias corrects
+    // forever and converges never `[GDE-ECHO-341]`.
+    //
+    // Late is positive, and a late node starts the next passage EARLIER -- the
+    // sign survives unchanged, which is worth saying because it reads either
+    // way at a glance.
+    let bite = max_bite.as_nanos() as i64;
+    OffsetFix::ShiftStart(residual.clamp(-bite, bite) / 1_000_000)
 }
 
 /// Where a passage actually is **in the air**, and when that was true.
@@ -1277,21 +1294,46 @@ mod tests {
                 "and it is symmetric");
     }
 
+    /// The loop must shrink the error it is given, whatever it is given
+    /// `[GDE-ECHO-341]`. A node with a systematic join bias converges only if
+    /// every correction reduces the offset; escalating never does.
+    #[test]
+    fn a_large_offset_walks_in_rather_than_escalating() {
+        let dead = Duration::from_millis(40);
+        let bite = Duration::from_millis(500);
+        let far = Duration::from_secs(5);
+        // The 886 ms actually observed, corrected across transitions.
+        let mut r: i64 = 886_000_000;
+        let mut steps = 0;
+        while let OffsetFix::ShiftStart(ms) = offset_fix(r, dead, bite, far) {
+            assert!(ms > 0, "a late node always starts earlier");
+            r -= ms * 1_000_000;
+            steps += 1;
+            assert!(steps < 10, "it must converge, not circle");
+        }
+        assert_eq!(offset_fix(r, dead, bite, far), OffsetFix::Hold);
+        assert_eq!(steps, 2, "886 ms is two transitions at half a second a bite");
+    }
+
     /// `[GDE-ECHO-340]`: a transition absorbs an offset either way, and far is
     /// a rejoin.
     #[test]
     fn an_offset_is_hidden_when_it_can_be_and_rejoined_when_it_cannot() {
         let dead = Duration::from_millis(5);
         let hide = Duration::from_millis(50);
-        assert_eq!(offset_fix(4_000_000, dead, hide), OffsetFix::Hold);
-        assert_eq!(offset_fix(-4_000_000, dead, hide), OffsetFix::Hold);
+        let far = Duration::from_secs(5);
+        assert_eq!(offset_fix(4_000_000, dead, hide, far), OffsetFix::Hold);
+        assert_eq!(offset_fix(-4_000_000, dead, hide, far), OffsetFix::Hold);
         // Late: start the next passage earlier, overlapping a little more.
-        assert_eq!(offset_fix(20_000_000, dead, hide), OffsetFix::ShiftStart(20));
+        assert_eq!(offset_fix(20_000_000, dead, hide, far), OffsetFix::ShiftStart(20));
         // Early: start it later, overlapping a little less. Symmetric.
-        assert_eq!(offset_fix(-20_000_000, dead, hide), OffsetFix::ShiftStart(-20));
-        // Past what a transition can absorb, either way.
-        assert_eq!(offset_fix(400_000_000, dead, hide), OffsetFix::Rejoin);
-        assert_eq!(offset_fix(-400_000_000, dead, hide), OffsetFix::Rejoin);
+        assert_eq!(offset_fix(-20_000_000, dead, hide, far), OffsetFix::ShiftStart(-20));
+        // Larger than one transition can absorb: take the biggest bite and come
+        // back for the rest `[GDE-ECHO-341]` rather than escalating.
+        assert_eq!(offset_fix(400_000_000, dead, hide, far), OffsetFix::ShiftStart(50));
+        assert_eq!(offset_fix(-400_000_000, dead, hide, far), OffsetFix::ShiftStart(-50));
+        // Only an absurd one is a rejoin.
+        assert_eq!(offset_fix(9_000_000_000, dead, hide, far), OffsetFix::Rejoin);
     }
 
     /// The master moves while this node prepares, so a mid-passage join aims
