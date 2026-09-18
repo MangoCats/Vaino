@@ -1397,10 +1397,17 @@ impl Engine {
         // `[GDE-ECHO-347]`.
         let (_, fine) = self.echo_split();
         if self.echo_next_shift_ms != 0 {
-            eprintln!("echo-offset: passage {} shifted {} ms {} ({} ms into the passage)",
-                      entry.passage_id, self.echo_next_shift_ms.abs(),
-                      if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
-                      fine);
+            // A commanded start brings its own position and outranks this; say
+            // which happened rather than claiming a shift that was dropped
+            // `[GDE-ECHO-351]`.
+            if self.pending_resume.is_some() {
+                eprintln!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo_next_shift_ms.abs());
+            } else {
+                eprintln!("echo-offset: passage {} shifted {} ms {} ({} ms into the passage)",
+                          entry.passage_id, self.echo_next_shift_ms.abs(),
+                          if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
+                          fine);
+            }
             self.echo_next_shift_ms = 0;
         }
         // The forward schedule `[GDE-ECHO-310]`, emitted here because here is

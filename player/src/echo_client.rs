@@ -616,6 +616,16 @@ async fn act(
             }
             fs.want_rejoin = false;
             fs.rate.clear();
+            fs.filtered.clear();
+            // **Committed.** A start is queued for a future instant, so the
+            // passage is in neither `current` nor the queue until it fires --
+            // which means `coming_here` says no and the mid-passage join
+            // races it `[GDE-ECHO-354]`. Observed on a skip: the follower
+            // took the master's corrected schedule at sample 0, then a second
+            // later joined the same passage part-way in and threw it away.
+            // Recording the commitment here is what makes the two paths see
+            // each other.
+            fs.mid_joined = Some(passage_id);
             let at = fs.clock.to_local(at).unwrap_or(at);
             start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;
         }

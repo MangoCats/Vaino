@@ -162,6 +162,27 @@ apart, and the test only has to separate them rather than measure either. With
 either figure missing it believes the master rather than a guess about its own
 future `[GOV-SRC-040]`.
 
+**`[GDE-ECHO-354]` A commanded start must be visible to the thing that would
+otherwise duplicate it.** With the two fixes above in place a skip did
+propagate -- and landed badly anyway. The journals show why:
+
+    bose   echo-schedule: passage=9852 sound_at=...661914 depth=660315   (pre-cut, wrong)
+    bose   echo-schedule: passage=9852 sound_at=...647449 depth=22050    (post-cut, right)
+    lp3    echo-follow: starting passage 9852 at sample 0 in 0.468s      (took the right one)
+    lp3    echo-follow: joining part-way into passage 9852 at sample 51332
+
+The follower did the right thing and then undid it one second later. A start
+is *queued for a future instant*, so between committing and firing the passage
+is in neither `current` nor the queue -- `coming_here` `[GDE-ECHO-353]` says
+no, and the mid-passage join fires into a passage already committed to,
+replacing an accurate placement at sample 0 with an approximate one part-way
+in.
+
+The two paths now record their commitment in the same place, so each can see
+the other. That both existed independently is the underlying fault: two ways
+to place a passage, neither aware of the other, and a race that only appears
+when a control change makes both eligible at once.
+
 **`[GDE-ECHO-335]` A queue edit outside the ring's window has no synchrony
 consequence at all.** Reordering, inserting or removing anything that is neither
 playing now nor already scheduled within the ring's depth arrives in time to be
