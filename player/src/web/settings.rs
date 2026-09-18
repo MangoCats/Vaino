@@ -46,6 +46,16 @@ pub(super) async fn set_echo_follow(
     StatusCode::NO_CONTENT
 }
 
+/// Join at once, or wait for the followed node's next passage
+/// `[SPEC-ECHO-030]`.
+pub(super) async fn set_echo_join_now(
+    State(ui): State<Ui>,
+    axum::extract::Path(now): axum::extract::Path<String>,
+) -> StatusCode {
+    ui.handle.send(Command::SetEchoJoinNow(matches!(now.as_str(), "1" | "true" | "now")));
+    StatusCode::NO_CONTENT
+}
+
 /// How often the resume point is written `[REQ-VIS-155]`.
 pub(super) async fn set_resume_save(
     State(ui): State<Ui>,

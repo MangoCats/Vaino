@@ -1201,6 +1201,7 @@ const Vaino = (() => {
     echoTrim: ms => post(`/echo/trim/${Math.round(ms)}`),
     echoTrimReset: () => post('/echo/trim/reset'),
     echoFollow: host => fetch('/echo/follow', { method: 'POST', body: String(host ?? '') }),
+    echoJoinNow: now => post(`/echo/join/${now ? 1 : 0}`),
     skipSuppress: h => post(`/skip/suppress/${Math.round(h)}`),
     dequeueSuppress: h => post(`/dequeue/suppress/${Math.round(h)}`),
     queueDepth: n => post(`/queue/depth/${Math.round(n)}`),

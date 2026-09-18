@@ -65,6 +65,24 @@ fn wanted_url(handle: &EngineHandle) -> Option<String> {
     (!host.is_empty()).then(|| format!("ws://{host}/ws"))
 }
 
+/// How far ahead of itself a mid-passage join aims `[SPEC-ECHO-030]`.
+///
+/// It has to cover a 10 ms tick, the engine opening and first-decoding the
+/// file -- tens of milliseconds on a Pi -- and whatever the snapshot took to
+/// arrive. A second is comfortably more than all of that and comfortably
+/// inside `[GDE-ECHO-325]`'s five-second allowance for a resync. Aiming too
+/// close simply fails the join and waits for the next snapshot, which is why
+/// this errs long.
+const MID_JOIN_MARGIN: Duration = Duration::from_secs(1);
+
+/// Join at once, and what this node is playing, as the panel has them.
+fn join_intent(handle: &EngineHandle) -> (bool, Option<i64>) {
+    match handle.state.lock() {
+        Ok(s) => (s.echo_node.join_now, s.current.as_ref().map(|e| e.passage_id)),
+        Err(_) => (false, None),
+    }
+}
+
 /// Say what following is actually doing, where the panel can see it.
 ///
 /// The engine rewrites `echo_node` twice a second and deliberately carries
@@ -94,6 +112,9 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
         };
         let mut follower =
             Follower::new(cfg.timing, Duration::from_micros(500), Duration::from_secs(1));
+        // Per connection: a node that reconnects should catch up again, since
+        // whatever it was playing while disconnected is by then its own.
+        let mut mid_joined: Option<i64> = None;
         // A follower's basis would normally be established and voided by its
         // own audio path. Nothing here trims, so nothing consults it; it is
         // established once and left alone, and that is said out loud because a
@@ -138,7 +159,7 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
                 }
             };
             let Ok(snap) = serde_json::from_str::<Snapshot>(&text) else { continue };
-            act(&mut follower, &snap.echo, &cfg, &handle, &mut last_note).await;
+            act(&mut follower, &snap.echo, &cfg, &handle, &mut last_note, &mut mid_joined).await;
         }
         set_status(&handle, "Not connected.");
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -151,7 +172,36 @@ async fn act(
     cfg: &Following,
     handle: &Arc<EngineHandle>,
     last: &mut String,
+    mid_joined: &mut Option<i64>,
 ) {
+    // Catching up to what the master is ALREADY playing, which the schedule
+    // cannot do: a schedule describes a passage about to start, and the moment
+    // somebody switches a speaker into follower mode is almost never one
+    // `[SPEC-ECHO-030]`.
+    //
+    // Attempted once per master passage. A node whose library lacks it must
+    // not retry twice a second forever, and when the master moves on the
+    // ordinary schedule path takes over anyway.
+    let (join_now, playing) = join_intent(handle);
+    if join_now {
+        if let Some(a) = st.anchor.as_ref() {
+            let already = playing == Some(a.passage_id) || *mid_joined == Some(a.passage_id);
+            if !already {
+                *mid_joined = Some(a.passage_id);
+                let air = crate::echo::AirPosition {
+                    passage_id: a.passage_id,
+                    position_ms: a.sample.saturating_mul(1000) / a.rate.max(1) as u64,
+                    at: a.heard_at,
+                };
+                let lead = cfg.timing.offset() + MID_JOIN_MARGIN;
+                if let Some(j) = crate::echo::join_mid_passage(&air, cfg.timing, now_nanos(), lead) {
+                    start(j.passage_id, j.start_sample, j.submit_at, cfg, handle, last,
+                          "joining part-way into").await;
+                }
+            }
+        }
+    }
+
     match f.on_state(st, now_nanos()) {
         Follow::Idle => {}
         Follow::Hold(why) => {
@@ -172,35 +222,50 @@ async fn act(
                 cfg.timing.offset().as_millis()));
         }
         Follow::StartAt { passage_id, start_sample, at } => {
-            let db = cfg.db.clone();
-            let library = cfg.library.clone();
-            // The library is SQLite and blocking; the socket must not wait on
-            // a disk read. Once per passage, so the spawn costs nothing.
-            let found = tokio::task::spawn_blocking(move || {
-                crate::db::Library::open_split(&db, &library)
-                    .and_then(|lib| lib.passage(passage_id))
-            }).await;
-            match found {
-                Ok(Ok(entry)) => {
-                    set_status(handle, "Following.");
-                    eprintln!("echo-follow: starting passage {passage_id} at sample \
-{start_sample} in {:.3}s", (at as i64 - now_nanos() as i64) as f64 / 1e9);
-                    handle.send(Command::EchoStartAt { entry, start_sample, at_nanos: at });
-                }
-                // A master playing something this node does not have is the
-                // expected cost of independent libraries, not an error to
-                // retry `[GDE-ECHO-420]`. It is reported once and the node
-                // carries on with its own programme.
-                Ok(Err(e)) => {
-                    set_status(handle, &format!(
-                        "That node is playing something this one does not have (passage {passage_id}); playing its own queue instead."));
-                    note(last, format!(
-                    "echo-follow: passage {passage_id} is not in this node's library ({e}); \
-staying with its own queue"));
-                }
-                Err(e) => note(last, format!("echo-follow: library lookup failed: {e}")),
-            }
+            start(passage_id, start_sample, at, cfg, handle, last, "starting").await;
         }
+    }
+}
+
+/// Resolve a passage against this node's own library and commit to the instant.
+///
+/// Both ways in land here -- a schedule for a passage about to start, and a
+/// mid-passage catch-up -- because they differ only in which sample they name.
+#[allow(clippy::too_many_arguments)]
+async fn start(
+    passage_id: i64,
+    start_sample: u64,
+    at: u64,
+    cfg: &Following,
+    handle: &Arc<EngineHandle>,
+    last: &mut String,
+    what: &str,
+) {
+    let db = cfg.db.clone();
+    let library = cfg.library.clone();
+    // The library is SQLite and blocking; the socket must not wait on a disk
+    // read. Once per passage, so the spawn costs nothing.
+    let found = tokio::task::spawn_blocking(move || {
+        crate::db::Library::open_split(&db, &library).and_then(|lib| lib.passage(passage_id))
+    })
+    .await;
+    match found {
+        Ok(Ok(entry)) => {
+            set_status(handle, "Following.");
+            eprintln!("echo-follow: {what} passage {passage_id} at sample {start_sample} in {:.3}s", (at as i64 - now_nanos() as i64) as f64 / 1e9);
+            handle.send(Command::EchoStartAt { entry, start_sample, at_nanos: at });
+        }
+        // A master playing something this node does not have is the expected
+        // cost of independent libraries, not an error to retry
+        // `[GDE-ECHO-420]`. Reported once; the node carries on with its own
+        // programme.
+        Ok(Err(e)) => {
+            set_status(handle, &format!(
+                "That node is playing something this one does not have (passage {passage_id}); playing its own queue instead."));
+            note(last, format!(
+                "echo-follow: passage {passage_id} is not in this node's library ({e}); staying with its own queue"));
+        }
+        Err(e) => note(last, format!("echo-follow: library lookup failed: {e}")),
     }
 }
 

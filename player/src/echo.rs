@@ -617,6 +617,57 @@ pub enum Rejoin {
 
 /// Decide between playing out and joining, given what is sounding here and
 /// where the master is.
+/// A mid-passage join: what to open, where, and when to submit it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MidJoin {
+    pub passage_id: i64,
+    /// The sample the master will have reached when this node's audio lands.
+    pub start_sample: u64,
+    /// When to hand sample `start_sample` to the device `[GDE-ECHO-410]`.
+    pub submit_at: WallNanos,
+}
+
+/// Join a master part-way through what it is already playing.
+///
+/// `[GDE-ECHO-330]` deferred this and `[GDE-ECHO-510]` made it required; a
+/// listener switching a speaker into follower mode makes it required again,
+/// because the master is almost never at a passage boundary at the moment
+/// somebody presses the button.
+///
+/// The master moves while this node prepares, so the target is not where it is
+/// but where it **will be**: pick an instant `lead` ahead, extrapolate the
+/// master's position to it, and submit so that sample lands then.
+///
+/// Extrapolation ignores the master's own rate error, which is a deliberate
+/// omission rather than an oversight -- at the ~14 ppm measured for this fleet
+/// `[LOG-P4-130]` a one-second lead accrues 14 microseconds, four orders below
+/// the tens of milliseconds the anchor itself carries `[LOG-P4-010]`. A
+/// correction here would be arithmetic theatre.
+///
+/// `None` when the anchor is from the future, which means clocks disagree and
+/// no arithmetic here can fix it `[GDE-ECHO-365]`.
+pub fn join_mid_passage(
+    m: &AirPosition,
+    node: NodeTiming,
+    now: WallNanos,
+    lead: Duration,
+) -> Option<MidJoin> {
+    let target = now.checked_add(lead.as_nanos() as u64)?;
+    let ahead_ns = target.checked_sub(m.at)?;
+    let position_ms = m.position_ms + ahead_ns / 1_000_000;
+    // Submitting is earlier than sounding by this node's own offset, and a
+    // lead shorter than that offset cannot be met at all.
+    let submit_at = target.checked_sub(node.offset().as_nanos() as u64)?;
+    if submit_at < now {
+        return None;
+    }
+    Some(MidJoin {
+        passage_id: m.passage_id,
+        start_sample: position_ms.saturating_mul(node.rate.max(1) as u64) / 1000,
+        submit_at,
+    })
+}
+
 pub fn rejoin_action(sounding: Option<i64>, master: Option<&AirPosition>) -> Option<Rejoin> {
     let m = master?;
     match sounding {
@@ -754,6 +805,42 @@ mod tests {
             }
             other => panic!("expected TooShallow, got {other:?}"),
         }
+    }
+
+    /// The master moves while this node prepares, so a mid-passage join aims
+    /// where it WILL be. One second of lead is one second further in.
+    #[test]
+    fn a_mid_passage_join_aims_ahead_of_where_the_master_is() {
+        let now = 100 * SEC;
+        // Master heard 30.000 s into passage 9, as of now.
+        let m = AirPosition { passage_id: 9, position_ms: 30_000, at: now };
+        let j = join_mid_passage(&m, BOSE, now, Duration::from_secs(1)).unwrap();
+        assert_eq!(j.passage_id, 9);
+        assert_eq!(j.start_sample, 31_000 * 44100 / 1000, "31.000 s, not 30.000");
+        // Submitting is earlier than sounding by this node's own offset.
+        assert_eq!(now + SEC - j.submit_at, BOSE.offset().as_nanos() as u64);
+    }
+
+    /// A node with a large offset needs a lead longer than that offset; there
+    /// is no arithmetic that recovers a shorter one `[GDE-ECHO-410]`.
+    #[test]
+    fn a_lead_shorter_than_the_offset_is_refused() {
+        let now = 100 * SEC;
+        let m = AirPosition { passage_id: 9, position_ms: 30_000, at: now };
+        // vainopi's 355 ms against a 100 ms lead.
+        assert_eq!(join_mid_passage(&m, VAINOPI, now, Duration::from_millis(100)), None);
+        // The same node with room to work in is fine.
+        assert!(join_mid_passage(&m, VAINOPI, now, Duration::from_millis(500)).is_some());
+    }
+
+    /// A stale anchor still extrapolates: that is the whole point of carrying
+    /// `at` beside the position rather than a bare position.
+    #[test]
+    fn an_anchor_from_a_moment_ago_extrapolates_from_its_own_timestamp() {
+        let now = 100 * SEC;
+        let m = AirPosition { passage_id: 9, position_ms: 30_000, at: now - 2 * SEC };
+        let j = join_mid_passage(&m, BOSE, now, Duration::from_secs(1)).unwrap();
+        assert_eq!(j.start_sample, 33_000 * 44100 / 1000, "2 s stale plus 1 s lead");
     }
 
     /// `[GDE-ECHO-315]`: the slower node announcing is fine, and is in fact the

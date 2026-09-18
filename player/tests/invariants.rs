@@ -260,6 +260,7 @@ fn settings_survive_a_reopen() {
 
     let want = vaino_player::db::Settings {
         // Round-tripped like every other setting `[SPEC-DLY-070]`.
+        echo_join_now: false,
         echo_delay_trim_ms: -7,
         echo_follow_host: "lempiplay3:5720".to_string(),
         volume: 0.42,

@@ -109,6 +109,8 @@ pub struct EchoNode {
     pub rate: u32,
     /// The node being followed, bare host; empty is independent.
     pub follow_host: String,
+    /// Whether entering follower mode joins at once `[SPEC-ECHO-030]`.
+    pub join_now: bool,
     /// What following is actually doing, in the follower's own words
     /// `[SPEC-ECHO-020]`. Empty while independent.
     pub follow_status: String,
@@ -226,6 +228,9 @@ pub enum Command {
     /// The node to follow, as a bare host. Empty means independent
     /// `[SPEC-ECHO-010]`.
     SetEchoFollow(String),
+    /// Join at once, or wait for the followed node's next passage
+    /// `[SPEC-ECHO-030]`.
+    SetEchoJoinNow(bool),
     /// Begin this passage, this far in, at this wall-clock instant
     /// `[GDE-ECHO-330]`.
     ///
@@ -359,6 +364,9 @@ pub struct Engine {
     /// The node this one follows, bare host; empty is independent
     /// `[SPEC-ECHO-010]`.
     pub(crate) echo_follow_host: String,
+    /// Join at once, or wait for the followed node's next passage
+    /// `[SPEC-ECHO-030]`.
+    pub(crate) echo_join_now: bool,
     /// A start instant committed to but not yet reached `[GDE-ECHO-330]`.
     echo_start: Option<(QueueEntry, u64, u64)>,
     echo_seen_recoveries: u64,
@@ -565,6 +573,7 @@ impl Engine {
             echo_depth_shortfall: 0,
             echo_delay_trim_ms: 0,
             echo_follow_host: String::new(),
+            echo_join_now: true,
             echo_start: None,
             echo_seen_recoveries: 0,
             echo_seen_underruns: 0,
@@ -851,6 +860,10 @@ impl Engine {
                         self.echo_follow_host = host;
                         self.remember_settings();
                     }
+                }
+                Ok(Command::SetEchoJoinNow(now)) => {
+                    self.echo_join_now = now;
+                    self.remember_settings();
                 }
                 Ok(Command::EchoStartAt { entry, start_sample, at_nanos }) => {
                     self.echo_start = Some((entry, start_sample, at_nanos));
@@ -1724,6 +1737,7 @@ impl Engine {
                 clamped,
                 rate: self.out_rate,
                 follow_host: self.echo_follow_host.clone(),
+                join_now: self.echo_join_now,
                 // Written by the follower task, which is the only thing that
                 // knows; left as it found it here.
                 follow_status: s.echo_node.follow_status.clone(),

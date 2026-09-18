@@ -56,6 +56,7 @@ impl Engine {
             lyrics_sidecar: self.lyrics_sidecar,
             echo_delay_trim_ms: self.echo_delay_trim_ms,
             echo_follow_host: self.echo_follow_host.clone(),
+            echo_join_now: self.echo_join_now,
         }
     }
 
@@ -82,6 +83,7 @@ impl Engine {
         self.lyrics_sidecar = s.lyrics_sidecar;
         self.echo_delay_trim_ms = s.echo_delay_trim_ms;
         self.echo_follow_host = s.echo_follow_host.clone();
+        self.echo_join_now = s.echo_join_now;
         self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);

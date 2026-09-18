@@ -527,6 +527,13 @@ pub struct Settings {
     /// rather than a URL: every node serves the same socket at the same path,
     /// so the rest is composed and cannot be got wrong.
     pub echo_follow_host: String,
+    /// Whether entering follower mode joins at once `[SPEC-ECHO-030]`.
+    ///
+    /// **True by default.** Someone who has just typed a node's name wants to
+    /// hear whether it worked, and the alternative can be minutes away. The
+    /// cost is that the passage playing here is cut, which is what a skip
+    /// always costs and is the listener's own choice to make.
+    pub echo_join_now: bool,
 }
 
 impl Settings {
@@ -541,7 +548,7 @@ impl Settings {
     /// against it by `every_setting_survives_a_round_trip`, so a field added to
     /// one and forgotten in the other fails a test rather than silently losing
     /// itself on the next restart.
-    pub const KEYS: [&'static str; 14] = [
+    pub const KEYS: [&'static str; 15] = [
         "volume",
         "skip_fade_ms",
         "skip_lead_ms",
@@ -554,6 +561,7 @@ impl Settings {
         "covers",
         "echo_delay_trim_ms",
         "echo_follow_host",
+        "echo_join_now",
         "lyrics_cache",
         "lyrics_sidecar",
     ];
@@ -575,6 +583,7 @@ impl Settings {
             "lyrics_sidecar" => (self.lyrics_sidecar as i64).to_string(),
             "echo_delay_trim_ms" => self.echo_delay_trim_ms.to_string(),
             "echo_follow_host" => self.echo_follow_host.clone(),
+            "echo_join_now" => (self.echo_join_now as i64).to_string(),
             _ => return None,
         })
     }
@@ -614,6 +623,7 @@ impl Settings {
             // the host somebody chose, and silently blanking it would look
             // like nobody ever set one `[GOV-SRC-040]`.
             "echo_follow_host" => self.echo_follow_host = value.to_string(),
+            "echo_join_now" => self.echo_join_now = flag(),
             _ => {}
         }
     }
@@ -642,6 +652,7 @@ impl Default for Settings {
             // *unset* rather than as a measured zero `[SPEC-DLY-050]`.
             echo_delay_trim_ms: 0,
             echo_follow_host: String::new(),
+            echo_join_now: true,
             lyrics_cache: false,
             lyrics_sidecar: false,
         }
@@ -2245,6 +2256,7 @@ mod tests {
         // quietly falls back to its default fails here rather than passing by
         // coincidence.
         let want = Settings {
+            echo_join_now: false,
             echo_delay_trim_ms: -40,
             echo_follow_host: "bose".to_string(),
             volume: 0.375,
@@ -2289,6 +2301,7 @@ mod tests {
         assert!(store.load_settings().is_none(), "nothing saved yet");
 
         let want = Settings {
+            echo_join_now: true,
             echo_delay_trim_ms: 125,
             echo_follow_host: String::new(),
             volume: 0.5,

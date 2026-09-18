@@ -95,6 +95,8 @@
   // anyone meant to follow, and sending one would make the panel flicker
   // through states nobody chose.
   echoFollow.onchange = () => Vaino.echoFollow(echoFollow.value);
+  const echoJoin = $('echojoin');
+  echoJoin.onchange = () => Vaino.echoJoinNow(echoJoin.value === '1');
 
   const resumeSave = $('resumesave');
   resumeSave.onchange = () => Vaino.resumeSave(resumeSave.value * 1000);
@@ -263,6 +265,7 @@
     if (!n) return;
     if (document.activeElement !== echoTrim) echoTrim.value = n.trim_ms;
     if (document.activeElement !== echoFollow) echoFollow.value = n.follow_host || '';
+    if (document.activeElement !== echoJoin) echoJoin.value = n.join_now ? '1' : '0';
     // The node's own rate, not an assumed 44.1 kHz.
     const ms = f => (f * 1000 / (n.rate || 44100)).toFixed(1);
     let note;
