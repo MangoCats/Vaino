@@ -251,6 +251,13 @@ pub enum Command {
     /// simply flows into the same passage the master does, and alignment is
     /// left to the overlap `[GDE-ECHO-340]`.
     EchoSetQueue(Vec<QueueEntry>),
+    /// Shed this many ms of position by trimming frames `[GDE-ECHO-349]`.
+    ///
+    /// For the endgame only: an error smaller than the mix quantum, which no
+    /// passage-boundary knob can reach. Paid off one frame at a time, at a
+    /// bounded rate, superimposed on the rate trim they share an actuator
+    /// with.
+    EchoShedOffset(i64),
     /// Start the next passage this many ms earlier, negative for later, to
     /// shed an offset `[GDE-ECHO-340]`.
     ///
@@ -396,6 +403,13 @@ pub struct Engine {
     pub(crate) echo_join_now: bool,
     /// The fitted relative rate error, ppm `[GDE-ECHO-340]`.
     pub(crate) echo_rate_ppm: f64,
+    /// Position still to shed by trimming, in frames `[GDE-ECHO-349]`.
+    ///
+    /// Positive when this node is late and must advance. Counted in frames
+    /// rather than milliseconds because that is the resolution the actuator
+    /// actually has -- 23 us -- and rounding to a millisecond here would
+    /// throw away forty times the precision the endgame exists to reach.
+    pub(crate) echo_debt_frames: i64,
     /// When a frame was last trimmed. Monotonic, because a wall clock can
     /// step `[GDE-ECHO-365]` and this is an interval.
     echo_last_trim: Option<std::time::Instant>,
@@ -611,6 +625,7 @@ impl Engine {
             echo_follow_host: String::new(),
             echo_join_now: true,
             echo_rate_ppm: 0.0,
+            echo_debt_frames: 0,
             echo_last_trim: None,
             echo_next_shift_ms: 0,
             echo_start: None,
@@ -910,7 +925,7 @@ impl Engine {
                     // Starting or stopping the clock, never resetting it
                     // mid-run: a rate that is merely refined should not push
                     // the next trim back by a whole interval each time.
-                    if self.echo_rate_ppm == 0.0 {
+                    if self.echo_rate_ppm == 0.0 && self.echo_debt_frames == 0 {
                         self.echo_last_trim = None;
                     } else if self.echo_last_trim.is_none() {
                         self.echo_last_trim = Some(std::time::Instant::now());
@@ -919,6 +934,16 @@ impl Engine {
                 Ok(Command::EchoSetQueue(entries)) => {
                     self.queue.replace_upcoming(entries);
                     self.queue_edited = true;
+                }
+                Ok(Command::EchoShedOffset(ms)) => {
+                    let rate = self.out_rate.max(1) as i64;
+                    self.echo_debt_frames = ms.saturating_mul(rate) / 1000;
+                    // The trim clock runs for a debt as well as for a rate.
+                    if self.echo_debt_frames != 0 && self.echo_last_trim.is_none() {
+                        self.echo_last_trim = Some(std::time::Instant::now());
+                    }
+                    eprintln!("echo-offset: shedding {ms} ms by trimming ({} frames)",
+                              self.echo_debt_frames);
                 }
                 Ok(Command::EchoCorrectNextStart(ms)) => {
                     self.echo_next_shift_ms = ms;
@@ -1688,16 +1713,40 @@ impl Engine {
         frames * 1000 / self.out_rate.max(1) as u64
     }
 
+    /// How hard a position debt may be paid off, in ppm `[GDE-ECHO-349]`.
+    ///
+    /// 100 ppm is one part in ten thousand of timing -- inaudible as pitch by
+    /// a wide margin, and about 4.4 frames a second, so each 23 us splice is
+    /// far enough from the last not to read as roughness. It clears a whole
+    /// mix quantum in about eight minutes, which is the right speed for an
+    /// endgame: the boundary knobs have already taken everything larger.
+    ///
+    /// Raising this is the obvious way to converge faster and the obvious way
+    /// to make it audible. It wants a listening test, not an argument.
+    const ECHO_DEBT_PPM: f64 = 100.0;
+
     /// Whether a frame is due to be trimmed, and which way.
     ///
     /// `Some(true)` drops -- this node is behind and must advance faster.
+    ///
+    /// Rate and position share one actuator, so they are summed into one
+    /// interval rather than run as two timers that would double the splice
+    /// rate and fight over direction `[GDE-ECHO-349]`.
     fn due_trim(&self) -> Option<bool> {
+        let debt_ppm = if self.echo_debt_frames > 0 {
+            Self::ECHO_DEBT_PPM
+        } else if self.echo_debt_frames < 0 {
+            -Self::ECHO_DEBT_PPM
+        } else {
+            0.0
+        };
+        let effective = self.echo_rate_ppm + debt_ppm;
         let interval = crate::echo::trim_interval(
-            self.echo_rate_ppm, self.out_rate, Self::ECHO_RATE_FLOOR_PPM)?;
+            effective, self.out_rate, Self::ECHO_RATE_FLOOR_PPM)?;
         // The clock starts when the rate does, so the first trim waits a full
         // interval rather than firing the instant an estimate arrives.
         let due = self.echo_last_trim.is_some_and(|t| t.elapsed() >= interval);
-        due.then_some(self.echo_rate_ppm > 0.0)
+        due.then_some(effective > 0.0)
     }
 
     /// Hold the ring below capacity so this node's submit-to-air total matches
@@ -1786,6 +1835,12 @@ impl Engine {
         let filled = match self.due_trim() {
             Some(drop_frame) => {
                 self.echo_last_trim = Some(std::time::Instant::now());
+                // One frame of the debt, whichever job the trim was doing --
+                // the actuator delivered one frame and the position moved by
+                // one frame, so the debt is one frame smaller.
+                if self.echo_debt_frames != 0 {
+                    self.echo_debt_frames -= self.echo_debt_frames.signum();
+                }
                 crate::mixer::apply_trim(&mut self.scratch, filled,
                                          self.out_channels.max(1), drop_frame)
             }

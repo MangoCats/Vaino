@@ -96,7 +96,19 @@ const MID_JOIN_MARGIN: Duration = Duration::from_secs(1);
 /// chasing noise, which is the exact failure `[GDE-ECHO-350]` exists to
 /// prevent. Alignment finer than this needs a more precise anchor, not a
 /// smaller number here.
-const OFFSET_DEADBAND: Duration = Duration::from_millis(40);
+const OFFSET_DEADBAND: Duration = Duration::from_millis(8);
+
+/// Below this the boundary knobs cannot help and the frame trim takes over
+/// `[GDE-ECHO-349]`.
+///
+/// One mix quantum, 46 ms at 44.1 kHz stereo, rounded up. Above it a passage
+/// boundary can shift the whole error at once; below it the coarse knob's
+/// step is larger than the error itself and only the 23 us actuator will do.
+const OFFSET_ENDGAME: Duration = Duration::from_millis(50);
+
+/// How the filtered residual is taken `[GDE-ECHO-348]`.
+const RESIDUAL_WINDOW: Duration = Duration::from_secs(120);
+const RESIDUAL_MIN_SAMPLES: usize = 60;
 
 /// The most a single transition may be asked to absorb.
 ///
@@ -174,6 +186,9 @@ struct FollowState {
     want_rejoin: bool,
     /// The followed node's clock, as this one estimates it `[GDE-ECHO-366]`.
     clock: crate::echo::MasterClock,
+    /// The residual, seen through two minutes rather than one reading
+    /// `[GDE-ECHO-348]`.
+    filtered: crate::echo::ResidualFilter,
     /// The rate correction currently being applied, ppm `[GDE-ECHO-346]`.
     ///
     /// Carried because the fit measures what is LEFT after this correction,
@@ -196,6 +211,8 @@ impl FollowState {
             clock: crate::echo::MasterClock::new(
                 CLOCK_WINDOW, Duration::from_secs(1)),
             applied_ppm: 0.0,
+            filtered: crate::echo::ResidualFilter::new(
+                RESIDUAL_WINDOW, RESIDUAL_MIN_SAMPLES),
         }
     }
 }
@@ -461,12 +478,36 @@ async fn act(
                 handle.send(Command::SetEchoRate(fs.applied_ppm));
                 fs.rate.clear();
             }
+            // Every reading feeds the filter; the corrections read the
+            // filter, never the reading `[GDE-ECHO-348]`.
+            fs.filtered.push(now_master, residual);
+            let Some(filtered) = fs.filtered.median() else {
+                set_status(handle, &format!(
+                    "Following, {:+.0} ms from that node (still measuring).",
+                    residual as f64 / 1e6));
+                return;
+            };
             // Logged, not merely observed `[GDE-ECHO-260]`: a regression months
             // from now needs a baseline to fail against.
             set_status(handle, &format!("Following, {:+.0} ms from that node.",
-                                        residual as f64 / 1e6));
+                                        filtered as f64 / 1e6));
+
+            // Below a mix quantum the boundary knobs cannot help: the coarse
+            // step is bigger than the error `[GDE-ECHO-347]`. The frame trim
+            // can, at 23 us a time `[GDE-ECHO-349]`.
+            if filtered.unsigned_abs() <= OFFSET_ENDGAME.as_nanos() as u64
+                && filtered.unsigned_abs() > OFFSET_DEADBAND.as_nanos() as u64
+            {
+                fs.filtered.clear();
+                note(&mut fs.note, format!(
+                    "echo-offset: {:+.0} ms out; shedding it by trimming frames",
+                    filtered as f64 / 1e6));
+                handle.send(Command::EchoShedOffset(filtered / 1_000_000));
+                return;
+            }
+
             match crate::echo::offset_fix(
-                residual, OFFSET_DEADBAND, OFFSET_MAX_BITE, OFFSET_REJOIN_BEYOND) {
+                filtered, OFFSET_DEADBAND, OFFSET_MAX_BITE, OFFSET_REJOIN_BEYOND) {
                 crate::echo::OffsetFix::Hold => {}
                 crate::echo::OffsetFix::ShiftStart(ms) => {
                     fs.corrected = Some(m.passage_id);
@@ -475,9 +516,10 @@ async fn act(
                     // costs an hour of rate estimate and saves the loop from
                     // trimming hard against a drift that never happened.
                     fs.rate.clear();
+                    fs.filtered.clear();
                     note(&mut fs.note, format!(
                         "echo-offset: {:+.0} ms out; starting the next passage {} ms {}",
-                        residual as f64 / 1e6, ms.abs(),
+                        filtered as f64 / 1e6, ms.abs(),
                         if ms > 0 { "earlier" } else { "later" }));
                     handle.send(Command::EchoCorrectNextStart(ms));
                 }
@@ -490,11 +532,12 @@ async fn act(
                     // a node too far out would flow into every transition,
                     // never take a scheduled start, and stay out indefinitely.
                     fs.want_rejoin = true;
+                    fs.filtered.clear();
                     // A rejoin places the first sample afresh, which steps the
                     // residual just as a nudge does.
                     fs.rate.clear();
                     note(&mut fs.note, format!(
-                        "echo-offset: {:+.0} ms out, which is not an offset any more; waiting for a scheduled start", residual as f64 / 1e6));
+                        "echo-offset: {:+.0} ms out, which is not an offset any more; waiting for a scheduled start", filtered as f64 / 1e6));
                 }
             }
         }

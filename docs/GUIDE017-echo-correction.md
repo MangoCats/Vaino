@@ -168,6 +168,39 @@ coarse one and pulls the overshoot forward on the fine, since there is no
 negative position to open at -- the asymmetry `[GDE-ECHO-340]` first ran into,
 now put to work rather than worked around.
 
+**`[GDE-ECHO-349]` Below the mix quantum only the frame trim will do, and it
+was already there.** A frame is 23 us and the trim already drops or duplicates
+one, inaudibly, on the mixer thread -- it was simply wired to *rate* alone.
+Nothing about the actuator is rate-specific: N frames dropped is N/44100
+seconds of position.
+
+So the correction now hands over. Above one mix quantum a passage boundary
+shifts the whole error at once `[GDE-ECHO-347]`. Below it the coarse step is
+larger than the error, and the trim pays the remainder off one frame at a time.
+The two share an actuator, so they are summed into a single interval rather
+than run as two timers that would double the splice rate and argue about
+direction.
+
+The budget is **100 ppm** -- one part in ten thousand, inaudible as pitch by a
+wide margin, about 4.4 frames a second so each splice is well clear of the
+last, and a whole quantum shed in about eight minutes. Raising it is the
+obvious way to converge faster and the obvious way to make it audible; that
+wants a listening test rather than an argument.
+
+**`[GDE-ECHO-348]` The endgame needs a measurement finer than the actuator it
+drives, which a single reading is not.** One anchor reading carries tens of
+milliseconds of ring jitter `[LOG-P4-010]`, so correcting a 10 ms position from
+one would be chasing noise -- and the deadband could not be lowered below that
+noise, which is why it sat at 40 ms and why 40 ms was smaller than the coarse
+knob's own step.
+
+A median over two minutes fixes it. Median, not mean, because the ring's
+shortfall is bounded one side and not the other. The window is derived: filtered
+noise falls as `1.25 s / sqrt(2T)` while drift accrued *during* the window grows
+as `r·T`, and at 30 ms of scatter and 13.92 ppm they cross near 130 s at about
+2 ms each. The deadband follows the filter down, from 40 ms to 8 ms. Anything
+that steps the residual clears the window, exactly as it clears the rate fit.
+
 **`[GDE-ECHO-346]` A fitted slope is the error in the correction, not the
 drift, and applying it as an absolute settles at half.** The residual being
 fitted is what remains *after* the current trim, so a loop that sends the fit

@@ -373,6 +373,64 @@ pub fn local_at_sample(local: &AirPosition, anchor: &DriftAnchor) -> i64 {
     local.at as i64 + (anchor_ms as i64 - local.position_ms as i64) * 1_000_000
 }
 
+/// A residual worth acting on at sample resolution.
+///
+/// **The actuator is finer than the measurement, and that is the trap.** One
+/// frame is 23 us, but one anchor reading carries tens of milliseconds of the
+/// output ring's own depth jitter `[LOG-P4-010]`. Correcting a position from a
+/// single reading below that noise is chasing it `[GDE-ECHO-350]`.
+///
+/// A median over a couple of minutes is what makes the endgame measurable --
+/// the **median** and not the mean, because the ring's shortfall is bounded on
+/// one side and unbounded on the other, so the noise has a tail rather than a
+/// shape.
+///
+/// The window is derived rather than chosen `[GDE-ECHO-348]`: filtered noise
+/// falls as `1.25 s / sqrt(2T)` while the drift accruing *during* the window
+/// grows as `r * T`. At 30 ms of scatter and the 13.92 ppm measured for this
+/// pair `[LOG-P4-130]` the two cross near 130 s, about 2 ms each. Shorter is
+/// all noise, longer is all lag, and the sum is flat enough either side that
+/// 120 s is right to within a factor of two.
+///
+/// Cleared by everything that clears the rate window, for the same reason: a
+/// correction, a rejoin or a clock step moves the quantity, and a median
+/// across that move describes neither side of it.
+#[derive(Debug)]
+pub struct ResidualFilter {
+    samples: std::collections::VecDeque<(WallNanos, i64)>,
+    window: Duration,
+    min_samples: usize,
+}
+
+impl ResidualFilter {
+    pub fn new(window: Duration, min_samples: usize) -> Self {
+        Self { samples: std::collections::VecDeque::new(), window, min_samples }
+    }
+
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
+    pub fn push(&mut self, at: WallNanos, residual: i64) {
+        self.samples.push_back((at, residual));
+        let cutoff = at.saturating_sub(self.window.as_nanos() as u64);
+        while self.samples.front().is_some_and(|(t, _)| *t < cutoff) {
+            self.samples.pop_front();
+        }
+    }
+
+    /// The filtered residual, or `None` until the window is full enough to
+    /// mean something. Refusing beats answering early `[GOV-SRC-040]`.
+    pub fn median(&self) -> Option<i64> {
+        if self.samples.len() < self.min_samples {
+            return None;
+        }
+        let mut v: Vec<i64> = self.samples.iter().map(|(_, r)| *r).collect();
+        v.sort_unstable();
+        Some(v[v.len() / 2])
+    }
+}
+
 /// The relative rate error, fitted from how the residual moves.
 ///
 /// **A slope, not a position.** One residual reading carries the output ring's
@@ -1218,6 +1276,51 @@ mod tests {
         assert!(invented > 20.0, "an uncleared step invents a rate: got {invented}");
         e.clear();
         assert_eq!(e.ppm(), None, "and clearing leaves nothing to act on");
+    }
+
+    /// The filter must be far steadier than any single reading, which is what
+    /// makes a sample-resolution endgame measurable at all.
+    #[test]
+    fn a_median_is_steadier_than_any_one_reading() {
+        let mut f = ResidualFilter::new(Duration::from_secs(120), 60);
+        assert_eq!(f.median(), None, "an empty window answers nothing");
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut raw_min = i64::MAX;
+        let mut raw_max = i64::MIN;
+        for i in 0..240u64 {
+            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            // One-sided: the ring can fall short by a lot and run over by
+            // little `[LOG-ECHO-020]`.
+            let r = 12_000_000 + (seed % 30_000_000) as i64;
+            raw_min = raw_min.min(r);
+            raw_max = raw_max.max(r);
+            f.push(10 * SEC + i * 500_000_000, r);
+        }
+        let m = f.median().unwrap();
+        assert!(raw_max - raw_min > 25_000_000, "the raw series really does scatter");
+        // Steady is the property, not accurate: a one-sided noise floor biases
+        // any estimator, which is why `[GDE-ECHO-345]` wants a better anchor
+        // rather than a cleverer filter.
+        let mut g = ResidualFilter::new(Duration::from_secs(120), 60);
+        for i in 240..480u64 {
+            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            g.push(10 * SEC + i * 500_000_000, 12_000_000 + (seed % 30_000_000) as i64);
+        }
+        let m2 = g.median().unwrap();
+        assert!((m - m2).abs() < 4_000_000,
+                "two independent windows must agree far closer than one reading scatters");
+    }
+
+    /// A step inside the window describes neither side of it.
+    #[test]
+    fn the_filter_is_cleared_by_anything_that_moves_the_quantity() {
+        let mut f = ResidualFilter::new(Duration::from_secs(120), 60);
+        for i in 0..240u64 {
+            f.push(10 * SEC + i * 500_000_000, if i < 120 { 0 } else { 40_000_000 });
+        }
+        assert!(f.median().is_some(), "a straddled step still answers, wrongly");
+        f.clear();
+        assert_eq!(f.median(), None, "which is why anything that steps it clears it");
     }
 
     /// `[GDE-ECHO-346]`: the loop must converge on the drift, not on half of
