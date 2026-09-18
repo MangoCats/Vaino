@@ -117,6 +117,14 @@ const OFFSET_ENDGAME: Duration = Duration::from_millis(50);
 /// anyway -- it cuts the ring.
 const FLOW_TOLERANCE: Duration = Duration::from_secs(5);
 
+/// How long a committed placement suppresses the other way of placing
+/// `[GDE-ECHO-354]`.
+///
+/// Long enough to cover a scheduled start's lead and the engine acting on it;
+/// short enough that a start the engine declined is retried rather than
+/// leaving the node stranded on the wrong passage `[GDE-ECHO-355]`.
+const COMMITMENT_HOLDS: Duration = Duration::from_secs(6);
+
 /// How the filtered residual is taken `[GDE-ECHO-348]`.
 const RESIDUAL_WINDOW: Duration = Duration::from_secs(120);
 const RESIDUAL_MIN_SAMPLES: usize = 60;
@@ -183,8 +191,16 @@ fn own_anchor(handle: &EngineHandle) -> Option<crate::echo::DriftAnchor> {
 struct FollowState {
     /// The last line printed, so a steady state is not restated twice a second.
     note: String,
-    /// The master passage a mid-passage join was last attempted for.
-    mid_joined: Option<i64>,
+    /// The master passage a placement was last committed to, and when.
+    ///
+    /// **Expiring, not permanent.** It exists so the scheduled start and the
+    /// mid-passage join stop racing each other `[GDE-ECHO-354]`, but a
+    /// commitment the engine then declined -- too late to meet, say -- must
+    /// not lock the passage out for ever. It did once: a skip the follower
+    /// could not reach was declined, the marker blocked the join that would
+    /// have rescued it, and the node played something else entirely
+    /// `[GDE-ECHO-355]`.
+    mid_joined: Option<(i64, std::time::Instant)>,
     /// The master passage an offset correction was last sent for.
     corrected: Option<i64>,
     /// The relative rate fit that drives the trim `[GDE-ECHO-340]`.
@@ -434,10 +450,12 @@ async fn act(
             // the right passage at the wrong moment, and only placing the
             // first sample afresh fixes that `[GDE-ECHO-344]`.
             let near = !fs.want_rejoin;
-            let already = (coming_here(handle, a.passage_id) && near)
-                || fs.mid_joined == Some(a.passage_id);
+            let committed = fs.mid_joined.is_some_and(|(id, when)| {
+                id == a.passage_id && when.elapsed() < COMMITMENT_HOLDS
+            });
+            let already = (coming_here(handle, a.passage_id) && near) || committed;
             if !already {
-                fs.mid_joined = Some(a.passage_id);
+                fs.mid_joined = Some((a.passage_id, std::time::Instant::now()));
                 let air = crate::echo::AirPosition {
                     passage_id: a.passage_id,
                     position_ms: a.sample.saturating_mul(1000) / a.rate.max(1) as u64,
@@ -625,7 +643,7 @@ async fn act(
             // later joined the same passage part-way in and threw it away.
             // Recording the commitment here is what makes the two paths see
             // each other.
-            fs.mid_joined = Some(passage_id);
+            fs.mid_joined = Some((passage_id, std::time::Instant::now()));
             let at = fs.clock.to_local(at).unwrap_or(at);
             start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;
         }

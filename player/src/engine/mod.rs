@@ -1756,10 +1756,35 @@ impl Engine {
     /// input a follower is meant to mirror `[GDE-ECHO-325]`.
     fn republish_after_cut(&mut self, lead_samples: usize) {
         let ch = self.out_channels.max(1);
+        let rate = self.out_rate.max(1) as u64;
         if let Some((id, origin)) = self.live.first().map(|l| (l.entry.passage_id, l.origin_ms)) {
-            self.publish_schedule(id, origin, (lead_samples / ch) as u64);
+            // Announced a little FURTHER ON than this node's own audio
+            // `[GDE-ECHO-355]`. A skip sounds here in `skip_lead_ms` -- half a
+            // second -- and no follower can meet that: its own skip costs the
+            // same lead plus its preparation, and it may wait half a second
+            // more just to hear about it. A target it cannot reach is declined
+            // as late and the skip does not propagate at all.
+            //
+            // The point announced is therefore a moment further into the same
+            // passage, which `[GDE-ECHO-325]` is shaped for: *passage P,
+            // sample S, at time T*. It still describes this node truthfully --
+            // by T this node really is at S -- so nothing is fabricated, and
+            // every follower has room to arrive.
+            let margin = Self::ECHO_SKIP_ANNOUNCE_MARGIN_MS;
+            let depth = (lead_samples / ch) as u64 + margin * rate / 1000;
+            self.publish_schedule(id, origin + margin, depth);
         }
     }
+
+    /// How far past its own audio a node announces a skip `[GDE-ECHO-355]`.
+    ///
+    /// It has to cover a follower's worst case: up to half a second to learn
+    /// of the skip at the snapshot's cadence, its own `skip_lead_ms`, and its
+    /// preparation. Two seconds clears that comfortably and sits well inside
+    /// `[GDE-ECHO-325]`'s five-second allowance for a resync. Erring long
+    /// costs nothing -- a follower that arrives early simply waits -- while
+    /// erring short costs the whole skip.
+    const ECHO_SKIP_ANNOUNCE_MARGIN_MS: u64 = 2_000;
 
     /// Split an offset correction into the coarse knob and the fine one
     /// `[GDE-ECHO-347]`.
