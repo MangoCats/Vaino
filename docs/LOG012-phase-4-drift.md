@@ -116,7 +116,9 @@ It also bears on `[SPEC-DLY-040]`: on this node the "known delay" is a
 distribution rather than a number, so a default taken from one reading would
 store whatever the device happened to report that second.
 
-**`[LOG-P4-085]` Four hours did not shrink it.** At 49 samples the spread is
+**`[LOG-P4-085]` Four hours did not shrink it.** *The conclusion drawn here —
+that this most threatens the pair — is withdrawn by `[LOG-P4-100]` the same
+evening: the wander is in the reporting, not in the sound.* At 49 samples the spread is
 413 frames against 13 samples' 400, and the sd only fell from 128.8 to 108.1.
 This is the node's behaviour, not a startup transient, and it is the finding
 that most threatens `bose`↔`lempiplay3` as an echo pair: trimming corrects a
@@ -144,6 +146,61 @@ journal's own timestamp, the step appears as an enormous gap with almost no
 frames in it, fails the implied-rate window, and becomes a segment boundary.
 That is the correct handling, arrived at for a general reason rather than this
 one.
+
+## 3a. The 9 ms is in the reporting, not in the sound
+
+195 clicks played through `lempiplay3`'s speaker and recorded by
+`teacherslounge`'s microphone, 2026-09-17, in a five-minute window offered for
+the purpose. `vaino` stopped for the duration — the device is exclusive, and a
+resampler anywhere makes it a measurement of the resampler.
+
+**`[LOG-P4-100]` The acoustic output held 1.72 µs rms over 187 s while ALSA
+reported 9.37 ms of delay movement on the same node.** Every detection kept and
+one line fitted to all of them `tools/click_steps.py`:
+
+| | |
+| :--- | ---: |
+| detections | 181 over 187.0 s |
+| residual | **1.72 µs rms**, peak-to-peak 8.46 µs |
+| steps | **none** |
+| halves | −0.320 then −0.414 ppm |
+
+`bose`'s own acoustic run managed 6.5 µs `[LOG-CAL-020]`, so this node is not
+merely adequate but quieter than the reference. The residuals walk smoothly
+from −3 µs to +6 µs across the whole recording — gentle curvature, not a
+discontinuity anywhere.
+
+Three consequences:
+
+- **`[GDE-ECHO-420]` does not disqualify `lempiplay3`.** Its *offset* is stable
+  to microseconds. The disqualifying property is variability in the sound, and
+  there is none.
+- **`[GDE-ECHO-430]`'s measured half is unreliable on this node.** Taking
+  ALSA's reported delay as the presentation offset would inject up to 9 ms of
+  error that is not there. This is exactly the node `[SPEC-DLY-010]`'s
+  calibrated residual exists for, and `[SPEC-DLY-040]`'s "known delay" default
+  must not come from a single reading here.
+- **`[GDE-ECHO-290]`'s verdict is satisfied for the wrong reason.** It rules the
+  timestamps real because the reported delay *changes*, on the theory that a
+  frozen delay is cpal's software substitute. `lempiplay3`'s delay changes
+  freely and the changes are noise. *The delay is real* and *the delay is
+  accurate* are different claims, and the verdict establishes only the first.
+
+**`[LOG-P4-110]` A second instrument now agrees `lempiplay3` is nominal.**
+Acoustically −0.386 ppm against the microphone; with that ADC measured at
++0.9 ppm `[LOG-CAL-100]` the absolute is **+0.51 ppm**, against **+0.168** from
+the frame clock over 3.9 h. Two instruments sharing no code, 0.35 ppm apart.
+That was the gap named in `[LOG-P4-040]`: this node had only one instrument on
+it and so could not be gated the way `bose` can.
+
+**`[LOG-P4-120]` "115 detections discarded" was seven dropped clicks, not
+instability.** `click_analyze` reports the longest *consecutive* run, so seven
+gaps split 195 clicks into eight runs of which the longest is 67 — and the
+summary then reads like three quarters of the data was bad. It was not: the
+residuals either side of every gap are unchanged. A low clean-run fraction is a
+level problem, and 0.06 amplitude was slightly under what this room wanted.
+`tools/click_steps.py` now says which of the two it is rather than leaving the
+reader to infer it from a discard count.
 
 ## 4. Open
 
