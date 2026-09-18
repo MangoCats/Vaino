@@ -264,6 +264,124 @@ pub fn local_at_sample(local: &AirPosition, anchor: &DriftAnchor) -> i64 {
     local.at as i64 + (anchor_ms as i64 - local.position_ms as i64) * 1_000_000
 }
 
+/// The relative rate error, fitted from how the residual moves.
+///
+/// **A slope, not a position.** One residual reading carries the output ring's
+/// depth jitter -- tens of milliseconds `[LOG-P4-010]` -- so a loop driven by
+/// the latest one would chase noise `[GDE-ECHO-350]`. A line fitted across
+/// minutes of them does not: the jitter is zero-mean and divides out, leaving
+/// the drift that actually accumulates. Thirty milliseconds of scatter over a
+/// ten-minute span is 0.05 ppm of slope error.
+///
+/// **The window has to be long, and the arithmetic says how long.** For
+/// scatter `s` sampled `n` times across a span `T`, the slope's standard error
+/// is `s / (sd(t) * sqrt(n))` with `sd(t) = T/sqrt(12)`. At 30 ms of scatter
+/// and two samples a second that is **5 ppm over ten minutes** and about
+/// **0.35 ppm over an hour** -- so ten minutes measures nothing useful about a
+/// 14 ppm drift, and an hour measures it comfortably. An earlier version of
+/// this comment claimed 0.05 ppm at ten minutes, which was wrong by two orders
+/// of magnitude and would have justified acting on noise.
+///
+/// An hour is also about the timescale the underlying rate itself wanders on
+/// -- `bose`'s hourly windows scatter 2.5-3.2 ppm `[LOG-P4-130]` -- so there
+/// is nothing to gain by averaging further: past that the quantity has moved.
+///
+/// This is why the rate half of `[GDE-ECHO-340]` can be built on the anchor
+/// that exists, while the offset half cannot do better than the anchor's own
+/// precision.
+#[derive(Debug)]
+pub struct RateEstimate {
+    /// `(nanoseconds since the first sample, residual)`, oldest first.
+    ///
+    /// Relative to the first rather than absolute: wall-clock nanoseconds are
+    /// near 1.8e18, and squaring those in a least-squares fit spends most of
+    /// an `f64`'s precision on a constant that cancels anyway.
+    samples: std::collections::VecDeque<(i64, i64)>,
+    origin: WallNanos,
+    window: Duration,
+    min_span: Duration,
+    min_samples: usize,
+}
+
+impl RateEstimate {
+    pub fn new(window: Duration, min_span: Duration, min_samples: usize) -> Self {
+        Self {
+            samples: std::collections::VecDeque::new(),
+            origin: 0,
+            window,
+            min_span,
+            min_samples,
+        }
+    }
+
+    /// Forget everything measured so far.
+    ///
+    /// **Called whenever the residual is moved by something other than drift**
+    /// -- an offset correction, a rejoin, a voided basis. A step in the middle
+    /// of the window is read by a straight-line fit as an enormous slope, and
+    /// the loop would then trim hard against a rate error that never existed.
+    pub fn clear(&mut self) {
+        self.samples.clear();
+        self.origin = 0;
+    }
+
+    pub fn push(&mut self, at: WallNanos, residual: i64) {
+        if self.samples.is_empty() {
+            self.origin = at;
+        }
+        let t = at as i64 - self.origin as i64;
+        self.samples.push_back((t, residual));
+        let cutoff = t - self.window.as_nanos() as i64;
+        while self.samples.front().is_some_and(|(ts, _)| *ts < cutoff) {
+            self.samples.pop_front();
+        }
+    }
+
+    /// The fitted rate error in ppm, positive when this node is falling behind.
+    ///
+    /// `None` until the window is both long enough and full enough to mean
+    /// something. An estimate from thirty seconds is not a small estimate, it
+    /// is a different quantity `[GDE-ECHO-350]`.
+    pub fn ppm(&self) -> Option<f64> {
+        if self.samples.len() < self.min_samples {
+            return None;
+        }
+        let (first, last) = (self.samples.front()?.0, self.samples.back()?.0);
+        if (last - first) < self.min_span.as_nanos() as i64 {
+            return None;
+        }
+        let n = self.samples.len() as f64;
+        let mean_t = self.samples.iter().map(|(t, _)| *t as f64).sum::<f64>() / n;
+        let mean_r = self.samples.iter().map(|(_, r)| *r as f64).sum::<f64>() / n;
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for (t, r) in &self.samples {
+            let dt = *t as f64 - mean_t;
+            num += dt * (*r as f64 - mean_r);
+            den += dt * dt;
+        }
+        (den > 0.0).then(|| num / den * 1e6)
+    }
+}
+
+/// How long between single-frame trims, to cancel a rate error of `ppm`.
+///
+/// A frame is `1/rate` of a second of position, and the error accrues
+/// `ppm * 1e-6` seconds every second, so they balance at
+/// `1 / (ppm * 1e-6 * rate)`. At the +13.92 ppm measured for
+/// `bose`-`lempiplay3` `[LOG-P4-130]` that is one frame every 1.63 s, which is
+/// the arithmetic `[GDE-ECHO-340]` does by hand.
+///
+/// `None` below a rate error too small to be worth correcting, where the
+/// interval would run to hours and the estimate is mostly noise anyway.
+pub fn trim_interval(ppm: f64, rate: u32, floor_ppm: f64) -> Option<Duration> {
+    if !ppm.is_finite() || ppm.abs() < floor_ppm {
+        return None;
+    }
+    let per_second = ppm.abs() * 1e-6 * rate as f64;
+    (per_second > 0.0).then(|| Duration::from_secs_f64(1.0 / per_second))
+}
+
 /// What to do about an offset that trimming will not remove.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OffsetFix {
@@ -866,6 +984,105 @@ mod tests {
             }
             other => panic!("expected TooShallow, got {other:?}"),
         }
+    }
+
+    fn estimator() -> RateEstimate {
+        RateEstimate::new(Duration::from_secs(3600), Duration::from_secs(900), 200)
+    }
+
+    /// Two samples a second for `mins` minutes, drifting at `ppm`, with
+    /// `jitter_ms` of scatter drawn from a fixed pseudo-random sequence.
+    ///
+    /// Pseudo-random rather than patterned, and that is the point: *any*
+    /// regular pattern correlates with evenly spaced time and tilts the fit.
+    /// A square wave alternating every sample biases this by exactly 1 ppm,
+    /// and a sawtooth of period seven by another, both of which are facts
+    /// about the noise rather than about the estimator.
+    fn feed(e: &mut RateEstimate, mins: u64, ppm: f64, jitter_ms: i64) {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        for i in 0..(mins * 120) {
+            let t = 10 * SEC + i * 500_000_000;
+            let drift = (i as f64 * 0.5 * ppm * 1e-6 * 1e9) as i64;
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let jitter = if jitter_ms == 0 {
+                0
+            } else {
+                (seed % (2 * jitter_ms as u64 + 1)) as i64 - jitter_ms
+            } * 1_000_000;
+            e.push(t, drift + jitter);
+        }
+    }
+
+    /// A clean ramp is read back as the rate that made it.
+    #[test]
+    fn a_steady_drift_is_measured_as_its_own_ppm() {
+        let mut e = estimator();
+        // +13.92 ppm, the figure measured for this fleet `[LOG-P4-130]`, with
+        // no scatter at all: the fit should return it almost exactly.
+        feed(&mut e, 20, 13.92, 0);
+        let ppm = e.ppm().expect("twenty minutes is plenty");
+        assert!((ppm - 13.92).abs() < 0.01, "got {ppm}");
+    }
+
+    /// The property the whole design leans on: ring jitter is zero-mean, so a
+    /// fit sees through it where a single reading cannot `[LOG-P4-010]`.
+    #[test]
+    fn scatter_far_larger_than_the_drift_still_yields_the_drift() {
+        let mut e = estimator();
+        // +14 ppm buried under +/-30 ms of scatter -- the residual swings a
+        // thousand times further than it drifts. An hour resolves it to a few
+        // tenths of a ppm; ten minutes would not resolve it at all.
+        feed(&mut e, 60, 14.0, 30);
+        let ppm = e.ppm().unwrap();
+        assert!((ppm - 14.0).abs() < 1.0, "got {ppm} from +/-30 ms of scatter");
+    }
+
+    /// An estimate from too little data is a different quantity, not a rough
+    /// one `[GDE-ECHO-350]`.
+    #[test]
+    fn a_short_or_sparse_window_yields_nothing() {
+        let mut e = estimator();
+        feed(&mut e, 1, 14.0, 0);
+        assert_eq!(e.ppm(), None, "one minute is not an estimate");
+        let mut e = estimator();
+        // Enough samples, but crammed into ninety seconds.
+        for i in 0..400u64 {
+            e.push(10 * SEC + i * 225_000_000, 0);
+        }
+        assert_eq!(e.ppm(), None, "ninety seconds is not an estimate either");
+    }
+
+    /// A step in the middle reads as a colossal slope, which is why anything
+    /// that moves the residual must clear the window.
+    #[test]
+    fn clearing_is_what_keeps_a_correction_from_reading_as_drift() {
+        let mut e = estimator();
+        for i in 0..3600u64 {
+            let t = 10 * SEC + i * 500_000_000;
+            // A 40 ms offset correction lands half way through.
+            e.push(t, if i < 1800 { 0 } else { 40_000_000 });
+        }
+        // The true rate here is zero. A 40 ms step across a half-hour window
+        // fits to about 33 ppm -- larger than the real drift of this fleet,
+        // and in whichever direction the correction went.
+        let invented = e.ppm().unwrap();
+        assert!(invented > 20.0, "an uncleared step invents a rate: got {invented}");
+        e.clear();
+        assert_eq!(e.ppm(), None, "and clearing leaves nothing to act on");
+    }
+
+    /// `[GDE-ECHO-340]`'s own arithmetic, checked.
+    #[test]
+    fn the_trim_interval_matches_the_rate_it_cancels() {
+        let d = trim_interval(13.92, 44100, 0.5).unwrap();
+        assert!((d.as_secs_f64() - 1.629).abs() < 0.01, "got {d:?}");
+        // Direction does not change how often, only which way.
+        assert_eq!(trim_interval(-13.92, 44100, 0.5), Some(d));
+        // Below the floor there is nothing worth correcting.
+        assert_eq!(trim_interval(0.2, 44100, 0.5), None);
+        assert_eq!(trim_interval(f64::NAN, 44100, 0.5), None);
     }
 
     /// The defect this replaced: two anchors are never about the same sample,
