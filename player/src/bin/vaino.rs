@@ -73,6 +73,13 @@ async fn main() {
     let port = flag(&args, "--port", 5720);
     let depth = flag(&args, "--depth", 5);
     let device = text_flag(&args, "--device");
+    // This node's calibrated presentation offset, and the smallest in the
+    // fleet `[LOG-ECHO-030]`. Both in frames, both calibrated rather than read
+    // live `[LOG-P4-100]`. Absent means "fill the ring to capacity", which is
+    // correct for a node running alone and for whichever node holds the
+    // fleet's minimum `[GOV-SRC-040]`.
+    let echo_offset = flag(&args, "--echo-offset-frames", 0) as u64;
+    let echo_fleet_min = flag(&args, "--echo-fleet-min-frames", 0) as u64;
     // A guest backend, offered rather than assumed `[SPEC-BK-020]`. Vaino still
     // plays; MPD is attached and idle until a switch asks for it.
     let mpd_addr = text_flag(&args, "--mpd");
@@ -131,6 +138,9 @@ async fn main() {
         .spawn(move || engine_thread(db, library, depth, device, mpd_addr, mpd_root, tx))
         .expect("spawn engine thread");
 
+    // Sent from here rather than inside the engine thread: the handle comes
+    // back to this scope anyway, and threading two more parameters through
+    // `engine_thread` pushed it past what a reader can hold at once.
     let (handle, why, controls) = match rx.recv() {
         Ok((h, why, c)) => (Arc::new(h), why, c),
         Err(_) => {
@@ -138,6 +148,17 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // Absent is not zero `[GOV-SRC-040]`: with no roster figures this node
+    // fills its ring to capacity, which is right for a node playing alone and
+    // for whichever node holds the fleet's smallest offset. Only a node told
+    // both numbers holds anything back.
+    if echo_offset > 0 && echo_fleet_min > 0 {
+        eprintln!("echo-depth: offset={echo_offset} fleet-min={echo_fleet_min}, holding {} frames of ring back", echo_offset.saturating_sub(echo_fleet_min));
+        handle.send(vaino_player::engine::Command::SetEchoDepth {
+            own_offset_frames: echo_offset,
+            fleet_min_offset_frames: echo_fleet_min,
+        });
+    }
     let ui = web::Ui { handle, why, controls, db: art_db, library: art_library };
     let app = web::router(ui);
 

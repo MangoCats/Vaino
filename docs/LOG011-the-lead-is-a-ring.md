@@ -119,20 +119,39 @@ still worth not having.
 
 ## 5. Open
 
-**`[LOG-ECHO-050]` Nothing yet runs its ring at a commanded depth.** `placement`
+**`[LOG-ECHO-050]` Built 2026-09-18.** *The lever below now exists:
+`Command::SetEchoDepth` takes this node's calibrated offset and the fleet's
+smallest, and the mixer holds the ring that far short of capacity. The cost is
+one constant subtracted from the free-space figure it already had — `free`
+is `capacity - buffered`, so `free - shortfall` is exactly
+`target - buffered` — with no extra read of the ring. The one trap was the
+cached free figure: refreshing it on the raw value rather than the usable one
+lets a capped ring stall forever, since the cache only updates after a submit
+that the cap prevents.* The original entry follows.
+
+**Nothing yet runs its ring at a commanded depth.** `placement`
 computes the target and is tested against it, but the mixer has no way to be
 told "fill to 13 633 frames short of capacity" — it fills to capacity. Phase 4
 needs that lever before a follower can hold sync across a passage boundary,
 and it is the smallest remaining piece of engine work that echo depends on.
 
-**`[LOG-ECHO-070]` `schedule_for_admission` announces off its own full ring.**
-It takes the announcer's ring depth and device delay and adds them, which fixes
-`Total = capacity + device_delay(announcer)`. That is correct only when the
-announcer happens to hold the fleet's smallest delay. It must instead announce
-the fleet's cap, `capacity + min(device delay)`, which means the master needs to
-know the roster's delays rather than only its own `[GDE-ECHO-450]` — a small
-change, but one that has to land before a second node acts on a schedule, since
-until then nothing reveals the error.
+**`[LOG-ECHO-070]` The announcement was never the defect — the missing depth
+control was.** This entry first said `schedule_for_admission` announces off its
+own *full* ring and must be taught the fleet's cap. Reading the call site
+corrected that: it is passed `out_buffered_frames()`, the ring's **actual**
+depth, so it already announces whatever the node really does. A node holding its
+ring short therefore announces the fleet's total with no change to the function
+at all, and the whole fix is `[LOG-ECHO-050]`'s lever.
+
+What remains is supplying the two numbers. They are **calibrated** offsets
+`[GDE-ECHO-430]`, not live `delay` readings, and that is not fastidiousness:
+`lempiplay3` reports a delay wandering 9.84 ms while its sound holds to 1.72 µs
+`[LOG-P4-100]`, so driving ring depth from the live figure would manufacture ten
+milliseconds of movement that is not otherwise there. `--echo-offset-frames`
+and `--echo-fleet-min-frames` accept them for now; the settings page
+`[SPEC-DLY-120]` is where they belong, and `lempiplay3`'s own calibrated figure
+is not yet established because its reported delay is a distribution rather than
+a number `[SPEC-DLY-040]`.
 
 **`[LOG-ECHO-060]` The 15.0 s capacity is a constant, not a measurement.** Both
 nodes take it from `BUFFER_FRAMES`, so the fleet-wide `Total` happens to be

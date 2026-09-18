@@ -162,6 +162,13 @@ pub enum Command {
     Skip,
     /// Master volume, clamped to 0.0..=1.0.
     SetVolume(f32),
+    /// Hold the output ring below capacity so this node's submit-to-air total
+    /// matches the fleet's `[LOG-ECHO-030]`.
+    ///
+    /// Both figures are calibrated presentation offsets `[GDE-ECHO-430]`, in
+    /// frames -- never a live `delay` reading, which on some nodes wanders
+    /// milliseconds while the sound does not `[LOG-P4-100]`.
+    SetEchoDepth { own_offset_frames: u64, fleet_min_offset_frames: u64 },
     /// How long a skip fades the outgoing passage out, in ms `[REQ-AUD-158]`.
     SetSkipFade(u64),
     /// How long after a skip the next passage starts, in ms `[REQ-AUD-162]`.
@@ -274,6 +281,15 @@ pub struct Engine {
     /// message is absolute and idempotent `[GDE-ECHO-320]`, so repeating one
     /// costs nothing and a node that missed the first simply uses this.
     echo_schedule: Option<crate::echo::Schedule>,
+    /// Samples of the output ring this node must leave EMPTY `[LOG-ECHO-030]`.
+    ///
+    /// Zero means "fill to capacity", which is what a node with the fleet's
+    /// shortest device delay does. Every other node runs shallower by its own
+    /// excess over that minimum, so that `depth + device_delay` comes to the
+    /// same total everywhere and one sample sounds at one instant across the
+    /// fleet. `bose` at 46.3 ms behind `lempiplay3`'s 42.2 ms leaves 181
+    /// frames `[LOG-P4-140]`.
+    echo_depth_shortfall: usize,
     echo_seen_recoveries: u64,
     echo_seen_underruns: u64,
     /// The audible passage as last published, so a change can bypass the clock.
@@ -475,6 +491,7 @@ impl Engine {
             clock_log_at: None,
             echo_basis: crate::echo::Basis::default(),
             echo_schedule: None,
+            echo_depth_shortfall: 0,
             echo_seen_recoveries: 0,
             echo_seen_underruns: 0,
             published: None,
@@ -742,6 +759,9 @@ impl Engine {
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::ReopenOutput) => self.path.reopen(),
                 Ok(Command::Skip) => self.skip(),
+                Ok(Command::SetEchoDepth { own_offset_frames, fleet_min_offset_frames }) => {
+                    self.set_echo_depth(own_offset_frames, fleet_min_offset_frames);
+                }
                 Ok(Command::SetSkipFade(ms)) => {
                     self.skip_fade_ms = ms.min(crate::SKIP_FADE_MAX_MS);
                     self.remember_settings();
@@ -1323,6 +1343,41 @@ impl Engine {
     ///
     /// Limiting here is also what propagates back-pressure: the stream rings
     /// stay full, so the decoders stop, and the device paces the whole chain.
+    /// Hold the ring below capacity so this node's submit-to-air total matches
+    /// the fleet's `[LOG-ECHO-030]`.
+    ///
+    /// Both offsets are **calibrated** presentation offsets `[GDE-ECHO-430]`,
+    /// never the live `delay_frames()` reading. That distinction is not
+    /// fastidiousness: `lempiplay3` reports a delay that wanders 9.84 ms while
+    /// its sound holds to 1.72 us `[LOG-P4-100]`, so driving the ring depth
+    /// from the live figure would inject nearly ten milliseconds of movement
+    /// that is not otherwise there -- manufacturing the very error this exists
+    /// to remove.
+    ///
+    /// A node at the fleet minimum gets zero and fills to capacity. Nothing
+    /// calls this yet: the fleet minimum has to reach a node before it can be
+    /// used, and that is the roster question `[GDE-ECHO-450]`, not this one.
+    pub(crate) fn set_echo_depth(&mut self, own_offset_frames: u64, fleet_min_offset_frames: u64) {
+        // An offset below the stated minimum means the caller's roster is
+        // wrong, not that this node should run deeper than capacity. Clamp,
+        // because the alternative is an underflow that reads as a colossal
+        // shortfall and silences the node.
+        let excess = own_offset_frames.saturating_sub(fleet_min_offset_frames);
+        self.echo_depth_shortfall = (excess as usize).saturating_mul(self.out_channels.max(1));
+    }
+
+    /// Frames this node may add, given a ring it must not fill completely.
+    ///
+    /// `free` is `capacity - buffered`, so `free - shortfall` is exactly
+    /// `target_depth - buffered` for `target_depth = capacity - shortfall`.
+    /// The subtraction is why holding a reduced depth costs nothing at
+    /// runtime: the cached free figure is already there, and a constant comes
+    /// off it. No second lock, no extra read of the ring
+    /// `[GDE-FBD-010]`.
+    fn submit_room_frames(free: usize, shortfall: usize) -> usize {
+        free.saturating_sub(shortfall)
+    }
+
     fn mix_and_submit(&mut self) -> usize {
         // Room is remembered from the last submit rather than asked for again.
         // Between then and now the callback only ever DRAINS, so the remembered
@@ -1337,8 +1392,16 @@ impl Engine {
                 // is already large enough needs no confirmation -- but one
                 // below the threshold must be re-read, or a ring that filled up
                 // once would never be topped up again.
-                if self.out_room < Self::MIN_SUBMIT { self.out_room = o.free(); }
-                self.out_room
+                // Refreshed on the room this node may actually USE, not on
+                // the raw free space. With a shortfall held back, those differ,
+                // and refreshing on the raw figure would let a capped ring sit
+                // forever: `out_room` stays above the threshold, the effective
+                // room stays below it, the early return fires every pass and
+                // nothing ever submits to update the cache.
+                if Self::submit_room_frames(self.out_room, self.echo_depth_shortfall) < Self::MIN_SUBMIT {
+                    self.out_room = o.free();
+                }
+                Self::submit_room_frames(self.out_room, self.echo_depth_shortfall)
             }
             None => self.scratch.len(),
         };
@@ -1551,6 +1614,44 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         self.persist(true);
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::Engine;
+
+    /// The whole lever: a constant off the cached free figure.
+    #[test]
+    fn a_shortfall_comes_straight_off_the_free_space() {
+        assert_eq!(Engine::submit_room_frames(10_000, 0), 10_000, "no shortfall, no change");
+        assert_eq!(Engine::submit_room_frames(10_000, 362), 9_638);
+        // A ring already inside its shortfall offers nothing, rather than
+        // wrapping to an enormous room and overrunning the target.
+        assert_eq!(Engine::submit_room_frames(100, 362), 0);
+    }
+
+    /// `bose` behind `lempiplay3`: 2043 - 1863 = 180 frames, 360 samples
+    /// stereo `[LOG-P4-140]`.
+    #[test]
+    fn the_shortfall_is_the_excess_over_the_fleet_minimum() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_channels = 2;
+        e.set_echo_depth(2043, 1863);
+        assert_eq!(e.echo_depth_shortfall, 360);
+        // The node holding the minimum fills to capacity.
+        e.set_echo_depth(1863, 1863);
+        assert_eq!(e.echo_depth_shortfall, 0);
+    }
+
+    /// A roster claiming a minimum above this node's own offset is wrong. The
+    /// answer is a full ring, not an underflow that would silence the node.
+    #[test]
+    fn an_offset_under_the_stated_minimum_clamps_rather_than_wrapping() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_channels = 2;
+        e.set_echo_depth(1863, 2043);
+        assert_eq!(e.echo_depth_shortfall, 0);
     }
 }
 
