@@ -128,12 +128,19 @@ node is currently the master.
 
 ## 5. Open
 
-**`[SPEC-DLY-120]` The control lives in the per-node Vaino skin settings
-page** — `#panel-settings` in
+**`[SPEC-DLY-120]` The control **belongs** in the per-node Vaino skin settings
+page — `#panel-settings` in
 [skin.html](../../player/src/web/skins/vaino/skin.html), served by
-[settings.rs](../../player/src/web/settings.rs). Each node therefore carries its
-own, reached the same way every other per-node setting is, and nothing new is
-needed to surface it.
+[settings.rs](../../player/src/web/settings.rs) — and **is not built.**
+
+*This entry first said the control lives there, recorded 2026-09-17 on a
+statement rather than on the code, and corrected 2026-09-18 by reading it.* The
+panel exists and carries seven settings; none of them is a delay. Nothing in
+`player/src/web/` mentions an offset, and the only thing that can set one today
+is the startup flag `--echo-offset-frames`, which is neither persisted
+`[SPEC-DLY-070]` nor resettable `[SPEC-DLY-060]` nor able to show its
+provenance `[SPEC-DLY-050]`. A flag satisfies none of this specification; it
+was a way to test the engine, not the control.
 
 What remains open is only the *aggregate*: a fleet-wide view showing every
 node's delay side by side would suit the actual task — aligning speakers against
