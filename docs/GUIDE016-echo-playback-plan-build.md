@@ -153,6 +153,38 @@ This split is why `[REQ-AUD-164]`'s buffer-depth trap does not bite here as it
 did four times before `[GDE-ECHO-220]`: the one correction that would need to be
 heard immediately is the one never applied mid-passage.
 
+*Offset correction built 2026-09-18, and building it settled how it has to
+work.* **Ring depth cannot do it.** For a gapless stream a sample's air time is
+fixed by where sample 0 was placed plus the device rate; the next passage is
+appended contiguously, so its alignment is inherited and changing the ring's
+depth mid-stream shifts nothing. Depth decides alignment at a *fresh start* and
+nowhere else, which is why `[LOG-ECHO-030]` holds at a join and why this
+correction must change **content** timing instead. Opening the next passage a
+few milliseconds further in is the only knob that does.
+
+That knob is one-directional, which the plan did not say. A node that is late
+skips into the lead-in and is level from there. A node that is **early** would
+have to open the passage at a negative position; there is no such thing, so it
+takes a scheduled start instead and places its first sample afresh.
+
+**`[GDE-ECHO-345]` The anchor's precision, not the ear's, sets how well this can
+work.** The residual is measured from a `DriftAnchor`, whose position comes from
+`audible_ms` and therefore carries the output ring's own depth jitter — tens of
+milliseconds `[LOG-P4-010]`. The deadband is 40 ms for that reason alone, well
+above anything a listener would call aligned. Correcting below the noise is the
+hunting `[GDE-ECHO-350]` exists to prevent, so **finer alignment needs a more
+precise anchor, not a smaller deadband**: a position derived from the device's
+own frame counter, which is sampled atomically with its timestamp and carries no
+ring at all `[LOG-P4-010]`. That is the next thing worth building, and until it
+exists a following node is audibly following rather than audibly one speaker.
+
+A defect surfaced on the way. The residual compared the *timestamps* of two
+anchors, which are never about the same sample — the master's crossed a network
+and describes a moment already past. On a quiet network that difference is
+mostly transport delay, so the loop would have chased the network. The local
+reading is now carried along its own playback to the sample the master named
+before the two are compared.
+
 **`[GDE-ECHO-350]` Hysteresis and a rate limit, or the loop will hunt.** Trim
 only while the estimated offset exceeds a deadband comfortably larger than the
 measurement noise, never more than one frame per correction interval, and never

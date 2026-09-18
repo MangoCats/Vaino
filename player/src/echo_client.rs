@@ -75,6 +75,29 @@ fn wanted_url(handle: &EngineHandle) -> Option<String> {
 /// this errs long.
 const MID_JOIN_MARGIN: Duration = Duration::from_secs(1);
 
+/// How far out this node may be before the offset correction acts.
+///
+/// **Set by the measurement, not by the ear.** A listener can place two
+/// speakers to a millisecond `[SPEC-DLY-020]`, but the anchor this residual
+/// comes from carries the output ring's own depth jitter -- tens of
+/// milliseconds `[LOG-P4-010]` -- so a deadband below that would have the node
+/// chasing noise, which is the exact failure `[GDE-ECHO-350]` exists to
+/// prevent. Alignment finer than this needs a more precise anchor, not a
+/// smaller number here.
+const OFFSET_DEADBAND: Duration = Duration::from_millis(40);
+
+/// The most that can be shed by opening a passage further in.
+///
+/// A quarter second is still inside the quiet opening of most passages, and an
+/// offset larger than this is better fixed by placing the first sample afresh
+/// `[GDE-ECHO-340]`.
+const OFFSET_MAX_HIDDEN: Duration = Duration::from_millis(250);
+
+/// This node's own anchor, as it publishes it to anyone following *it*.
+fn own_anchor(handle: &EngineHandle) -> Option<crate::echo::DriftAnchor> {
+    handle.state.lock().ok()?.echo.anchor
+}
+
 /// Join at once, and what this node is playing, as the panel has them.
 fn join_intent(handle: &EngineHandle) -> (bool, Option<i64>) {
     match handle.state.lock() {
@@ -115,6 +138,7 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
         // Per connection: a node that reconnects should catch up again, since
         // whatever it was playing while disconnected is by then its own.
         let mut mid_joined: Option<i64> = None;
+        let mut corrected: Option<i64> = None;
         // A follower's basis would normally be established and voided by its
         // own audio path. Nothing here trims, so nothing consults it; it is
         // established once and left alone, and that is said out loud because a
@@ -159,7 +183,8 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
                 }
             };
             let Ok(snap) = serde_json::from_str::<Snapshot>(&text) else { continue };
-            act(&mut follower, &snap.echo, &cfg, &handle, &mut last_note, &mut mid_joined).await;
+            act(&mut follower, &snap.echo, &cfg, &handle, &mut last_note,
+                &mut mid_joined, &mut corrected).await;
         }
         set_status(&handle, "Not connected.");
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -173,6 +198,7 @@ async fn act(
     handle: &Arc<EngineHandle>,
     last: &mut String,
     mid_joined: &mut Option<i64>,
+    corrected: &mut Option<i64>,
 ) {
     // Catching up to what the master is ALREADY playing, which the schedule
     // cannot do: a schedule describes a passage about to start, and the moment
@@ -197,6 +223,45 @@ async fn act(
                 if let Some(j) = crate::echo::join_mid_passage(&air, cfg.timing, now_nanos(), lead) {
                     start(j.passage_id, j.start_sample, j.submit_at, cfg, handle, last,
                           "joining part-way into").await;
+                }
+            }
+        }
+    }
+
+    // `[GDE-ECHO-340]`'s offset correction. Measured now, applied at the next
+    // admission -- which is sound only because an offset is a position and does
+    // not grow while nobody is looking, unlike the rate error trimming handles.
+    //
+    // Once per master passage: the correction is for the passage after this
+    // one, and sending it twice a second would simply overwrite itself.
+    if let (Some(m), Some(mine)) = (st.anchor.as_ref(), own_anchor(handle)) {
+        if m.passage_id == mine.passage_id && *corrected != Some(m.passage_id) {
+            let local = crate::echo::AirPosition {
+                passage_id: mine.passage_id,
+                position_ms: mine.sample.saturating_mul(1000) / mine.rate.max(1) as u64,
+                at: mine.heard_at,
+            };
+            let residual = crate::echo::local_at_sample(&local, m) - m.heard_at as i64;
+            // Logged, not merely observed `[GDE-ECHO-260]`: a regression months
+            // from now needs a baseline to fail against.
+            set_status(handle, &format!("Following, {:+.0} ms from that node.",
+                                        residual as f64 / 1e6));
+            match crate::echo::offset_fix(residual, OFFSET_DEADBAND, OFFSET_MAX_HIDDEN) {
+                crate::echo::OffsetFix::Hold => {}
+                crate::echo::OffsetFix::SkipInto(ms) => {
+                    *corrected = Some(m.passage_id);
+                    note(last, format!(
+                        "echo-offset: {:+.0} ms out; opening the next passage {ms} ms in",
+                        residual as f64 / 1e6));
+                    handle.send(Command::EchoCorrectNextStart(ms));
+                }
+                // Early, or too far to hide. Saying so beats a silent hold --
+                // this is the case a listener would otherwise hear and not be
+                // able to explain `[GOV-SRC-040]`.
+                crate::echo::OffsetFix::Rejoin => {
+                    *corrected = Some(m.passage_id);
+                    note(last, format!(
+                        "echo-offset: {:+.0} ms out, too far or the wrong way to hide; waiting for a scheduled start", residual as f64 / 1e6));
                 }
             }
         }

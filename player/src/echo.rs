@@ -248,6 +248,63 @@ pub fn residual_ns(anchor: &DriftAnchor, local_heard_at: WallNanos) -> i64 {
     local_heard_at as i64 - anchor.heard_at as i64
 }
 
+/// When this node reached the master's anchored sample.
+///
+/// **The two anchors are never about the same sample.** The master's crossed a
+/// network and describes some sample it played a moment ago; this node's
+/// describes wherever it is now. Subtracting their timestamps therefore
+/// measures the gap between two *readings*, which on a quiet network is mostly
+/// transport delay and has nothing to do with alignment.
+///
+/// So the local reading is carried along its own playback to the sample the
+/// master named, and only then compared. Positions advance at one millisecond
+/// per millisecond, so this is a subtraction rather than a model.
+pub fn local_at_sample(local: &AirPosition, anchor: &DriftAnchor) -> i64 {
+    let anchor_ms = anchor.sample.saturating_mul(1000) / anchor.rate.max(1) as u64;
+    local.at as i64 + (anchor_ms as i64 - local.position_ms as i64) * 1_000_000
+}
+
+/// What to do about an offset that trimming will not remove.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OffsetFix {
+    /// Inside the deadband. Leave it alone `[GDE-ECHO-350]`.
+    Hold,
+    /// Open the next passage this many milliseconds further in.
+    ///
+    /// The whole of `[GDE-ECHO-340]`'s offset correction: a node that is late
+    /// skips that much of the next passage's opening and is level from there.
+    /// Inaudible by construction -- a few tens of milliseconds at a passage
+    /// start is inside the lead-in, before anything a listener could name has
+    /// begun.
+    SkipInto(u64),
+    /// Start the next passage from the master's schedule instead.
+    ///
+    /// For the two cases `SkipInto` cannot serve: an offset too large to hide
+    /// in a lead-in, and **any** offset the wrong way. A node that is early
+    /// would have to open the passage at a negative position, and there is no
+    /// such thing; the only way back is to place its first sample afresh,
+    /// which is what a scheduled start does `[GDE-ECHO-330]`.
+    Rejoin,
+}
+
+/// Decide the offset correction for the passage about to be opened.
+///
+/// Called at admission, which is a ring's depth before anyone hears the
+/// result -- the correction is aimed at audio fifteen seconds out, using a
+/// residual measured from audio fifteen seconds old. That is sound only
+/// because an offset is a position rather than a slope: it does not grow
+/// while nobody is looking, which is exactly the property `[GDE-ECHO-340]`
+/// separates it from rate for.
+pub fn offset_fix(residual: i64, deadband: Duration, max_hidden: Duration) -> OffsetFix {
+    if residual.unsigned_abs() <= deadband.as_nanos() as u64 {
+        return OffsetFix::Hold;
+    }
+    if residual > 0 && (residual as u64) <= max_hidden.as_nanos() as u64 {
+        return OffsetFix::SkipInto((residual as u64) / 1_000_000);
+    }
+    OffsetFix::Rejoin
+}
+
 /// Where a passage actually is **in the air**, and when that was true.
 ///
 /// Distinct from the engine's `audible_ms`, which subtracts the output ring
@@ -530,8 +587,9 @@ impl Follower {
         // Where the master says this node's own sample should have been heard,
         // and where it actually was. Both are on the disciplined wall clock,
         // so the difference is a real offset rather than a clock comparison.
-        let local_heard = local.at;
-        let residual = residual_ns(&anchor, local_heard);
+        // Carried to the master's own sample first `[local_at_sample]`;
+        // comparing the two readings directly would measure transport delay.
+        let residual = local_at_sample(local, &anchor) - anchor.heard_at as i64;
         let since = self.last_trim.map_or(self.min_trim_interval, |t| {
             Duration::from_nanos(now.saturating_sub(t))
         });
@@ -805,6 +863,43 @@ mod tests {
             }
             other => panic!("expected TooShallow, got {other:?}"),
         }
+    }
+
+    /// The defect this replaced: two anchors are never about the same sample,
+    /// and subtracting their timestamps measures transport delay, not
+    /// alignment.
+    #[test]
+    fn a_residual_compares_the_same_sample_not_the_same_moment() {
+        // Master: heard sample 0 (0 ms) at t=10 s. Its snapshot then crossed a
+        // network, and this node reads its own position 250 ms later -- by
+        // which time it has itself played 250 ms. Perfectly in sync.
+        let m = DriftAnchor { passage_id: 3, sample: 0, heard_at: 10 * SEC,
+                              rate: 44100, ppm: None };
+        let local = AirPosition { passage_id: 3, position_ms: 250, at: 10 * SEC + 250_000_000 };
+        assert_eq!(local_at_sample(&local, &m) - m.heard_at as i64, 0,
+                   "a quarter second of transport is not a quarter second of error");
+        // The naive subtraction would have called that 250 ms late.
+        assert_eq!(residual_ns(&m, local.at), 250_000_000);
+
+        // Genuinely 5 ms late: same position, reached 5 ms later.
+        let late = AirPosition { passage_id: 3, position_ms: 250,
+                                 at: 10 * SEC + 255_000_000 };
+        assert_eq!(local_at_sample(&late, &m) - m.heard_at as i64, 5_000_000);
+    }
+
+    /// `[GDE-ECHO-340]`: late hides in a lead-in, early cannot, and far is a
+    /// rejoin either way.
+    #[test]
+    fn an_offset_is_hidden_when_it_can_be_and_rejoined_when_it_cannot() {
+        let dead = Duration::from_millis(5);
+        let hide = Duration::from_millis(50);
+        assert_eq!(offset_fix(4_000_000, dead, hide), OffsetFix::Hold);
+        assert_eq!(offset_fix(-4_000_000, dead, hide), OffsetFix::Hold);
+        assert_eq!(offset_fix(20_000_000, dead, hide), OffsetFix::SkipInto(20));
+        // Too far to hide.
+        assert_eq!(offset_fix(400_000_000, dead, hide), OffsetFix::Rejoin);
+        // Early at all: there is no negative position to open at.
+        assert_eq!(offset_fix(-20_000_000, dead, hide), OffsetFix::Rejoin);
     }
 
     /// The master moves while this node prepares, so a mid-passage join aims

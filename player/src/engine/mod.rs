@@ -231,6 +231,14 @@ pub enum Command {
     /// Join at once, or wait for the followed node's next passage
     /// `[SPEC-ECHO-030]`.
     SetEchoJoinNow(bool),
+    /// Open the next passage this many ms further in, to shed an offset
+    /// `[GDE-ECHO-340]`.
+    ///
+    /// Applied once, to the next admission, and only when nothing else has
+    /// asked for a resume position -- a listener's own resume point is a
+    /// statement about where to play from and outranks a few milliseconds of
+    /// alignment.
+    EchoCorrectNextStart(u64),
     /// Begin this passage, this far in, at this wall-clock instant
     /// `[GDE-ECHO-330]`.
     ///
@@ -367,6 +375,8 @@ pub struct Engine {
     /// Join at once, or wait for the followed node's next passage
     /// `[SPEC-ECHO-030]`.
     pub(crate) echo_join_now: bool,
+    /// An offset correction waiting for the next admission `[GDE-ECHO-340]`.
+    pub(crate) echo_next_start_ms: Option<u64>,
     /// A start instant committed to but not yet reached `[GDE-ECHO-330]`.
     echo_start: Option<(QueueEntry, u64, u64)>,
     echo_seen_recoveries: u64,
@@ -574,6 +584,7 @@ impl Engine {
             echo_delay_trim_ms: 0,
             echo_follow_host: String::new(),
             echo_join_now: true,
+            echo_next_start_ms: None,
             echo_start: None,
             echo_seen_recoveries: 0,
             echo_seen_underruns: 0,
@@ -860,6 +871,9 @@ impl Engine {
                         self.echo_follow_host = host;
                         self.remember_settings();
                     }
+                }
+                Ok(Command::EchoCorrectNextStart(ms)) => {
+                    self.echo_next_start_ms = Some(ms);
                 }
                 Ok(Command::SetEchoJoinNow(now)) => {
                     self.echo_join_now = now;
@@ -1278,7 +1292,14 @@ impl Engine {
         // passage part-way in, and a schedule announcing sample 0 for a
         // passage that begins at 3 minutes tells every follower to play the
         // wrong audio at the right time `[GDE-ECHO-325]`.
-        let origin = self.pending_resume.take();
+        // A listener's resume point wins; the correction fills the gap when
+        // there is none, which at an ordinary passage boundary is always.
+        let origin = self.pending_resume.take().or_else(|| {
+            self.echo_next_start_ms.take().inspect(|ms| {
+                eprintln!("echo-offset: opening passage {} {ms} ms in to shed an offset",
+                          entry.passage_id);
+            })
+        });
         if let Some(r) = self.path.ring.as_ref() {
             if r.clock.timestamps() == crate::output::Timestamps::Hardware {
                 if let Ok(d) = std::time::SystemTime::now()
