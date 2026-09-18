@@ -128,19 +128,30 @@ node is currently the master.
 
 ## 5. Open
 
-**`[SPEC-DLY-120]` The control **belongs** in the per-node Vaino skin settings
-page — `#panel-settings` in
+**`[SPEC-DLY-120]` The control lives in the per-node Vaino skin settings page**
+— `#panel-settings` in
 [skin.html](../../player/src/web/skins/vaino/skin.html), served by
-[settings.rs](../../player/src/web/settings.rs) — and **is not built.**
+[settings.rs](../../player/src/web/settings.rs). **Built 2026-09-18.**
 
-*This entry first said the control lives there, recorded 2026-09-17 on a
-statement rather than on the code, and corrected 2026-09-18 by reading it.* The
-panel exists and carries seven settings; none of them is a delay. Nothing in
-`player/src/web/` mentions an offset, and the only thing that can set one today
-is the startup flag `--echo-offset-frames`, which is neither persisted
-`[SPEC-DLY-070]` nor resettable `[SPEC-DLY-060]` nor able to show its
-provenance `[SPEC-DLY-050]`. A flag satisfies none of this specification; it
-was a way to test the engine, not the control.
+*This entry twice said so before it was true.* It was first recorded
+2026-09-17 from a statement rather than from the code; reading the code on
+2026-09-18 found the panel carrying seven settings, none of them a delay, and
+nothing in `player/src/web/` mentioning an offset at all. It is now genuinely
+there: a millisecond field with a **Default** button, `POST /echo/trim/:ms` and
+`/echo/trim/reset`, persisted through `player_settings` beside every other
+setting `[SPEC-DLY-070]` — which puts it in `listener.db` under `/var/vaino`,
+bind-mounted from the state partition, satisfying `[SPEC-DLY-080]` by reuse
+rather than by a second mechanism.
+
+The provenance line `[SPEC-DLY-050]` is rendered from `measured_frames`, which
+is `None` rather than zero on a node whose timestamp verdict is not `Hardware`
+`[GDE-ECHO-290]`, so *"nothing here measures this device's delay"* and
+*"measured at 46.3 ms"* are different sentences and not the same zero. The
+clamp `[SPEC-DLY-030]` is reported in that line too, never applied silently.
+
+`--echo-offset-frames` remains, and remains a different thing: it seeds the
+engine at startup for a node being set up before anyone can reach its
+interface. It satisfies none of this specification on its own.
 
 What remains open is only the *aggregate*: a fleet-wide view showing every
 node's delay side by side would suit the actual task — aligning speakers against

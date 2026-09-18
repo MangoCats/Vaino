@@ -66,6 +66,54 @@ impl PendingFinish {
     }
 }
 
+/// Whether a host names this very node `[SPEC-ECHO-050]`.
+///
+/// Deliberately shallow: the hostname, `localhost`, and the loopback
+/// addresses. It will not catch every alias a network can invent, and it is
+/// not trying to -- it catches the ones a person actually types, and the
+/// feedback loop it prevents is obvious enough in the log if one slips past.
+fn is_self(host: &str) -> bool {
+    let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let h = h.split(':').next().unwrap_or(&h);
+    if matches!(h, "localhost" | "127.0.0.1" | "::1" | "0.0.0.0" | "") {
+        return true;
+    }
+    std::env::var("HOSTNAME").ok()
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|n| n.trim().to_ascii_lowercase())
+        .is_some_and(|n| !n.is_empty() && (h == n || h == n.split('.').next().unwrap_or(&n)))
+}
+
+/// What the delay and follow controls need to render honestly.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct EchoNode {
+    /// The hand-set trim, ms `[SPEC-DLY-010]`.
+    pub trim_ms: i64,
+    /// The device's own reported delay in frames, and whether that reading
+    /// rests on real hardware timestamps `[GDE-ECHO-290]`.
+    ///
+    /// `None` is the whole point: a node whose verdict is not `Hardware` has
+    /// no measured half at all, and showing 0 would be a measured zero rather
+    /// than an absent one `[GOV-SRC-040]`.
+    pub measured_frames: Option<u64>,
+    /// `measured + trim`, clamped at zero, in frames `[SPEC-DLY-030]`.
+    pub offset_frames: u64,
+    /// True when the clamp is biting, so the panel can say so instead of
+    /// quietly showing a number the user did not ask for.
+    pub clamped: bool,
+    /// The output rate these frame counts are in.
+    ///
+    /// Sent rather than assumed: a browser dividing by 44.1 is right until a
+    /// node runs at 48 kHz, and then it is quietly wrong by 9 % in a figure
+    /// someone is about to calibrate by ear.
+    pub rate: u32,
+    /// The node being followed, bare host; empty is independent.
+    pub follow_host: String,
+    /// What following is actually doing, in the follower's own words
+    /// `[SPEC-ECHO-020]`. Empty while independent.
+    pub follow_status: String,
+}
+
 /// What the UI and the persistence layer read. Cheap to clone.
 #[derive(Debug, Clone, Default)]
 pub struct PlayerState {
@@ -80,6 +128,9 @@ pub struct PlayerState {
     /// node that cannot place itself in time, which is a fact rather than an
     /// omission -- see `EchoState::voided_by`.
     pub echo: crate::echo::EchoState,
+    /// This node's place in the fleet, as the settings panel shows it
+    /// `[SPEC-DLY-050]`, `[SPEC-ECHO-020]`.
+    pub echo_node: EchoNode,
     /// What is coming, in play order.
     pub queue: Vec<QueueEntry>,
     /// How many of those the mixer already holds, and so cannot be edited
@@ -169,6 +220,12 @@ pub enum Command {
     /// frames -- never a live `delay` reading, which on some nodes wanders
     /// milliseconds while the sound does not `[LOG-P4-100]`.
     SetEchoDepth { own_offset_frames: u64, fleet_min_offset_frames: u64 },
+    /// This node's hand-set delay trim, ms, clamped to +/-2000
+    /// `[SPEC-DLY-010]`.
+    SetEchoDelayTrim(i64),
+    /// The node to follow, as a bare host. Empty means independent
+    /// `[SPEC-ECHO-010]`.
+    SetEchoFollow(String),
     /// Begin this passage, this far in, at this wall-clock instant
     /// `[GDE-ECHO-330]`.
     ///
@@ -297,6 +354,11 @@ pub struct Engine {
     /// fleet. `bose` at 46.3 ms behind `lempiplay3`'s 42.2 ms leaves 181
     /// frames `[LOG-P4-140]`.
     echo_depth_shortfall: usize,
+    /// This node's hand-set delay trim, ms `[SPEC-DLY-010]`.
+    pub(crate) echo_delay_trim_ms: i64,
+    /// The node this one follows, bare host; empty is independent
+    /// `[SPEC-ECHO-010]`.
+    pub(crate) echo_follow_host: String,
     /// A start instant committed to but not yet reached `[GDE-ECHO-330]`.
     echo_start: Option<(QueueEntry, u64, u64)>,
     echo_seen_recoveries: u64,
@@ -501,6 +563,8 @@ impl Engine {
             echo_basis: crate::echo::Basis::default(),
             echo_schedule: None,
             echo_depth_shortfall: 0,
+            echo_delay_trim_ms: 0,
+            echo_follow_host: String::new(),
             echo_start: None,
             echo_seen_recoveries: 0,
             echo_seen_underruns: 0,
@@ -770,6 +834,24 @@ impl Engine {
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::ReopenOutput) => self.path.reopen(),
                 Ok(Command::Skip) => self.skip(),
+                Ok(Command::SetEchoDelayTrim(ms)) => {
+                    self.echo_delay_trim_ms =
+                        ms.clamp(-crate::db::ECHO_TRIM_LIMIT_MS, crate::db::ECHO_TRIM_LIMIT_MS);
+                    self.remember_settings();
+                }
+                Ok(Command::SetEchoFollow(host)) => {
+                    // Trimmed, and a node refuses to follow itself
+                    // `[SPEC-ECHO-050]`: its own address makes a socket to its
+                    // own snapshot and a join triggered by its own admission,
+                    // which skips forever and is baffling to watch.
+                    let host = host.trim().to_string();
+                    if !host.is_empty() && is_self(&host) {
+                        eprintln!("echo-follow: {host} is this node; refusing to follow itself");
+                    } else {
+                        self.echo_follow_host = host;
+                        self.remember_settings();
+                    }
+                }
                 Ok(Command::EchoStartAt { entry, start_sample, at_nanos }) => {
                     self.echo_start = Some((entry, start_sample, at_nanos));
                 }
@@ -1403,6 +1485,21 @@ impl Engine {
         self.queue_edited = true;
     }
 
+    /// This node's presentation offset: what the device reports plus what a
+    /// listener calibrated `[GDE-ECHO-430]`, clamped at zero
+    /// `[SPEC-DLY-030]`.
+    ///
+    /// Returns the clamp as a fact rather than hiding it. A node cannot sound
+    /// before it submits, so a trim more negative than the measured delay is
+    /// not a smaller number but an impossible one, and the panel says so
+    /// instead of showing a value nobody chose.
+    pub(crate) fn echo_offset_frames(&self, measured: Option<u64>) -> (u64, bool) {
+        let rate = self.out_rate.max(1) as i64;
+        let trim_frames = self.echo_delay_trim_ms.saturating_mul(rate) / 1000;
+        let want = measured.unwrap_or(0) as i64 + trim_frames;
+        if want < 0 { (0, true) } else { (want as u64, false) }
+    }
+
     /// Hold the ring below capacity so this node's submit-to-air total matches
     /// the fleet's `[LOG-ECHO-030]`.
     ///
@@ -1612,6 +1709,25 @@ impl Engine {
         };
         if let Ok(mut s) = self.state.lock() {
             s.echo = echo;
+            // Rebuilt each publish rather than cached: the measured half moves
+            // on its own `[LOG-P4-080]`, and a stale copy would show a delay
+            // the device stopped reporting minutes ago.
+            let measured = self.path.ring.as_ref().and_then(|r| {
+                (r.clock.timestamps() == crate::output::Timestamps::Hardware)
+                    .then(|| r.clock.delay_frames())
+            });
+            let (offset_frames, clamped) = self.echo_offset_frames(measured);
+            s.echo_node = EchoNode {
+                trim_ms: self.echo_delay_trim_ms,
+                measured_frames: measured,
+                offset_frames,
+                clamped,
+                rate: self.out_rate,
+                follow_host: self.echo_follow_host.clone(),
+                // Written by the follower task, which is the only thing that
+                // knows; left as it found it here.
+                follow_status: s.echo_node.follow_status.clone(),
+            };
             s.playing = self.playing;
             s.current = self.shown.as_ref().map(|(e, _)| e.clone());
             s.position_ms = self.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);
@@ -1680,6 +1796,34 @@ impl Drop for Engine {
 #[cfg(test)]
 mod depth_tests {
     use super::Engine;
+
+    /// `[SPEC-DLY-030]`: a node cannot sound before it submits, so a trim
+    /// more negative than the measured delay is impossible rather than small.
+    /// The clamp is reported so the panel can say so.
+    #[test]
+    fn a_trim_past_the_measured_delay_clamps_and_says_it_did() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        e.echo_delay_trim_ms = -40;
+        assert_eq!(e.echo_offset_frames(Some(2043)), (279, false), "46 ms less 40 leaves 6");
+        e.echo_delay_trim_ms = -100;
+        assert_eq!(e.echo_offset_frames(Some(2043)), (0, true), "further back than zero");
+        // With nothing measured the trim IS the offset `[GDE-ECHO-430]`.
+        e.echo_delay_trim_ms = 10;
+        assert_eq!(e.echo_offset_frames(None), (441, false));
+    }
+
+    /// `[SPEC-ECHO-050]`: following yourself is a feedback loop, and an easy
+    /// thing to type.
+    #[test]
+    fn a_node_will_not_follow_itself() {
+        for h in ["localhost", "127.0.0.1", "::1", "LocalHost", " localhost ", "localhost:5720"] {
+            assert!(super::is_self(h), "{h} names this node");
+        }
+        for h in ["bose", "lempiplay3:5720", "192.168.67.27"] {
+            assert!(!super::is_self(h), "{h} is somewhere else");
+        }
+    }
 
     /// The whole lever: a constant off the cached free figure.
     #[test]

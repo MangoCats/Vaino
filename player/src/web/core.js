@@ -1195,6 +1195,12 @@ const Vaino = (() => {
     skipFade: ms => post(`/skip/fade/${Math.round(ms)}`),
     skipLead: ms => post(`/skip/lead/${Math.round(ms)}`),
     resumeSave: ms => post(`/resume/save/${Math.round(ms)}`),
+    // This node's place in a fleet [SPEC-DLY-010], [SPEC-ECHO-010]. The host
+    // goes in a body rather than a path: a hostname is text a person typed,
+    // and path-escaping it to satisfy a router is a way to mangle it.
+    echoTrim: ms => post(`/echo/trim/${Math.round(ms)}`),
+    echoTrimReset: () => post('/echo/trim/reset'),
+    echoFollow: host => fetch('/echo/follow', { method: 'POST', body: String(host ?? '') }),
     skipSuppress: h => post(`/skip/suppress/${Math.round(h)}`),
     dequeueSuppress: h => post(`/dequeue/suppress/${Math.round(h)}`),
     queueDepth: n => post(`/queue/depth/${Math.round(n)}`),

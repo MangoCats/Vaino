@@ -54,6 +54,8 @@ impl Engine {
             covers: self.covers,
             lyrics_cache: self.lyrics_cache,
             lyrics_sidecar: self.lyrics_sidecar,
+            echo_delay_trim_ms: self.echo_delay_trim_ms,
+            echo_follow_host: self.echo_follow_host.clone(),
         }
     }
 
@@ -78,6 +80,8 @@ impl Engine {
         self.covers = s.covers;
         self.lyrics_cache = s.lyrics_cache;
         self.lyrics_sidecar = s.lyrics_sidecar;
+        self.echo_delay_trim_ms = s.echo_delay_trim_ms;
+        self.echo_follow_host = s.echo_follow_host.clone();
         self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);

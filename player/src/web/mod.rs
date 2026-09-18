@@ -473,6 +473,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/skip/fade/:ms", post(set_skip_fade))
         .route("/skip/lead/:ms", post(set_skip_lead))
         .route("/resume/save/:ms", post(set_resume_save))
+        // This node's place in the fleet `[SPEC-DLY-120]`, `[SPEC-ECHO-010]`.
+        .route("/echo/trim/:ms", post(set_echo_trim))
+        .route("/echo/trim/reset", post(reset_echo_trim))
+        .route("/echo/follow", post(set_echo_follow))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))

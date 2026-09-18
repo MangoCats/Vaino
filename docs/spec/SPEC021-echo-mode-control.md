@@ -2,21 +2,22 @@
 
 **Design Specification — independent or follower, and whom to follow**
 
-A node plays its own programme or echoes another's. Nothing in the interface
-says which, or lets anyone change it: today the only way to make a node follow
-is the startup flag `--follow`, which means a decision about what a speaker
-plays in a room can only be made by restarting a process over ssh. This
-specifies the control that fixes that, and the several things about echo that
-make it more than a text box and a checkbox.
+A node plays its own programme or echoes another's. Until 2026-09-18 nothing
+in the interface said which, or let anyone change it: the only way to make a
+node follow was the startup flag `--follow`, so a decision about what a speaker
+plays in a room could only be made by restarting a process over ssh. This
+specifies the control that fixed that, and the several things about echo that
+make it more than a text box and a checkbox. All of it is built except
+`[SPEC-ECHO-030]`.
 
-> **Related:** [SPEC020](SPEC020-node-delay-control.md) `[SPEC-DLY-120]` — the other per-node echo control, likewise specified and unbuilt · [GUIDE016](../GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-315]` — which node may be master · [GUIDE010](../GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-450]` — the roster this needs
+> **Related:** [SPEC020](SPEC020-node-delay-control.md) `[SPEC-DLY-120]` — the other per-node echo control, in the same panel · [GUIDE016](../GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-315]` — which node may be master · [GUIDE010](../GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-450]` — the roster this needs
 
 ---
 
 ## 1. The control
 
 **`[SPEC-ECHO-010]` Two fields and a state, in the same settings panel as the
-delay `[SPEC-DLY-120]`.** A mode — *independent* or *following* — and the
+delay `[SPEC-DLY-120]`. Built 2026-09-18.** A mode — *independent* or *following* — and the
 address of the node to follow. They belong together because neither is usable
 alone, and beside the delay because all three are this node's place in the
 fleet.
@@ -24,7 +25,9 @@ fleet.
 The address is a host, not a URL. Every node serves the same socket at the same
 path, so asking for `ws://bose:5720/ws` asks a listener to know three things
 that cannot vary usefully. `bose` is the whole input; the client composes the
-rest.
+rest — **with a port when the fleet needs one**, since `bose` answers on 80 and
+`lempiplay3` on 5720, so `lempiplay3:5720` is accepted and a bare name is not
+quietly assumed to be either.
 
 **`[SPEC-ECHO-020]` The control shows what following is actually doing, because
 "following" is not a state that can be assumed from a setting.** The client
@@ -46,15 +49,20 @@ letting the listener infer success from it `[GOV-SRC-040]`.
 ## 2. What changing it does
 
 **`[SPEC-ECHO-030]` Entering follower mode takes effect at the next passage
-boundary by default, and immediately only if asked.** Switching mid-passage is
-a join, and a join is a skip: the ring is cut and the current passage stops
-where it stands `[GDE-ECHO-330]`. That is the right behaviour when someone is
-setting a fleet up and the wrong one when a passage is half-played and being
-listened to. Waiting for the boundary makes the change inaudible, which is what
-`[GDE-ECHO-325]` promises for everything the queue saw coming.
+boundary by default, and immediately only if asked.** **Not built as
+specified.**
 
-An *immediate* option belongs beside it, because during setup the boundary is
-minutes away and the listener wants to hear whether it worked.
+Switching mid-passage is a join, and a join is a skip: the ring is cut and the
+current passage stops where it stands `[GDE-ECHO-330]`. That is the right
+behaviour when someone is setting a fleet up and the wrong one when a passage
+is half-played and being listened to. Waiting for the boundary makes the change
+inaudible, which is what `[GDE-ECHO-325]` promises for everything the queue saw
+coming, and an *immediate* option belongs beside it for setup.
+
+**What ships offers only the immediate behaviour**, and not even as a choice:
+the node joins at the *master's* next passage admission, cutting whatever it
+was playing. Recorded here rather than left for someone to discover during a
+track they were enjoying.
 
 **`[SPEC-ECHO-040]` Leaving follower mode is always immediate and always
 safe.** The node stops acting on schedules and keeps playing what it has; its

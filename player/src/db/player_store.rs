@@ -478,7 +478,13 @@ pub struct PlayerStore {
 ///
 /// A struct rather than a tuple because there are eight of them now and a
 /// nine-element tuple is a way to swap two `u64`s without the compiler minding.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// `[SPEC-DLY-010]`: the trim's range, either way.
+pub const ECHO_TRIM_LIMIT_MS: i64 = 2_000;
+
+// No longer `Copy`: `echo_follow_host` is a `String`. Clone is kept, and the
+// handful of call sites that relied on an implicit copy now say `.clone()`,
+// which is the honest cost of a setting that is text rather than a number.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub volume: f32,
     pub skip_fade_ms: u64,
@@ -508,6 +514,19 @@ pub struct Settings {
     /// **Off by default**: it writes into the music folder, and it is
     /// deliberately blind to captures `[SPEC-LYR-080]`.
     pub lyrics_sidecar: bool,
+    /// This node's hand-set delay trim, in milliseconds `[SPEC-DLY-010]`.
+    ///
+    /// The *calibrated* half of the presentation offset `[GDE-ECHO-430]`,
+    /// added to whatever the device reports. Signed, because a stack that
+    /// over-reports its delay needs the node pulled earlier, not later.
+    pub echo_delay_trim_ms: i64,
+    /// The node this one follows `[SPEC-ECHO-010]`, as a bare host.
+    ///
+    /// Empty means independent, which is every node's default and what it
+    /// returns to if its master goes away `[GDE-ECHO-500]`. Stored as a host
+    /// rather than a URL: every node serves the same socket at the same path,
+    /// so the rest is composed and cannot be got wrong.
+    pub echo_follow_host: String,
 }
 
 impl Settings {
@@ -522,7 +541,7 @@ impl Settings {
     /// against it by `every_setting_survives_a_round_trip`, so a field added to
     /// one and forgotten in the other fails a test rather than silently losing
     /// itself on the next restart.
-    pub const KEYS: [&'static str; 12] = [
+    pub const KEYS: [&'static str; 14] = [
         "volume",
         "skip_fade_ms",
         "skip_lead_ms",
@@ -533,6 +552,8 @@ impl Settings {
         "sample_interval_ms",
         "cue_sheets",
         "covers",
+        "echo_delay_trim_ms",
+        "echo_follow_host",
         "lyrics_cache",
         "lyrics_sidecar",
     ];
@@ -552,6 +573,8 @@ impl Settings {
             "covers" => (self.covers as i64).to_string(),
             "lyrics_cache" => (self.lyrics_cache as i64).to_string(),
             "lyrics_sidecar" => (self.lyrics_sidecar as i64).to_string(),
+            "echo_delay_trim_ms" => self.echo_delay_trim_ms.to_string(),
+            "echo_follow_host" => self.echo_follow_host.clone(),
             _ => return None,
         })
     }
@@ -582,6 +605,15 @@ impl Settings {
             "covers" => self.covers = flag(),
             "lyrics_cache" => self.lyrics_cache = flag(),
             "lyrics_sidecar" => self.lyrics_sidecar = flag(),
+            "echo_delay_trim_ms" => {
+                if let Ok(v) = value.parse::<i64>() {
+                    self.echo_delay_trim_ms = v.clamp(-ECHO_TRIM_LIMIT_MS, ECHO_TRIM_LIMIT_MS);
+                }
+            }
+            // Read back as stored. A host that has become unreachable is still
+            // the host somebody chose, and silently blanking it would look
+            // like nobody ever set one `[GOV-SRC-040]`.
+            "echo_follow_host" => self.echo_follow_host = value.to_string(),
             _ => {}
         }
     }
@@ -605,6 +637,11 @@ impl Default for Settings {
             sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
             cue_sheets: false,
             covers: false,
+            // Absent is not zero `[GOV-SRC-040]`: a trim of 0 here means
+            // nothing has been calibrated, which the interface shows as
+            // *unset* rather than as a measured zero `[SPEC-DLY-050]`.
+            echo_delay_trim_ms: 0,
+            echo_follow_host: String::new(),
             lyrics_cache: false,
             lyrics_sidecar: false,
         }
@@ -2208,6 +2245,8 @@ mod tests {
         // quietly falls back to its default fails here rather than passing by
         // coincidence.
         let want = Settings {
+            echo_delay_trim_ms: -40,
+            echo_follow_host: "bose".to_string(),
             volume: 0.375,
             skip_fade_ms: 1_234,
             skip_lead_ms: 321,
@@ -2250,6 +2289,8 @@ mod tests {
         assert!(store.load_settings().is_none(), "nothing saved yet");
 
         let want = Settings {
+            echo_delay_trim_ms: 125,
+            echo_follow_host: String::new(),
             volume: 0.5,
             skip_fade_ms: 2_000,
             skip_lead_ms: 500,

@@ -87,6 +87,15 @@
   const skipFade = $('skipfade'), skipLead = $('skiplead');
   skipFade.onchange = () => Vaino.skipFade(skipFade.value * 1000);
   skipLead.onchange = () => Vaino.skipLead(skipLead.value * 1000);
+  // This node's place in a fleet [SPEC-DLY-120], [SPEC-ECHO-010].
+  const echoTrim = $('echotrim'), echoFollow = $('echofollow');
+  echoTrim.onchange = () => Vaino.echoTrim(echoTrim.value || 0);
+  $('echotrimreset').onclick = () => Vaino.echoTrimReset();
+  // On change, not on every keystroke: a half-typed hostname is not a node
+  // anyone meant to follow, and sending one would make the panel flicker
+  // through states nobody chose.
+  echoFollow.onchange = () => Vaino.echoFollow(echoFollow.value);
+
   const resumeSave = $('resumesave');
   resumeSave.onchange = () => Vaino.resumeSave(resumeSave.value * 1000);
   // A skip suppresses; it does not count as played `[SPEC-PLAY-050]`.
@@ -242,6 +251,47 @@
     if (guestOpt && s.guest_name) guestOpt.textContent = `${s.guest_name} (spans only)`;
     if (s.backend && document.activeElement !== backendSel) backendSel.value = s.backend;
     $('switchstatus').textContent = s.switch_status || '';
+  }
+
+  // This node's place in a fleet [SPEC-DLY-050], [SPEC-ECHO-020].
+  //
+  // The note under the delay box is the whole point of the control. Three
+  // different zeroes mean three different things -- measured, restored, and
+  // never configured -- and they are indistinguishable as numbers, so the
+  // provenance is said in words beside the value [GOV-SRC-040].
+  function renderEchoNode(n) {
+    if (!n) return;
+    if (document.activeElement !== echoTrim) echoTrim.value = n.trim_ms;
+    if (document.activeElement !== echoFollow) echoFollow.value = n.follow_host || '';
+    // The node's own rate, not an assumed 44.1 kHz.
+    const ms = f => (f * 1000 / (n.rate || 44100)).toFixed(1);
+    let note;
+    if (n.measured_frames == null) {
+      // Not "0 ms": this device reports no usable delay at all, so the whole
+      // offset is whatever a listener set by ear [GDE-ECHO-290].
+      note = n.trim_ms
+        ? `Nothing here measures this device's delay, so this ${n.trim_ms} ms is the whole of it — set by ear.`
+        : "Nothing here measures this device's delay, and none has been set. This speaker is using no delay at all.";
+    } else if (n.trim_ms === 0) {
+      note = `Measured at ${ms(n.measured_frames)} ms, with nothing added.`;
+    } else {
+      note = `Measured at ${ms(n.measured_frames)} ms, ${n.trim_ms > 0 ? 'plus' : 'minus'} `
+           + `${Math.abs(n.trim_ms)} ms set here — ${ms(n.offset_frames)} ms in all.`;
+    }
+    // A clamp is reported, never silently applied: a node cannot sound before
+    // it submits [SPEC-DLY-030].
+    if (n.clamped) note += ' That is further back than the speaker can go; using none.';
+    $('echotrimnote').textContent = note;
+
+    const st = $('echofollownote');
+    if (!n.follow_host) {
+      st.textContent = 'Playing this node’s own programme. '
+        + 'Type the name of another player to follow it.';
+    } else {
+      // "Following" is a setting, not a state. Saying which of the two is
+      // true is the difference between a working fleet and a silent failure.
+      st.textContent = n.follow_status || `Set to follow ${n.follow_host}; not connected yet.`;
+    }
   }
 
   function renderSkip(k) {
@@ -428,6 +478,7 @@
       ? (s.program_manual ? `${s.program}, chosen` : `${s.program}, by the clock`)
       : '';
     renderSkip(s.skip);
+    renderEchoNode(s.echo_node);
     renderBackend(s);
     renderCue(s);
     renderBuild(s);

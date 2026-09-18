@@ -9,6 +9,43 @@ use crate::engine::Command;
 
 use super::Ui;
 
+/// This node's hand-set delay trim `[SPEC-DLY-010]`.
+///
+/// Signed, so the path takes it as a string and parses: axum's `i64` path
+/// extractor is fine with `-40`, but a browser sending `+40` is not worth a
+/// 400 when the intent is unambiguous.
+pub(super) async fn set_echo_trim(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<String>,
+) -> StatusCode {
+    match ms.trim().trim_start_matches('+').parse::<i64>() {
+        Ok(v) => {
+            ui.handle.send(Command::SetEchoDelayTrim(v));
+            StatusCode::NO_CONTENT
+        }
+        Err(_) => StatusCode::BAD_REQUEST,
+    }
+}
+
+/// Return the trim to its ranked default `[SPEC-DLY-060]`.
+///
+/// Zero, which on a node with a measured delay means "the measured figure and
+/// nothing added". On a node without one it means unset, which is not the same
+/// claim and is shown differently `[SPEC-DLY-050]`.
+pub(super) async fn reset_echo_trim(State(ui): State<Ui>) -> StatusCode {
+    ui.handle.send(Command::SetEchoDelayTrim(0));
+    StatusCode::NO_CONTENT
+}
+
+/// The node to follow, or nothing `[SPEC-ECHO-010]`.
+pub(super) async fn set_echo_follow(
+    State(ui): State<Ui>,
+    body: String,
+) -> StatusCode {
+    ui.handle.send(Command::SetEchoFollow(body.trim().to_string()));
+    StatusCode::NO_CONTENT
+}
+
 /// How often the resume point is written `[REQ-VIS-155]`.
 pub(super) async fn set_resume_save(
     State(ui): State<Ui>,

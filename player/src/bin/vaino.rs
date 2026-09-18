@@ -84,6 +84,7 @@ async fn main() {
     // echo and plays its own programme, which is every node's default and the
     // behaviour it keeps if its master ever goes away `[GDE-ECHO-500]`.
     let follow = text_flag(&args, "--follow");
+    #[cfg_attr(not(feature = "echo-client"), allow(unused_variables))]
     let echo_rate = flag(&args, "--echo-rate", 44_100) as u32;
     // A guest backend, offered rather than assumed `[SPEC-BK-020]`. Vaino still
     // plays; MPD is attached and idle until a switch asks for it.
@@ -164,14 +165,20 @@ async fn main() {
             fleet_min_offset_frames: echo_fleet_min,
         });
     }
+    // `--follow` seeds the stored setting rather than replacing it. The
+    // control is the settings panel `[SPEC-ECHO-010]`; the flag is for a node
+    // being set up before anyone can reach its interface, and a flag that
+    // silently overrode what a listener chose would be worse than no flag.
     #[cfg(feature = "echo-client")]
-    if let Some(url) = follow {
-        // Its own offset, not the master's: the schedule says when a sample
-        // should sound, and this node alone knows what it costs to get there
-        // `[GDE-ECHO-410]`.
+    {
+        if let Some(host) = follow {
+            handle.send(vaino_player::engine::Command::SetEchoFollow(host));
+        }
+        // Always spawned, even with nothing to follow: which node to follow is
+        // now a setting that can change at any moment, and a task started only
+        // at boot would mean the control did nothing until a restart.
         tokio::spawn(vaino_player::echo_client::run(
             vaino_player::echo_client::Following {
-                url,
                 timing: vaino_player::echo::NodeTiming {
                     presentation_offset_frames: echo_offset,
                     rate: echo_rate,
