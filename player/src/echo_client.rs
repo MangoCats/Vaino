@@ -415,6 +415,19 @@ async fn act(
     }
 }
 
+/// A passage, with the names a listener reads.
+///
+/// `Library::passage` returns the audio facts -- path, bounds, fades -- and
+/// nothing a person would recognise; the title and artist come from a second
+/// lookup against the recording's MBID. Every other queue path in the player
+/// calls `describe`, and this one did not, so a follower's *Coming Up* listed
+/// filenames where the node it followed listed songs.
+fn named(lib: &crate::db::Library, passage_id: i64) -> Option<crate::queue::QueueEntry> {
+    let mut e = lib.passage(passage_id).ok()?;
+    lib.describe(&mut e);
+    Some(e)
+}
+
 /// Take the followed node's queue as this node's own `[GDE-ECHO-500]`.
 ///
 /// Only when it changes: the snapshot arrives twice a second and resolving a
@@ -439,7 +452,7 @@ async fn adopt_queue(
     let wanted = announced.len();
     let found = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open_split(&db, &library).ok()?;
-        Some(announced.iter().filter_map(|id| lib.passage(*id).ok()).collect::<Vec<_>>())
+        Some(announced.iter().filter_map(|id| named(&lib, *id)).collect::<Vec<_>>())
     })
     .await;
     if let Ok(Some(entries)) = found {
@@ -471,7 +484,9 @@ async fn start(
     // The library is SQLite and blocking; the socket must not wait on a disk
     // read. Once per passage, so the spawn costs nothing.
     let found = tokio::task::spawn_blocking(move || {
-        crate::db::Library::open_split(&db, &library).and_then(|lib| lib.passage(passage_id))
+        let lib = crate::db::Library::open_split(&db, &library)?;
+        named(&lib, passage_id)
+            .ok_or_else(|| crate::db::DbError::Query(format!("passage {passage_id} not here")))
     })
     .await;
     match found {
