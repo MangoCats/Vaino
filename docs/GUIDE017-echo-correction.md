@@ -133,6 +133,26 @@ audible sits at the front of the published queue, ahead of what is still
 merely queued, so asking "playing **or** coming" covers both the ring window
 and the ordinary wait. A passage already coming needs no join, only patience.
 
+**`[GDE-ECHO-344]` Two mechanisms, and the threshold between them must clear
+the join bias.** `[GDE-ECHO-343]`'s guard was right about ordinary transitions
+and wrong about everything else: suppressing the join whenever the node was
+*coming* to that passage also removed the only thing that aligns a node
+initially. After a restart a follower resumes its own programme, adopts the
+master's queue, flows into the same passages -- and sits however far out it
+happened to be, with 500 ms a transition to claw back. Measured at **4.8 s**,
+which is forty minutes of nudging; the divergence got worse, not better.
+
+Being *coming to a passage* is therefore only sufficient while the node is
+roughly in the right place. Grossly out, it is playing the right passage at the
+wrong moment, and only placing the first sample afresh fixes that.
+
+The threshold between the two carries a constraint that is easy to miss: **it
+must sit above the join bias.** A join lands a few hundred milliseconds to a
+second late `[GDE-ECHO-342]`, so a threshold at or below that has every join
+trigger the next one for ever. 1.5 s clears the worst observed bias with room,
+so a join always lands *inside* the band and the nudges take it from there --
+and is low enough that a node never faces forty minutes of nudging.
+
 **`[GDE-ECHO-342]` The join bias itself is real and not yet fixed.** A
 commanded start lands late by a variable few hundred milliseconds to a second.
 `skip_lead_ms` is compensated `[GDE-ECHO-337]`, but before cutting the ring the

@@ -105,9 +105,19 @@ const OFFSET_DEADBAND: Duration = Duration::from_millis(40);
 /// bite `[GDE-ECHO-341]`.
 const OFFSET_MAX_BITE: Duration = Duration::from_millis(500);
 
-/// Beyond this a node is probably not playing what it thinks it is, and
-/// placing its first sample afresh is the honest answer `[GDE-ECHO-341]`.
-const OFFSET_REJOIN_BEYOND: Duration = Duration::from_secs(5);
+/// Beyond this, nudging is too slow to be the whole answer and the node
+/// places its first sample afresh instead `[GDE-ECHO-344]`.
+///
+/// **Above the join bias, and deliberately.** A join lands a few hundred
+/// milliseconds to a second late `[GDE-ECHO-342]`; a threshold at or below
+/// that would have every join trigger the next one, for ever. 1.5 s clears the
+/// worst bias seen with room to spare, so a join always lands *inside* the
+/// band and the nudges take it from there.
+///
+/// It also has to be low enough to matter: at 500 ms a transition and four
+/// minutes a passage, an offset of five seconds takes forty minutes to nudge
+/// away, which is not convergence a listener would recognise as such.
+const OFFSET_REJOIN_BEYOND: Duration = Duration::from_millis(1_500);
 
 /// The rate fit's window, and what it takes before it means anything.
 ///
@@ -368,7 +378,13 @@ async fn act(
     let (join_now, _) = join_intent(handle);
     if join_now {
         if let Some(a) = st.anchor.as_ref() {
-            let already = coming_here(handle, a.passage_id)
+            // Coming to it is enough to skip the join only while the node is
+            // roughly in the right place. Grossly out -- a node that has just
+            // restarted and resumed its own programme, say -- it is playing
+            // the right passage at the wrong moment, and only placing the
+            // first sample afresh fixes that `[GDE-ECHO-344]`.
+            let near = !fs.want_rejoin;
+            let already = (coming_here(handle, a.passage_id) && near)
                 || fs.mid_joined == Some(a.passage_id);
             if !already {
                 fs.mid_joined = Some(a.passage_id);
@@ -378,6 +394,7 @@ async fn act(
                     at: a.heard_at,
                 };
                 let lead = f.timing.offset() + MID_JOIN_MARGIN;
+                fs.want_rejoin = false;
                 if let Some(j) = crate::echo::join_mid_passage(&air, f.timing, now_master, lead) {
                     // Back into this node's own clock before anyone waits on it.
                     let at = fs.clock.to_local(j.submit_at).unwrap_or(j.submit_at);
