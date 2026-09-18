@@ -80,6 +80,11 @@ async fn main() {
     // fleet's minimum `[GOV-SRC-040]`.
     let echo_offset = flag(&args, "--echo-offset-frames", 0) as u64;
     let echo_fleet_min = flag(&args, "--echo-fleet-min-frames", 0) as u64;
+    // The master to follow `[GDE-ECHO-330]`. Absent means this node is nobody's
+    // echo and plays its own programme, which is every node's default and the
+    // behaviour it keeps if its master ever goes away `[GDE-ECHO-500]`.
+    let follow = text_flag(&args, "--follow");
+    let echo_rate = flag(&args, "--echo-rate", 44_100) as u32;
     // A guest backend, offered rather than assumed `[SPEC-BK-020]`. Vaino still
     // plays; MPD is attached and idle until a switch asks for it.
     let mpd_addr = text_flag(&args, "--mpd");
@@ -158,6 +163,31 @@ async fn main() {
             own_offset_frames: echo_offset,
             fleet_min_offset_frames: echo_fleet_min,
         });
+    }
+    #[cfg(feature = "echo-client")]
+    if let Some(url) = follow {
+        // Its own offset, not the master's: the schedule says when a sample
+        // should sound, and this node alone knows what it costs to get there
+        // `[GDE-ECHO-410]`.
+        tokio::spawn(vaino_player::echo_client::run(
+            vaino_player::echo_client::Following {
+                url,
+                timing: vaino_player::echo::NodeTiming {
+                    presentation_offset_frames: echo_offset,
+                    rate: echo_rate,
+                },
+                db: art_db.clone(),
+                library: art_library.clone(),
+            },
+            handle.clone(),
+        ));
+    }
+    #[cfg(not(feature = "echo-client"))]
+    if follow.is_some() {
+        // Refusing loudly beats ignoring a flag: a node asked to follow and
+        // silently playing its own programme is the hardest kind of wrong to
+        // notice `[GOV-SRC-040]`.
+        eprintln!("--follow needs a build with `--features echo-client`; not following");
     }
     let ui = web::Ui { handle, why, controls, db: art_db, library: art_library };
     let app = web::router(ui);

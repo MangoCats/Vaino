@@ -43,6 +43,12 @@ pub mod db;
 pub mod director;
 pub mod decoder;
 pub mod echo;
+/// Following a master `[GDE-ECHO-330]`. Behind `echo-client` because it names
+/// `tokio-tungstenite` directly; the crate is already in the graph via axum's
+/// own `ws` feature, so the gate costs a build nothing it was not already
+/// paying.
+#[cfg(feature = "echo-client")]
+pub mod echo_client;
 pub mod engine;
 pub mod fade;
 /// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
