@@ -109,9 +109,11 @@ run for ever without converging, and did.
 
 So a large offset is now corrected by taking the largest bite the transition
 allows and coming back for the rest: 886 ms is two transitions at half a second
-each, monotonically. `Rejoin` is reserved for a residual past five seconds,
-where the node is probably not playing what it thinks it is and placing the
-first sample afresh is the honest answer rather than a smaller correction.
+each, monotonically. `Rejoin` is reserved for a residual past the threshold in
+`[GDE-ECHO-344]` -- 1.5 s, lowered from five once it was clear that five
+seconds of nudging is forty minutes -- where the node is probably not playing
+what it thinks it is and placing the first sample afresh is the honest answer
+rather than a smaller correction.
 
 **`[GDE-ECHO-343]` "Is it playing this?" is the wrong question to ask a
 follower; "is it coming to this?" is the right one.** The mid-passage join was
@@ -132,6 +134,25 @@ The queue is the rest of the answer. A passage already admitted but not yet
 audible sits at the front of the published queue, ahead of what is still
 merely queued, so asking "playing **or** coming" covers both the ring window
 and the ordinary wait. A passage already coming needs no join, only patience.
+
+**`[GDE-ECHO-346]` A fitted slope is the error in the correction, not the
+drift, and applying it as an absolute settles at half.** The residual being
+fitted is what remains *after* the current trim, so a loop that sends the fit
+as the whole answer sets the trim to `R - A` when it already holds `A`. The
+fixed point is `R/2` and the eigenvalue is -1: it sits at half-correction or
+oscillates about it on the fit window's period.
+
+At the +13.92 ppm measured for this pair `[LOG-P4-130]` that leaves ~7 ppm
+uncorrected for ever -- **25 ms an hour**, which crosses the 40 ms offset
+deadband every hour and a half, fires a shift, and clears the rate window,
+starting the whole cycle again. That is a structural error and no amount of
+threshold tuning reaches it.
+
+Adding to what is applied is deadbeat in one window, and what remains is the
+fit's own error rather than half the drift. The correction is then applied
+**once per window and the window cleared**, because the plant's slope has just
+stepped and a line across that step is not a slope. Shipped code sent it twice
+a second.
 
 **`[GDE-ECHO-344]` Two mechanisms, and the threshold between them must clear
 the join bias.** `[GDE-ECHO-343]`'s guard was right about ordinary transitions

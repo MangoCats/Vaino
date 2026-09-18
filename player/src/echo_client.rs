@@ -174,6 +174,13 @@ struct FollowState {
     want_rejoin: bool,
     /// The followed node's clock, as this one estimates it `[GDE-ECHO-366]`.
     clock: crate::echo::MasterClock,
+    /// The rate correction currently being applied, ppm `[GDE-ECHO-346]`.
+    ///
+    /// Carried because the fit measures what is LEFT after this correction,
+    /// not the drift itself. Treating a fitted slope as the whole answer sets
+    /// the trim to `R - A` when it already holds `A`, which settles at half
+    /// the drift and oscillates about it.
+    applied_ppm: f64,
 }
 
 impl FollowState {
@@ -188,6 +195,7 @@ impl FollowState {
             want_rejoin: false,
             clock: crate::echo::MasterClock::new(
                 CLOCK_WINDOW, Duration::from_secs(1)),
+            applied_ppm: 0.0,
         }
     }
 }
@@ -270,6 +278,8 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
             // And an independent node trims nothing. Leaving a rate behind
             // would have it quietly correcting towards a master it is no
             // longer listening to.
+            // The integrator resets with it: `FollowState` is rebuilt per
+            // connection, so a reconnection never resumes from a stale trim.
             handle.send(Command::SetEchoRate(0.0));
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
@@ -431,8 +441,25 @@ async fn act(
             // correction: the slope is what the rate trim runs on, and it
             // needs the whole series `[GDE-ECHO-340]`.
             fs.rate.push(now_master, residual);
+            // **Added to what is already applied, not substituted for it**
+            // `[GDE-ECHO-346]`. The residual being fitted is what remains
+            // AFTER the current trim, so the slope is the error in the
+            // correction rather than the drift. Sending it as an absolute
+            // sets the trim to `R - A` when it already holds `A`: the fixed
+            // point is half the drift and the map oscillates about it, which
+            // leaves ~7 ppm of the measured 13.92 uncorrected for ever
+            // `[LOG-P4-130]`.
+            //
+            // Applied once per window and then cleared, because the plant's
+            // slope has just stepped and a line fitted across that step is not
+            // a slope `[RateEstimate::clear]`.
             if let Some(ppm) = fs.rate.ppm() {
-                handle.send(Command::SetEchoRate(ppm));
+                fs.applied_ppm = crate::echo::next_trim_ppm(fs.applied_ppm, ppm);
+                note(&mut fs.note, format!(
+                    "echo-rate: {ppm:+.2} ppm still out; trimming at {:+.2} ppm",
+                    fs.applied_ppm));
+                handle.send(Command::SetEchoRate(fs.applied_ppm));
+                fs.rate.clear();
             }
             // Logged, not merely observed `[GDE-ECHO-260]`: a regression months
             // from now needs a baseline to fail against.

@@ -473,6 +473,22 @@ impl RateEstimate {
     }
 }
 
+/// The trim to apply next, given what is already applied and what is left.
+///
+/// **A fitted slope is the error in the correction, not the drift.** The
+/// residual being fitted is what remains *after* the current trim, so applying
+/// the fit as an absolute sets the trim to `R - A` when it already holds `A`.
+/// That map has a fixed point at half the drift and an eigenvalue of -1: it
+/// settles at half-correction or oscillates about it, and either way leaves
+/// about 7 ppm of the 13.92 measured for this fleet uncorrected for ever
+/// `[LOG-P4-130]`, which is 25 ms an hour `[GDE-ECHO-346]`.
+///
+/// Adding instead is deadbeat: one window, and what is left is the fit's own
+/// error rather than half the drift.
+pub fn next_trim_ppm(applied: f64, fitted: f64) -> f64 {
+    applied + fitted
+}
+
 /// How long between single-frame trims, to cancel a rate error of `ppm`.
 ///
 /// A frame is `1/rate` of a second of position, and the error accrues
@@ -1202,6 +1218,29 @@ mod tests {
         assert!(invented > 20.0, "an uncleared step invents a rate: got {invented}");
         e.clear();
         assert_eq!(e.ppm(), None, "and clearing leaves nothing to act on");
+    }
+
+    /// `[GDE-ECHO-346]`: the loop must converge on the drift, not on half of
+    /// it. Written to fail against treating a fitted slope as an absolute.
+    #[test]
+    fn the_rate_loop_converges_on_the_drift_not_half_of_it() {
+        const R: f64 = 13.92;                 // the measured pair `[LOG-P4-130]`
+        let mut applied = 0.0;
+        for _ in 0..6 {
+            // What a fit sees is whatever the trim has not already removed.
+            let fitted = R - applied;
+            applied = next_trim_ppm(applied, fitted);
+        }
+        assert!((applied - R).abs() < 1e-9, "settled at {applied}, not {R}");
+
+        // The same loop with the fit applied as an absolute, which is what
+        // shipped: it reaches half and stays there.
+        let mut wrong = 0.0;
+        for _ in 0..6 {
+            wrong = R - wrong;
+        }
+        assert!((wrong - R / 2.0).abs() < 1e-9 || (wrong - R).abs() > 1.0,
+                "an absolute command cannot reach the drift; got {wrong}");
     }
 
     /// `[GDE-ECHO-340]`'s own arithmetic, checked.
