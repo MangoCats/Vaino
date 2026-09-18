@@ -1329,12 +1329,10 @@ impl Engine {
     fn admit_due(&mut self) {
         let due = match (self.queue.peek(), self.live.last()) {
             (Some(next), Some(l)) => {
-                // The offset correction rides here `[GDE-ECHO-340]`: a node
-                // that is late admits a few ms sooner, overlapping more and
-                // catching up; one that is early admits later. Spending the
-                // transition costs no content in either direction.
+                // The offset correction rides here `[GDE-ECHO-340]`, but only
+                // its coarse half `[GDE-ECHO-347]`.
                 should_admit_nudged(
-                    &l.entry, self.played_ms(l), next, self.echo_next_shift_ms)
+                    &l.entry, self.played_ms(l), next, self.echo_split().0)
             }
             (Some(_), None) => true,
             _ => false,
@@ -1349,9 +1347,10 @@ impl Engine {
         // Spent. A correction left in place would be applied again at every
         // boundary, turning a one-off nudge into a standing rate error.
         if self.echo_next_shift_ms != 0 {
-            eprintln!("echo-offset: passage {} admitted {} ms {} to shed an offset",
-                      entry.passage_id, self.echo_next_shift_ms.abs(),
-                      if self.echo_next_shift_ms > 0 { "early" } else { "late" });
+            let (coarse, fine) = self.echo_split();
+            eprintln!("echo-offset: passage {} shifted {} ms {} ({} ms admission, {} ms into the passage)", entry.passage_id, self.echo_next_shift_ms.abs(),
+                      if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
+                      coarse, fine);
             self.echo_next_shift_ms = 0;
         }
         // The forward schedule `[GDE-ECHO-310]`, emitted here because here is
@@ -1364,7 +1363,10 @@ impl Engine {
         // passage part-way in, and a schedule announcing sample 0 for a
         // passage that begins at 3 minutes tells every follower to play the
         // wrong audio at the right time `[GDE-ECHO-325]`.
-        let origin = self.pending_resume.take();
+        // A listener's own resume point outranks alignment; otherwise the
+        // fine half of the offset correction goes here `[GDE-ECHO-347]`.
+        let fine = self.echo_split().1;
+        let origin = self.pending_resume.take().or(if fine > 0 { Some(fine) } else { None });
         if let Some(r) = self.path.ring.as_ref() {
             if r.clock.timestamps() == crate::output::Timestamps::Hardware {
                 if let Ok(d) = std::time::SystemTime::now()
@@ -1640,6 +1642,51 @@ impl Engine {
     /// at every mix pass. Clamping keeps a bad estimate from becoming a bad
     /// noise while the cause is found.
     const ECHO_RATE_CEILING_PPM: f64 = 100.0;
+
+    /// Split an offset correction into the coarse knob and the fine one
+    /// `[GDE-ECHO-347]`.
+    ///
+    /// Returns `(admission nudge ms, origin ms)`, both applied to the next
+    /// passage, together shifting when its content is heard by the requested
+    /// amount.
+    ///
+    /// **Admission timing cannot do this alone.** The mixer only runs with at
+    /// least `MIN_SUBMIT` of room, so an incoming passage's first sample lands
+    /// on a mix-chunk boundary and the achievable shift is quantised to 46 ms
+    /// at 44.1 kHz. Measured on the fleet 2026-09-18: the loop converged in two
+    /// transitions and then dithered at exactly +/-1 chunk for half an hour,
+    /// firing every transition, because the deadband it was asked to reach
+    /// (40 ms) is *smaller than the smallest step it could take*.
+    ///
+    /// Opening the passage part-way in is not quantised. Skipping `o` of the
+    /// content makes everything after it sound `o` earlier, to the
+    /// millisecond, and a few tens of milliseconds is inside the lead-in where
+    /// nothing has begun. It is one-directional -- there is no negative
+    /// position -- which is why it is the *fine* knob and not the only one:
+    /// to sound LATER, admission goes back a whole chunk and the overshoot is
+    /// pulled forward again by the origin.
+    fn echo_split(&self) -> (i64, u64) {
+        let d = self.echo_next_shift_ms;
+        if d == 0 {
+            return (0, 0);
+        }
+        if d > 0 {
+            // Late: skip that much of the next passage and be level at once.
+            return (0, d as u64);
+        }
+        // Early: no negative position exists, so go back whole chunks and
+        // spend the remainder forwards.
+        let chunk = self.echo_chunk_ms().max(1);
+        let want = d.unsigned_abs();
+        let back = want.div_ceil(chunk) * chunk;
+        (-(back as i64), back - want)
+    }
+
+    /// One mix chunk, in milliseconds -- the resolution of admission timing.
+    fn echo_chunk_ms(&self) -> u64 {
+        let frames = (Self::MIN_SUBMIT / self.out_channels.max(1)) as u64;
+        frames * 1000 / self.out_rate.max(1) as u64
+    }
 
     /// Whether a frame is due to be trimmed, and which way.
     ///
@@ -2000,6 +2047,39 @@ mod depth_tests {
         e.tick();
         e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
+    }
+
+    /// `[GDE-ECHO-347]`: the two knobs together must shift by exactly what
+    /// was asked, in both directions, without the 46 ms quantum the coarse
+    /// one alone is stuck with.
+    #[test]
+    fn an_offset_correction_splits_into_a_coarse_and_a_fine_part() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        e.out_channels = 2;
+        let chunk = e.echo_chunk_ms() as i64;
+        assert_eq!(chunk, 46, "one mix chunk at 44.1 kHz stereo");
+
+        // Nothing asked, nothing done.
+        assert_eq!(e.echo_split(), (0, 0));
+
+        // Late: all of it on the fine knob, so no quantum applies at all.
+        // 43 ms is the figure the fleet dithered on for half an hour.
+        e.echo_next_shift_ms = 43;
+        assert_eq!(e.echo_split(), (0, 43));
+
+        // Early: back one whole chunk, then pull the overshoot forward. The
+        // sum is what was asked, to the millisecond.
+        e.echo_next_shift_ms = -43;
+        let (coarse, fine) = e.echo_split();
+        assert_eq!((coarse, fine), (-46, 3));
+        assert_eq!(coarse + fine as i64, -43, "the two together are the request");
+
+        // And across a chunk boundary, still exact.
+        e.echo_next_shift_ms = -100;
+        let (coarse, fine) = e.echo_split();
+        assert_eq!(coarse + fine as i64, -100);
+        assert_eq!(coarse % chunk, 0, "the coarse part is whole chunks");
     }
 
     /// A wild estimate is clamped, not obeyed: at 5000 ppm the trim would run

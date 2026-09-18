@@ -135,6 +135,39 @@ audible sits at the front of the published queue, ahead of what is still
 merely queued, so asking "playing **or** coming" covers both the ring window
 and the ordinary wait. A passage already coming needs no join, only patience.
 
+**`[GDE-ECHO-347]` The loop's floor was its actuator's quantum, and the
+deadband was smaller than it.** Measured on the fleet 2026-09-18, and this is
+the number that explains what a listener still hears. After converging from
+924 ms in two transitions, the residual sat and dithered:
+
+    +441 -> admitted 440 ms early
+     +51 -> admitted  50 ms early
+     -43 -> admitted  43 ms late
+     -44 -> admitted  43 ms late
+     -49 -> admitted  48 ms late
+     +43 -> admitted  42 ms early
+
+A correction at *every* transition, each applied, each measuring back the same
+size. Not noise -- every one of those figures is one mix chunk. The mixer runs
+only with `MIN_SUBMIT` of room, so an incoming passage's first sample lands on
+a chunk boundary and admission timing can only shift in steps of **46.4 ms** at
+44.1 kHz. The loop had reached its actuator's resolution.
+
+And it could never come to rest, because the deadband it was asked to reach
+(40 ms) is **smaller than the smallest step it can take** (46 ms). That is the
+same class as `[GDE-ECHO-344]` -- a threshold inside another mechanism's error
+band -- with the mechanism being quantisation rather than noise, which is why
+no amount of filtering would have found it.
+
+Opening the passage part-way in is not quantised. Skipping `o` of the content
+makes everything after it sound `o` earlier, to the millisecond, and a few tens
+of milliseconds is inside the lead-in where nothing has begun. So the
+correction now splits: **admission for the coarse part, origin for the fine**.
+Being late needs only the fine knob. Being early goes back a whole chunk on the
+coarse one and pulls the overshoot forward on the fine, since there is no
+negative position to open at -- the asymmetry `[GDE-ECHO-340]` first ran into,
+now put to work rather than worked around.
+
 **`[GDE-ECHO-346]` A fitted slope is the error in the correction, not the
 drift, and applying it as an absolute settles at half.** The residual being
 fitted is what remains *after* the current trim, so a loop that sends the fit
