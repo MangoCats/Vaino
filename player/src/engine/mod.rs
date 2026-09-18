@@ -889,7 +889,12 @@ impl Engine {
                     }
                 }
                 Ok(Command::SetEchoRate(ppm)) => {
-                    self.echo_rate_ppm = if ppm.is_finite() { ppm } else { 0.0 };
+                    let want = if ppm.is_finite() { ppm } else { 0.0 };
+                    if want.abs() > Self::ECHO_RATE_CEILING_PPM {
+                        eprintln!("echo-rate: {want:+.1} ppm is not a crystal; clamping to {:+.0} and carrying on", Self::ECHO_RATE_CEILING_PPM.copysign(want));
+                    }
+                    self.echo_rate_ppm =
+                        want.clamp(-Self::ECHO_RATE_CEILING_PPM, Self::ECHO_RATE_CEILING_PPM);
                     // Starting or stopping the clock, never resetting it
                     // mid-run: a rate that is merely refined should not push
                     // the next trim back by a whole interval each time.
@@ -1575,6 +1580,16 @@ impl Engine {
     /// finer than its own error is how a loop starts hunting.
     const ECHO_RATE_FLOOR_PPM: f64 = 0.5;
 
+    /// And above this, something is wrong rather than fast.
+    ///
+    /// Crystals in this class are tens of ppm out, not hundreds
+    /// `[LOG-P4-130]`. A larger figure means a broken fit, a clock step
+    /// `[GDE-ECHO-365]`, or a residual series with a discontinuity nobody
+    /// cleared -- and acting on it is audible, because the trim would then run
+    /// at every mix pass. Clamping keeps a bad estimate from becoming a bad
+    /// noise while the cause is found.
+    const ECHO_RATE_CEILING_PPM: f64 = 100.0;
+
     /// Whether a frame is due to be trimmed, and which way.
     ///
     /// `Some(true)` drops -- this node is behind and must advance faster.
@@ -1934,6 +1949,23 @@ mod depth_tests {
         e.tick();
         e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
+    }
+
+    /// A wild estimate is clamped, not obeyed: at 5000 ppm the trim would run
+    /// at every mix pass and be plainly audible.
+    #[test]
+    fn an_impossible_rate_is_clamped() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        h.send(Command::SetEchoRate(5_000.0));
+        e.tick();
+        assert_eq!(e.echo_rate_ppm, Engine::ECHO_RATE_CEILING_PPM);
+        h.send(Command::SetEchoRate(-5_000.0));
+        e.tick();
+        assert_eq!(e.echo_rate_ppm, -Engine::ECHO_RATE_CEILING_PPM);
+        h.send(Command::SetEchoRate(f64::INFINITY));
+        e.tick();
+        assert_eq!(e.echo_rate_ppm, 0.0, "not finite is not a rate at all");
     }
 
     /// Stopping following stops trimming. A rate left behind would have the
