@@ -217,6 +217,22 @@ about two days forward roughly 130 s into the boot. The signature was systemd
 reporting `vaino` started two days *before* the machine booted, with
 `NRestarts=0`. The step is bounded only by how long a node sat powered off.
 
+**Built 2026-09-18, after the failure it predicts happened.** `lempiplay3` was
+unplugged and moved; on restart it kept its follow setting, connected to
+`bose`, adopted its queue -- and played its own programme anyway, with no
+error. Its journal shows the signature plainly: entries at `Sep 15 22:35`, then
+a jump to `Sep 18 20:48`. Booted on a restored clock two days behind, it
+derived a submission time from `bose`'s correct `sound_at` and sat waiting two
+days for it. Setting the control again changed nothing, because the setting was
+never the problem.
+
+The guard is measured against the master rather than asked of the operating
+system: the question is not *is this node disciplined* but *do these two
+agree*, and the anchor already carries the other side's answer. Beyond 30 s of
+skew a follower acts on nothing, clears its rate window, and says which way and
+by how much. A committed start more than a minute out is dropped for the same
+reason.
+
 Three requirements follow:
 
 - **Intervals come from a monotonic clock**; only the shared datum is wall time.

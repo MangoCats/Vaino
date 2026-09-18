@@ -133,6 +133,12 @@ pub enum StartVerdict {
     Wait,
     /// Now, or near enough.
     Fire,
+    /// Too far ahead to be a real schedule `[GDE-ECHO-365]`.
+    ///
+    /// A lead is fifteen seconds and a join is one. A start days out is a
+    /// clock that has not been disciplined yet, not a patient node, and
+    /// waiting for it means waiting for ever.
+    TooFar { by: Duration },
     /// Too late to be worth doing `[GDE-ECHO-410]`.
     ///
     /// A join that misses its instant does not become a join that starts late:
@@ -154,9 +160,19 @@ pub enum StartVerdict {
 /// offset at the next passage boundary, where it is inaudible -- so the limit
 /// is set well above tick jitter and well below anything a listener would hear
 /// as two speakers rather than one.
-pub fn start_verdict(at: WallNanos, now: WallNanos, late_limit: Duration) -> StartVerdict {
+pub fn start_verdict(
+    at: WallNanos,
+    now: WallNanos,
+    late_limit: Duration,
+    far_limit: Duration,
+) -> StartVerdict {
     if now < at {
-        return StartVerdict::Wait;
+        let ahead = Duration::from_nanos(at - now);
+        return if ahead > far_limit {
+            StartVerdict::TooFar { by: ahead }
+        } else {
+            StartVerdict::Wait
+        };
     }
     let late = Duration::from_nanos(now - at);
     if late > late_limit {
@@ -164,6 +180,23 @@ pub fn start_verdict(at: WallNanos, now: WallNanos, late_limit: Duration) -> Sta
     } else {
         StartVerdict::Fire
     }
+}
+
+/// Whether two nodes are using the same clock at all `[GDE-ECHO-365]`.
+///
+/// Nothing in echo works across a wall-clock disagreement: every instant on
+/// the wire is absolute, so a node whose clock is out by days computes a
+/// submission time days away and waits for it. No node in this fleet has an
+/// RTC, so each boots on a restored time and is stepped by NTP minutes later
+/// -- a window in which a follower can connect, adopt a queue, and silently do
+/// nothing at all. Observed on `lempiplay3` 2026-09-18 after a power cycle.
+///
+/// Measured against the master rather than asked of the operating system: the
+/// question is not "is this node disciplined" but "do these two agree", and
+/// the anchor already carries the other side's answer.
+pub fn clocks_agree(master_heard_at: WallNanos, now: WallNanos, tolerance: Duration) -> bool {
+    let skew = (now as i64 - master_heard_at as i64).unsigned_abs();
+    skew <= tolerance.as_nanos() as u64
 }
 
 /// Where sample 0 must sit in this node's output ring at admission.
@@ -932,11 +965,16 @@ mod tests {
     fn a_start_instant_is_due_once_and_stale_soon_after() {
         let at = 100 * SEC;
         let lim = Duration::from_millis(100);
-        assert_eq!(start_verdict(at, at - 1, lim), StartVerdict::Wait);
-        assert_eq!(start_verdict(at, at, lim), StartVerdict::Fire, "exactly due fires");
-        assert_eq!(start_verdict(at, at + 99_000_000, lim), StartVerdict::Fire);
+        let far = Duration::from_secs(60);
+        assert_eq!(start_verdict(at, at - 1, lim, far), StartVerdict::Wait);
+        assert_eq!(start_verdict(at, at, lim, far), StartVerdict::Fire, "exactly due fires");
+        assert_eq!(start_verdict(at, at + 99_000_000, lim, far), StartVerdict::Fire);
+        // A start days out is an undisciplined clock, not a patient node.
+        // The node is two days BEHIND, so the schedule reads two days out.
+        assert!(matches!(start_verdict(at + 2 * 86_400 * SEC, at, lim, far),
+                         StartVerdict::TooFar { .. }));
         // One tick's jitter is fine; a quarter second is not a join any more.
-        match start_verdict(at, at + 250_000_000, lim) {
+        match start_verdict(at, at + 250_000_000, lim, far) {
             StartVerdict::TooLate { by } => assert_eq!(by, Duration::from_millis(250)),
             other => panic!("expected TooLate, got {other:?}"),
         }
@@ -1105,6 +1143,18 @@ mod tests {
         let late = AirPosition { passage_id: 3, position_ms: 250,
                                  at: 10 * SEC + 255_000_000 };
         assert_eq!(local_at_sample(&late, &m) - m.heard_at as i64, 5_000_000);
+    }
+
+    /// `[GDE-ECHO-365]`: a node two days behind is not following anything.
+    #[test]
+    fn clocks_days_apart_do_not_agree() {
+        let tol = Duration::from_secs(30);
+        assert!(clocks_agree(100 * SEC, 100 * SEC, tol), "identical agree");
+        assert!(clocks_agree(100 * SEC, 110 * SEC, tol), "ten seconds is transport");
+        assert!(!clocks_agree(100 * SEC, 100 * SEC + 2 * 86_400 * SEC, tol),
+                "two days is a clock that has not been stepped yet");
+        assert!(!clocks_agree(100 * SEC + 2 * 86_400 * SEC, 100 * SEC, tol),
+                "and it is symmetric");
     }
 
     /// `[GDE-ECHO-340]`: a transition absorbs an offset either way, and far is

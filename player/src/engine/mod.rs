@@ -1551,6 +1551,14 @@ impl Engine {
     /// corrects offset at the next passage boundary, where it is inaudible.
     const ECHO_START_LATE_LIMIT: std::time::Duration = std::time::Duration::from_millis(100);
 
+    /// And beyond this ahead, it is not a schedule at all.
+    ///
+    /// A lead is fifteen seconds `[LOG-ECHO-020]` and a join is one. A minute
+    /// leaves both ample room while catching the case that actually happens:
+    /// a node booted without an RTC computing a submission time days out
+    /// `[GDE-ECHO-365]`.
+    const ECHO_START_FAR_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
     /// Begin the master's passage at the instant its schedule named.
     ///
     /// Joining and seeking only: both cut the ring `[REQ-AUD-158]`, so sample
@@ -1571,8 +1579,16 @@ impl Engine {
         // ran `[GDE-ECHO-330]`. The caller asked for a time the audio should
         // SOUND; what the engine controls is when it starts arranging it.
         let at = at.saturating_sub(self.skip_lead_ms * 1_000_000);
-        match crate::echo::start_verdict(at, now, Self::ECHO_START_LATE_LIMIT) {
+        match crate::echo::start_verdict(
+            at, now, Self::ECHO_START_LATE_LIMIT, Self::ECHO_START_FAR_LIMIT) {
             crate::echo::StartVerdict::Wait => return,
+            crate::echo::StartVerdict::TooFar { by } => {
+                // A clock that has not been disciplined yet `[GDE-ECHO-365]`.
+                // Waiting for this would be waiting for days.
+                eprintln!("echo-start: scheduled {} s out, which is not a schedule; dropping it and waiting for this node's clock", by.as_secs());
+                self.echo_start = None;
+                return;
+            }
             crate::echo::StartVerdict::TooLate { by } => {
                 // Said out loud. A node that silently declines to join looks
                 // exactly like one that was never told to `[GOV-SRC-040]`.

@@ -174,6 +174,14 @@ impl FollowState {
     }
 }
 
+/// How far two nodes' clocks may differ before nothing here means anything.
+///
+/// Generous, because it is not measuring quality: a healthy pair agrees to
+/// milliseconds and the failure it catches is *days*, a node booted without an
+/// RTC before NTP has stepped it `[GDE-ECHO-365]`. Thirty seconds is far past
+/// any transport delay and far short of the fault.
+const MAX_CLOCK_SKEW: Duration = Duration::from_secs(30);
+
 /// The passage this node will play next of its own accord.
 ///
 /// `None` when nothing is queued, which is the case a scheduled start exists
@@ -290,6 +298,26 @@ async fn act(
     // The offset the listener has set, this instant. Assigned rather than
     // passed, because `submit_at` and the trim both read it off the follower.
     f.timing = live_timing(handle, cfg.timing);
+    // Nothing below works across a wall-clock disagreement `[GDE-ECHO-365]`.
+    // Every instant on the wire is absolute, so a node two days behind
+    // computes a submission time two days out and waits for it -- connected,
+    // queue adopted, silently doing nothing, which is what a power cycle
+    // produced on `lempiplay3` before this existed. Say so and wait for the
+    // clock rather than acting on arithmetic that cannot hold.
+    if let Some(m) = st.anchor.as_ref() {
+        if !crate::echo::clocks_agree(m.heard_at, now_nanos(), MAX_CLOCK_SKEW) {
+            let skew = (now_nanos() as i64 - m.heard_at as i64) / 1_000_000_000;
+            set_status(handle, &format!(
+                "This node's clock is {skew} s from that one's; waiting for it to be set."));
+            note(&mut fs.note, format!(
+                "echo-follow: clocks differ by {skew} s; not acting until they agree"));
+            // The fit cannot survive a step either `[RateEstimate::clear]`.
+            fs.rate.clear();
+            handle.send(Command::SetEchoRate(0.0));
+            return;
+        }
+    }
+
     // Catching up to what the master is ALREADY playing, which the schedule
     // cannot do: a schedule describes a passage about to start, and the moment
     // somebody switches a speaker into follower mode is almost never one
