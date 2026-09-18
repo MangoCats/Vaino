@@ -205,6 +205,26 @@ fn next_up(handle: &EngineHandle) -> Option<i64> {
     handle.state.lock().ok()?.queue.first().map(|e| e.passage_id)
 }
 
+/// Whether this node is playing that passage or is going to.
+///
+/// **Playing is not enough to ask.** `current` is the *audible* passage, and
+/// the output ring is some fifteen seconds deep `[LOG-ECHO-020]`, so for a
+/// long window after a follower admits a passage it still names the previous
+/// one. The master's anchor switches as soon as its own ring drains, which is
+/// sooner -- so a guard that only asks what is playing sees a mismatch at
+/// every ordinary transition and joins into a passage the node was already
+/// flowing into. Each of those joins cuts the ring and re-imposes the join
+/// bias `[GDE-ECHO-342]`, which is how `lempiplay3` held a steady 0.9 s of lag
+/// through a correction loop that was working perfectly `[GDE-ECHO-343]`.
+///
+/// The queue is the rest of the answer: a passage already coming needs no
+/// join, only patience.
+fn coming_here(handle: &EngineHandle, passage_id: i64) -> bool {
+    let Ok(s) = handle.state.lock() else { return false };
+    s.current.as_ref().is_some_and(|e| e.passage_id == passage_id)
+        || s.queue.iter().any(|e| e.passage_id == passage_id)
+}
+
 /// Join at once, and what this node is playing, as the panel has them.
 fn join_intent(handle: &EngineHandle) -> (bool, Option<i64>) {
     match handle.state.lock() {
@@ -345,10 +365,11 @@ async fn act(
     // Attempted once per master passage. A node whose library lacks it must
     // not retry twice a second forever, and when the master moves on the
     // ordinary schedule path takes over anyway.
-    let (join_now, playing) = join_intent(handle);
+    let (join_now, _) = join_intent(handle);
     if join_now {
         if let Some(a) = st.anchor.as_ref() {
-            let already = playing == Some(a.passage_id) || fs.mid_joined == Some(a.passage_id);
+            let already = coming_here(handle, a.passage_id)
+                || fs.mid_joined == Some(a.passage_id);
             if !already {
                 fs.mid_joined = Some(a.passage_id);
                 let air = crate::echo::AirPosition {

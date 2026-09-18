@@ -113,6 +113,26 @@ each, monotonically. `Rejoin` is reserved for a residual past five seconds,
 where the node is probably not playing what it thinks it is and placing the
 first sample afresh is the honest answer rather than a smaller correction.
 
+**`[GDE-ECHO-343]` "Is it playing this?" is the wrong question to ask a
+follower; "is it coming to this?" is the right one.** The mid-passage join was
+guarded on the *currently playing* passage. But `current` is the **audible**
+passage, and the output ring is some fifteen seconds deep `[LOG-ECHO-020]`, so
+for a long window after a follower admits a passage it still names the previous
+one. The master's anchor switches as soon as its own ring drains, which is
+sooner.
+
+So at every ordinary transition the guard saw a mismatch and joined into a
+passage the node was already flowing into perfectly well -- and every join cuts
+the ring and re-imposes the join bias `[GDE-ECHO-342]`. That is how a node held
+a steady 0.9 s of lag *through a correction loop that was working*: the loop
+shed the offset over a couple of transitions, and the next transition put it
+straight back.
+
+The queue is the rest of the answer. A passage already admitted but not yet
+audible sits at the front of the published queue, ahead of what is still
+merely queued, so asking "playing **or** coming" covers both the ring window
+and the ordinary wait. A passage already coming needs no join, only patience.
+
 **`[GDE-ECHO-342]` The join bias itself is real and not yet fixed.** A
 commanded start lands late by a variable few hundred milliseconds to a second.
 `skip_lead_ms` is compensated `[GDE-ECHO-337]`, but before cutting the ring the
