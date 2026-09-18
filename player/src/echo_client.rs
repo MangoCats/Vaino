@@ -104,6 +104,23 @@ const RATE_WINDOW: Duration = Duration::from_secs(3600);
 const RATE_MIN_SPAN: Duration = Duration::from_secs(900);
 const RATE_MIN_SAMPLES: usize = 200;
 
+/// This node's presentation offset as it stands **now**.
+///
+/// Read every pass rather than taken at startup, because the listener can move
+/// it from the settings panel at any moment `[SPEC-DLY-010]` and a follower
+/// holding a figure from boot would schedule against a delay nobody has any
+/// more. It is the measured half plus the calibrated one, already clamped by
+/// the engine `[GDE-ECHO-430]`.
+fn live_timing(handle: &EngineHandle, fallback: NodeTiming) -> NodeTiming {
+    match handle.state.lock() {
+        Ok(s) => NodeTiming {
+            presentation_offset_frames: s.echo_node.offset_frames,
+            rate: if s.echo_node.rate > 0 { s.echo_node.rate } else { fallback.rate },
+        },
+        Err(_) => fallback,
+    }
+}
+
 /// This node's own anchor, as it publishes it to anyone following *it*.
 fn own_anchor(handle: &EngineHandle) -> Option<crate::echo::DriftAnchor> {
     handle.state.lock().ok()?.echo.anchor
@@ -241,6 +258,9 @@ async fn act(
     handle: &Arc<EngineHandle>,
     fs: &mut FollowState,
 ) {
+    // The offset the listener has set, this instant. Assigned rather than
+    // passed, because `submit_at` and the trim both read it off the follower.
+    f.timing = live_timing(handle, cfg.timing);
     // Catching up to what the master is ALREADY playing, which the schedule
     // cannot do: a schedule describes a passage about to start, and the moment
     // somebody switches a speaker into follower mode is almost never one
@@ -260,8 +280,8 @@ async fn act(
                     position_ms: a.sample.saturating_mul(1000) / a.rate.max(1) as u64,
                     at: a.heard_at,
                 };
-                let lead = cfg.timing.offset() + MID_JOIN_MARGIN;
-                if let Some(j) = crate::echo::join_mid_passage(&air, cfg.timing, now_nanos(), lead) {
+                let lead = f.timing.offset() + MID_JOIN_MARGIN;
+                if let Some(j) = crate::echo::join_mid_passage(&air, f.timing, now_nanos(), lead) {
                     start(j.passage_id, j.start_sample, j.submit_at, cfg, handle, &mut fs.note,
                           "joining part-way into").await;
                 }
@@ -337,11 +357,11 @@ async fn act(
             // `[GDE-ECHO-410]`. Saying which node and which passage is what
             // makes that diagnosable instead of mysterious.
             set_status(handle, &format!(
-                "Schedules are arriving too late for this speaker's {} ms delay; waiting for the next passage.", cfg.timing.offset().as_millis()));
+                "Schedules are arriving too late for this speaker's {} ms delay; waiting for the next passage.", f.timing.offset().as_millis()));
             note(&mut fs.note, format!(
                 "echo-follow: passage {passage_id} was already due for this node's \
 {} ms offset; waiting for the next",
-                cfg.timing.offset().as_millis()));
+                f.timing.offset().as_millis()));
         }
         Follow::StartAt { passage_id, start_sample, at } => {
             start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;

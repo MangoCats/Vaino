@@ -149,9 +149,17 @@ is `None` rather than zero on a node whose timestamp verdict is not `Hardware`
 *"measured at 46.3 ms"* are different sentences and not the same zero. The
 clamp `[SPEC-DLY-030]` is reported in that line too, never applied silently.
 
-`--echo-offset-frames` remains, and remains a different thing: it seeds the
-engine at startup for a node being set up before anyone can reach its
-interface. It satisfies none of this specification on its own.
+**`[SPEC-DLY-125]` The control is live, and that took a second pass.** The
+first version stored the value and rendered it and changed nothing: the
+follower's presentation offset still came from `--echo-offset-frames`, read
+once at startup. A control that persists, displays, and does not act is worse
+than no control, because it invites a listener to calibrate by ear against a
+figure the scheduler never sees. The follower now reads
+`offset_frames` -- measured plus calibrated, already clamped -- on every pass,
+so moving the slider moves the next passage's timing.
+
+`--echo-offset-frames` remains for `[SPEC-ECHO-090]`'s pairing with the fleet
+minimum, which is roster knowledge rather than this node's own.
 
 What remains open is only the *aggregate*: a fleet-wide view showing every
 node's delay side by side would suit the actual task — aligning speakers against
