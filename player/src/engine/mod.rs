@@ -403,6 +403,20 @@ pub struct Engine {
     pub(crate) echo_join_now: bool,
     /// The fitted relative rate error, ppm `[GDE-ECHO-340]`.
     pub(crate) echo_rate_ppm: f64,
+    /// How long a commanded start takes to become audible, ms
+    /// `[GDE-ECHO-342]`.
+    ///
+    /// Measured, not assumed. The lead a skip applies is a constant, but the
+    /// work before it -- opening the file, seeking, building the resampler,
+    /// and topping the decoder up so the overlay is not silence
+    /// `[PI-CHR-075]` -- takes as long as the card and the passage make it.
+    /// That time lands directly on the air, so a start fired early by a
+    /// constant is late by however long the work took: ~900 ms on this fleet,
+    /// which was the whole of the lag a listener could hear.
+    ///
+    /// Smoothed, because the next join's prep is better predicted by the last
+    /// few than by any constant, and the first one has to guess something.
+    pub(crate) echo_prep_ms: u64,
     /// Position still to shed by trimming, in frames `[GDE-ECHO-349]`.
     ///
     /// Positive when this node is late and must advance. Counted in frames
@@ -626,6 +640,7 @@ impl Engine {
             echo_join_now: true,
             echo_rate_ppm: 0.0,
             echo_debt_frames: 0,
+            echo_prep_ms: Self::ECHO_PREP_GUESS_MS,
             echo_last_trim: None,
             echo_next_shift_ms: 0,
             echo_start: None,
@@ -1586,6 +1601,18 @@ impl Engine {
     /// `[GDE-ECHO-365]`.
     const ECHO_START_FAR_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
+    /// What the first join assumes its own preparation will cost.
+    ///
+    /// Only ever the first: every join thereafter uses the measured figure.
+    /// 400 ms is the middle of what this fleet showed, so a cold node is
+    /// wrong by a few hundred ms once rather than by a second every time.
+    const ECHO_PREP_GUESS_MS: u64 = 400;
+
+    /// Ceiling on the measured figure, so one pathological join -- a cold
+    /// cache, a long seek into a capture -- cannot leave every later join
+    /// firing seconds early `[PI-CHR-075]`.
+    const ECHO_PREP_MAX_MS: u64 = 2_000;
+
     /// Begin the master's passage at the instant its schedule named.
     ///
     /// Joining and seeking only: both cut the ring `[REQ-AUD-158]`, so sample
@@ -1605,7 +1632,11 @@ impl Engine {
         // the 1028 ms residual seen on `lempiplay3` the first time two nodes
         // ran `[GDE-ECHO-330]`. The caller asked for a time the audio should
         // SOUND; what the engine controls is when it starts arranging it.
-        let at = at.saturating_sub(self.skip_lead_ms * 1_000_000);
+        // Early by BOTH the constant lead and the measured preparation: the
+        // caller named an instant the audio should sound, and everything
+        // between here and there has to be subtracted, not just the part that
+        // happens to be a constant `[GDE-ECHO-342]`.
+        let at = at.saturating_sub((self.skip_lead_ms + self.echo_prep_ms) * 1_000_000);
         match crate::echo::start_verdict(
             at, now, Self::ECHO_START_LATE_LIMIT, Self::ECHO_START_FAR_LIMIT) {
             crate::echo::StartVerdict::Wait => return,
@@ -1629,10 +1660,18 @@ impl Engine {
         let Some((entry, start_sample, _)) = self.echo_start.take() else { return };
         // Before `skip`, not after: `skip` admits the next passage itself, and
         // a resume offset arriving afterwards would apply to the one after it.
+        let began = std::time::Instant::now();
         self.resume_at(start_sample.saturating_mul(1000) / self.out_rate.max(1) as u64);
         self.queue.push_front(entry);
         self.skip();
         self.queue_edited = true;
+        // What that actually cost, folded in for next time. Weighted towards
+        // history so a single slow seek moves the estimate rather than
+        // replacing it.
+        let took = (began.elapsed().as_millis() as u64).min(Self::ECHO_PREP_MAX_MS);
+        let was = self.echo_prep_ms;
+        self.echo_prep_ms = (was * 3 + took) / 4;
+        eprintln!("echo-start: preparing took {took} ms (was assuming {was}); firing {} ms early from now on", self.echo_prep_ms + self.skip_lead_ms);
     }
 
     /// This node's presentation offset: what the device reports plus what a

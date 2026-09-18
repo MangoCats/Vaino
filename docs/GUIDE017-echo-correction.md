@@ -240,7 +240,36 @@ trigger the next one for ever. 1.5 s clears the worst observed bias with room,
 so a join always lands *inside* the band and the nudges take it from there --
 and is low enough that a node never faces forty minutes of nudging.
 
-**`[GDE-ECHO-342]` The join bias itself is real and not yet fixed.** A
+**`[GDE-ECHO-342]` The join bias, measured rather than assumed.** *Deferred
+through several rounds and fixed 2026-09-18, when it became the whole of what
+a listener could hear: a consistent ~900 ms, confirmed by ear, by
+`tools/echo_skew.sh` (900/875/967 ms) and by the follower's own residual
+(+845, +953) all at once.*
+
+A commanded start goes through `skip`, which applies `skip_lead_ms` -- a
+constant -- and then does the work: open the file, seek, build the resampler,
+and top the decoder up so the overlay is not silence `[PI-CHR-075]`. That work
+lands **directly on the air time**, and firing early by a constant cannot
+compensate a variable. The residual of a join therefore *is* its preparation
+time, identically; everything else in the arithmetic cancels.
+
+The compensation is now measured. Each join times its own preparation and
+folds it into a smoothed estimate, weighted towards history so one slow seek
+moves the figure rather than replacing it, and clamped so a pathological join
+cannot leave every later one firing seconds early. The first join on a cold
+node guesses 400 ms and is wrong once; every join after it uses what this node
+actually costs.
+
+This is deliberately *not* the durable fix. That is to derive the placement
+from the target air time at the moment the ring is cut -- after the work, not
+before -- which `placement()` already computes and nothing calls. It was not
+taken here because `cut_ring_to_incoming` is the real-time path every ordinary
+user skip also uses, and a self-calibrating constant reaches most of the
+benefit without touching it. If the measured preparation turns out to vary
+widely *within* a node rather than between nodes, the estimate will not hold
+and the durable fix becomes necessary.
+
+**Superseded note:** the join bias itself is real and no longer unfixed. A
 commanded start lands late by a variable few hundred milliseconds to a second.
 `skip_lead_ms` is compensated `[GDE-ECHO-337]`, but before cutting the ring the
 engine synchronously tops the incoming decoder up, and that takes as long as it
