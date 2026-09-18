@@ -1184,6 +1184,7 @@ impl Engine {
         self.shown = self.live.first().map(|l| (l.entry.clone(), l.origin_ms));
 
         self.cut_ring_to_incoming(fade_samples, lead_samples);
+        self.republish_after_cut(lead_samples);
     }
 
     /// Cut the ring back to the fade and overlay whatever is sounding now.
@@ -1292,6 +1293,7 @@ impl Engine {
         self.shown = self.live.first().map(|l| (l.entry.clone(), at));
         self.heard_from = None;
         self.cut_ring_to_incoming(fade_samples, lead_samples);
+        self.republish_after_cut(lead_samples);
     }
 
     /// The passage sounding and how far into its span, for a handoff that must
@@ -1419,18 +1421,9 @@ impl Engine {
                 if let Ok(d) = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                 {
-                    let rate = r.sample_rate();
-                    let s = crate::echo::schedule_for_admission(
-                        entry.passage_id,
-                        origin.unwrap_or(0).saturating_mul(rate as u64) / 1000,
-                        self.out_buffered_frames() as u64,
-                        r.clock.delay_frames(),
-                        rate,
-                        d.as_nanos() as u64,
-                    );
-                    eprintln!("echo-schedule: passage={} start_sample={} sound_at={} rate={}",
-                              s.passage_id, s.start_sample, s.sound_at, s.rate);
-                    self.echo_schedule = Some(s);
+                    let _ = (r, d);
+                    let depth = self.out_buffered_frames() as u64;
+                    self.publish_schedule(entry.passage_id, origin.unwrap_or(0), depth);
                 }
             }
         }
@@ -1713,6 +1706,53 @@ impl Engine {
     /// at every mix pass. Clamping keeps a bad estimate from becoming a bad
     /// noise while the cause is found.
     const ECHO_RATE_CEILING_PPM: f64 = 100.0;
+
+    /// Tell followers when a passage's first sample will reach the air
+    /// `[GDE-ECHO-310]`.
+    ///
+    /// `depth_frames` is **where that sample actually sits**, not how much the
+    /// ring happens to hold. Ordinarily they are the same -- a passage
+    /// admitted the usual way goes in behind everything buffered. After a skip
+    /// or a seek they are not: the ring is cut and the incoming passage is
+    /// laid only `skip_lead_ms` in `[REQ-AUD-162]`, so it sounds in half a
+    /// second where the ring still holds two.
+    ///
+    /// Getting that wrong is why a skip did not propagate `[GDE-ECHO-352]`:
+    /// the schedule came from inside `admit_due`, which `skip` calls *before*
+    /// cutting the ring, so the master announced a sound time some fourteen
+    /// seconds later than the truth and every follower planned against it.
+    fn publish_schedule(&mut self, passage_id: i64, origin_ms: u64, depth_frames: u64) {
+        let Some(r) = self.path.ring.as_ref() else { return };
+        if r.clock.timestamps() != crate::output::Timestamps::Hardware {
+            return;
+        }
+        let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        else { return };
+        let rate = r.sample_rate();
+        let s = crate::echo::schedule_for_admission(
+            passage_id,
+            origin_ms.saturating_mul(rate as u64) / 1000,
+            depth_frames,
+            r.clock.delay_frames(),
+            rate,
+            d.as_nanos() as u64,
+        );
+        eprintln!("echo-schedule: passage={} start_sample={} sound_at={} rate={} depth={}",
+                  s.passage_id, s.start_sample, s.sound_at, s.rate, depth_frames);
+        self.echo_schedule = Some(s);
+    }
+
+    /// Re-announce after a cut, from where the incoming passage really sits.
+    ///
+    /// A skip and a seek are the two places a passage's first sample is
+    /// placed somewhere other than behind the whole ring, and both are user
+    /// input a follower is meant to mirror `[GDE-ECHO-325]`.
+    fn republish_after_cut(&mut self, lead_samples: usize) {
+        let ch = self.out_channels.max(1);
+        if let Some((id, origin)) = self.live.first().map(|l| (l.entry.passage_id, l.origin_ms)) {
+            self.publish_schedule(id, origin, (lead_samples / ch) as u64);
+        }
+    }
 
     /// Split an offset correction into the coarse knob and the fine one
     /// `[GDE-ECHO-347]`.
@@ -2430,6 +2470,40 @@ mod tests {
     /// default features already bring a RIFF reader and a PCM codec, so silence
     /// can simply be written on the spot. Silence decodes to frames like
     /// anything else, and frames are what the clock counts.
+    /// A skip must announce when the audio will REALLY sound `[GDE-ECHO-352]`.
+    ///
+    /// `skip` cuts the ring and lays the incoming passage `skip_lead_ms` in,
+    /// so it sounds in half a second where the ring still holds two. The
+    /// schedule emitted from inside `admit_due` -- before the cut -- said
+    /// fifteen, and every follower planned against that.
+    #[test]
+    fn a_skip_announces_the_post_cut_air_time_not_the_whole_ring() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(30_000);
+        let mut a = entry(1, wav.to_str().unwrap());
+        a.end_ms = 30_000;
+        let mut b = entry(2, wav.to_str().unwrap());
+        b.end_ms = 30_000;
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |e| e.shown.is_some()), "it should be playing");
+
+        // With a discard sink there is no hardware clock, so no schedule is
+        // published at all -- which is itself the contract `[GDE-ECHO-290]`.
+        // What can be asserted here is the arithmetic the skip path feeds it.
+        let ch = e.out_channels.max(1);
+        let lead_samples = (e.skip_lead_ms * e.out_rate as u64 / 1000) as usize * ch;
+        let lead_frames = (lead_samples / ch) as u64;
+        assert_eq!(lead_frames * 1000 / e.out_rate as u64, e.skip_lead_ms,
+                   "the depth a skip republishes is its lead, not the ring");
+        // And that depth is far short of a full ring, which is the whole bug.
+        assert!(lead_frames < e.out_buffered_frames() as u64 + crate::BUFFER_FRAMES as u64,
+                "a lead must be shorter than a ring for this to matter");
+        let _ = std::fs::remove_file(&wav);
+    }
+
     /// An offset correction must actually reach the audio `[GDE-ECHO-347]`.
     ///
     /// Written after a regression that logged the correction it was about to

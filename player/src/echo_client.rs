@@ -106,6 +106,17 @@ const OFFSET_DEADBAND: Duration = Duration::from_millis(8);
 /// step is larger than the error itself and only the 23 us actuator will do.
 const OFFSET_ENDGAME: Duration = Duration::from_millis(50);
 
+/// How far this node's own transition may sit from the announced one and
+/// still be called the same transition `[GDE-ECHO-353]`.
+///
+/// Generous, because it is separating two cases that are far apart rather
+/// than measuring either: an ordinary boundary both nodes are heading to
+/// within a second or two of each other, against a skip that moved the
+/// master's by minutes. The offset correction handles everything inside it
+/// `[GDE-ECHO-340]`, and a scheduled start would be the wrong tool there
+/// anyway -- it cuts the ring.
+const FLOW_TOLERANCE: Duration = Duration::from_secs(5);
+
 /// How the filtered residual is taken `[GDE-ECHO-348]`.
 const RESIDUAL_WINDOW: Duration = Duration::from_secs(120);
 const RESIDUAL_MIN_SAMPLES: usize = 60;
@@ -238,6 +249,18 @@ const CLOCK_WINDOW: Duration = Duration::from_secs(60);
 /// for.
 fn next_up(handle: &EngineHandle) -> Option<i64> {
     handle.state.lock().ok()?.queue.first().map(|e| e.passage_id)
+}
+
+/// How long until this node reaches its own next passage, in ms.
+///
+/// `None` when nothing is playing, or when the passage has no length to
+/// measure against -- a live capture, say -- in which case a follower has no
+/// business guessing and should act on what it was told.
+fn own_transition_in_ms(handle: &EngineHandle) -> Option<u64> {
+    let s = handle.state.lock().ok()?;
+    let cur = s.current.as_ref()?;
+    let dur = cur.duration_ms();
+    (dur > 0).then(|| dur.saturating_sub(s.position_ms))
 }
 
 /// Whether this node is playing that passage or is going to.
@@ -563,13 +586,30 @@ async fn act(
                 f.timing.offset().as_millis()));
         }
         Follow::StartAt { passage_id, start_sample, at } => {
-            // Already heading there. Let it flow: a scheduled start goes
-            // through `skip`, which cuts the ring `[REQ-AUD-158]`, and a
-            // follower that skips into every passage loses its buffer at every
-            // boundary -- heard as a stutter at the start of each track. The
-            // offset it would have corrected is what the overlap is for
-            // `[GDE-ECHO-340]`.
-            if next_up(handle) == Some(passage_id) && start_sample == 0 && !fs.want_rejoin {
+            // Already heading there, and heading there *at about the right
+            // time*. Let it flow: a scheduled start goes through `skip`, which
+            // cuts the ring `[REQ-AUD-158]`, and a follower that skips into
+            // every passage loses its buffer at every boundary -- heard as a
+            // stutter at the start of each track `[GDE-ECHO-336]`.
+            //
+            // **Being next is not enough on its own.** When the master skips,
+            // its next passage is the one this node also has queued -- and
+            // this node will not reach it for minutes. Suppressing on
+            // queue membership alone is why a skip on the master left the
+            // follower playing calmly on `[GDE-ECHO-353]`. The test is
+            // whether flowing would land anywhere near the announced time.
+            let flowing_would_do = match (own_transition_in_ms(handle), at.checked_sub(now_master)) {
+                (Some(mine), Some(theirs)) => {
+                    let theirs = theirs / 1_000_000;
+                    mine.abs_diff(theirs) <= FLOW_TOLERANCE.as_millis() as u64
+                }
+                // Without both figures, believe what the master said rather
+                // than a guess about this node's own future `[GOV-SRC-040]`.
+                _ => false,
+            };
+            if next_up(handle) == Some(passage_id) && start_sample == 0
+                && !fs.want_rejoin && flowing_would_do
+            {
                 note(&mut fs.note, format!(
                     "echo-follow: passage {passage_id} is already next here; flowing into it"));
                 return;

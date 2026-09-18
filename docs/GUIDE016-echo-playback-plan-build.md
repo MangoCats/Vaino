@@ -136,6 +136,32 @@ the window is brief and it is *not* established as the cause of the 1028 ms --
 but it misreports the display and any resume point taken in that window, and it
 was never only an echo fault.
 
+**`[GDE-ECHO-352]` A skip must announce when the audio will really sound, not
+where the ring happened to be.** `skip` calls `admit_due` -- which emits the
+schedule -- and *then* cuts the ring, so the schedule was computed from the
+pre-cut depth and announced a sound time some **fourteen seconds** later than
+the truth. The incoming passage is laid only `skip_lead_ms` in
+`[REQ-AUD-162]`, so it sounds in half a second where the ring still holds two.
+
+The schedule is now published from the depth the first sample *actually*
+occupies, and re-published after the cut. Both places a passage is placed
+somewhere other than behind the whole ring -- a skip and a seek -- do it, and
+both are user input a follower is meant to mirror `[GDE-ECHO-325]`.
+
+**`[GDE-ECHO-353]` Being next is not enough to justify flowing; being next
+*at about the right time* is.** The follower suppressed a scheduled start
+whenever the announced passage was already its own next one `[GDE-ECHO-343]`
+-- correct for an ordinary boundary and wrong for a skip, where that passage
+is still minutes away. Reported from the room: a skip on the master left the
+follower playing calmly on.
+
+It now compares the announced instant against its own projected transition and
+flows only if the two are within a few seconds. Wider than any offset the
+correction loop deals with, narrower than any skip -- the two cases are far
+apart, and the test only has to separate them rather than measure either. With
+either figure missing it believes the master rather than a guess about its own
+future `[GOV-SRC-040]`.
+
 **`[GDE-ECHO-335]` A queue edit outside the ring's window has no synchrony
 consequence at all.** Reordering, inserting or removing anything that is neither
 playing now nor already scheduled within the ring's depth arrives in time to be
