@@ -239,6 +239,18 @@ pub enum Command {
     /// comes round. Zero stops trimming, which is what a node that stops
     /// following sends.
     SetEchoRate(f64),
+    /// Replace what is coming with the node being followed `[GDE-ECHO-500]`.
+    ///
+    /// The whole upcoming queue, already resolved against this node's own
+    /// library. Passages the mixer is already holding are untouched, because
+    /// they are not in the queue -- they have been admitted.
+    ///
+    /// **This is what stops a follower skipping into every passage.** Without
+    /// it the node keeps choosing its own next track and is yanked off it at
+    /// each boundary, which cuts the ring and is audible; with it the node
+    /// simply flows into the same passage the master does, and alignment is
+    /// left to the overlap `[GDE-ECHO-340]`.
+    EchoSetQueue(Vec<QueueEntry>),
     /// Start the next passage this many ms earlier, negative for later, to
     /// shed an offset `[GDE-ECHO-340]`.
     ///
@@ -903,6 +915,10 @@ impl Engine {
                     } else if self.echo_last_trim.is_none() {
                         self.echo_last_trim = Some(std::time::Instant::now());
                     }
+                }
+                Ok(Command::EchoSetQueue(entries)) => {
+                    self.queue.replace_upcoming(entries);
+                    self.queue_edited = true;
                 }
                 Ok(Command::EchoCorrectNextStart(ms)) => {
                     self.echo_next_shift_ms = ms;

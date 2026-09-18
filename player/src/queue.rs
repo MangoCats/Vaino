@@ -383,6 +383,20 @@ impl Queue {
     }
 
     /// Should the second entry be admitted, given progress through the first?
+    /// Replace everything upcoming, keeping the qid stamping rule.
+    ///
+    /// For an echo node adopting the queue of the node it follows
+    /// `[GDE-ECHO-500]`. Nothing here is playing -- the queue holds only what
+    /// is still to come -- so replacing it wholesale disturbs no audio, which
+    /// is exactly why a follower can match a master's programme without a
+    /// skip.
+    pub fn replace_upcoming(&mut self, entries: Vec<QueueEntry>) {
+        self.entries.clear();
+        for e in entries {
+            self.push(e);
+        }
+    }
+
     pub fn should_admit_next(&self, played_ms: u64) -> bool {
         match (self.peek(), self.peek_next()) {
             (Some(cur), Some(next)) => should_admit(cur, played_ms, next),
@@ -633,6 +647,25 @@ mod tests {
         assert!(!should_admit(&a, 55_000, &b), "1s too early");
         assert!(should_admit(&a, 56_000, &b), "exactly at the lead-out point");
         assert!(should_admit(&a, 58_000, &b), "and after it");
+    }
+
+    /// Adopting a master's queue replaces what was coming and disturbs
+    /// nothing that is playing `[GDE-ECHO-500]`.
+    #[test]
+    fn replacing_the_upcoming_queue_keeps_stamping_qids() {
+        let mut q = Queue::new(3);
+        q.push(entry(1, 10_000, 0, 0));
+        q.push(entry(2, 10_000, 0, 0));
+        let before: Vec<u64> = q.iter().map(|e| e.qid).collect();
+        q.replace_upcoming(vec![entry(7, 10_000, 0, 0), entry(8, 10_000, 0, 0)]);
+        let ids: Vec<i64> = q.iter().map(|e| e.passage_id).collect();
+        assert_eq!(ids, vec![7, 8], "the announced queue, in the announced order");
+        let after: Vec<u64> = q.iter().map(|e| e.qid).collect();
+        assert!(after.iter().all(|q| !before.contains(q)),
+                "qids are never reused, so a stale edit cannot hit a new entry");
+        // Emptying is legitimate: a master with nothing queued announces none.
+        q.replace_upcoming(vec![]);
+        assert_eq!(q.iter().count(), 0);
     }
 
     /// `[GDE-ECHO-340]`'s offset correction, both ways. A late node admits

@@ -31,6 +31,18 @@ use crate::engine::{Command, EngineHandle};
 struct Snapshot {
     #[serde(default)]
     echo: EchoState,
+    /// What the node being followed will play next, in order `[GDE-ECHO-500]`.
+    ///
+    /// Already on this socket for the browser's sake, and ignored until now,
+    /// which is why a follower's own "coming up" disagreed with the master's:
+    /// it kept choosing for itself and was overridden one passage at a time.
+    #[serde(default)]
+    queue: Vec<AnnouncedEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct AnnouncedEntry {
+    passage_id: i64,
 }
 
 pub struct Following {
@@ -140,6 +152,9 @@ struct FollowState {
     corrected: Option<i64>,
     /// The relative rate fit that drives the trim `[GDE-ECHO-340]`.
     rate: crate::echo::RateEstimate,
+    /// The announced queue last adopted, so an unchanged one costs no
+    /// database work. The snapshot arrives twice a second.
+    queue: Vec<i64>,
 }
 
 impl FollowState {
@@ -150,8 +165,17 @@ impl FollowState {
             corrected: None,
             rate: crate::echo::RateEstimate::new(
                 RATE_WINDOW, RATE_MIN_SPAN, RATE_MIN_SAMPLES),
+            queue: Vec::new(),
         }
     }
+}
+
+/// The passage this node will play next of its own accord.
+///
+/// `None` when nothing is queued, which is the case a scheduled start exists
+/// for.
+fn next_up(handle: &EngineHandle) -> Option<i64> {
+    handle.state.lock().ok()?.queue.first().map(|e| e.passage_id)
 }
 
 /// Join at once, and what this node is playing, as the panel has them.
@@ -242,6 +266,7 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
                 }
             };
             let Ok(snap) = serde_json::from_str::<Snapshot>(&text) else { continue };
+            adopt_queue(&snap, &cfg, &handle, &mut fs).await;
             act(&mut follower, &snap.echo, &cfg, &handle, &mut fs).await;
         }
         set_status(&handle, "Not connected.");
@@ -364,8 +389,56 @@ async fn act(
                 f.timing.offset().as_millis()));
         }
         Follow::StartAt { passage_id, start_sample, at } => {
+            // Already heading there. Let it flow: a scheduled start goes
+            // through `skip`, which cuts the ring `[REQ-AUD-158]`, and a
+            // follower that skips into every passage loses its buffer at every
+            // boundary -- heard as a stutter at the start of each track. The
+            // offset it would have corrected is what the overlap is for
+            // `[GDE-ECHO-340]`.
+            if next_up(handle) == Some(passage_id) && start_sample == 0 {
+                note(&mut fs.note, format!(
+                    "echo-follow: passage {passage_id} is already next here; flowing into it"));
+                return;
+            }
             start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;
         }
+    }
+}
+
+/// Take the followed node's queue as this node's own `[GDE-ECHO-500]`.
+///
+/// Only when it changes: the snapshot arrives twice a second and resolving a
+/// queue means a database read per passage.
+///
+/// Passages this node does not have are dropped rather than refused wholesale.
+/// Two libraries that have drifted apart should cost the passages they differ
+/// on, not the whole programme `[GDE-ECHO-420]`.
+async fn adopt_queue(
+    snap: &Snapshot,
+    cfg: &Following,
+    handle: &Arc<EngineHandle>,
+    fs: &mut FollowState,
+) {
+    let announced: Vec<i64> = snap.queue.iter().map(|e| e.passage_id).collect();
+    if announced.is_empty() || announced == fs.queue {
+        return;
+    }
+    fs.queue = announced.clone();
+    let db = cfg.db.clone();
+    let library = cfg.library.clone();
+    let wanted = announced.len();
+    let found = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
+        Some(announced.iter().filter_map(|id| lib.passage(*id).ok()).collect::<Vec<_>>())
+    })
+    .await;
+    if let Ok(Some(entries)) = found {
+        if entries.len() < wanted {
+            note(&mut fs.note, format!(
+                "echo-queue: {} of {wanted} upcoming passages are in this node's library",
+                entries.len()));
+        }
+        handle.send(Command::EchoSetQueue(entries));
     }
 }
 

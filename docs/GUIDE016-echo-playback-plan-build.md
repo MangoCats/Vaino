@@ -95,6 +95,26 @@ difference is a new instruction. And the master must take its resume offset
 three minutes in tells every follower to play the wrong audio at the right
 time.
 
+**`[GDE-ECHO-336]` A follower adopts the master's queue, and not doing so was
+audible.** Observed on `lempiplay3` 2026-09-18, the first time two nodes ran
+this: the follower played the right passage at the right moment, and its
+*Coming Up* showed entirely different tracks.
+
+It had been choosing its own next passage all along and being pulled off it at
+each boundary, one passage at a time. That pull goes through `skip`, which cuts
+the ring `[REQ-AUD-158]`, so the node lost its whole buffer at every transition
+and started each track from an empty one -- heard as a stutter at the opening
+of the new song, which is exactly what was reported.
+
+The master's queue was already on the wire, carried for the browser's sake on
+the very socket the follower reads; the client simply ignored the field, and
+`reconcile_queue` had never been called by anything. A follower now takes the
+announced queue as its own, dropping only passages its library lacks, and a
+scheduled start is **suppressed when the node is already heading to that
+passage**. It then flows into each transition instead of skipping into it, and
+the alignment a start would have imposed is left to the overlap
+`[GDE-ECHO-340]` -- which is inaudible where the skip was not.
+
 **`[GDE-ECHO-335]` A queue edit outside the ring's window has no synchrony
 consequence at all.** Reordering, inserting or removing anything that is neither
 playing now nor already scheduled within the ring's depth arrives in time to be
