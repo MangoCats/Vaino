@@ -1,6 +1,6 @@
 # LOG012: Phase 4's Drift, From the Player's Own Clock
 
-**Experiment Record — 2026-09-17, in progress**
+**Experiment Record — 2026-09-17, concluded 2026-09-18**
 
 `[GDE-ECHO-330]`'s gate asks that observed drift match Phase 1's prediction
 within a factor of two. This is that measurement, taken from the instrument the
@@ -201,6 +201,54 @@ residuals either side of every gap are unchanged. A low clean-run fraction is a
 level problem, and 0.06 amplitude was slightly under what this room wanted.
 `tools/click_steps.py` now says which of the two it is rather than leaving the
 reader to infer it from a discard count.
+
+## 3b. Overnight, both nodes muted — the figures that stand
+
+Fourteen hours with `Digital` muted on `bose`'s HiFiBerry and `PCM` muted on
+`lempiplay3`, both streams held open and consuming frames throughout. Muting is
+a digital attenuation and does not touch frame consumption, which was checked
+rather than assumed: `hw_ptr` advanced at nominal on both while the mixers read
+`[off]`. *These supersede every earlier figure in this document.*
+
+| | span | n | endpoint | **fit** | hourly sd |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| `bose` | 14.3 h | 172 | +13.725 | **+13.740 ppm** | 3.242 |
+| `lempiplay3` seg 1 | 8.3 h | 101 | +0.245 | +0.282 ppm | 1.720 |
+| `lempiplay3` seg 2 | 5.8 h | 71 | −1.036 | −0.831 ppm | 1.962 |
+| `lempiplay3` combined | 14.1 h | 172 | | **−0.176 ppm** | |
+
+**`[LOG-P4-130]` The pair is +13.92 ppm — one trimmed frame every 1.63 s.**
+`bose`'s endpoint and fit now agree to 0.015 ppm, against 0.33 the day before,
+which is what a longer clean segment buys. Its **+13.740** lands on
+`[LOG-FIX-030]`'s electrical **+13.7** almost exactly.
+
+`lempiplay3`'s two segments are the `vaino` restart either side of the click
+test, correctly cut by the tool. They differ by 1.11 ppm against hourly sds of
+1.7 and 2.0 — within the node's own wander, but a reminder that its rate is not
+quite the constant `bose`'s is. Every measurement of it now agrees it is
+nominal: −0.18 and +0.28 and −0.83 electrically, +0.51 acoustically.
+
+**`[LOG-P4-140]` The delay contrast held over a full night and is now beyond
+doubt.** `lempiplay3` 434 frames (9.84 ms, sd 115.3) across 178 samples;
+`bose` 4 frames (0.09 ms, sd 0.3) across 172. Its mean also climbed with sample
+count — 1789.8, then 1861.4, then 1874.1 — which is what sampling a sawtooth
+more fully looks like. None of it is in the sound `[LOG-P4-100]`.
+
+**`[LOG-P4-150]` This establishes the prediction; it does not close
+`[GDE-ECHO-330]`'s gate.** The gate asks for *the residual offset between the
+two nodes, logged across many passages*. What is measured here is each node's
+own rate against its own disciplined clock, separately — which yields the pair
+figure by subtraction and nothing about how well two nodes actually hold
+together on one programme. The difference matters: a residual test would also
+catch errors in the schedule arithmetic, the presentation offsets and the ring
+placement, none of which a per-node rate can see. Closing the gate still needs
+the follower to act, and so still needs `[LOG-ECHO-070]`, the schedule's start
+sample `[GDE-ECHO-325]` and the mixer's commanded-depth lever `[LOG-ECHO-050]`.
+
+What it does buy is a **prediction worth failing against**: the per-node
+absolutes predict +13.2 ppm for the pair and the direct subtraction gives
++13.92, a 6 % agreement. A residual run that disagrees with that by more than a
+factor of two is a fault in the chain, not in the clocks.
 
 ## 4. Open
 
