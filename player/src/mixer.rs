@@ -7,6 +7,39 @@
 
 use crate::fade::Envelope;
 
+/// Drop or duplicate one frame in a freshly mixed block `[GDE-ECHO-340]`.
+///
+/// Returns the number of samples to submit. Dropping hands back one frame
+/// fewer, discarding audio the mixer already consumed, so position advances
+/// faster than time; duplicating repeats the last frame, so it advances
+/// slower. One frame is 23 microseconds at 44.1 kHz -- below anything a
+/// listener can hear as an event, which is the whole reason the *rate*
+/// correction is allowed to happen mid-passage where the offset correction is
+/// not.
+///
+/// Refuses rather than forces in two cases, both of which would otherwise
+/// corrupt a block: a drop that would empty an already-tiny block, and a
+/// duplicate with no room to put the extra frame. A trim skipped now simply
+/// happens on the next pass, a few milliseconds later, and nothing accumulates
+/// -- the schedule is a rate, not a queue of debts.
+pub fn apply_trim(buf: &mut [f32], filled: usize, channels: usize, drop_frame: bool) -> usize {
+    let ch = channels.max(1);
+    if filled < 2 * ch || !filled.is_multiple_of(ch) {
+        return filled;
+    }
+    if drop_frame {
+        return filled - ch;
+    }
+    if filled + ch > buf.len() {
+        return filled;
+    }
+    let (last, next) = (filled - ch, filled);
+    for i in 0..ch {
+        buf[next + i] = buf[last + i];
+    }
+    filled + ch
+}
+
 /// Fixed-capacity FIFO of interleaved f32 samples.
 ///
 /// Capacity is set once and never grows -- that is the whole point
@@ -229,6 +262,30 @@ mod tests {
     /// The overlay sums where audio is already queued and appends past the end
     /// -- one call spanning both, because the incoming passage straddles the
     /// end of what the outgoing one left behind.
+    /// One frame either way, and the sample values say which.
+    #[test]
+    fn a_trim_removes_or_repeats_exactly_one_frame() {
+        // Stereo: [L0 R0 L1 R1 L2 R2] with room for one more frame.
+        let mut buf = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 0.0, 0.0];
+        assert_eq!(apply_trim(&mut buf, 6, 2, true), 4, "a dropped frame is simply not sent");
+        let mut buf = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 0.0, 0.0];
+        assert_eq!(apply_trim(&mut buf, 6, 2, false), 8);
+        assert_eq!(&buf[6..8], &[3.0, -3.0], "the repeated frame is the last one");
+    }
+
+    /// Both refusals `[GDE-ECHO-340]`: a trim skipped now happens on the next
+    /// pass, so refusing costs nothing and forcing would corrupt the block.
+    #[test]
+    fn a_trim_refuses_rather_than_corrupting_a_block() {
+        let mut buf = [1.0, -1.0, 2.0, -2.0];
+        assert_eq!(apply_trim(&mut buf, 4, 2, false), 4, "nowhere to put it");
+        let mut buf = [1.0, -1.0, 0.0, 0.0];
+        assert_eq!(apply_trim(&mut buf, 2, 2, true), 2, "one frame is not droppable");
+        // A partial frame is never touched; that would offset every sample after.
+        let mut buf = [1.0, -1.0, 2.0, 0.0];
+        assert_eq!(apply_trim(&mut buf, 3, 2, true), 3);
+    }
+
     #[test]
     fn mix_at_sums_over_existing_audio_and_appends_past_it() {
         let mut r = RingBuffer::new(64);

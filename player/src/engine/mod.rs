@@ -231,6 +231,14 @@ pub enum Command {
     /// Join at once, or wait for the followed node's next passage
     /// `[SPEC-ECHO-030]`.
     SetEchoJoinNow(bool),
+    /// The measured relative rate error against the node being followed, in
+    /// ppm, positive when this node is falling behind `[GDE-ECHO-340]`.
+    ///
+    /// A *rate*, fitted over an hour, never an instantaneous position: the
+    /// engine turns it into an interval and trims one frame each time it
+    /// comes round. Zero stops trimming, which is what a node that stops
+    /// following sends.
+    SetEchoRate(f64),
     /// Start the next passage this many ms earlier, negative for later, to
     /// shed an offset `[GDE-ECHO-340]`.
     ///
@@ -374,6 +382,11 @@ pub struct Engine {
     /// Join at once, or wait for the followed node's next passage
     /// `[SPEC-ECHO-030]`.
     pub(crate) echo_join_now: bool,
+    /// The fitted relative rate error, ppm `[GDE-ECHO-340]`.
+    pub(crate) echo_rate_ppm: f64,
+    /// When a frame was last trimmed. Monotonic, because a wall clock can
+    /// step `[GDE-ECHO-365]` and this is an interval.
+    echo_last_trim: Option<std::time::Instant>,
     /// An offset correction waiting for the next admission, ms earlier
     /// `[GDE-ECHO-340]`. Zero is no correction, which is also the resting
     /// state of a node that is already level.
@@ -585,6 +598,8 @@ impl Engine {
             echo_delay_trim_ms: 0,
             echo_follow_host: String::new(),
             echo_join_now: true,
+            echo_rate_ppm: 0.0,
+            echo_last_trim: None,
             echo_next_shift_ms: 0,
             echo_start: None,
             echo_seen_recoveries: 0,
@@ -871,6 +886,17 @@ impl Engine {
                     } else {
                         self.echo_follow_host = host;
                         self.remember_settings();
+                    }
+                }
+                Ok(Command::SetEchoRate(ppm)) => {
+                    self.echo_rate_ppm = if ppm.is_finite() { ppm } else { 0.0 };
+                    // Starting or stopping the clock, never resetting it
+                    // mid-run: a rate that is merely refined should not push
+                    // the next trim back by a whole interval each time.
+                    if self.echo_rate_ppm == 0.0 {
+                        self.echo_last_trim = None;
+                    } else if self.echo_last_trim.is_none() {
+                        self.echo_last_trim = Some(std::time::Instant::now());
                     }
                 }
                 Ok(Command::EchoCorrectNextStart(ms)) => {
@@ -1541,6 +1567,26 @@ impl Engine {
         if want < 0 { (0, true) } else { (want as u64, false) }
     }
 
+    /// Below this there is nothing worth correcting `[GDE-ECHO-350]`.
+    ///
+    /// Half a ppm is 1.8 ms an hour, comfortably inside what the offset
+    /// correction sheds at a passage boundary, and below the precision the
+    /// hour-long fit itself has `[LOG-P4-130]`. Trimming against an estimate
+    /// finer than its own error is how a loop starts hunting.
+    const ECHO_RATE_FLOOR_PPM: f64 = 0.5;
+
+    /// Whether a frame is due to be trimmed, and which way.
+    ///
+    /// `Some(true)` drops -- this node is behind and must advance faster.
+    fn due_trim(&self) -> Option<bool> {
+        let interval = crate::echo::trim_interval(
+            self.echo_rate_ppm, self.out_rate, Self::ECHO_RATE_FLOOR_PPM)?;
+        // The clock starts when the rate does, so the first trim waits a full
+        // interval rather than firing the instant an estimate arrives.
+        let due = self.echo_last_trim.is_some_and(|t| t.elapsed() >= interval);
+        due.then_some(self.echo_rate_ppm > 0.0)
+    }
+
     /// Hold the ring below capacity so this node's submit-to-air total matches
     /// the fleet's `[LOG-ECHO-030]`.
     ///
@@ -1620,6 +1666,18 @@ impl Engine {
             self.live.iter_mut().map(|l| &mut l.stream),
             &mut self.scratch[..want],
         );
+        // The rate correction `[GDE-ECHO-340]`, on the mixer thread where the
+        // audio is, and nowhere near the callback. One frame, at the interval
+        // the fitted ppm calls for -- which IS the rate limit `[GDE-ECHO-350]`,
+        // so there is no second governor to disagree with it.
+        let filled = match self.due_trim() {
+            Some(drop_frame) => {
+                self.echo_last_trim = Some(std::time::Instant::now());
+                crate::mixer::apply_trim(&mut self.scratch, filled,
+                                         self.out_channels.max(1), drop_frame)
+            }
+            None => filled,
+        };
         for (l, was) in self.live.iter_mut().zip(before) {
             let consumed = was.saturating_sub(l.stream.ring.len());
             l.frames_mixed += (consumed / l.stream.channels.max(1)) as u64;
@@ -1837,7 +1895,7 @@ impl Drop for Engine {
 
 #[cfg(test)]
 mod depth_tests {
-    use super::Engine;
+    use super::{Command, Engine};
 
     /// `[SPEC-DLY-030]`: a node cannot sound before it submits, so a trim
     /// more negative than the measured delay is impossible rather than small.
@@ -1853,6 +1911,56 @@ mod depth_tests {
         // With nothing measured the trim IS the offset `[GDE-ECHO-430]`.
         e.echo_delay_trim_ms = 10;
         assert_eq!(e.echo_offset_frames(None), (441, false));
+    }
+
+    /// The trim fires at the interval the rate calls for, in the direction the
+    /// sign calls for, and not before `[GDE-ECHO-340]`.
+    #[test]
+    fn a_trim_waits_its_interval_and_knows_which_way() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        assert_eq!(e.due_trim(), None, "no rate, no trim");
+
+        h.send(Command::SetEchoRate(13.92));
+        e.tick();
+        // The clock starts with the rate: nothing is due in the first instant.
+        assert_eq!(e.due_trim(), None, "an arriving rate is not a debt to pay at once");
+        // ...but once an interval has passed, it is, and this node is behind.
+        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        assert_eq!(e.due_trim(), Some(true), "behind: drop a frame to catch up");
+
+        // The other way round.
+        h.send(Command::SetEchoRate(-13.92));
+        e.tick();
+        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
+    }
+
+    /// Stopping following stops trimming. A rate left behind would have the
+    /// node correcting towards a master it is no longer listening to.
+    #[test]
+    fn a_zero_rate_stops_the_trim_and_its_clock() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        h.send(Command::SetEchoRate(13.92));
+        e.tick();
+        assert!(e.echo_last_trim.is_some());
+        h.send(Command::SetEchoRate(0.0));
+        e.tick();
+        assert_eq!(e.due_trim(), None);
+        assert!(e.echo_last_trim.is_none(), "the clock stops with the rate");
+    }
+
+    /// Below the floor the interval runs to hours and the estimate is mostly
+    /// its own error `[GDE-ECHO-350]`.
+    #[test]
+    fn a_rate_under_the_floor_is_left_alone() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        h.send(Command::SetEchoRate(0.2));
+        e.tick();
+        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(3600));
+        assert_eq!(e.due_trim(), None);
     }
 
     /// `[SPEC-ECHO-050]`: following yourself is a feedback loop, and an easy

@@ -134,69 +134,13 @@ after hours, which is the hardest kind to find.
 
 ---
 
+---
+
 ## 3. Phase 5 — Correction
 
-**`[GDE-ECHO-340]` Rate and offset are different errors, corrected in different
-places, and separating them is what makes the ring's depth stop mattering.** A
-*rate* error accumulates slowly and is corrected by trimming: drop or duplicate
-one frame on submission into the output ring, on the mixer thread, at whatever
-interval the measured ppm calls for — one frame every 5.7 s at the ~4 ppm now
-measured for `bose`↔`smartboardpc`, and every 1.4 s for `bose`↔`vainopi`, not
-the one per minute this plan assumed from the discredited 0.4 ppm
-`[GDE-ECHO-550]`.
-That the correction is heard fifteen seconds later is irrelevant, because what
-is being corrected is a slope, not a position. An *offset* error is corrected
-only at a passage boundary, by opening the next passage a few milliseconds
-adjusted, where it costs nothing and is inaudible by construction.
-
-This split is why `[REQ-AUD-164]`'s buffer-depth trap does not bite here as it
-did four times before `[GDE-ECHO-220]`: the one correction that would need to be
-heard immediately is the one never applied mid-passage.
-
-*Offset correction built 2026-09-18, and building it settled how it has to
-work.* **Ring depth cannot do it.** For a gapless stream a sample's air time is
-fixed by where sample 0 was placed plus the device rate; the next passage is
-appended contiguously, so its alignment is inherited and changing the ring's
-depth mid-stream shifts nothing. Depth decides alignment at a *fresh start* and
-nowhere else, which is why `[LOG-ECHO-030]` holds at a join and why this
-correction must move the **transition** instead.
-
-*A first attempt moved the position inside the file — opening the next passage
-a few milliseconds further in — and was one-directional, since there is no
-negative position to open at.* The knob that actually serves is **where the
-incoming passage sits inside the overlap**. Every transition has one, and
-starting the passage earlier overlaps a few milliseconds more and catches up,
-while starting it later overlaps a few less and waits. Nothing is skipped and
-nothing is repeated, so it is inaudible in both directions and symmetric by
-construction — there is no negative position, but there is always a slightly
-smaller overlap. It is a signed nudge to `should_admit`'s threshold, clamped so
-it can neither ask for audio that does not exist nor narrow through zero into a
-gap, which would be a worse fault than the offset it was correcting.
-
-**`[GDE-ECHO-345]` The anchor's precision, not the ear's, sets how well this can
-work.** The residual is measured from a `DriftAnchor`, whose position comes from
-`audible_ms` and therefore carries the output ring's own depth jitter — tens of
-milliseconds `[LOG-P4-010]`. The deadband is 40 ms for that reason alone, well
-above anything a listener would call aligned. Correcting below the noise is the
-hunting `[GDE-ECHO-350]` exists to prevent, so **finer alignment needs a more
-precise anchor, not a smaller deadband**: a position derived from the device's
-own frame counter, which is sampled atomically with its timestamp and carries no
-ring at all `[LOG-P4-010]`. That is the next thing worth building, and until it
-exists a following node is audibly following rather than audibly one speaker.
-
-A defect surfaced on the way. The residual compared the *timestamps* of two
-anchors, which are never about the same sample — the master's crossed a network
-and describes a moment already past. On a quiet network that difference is
-mostly transport delay, so the loop would have chased the network. The local
-reading is now carried along its own playback to the sample the master named
-before the two are compared.
-
-**`[GDE-ECHO-350]` Hysteresis and a rate limit, or the loop will hunt.** Trim
-only while the estimated offset exceeds a deadband comfortably larger than the
-measurement noise, never more than one frame per correction interval, and never
-on an estimate younger than the regression window. A correction loop that reacts
-to its own measurement noise produces exactly the slow periodic wobble it was
-built to remove.
+Split out in full: [GUIDE017](GUIDE017-echo-correction.md) `[GDE-ECHO-340]`.
+Rate is a slope and is trimmed continuously; offset is a position and is shed
+at a passage boundary. Both are built.
 
 ---
 
