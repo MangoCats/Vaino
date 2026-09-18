@@ -182,6 +182,82 @@ pub fn start_verdict(
     }
 }
 
+/// The master's clock, as this node can best estimate it `[GDE-ECHO-366]`.
+///
+/// **A follower does not need its own clock to be right; it needs to agree
+/// with the node it follows.** Those are different problems and only one of
+/// them requires privileges. Carrying the difference as an offset means the
+/// follower's own wall clock drops out of every scheduling decision, so a node
+/// booted two days behind -- which is every node here after a power cut, none
+/// having an RTC -- computes exactly the same submission *interval* as a
+/// perfectly disciplined one.
+///
+/// The alternative, stepping the clock to match, needs root the player does
+/// not have and fights the NTP daemon that is actively disciplining it. This
+/// needs neither and works from the first snapshot.
+///
+/// **Estimated by maximum, not by mean.** `heard_at` is stamped as the master
+/// builds the snapshot, so it reaches this node one transport delay later and
+/// every sample reads low by however long the network took. Delay is
+/// one-sided -- it can lengthen but never go below the wire -- so the largest
+/// observed difference is the least contaminated one, where an average would
+/// bake in the typical delay instead. What remains is a few milliseconds on a
+/// LAN, inside the anchor's own jitter `[LOG-P4-010]` and therefore not worth
+/// a round trip to remove.
+#[derive(Debug)]
+pub struct MasterClock {
+    /// `(own clock at receipt, master - own)`, oldest first.
+    samples: std::collections::VecDeque<(WallNanos, i64)>,
+    window: Duration,
+    step: Duration,
+}
+
+impl MasterClock {
+    pub fn new(window: Duration, step: Duration) -> Self {
+        Self { samples: std::collections::VecDeque::new(), window, step }
+    }
+
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
+    /// Take a reading. **True when either clock has stepped**, which the
+    /// caller must treat as it treats any other discontinuity: a rate fitted
+    /// across a step is not a rate `[RateEstimate::clear]`.
+    pub fn observe(&mut self, master_heard_at: WallNanos, own_now: WallNanos) -> bool {
+        let offset = master_heard_at as i64 - own_now as i64;
+        let stepped = self
+            .offset()
+            .is_some_and(|had| (offset - had).unsigned_abs() > self.step.as_nanos() as u64);
+        if stepped {
+            self.samples.clear();
+        }
+        self.samples.push_back((own_now, offset));
+        let cutoff = own_now.saturating_sub(self.window.as_nanos() as u64);
+        while self.samples.front().is_some_and(|(t, _)| *t < cutoff) {
+            self.samples.pop_front();
+        }
+        stepped
+    }
+
+    /// `master - own`, or `None` before anything has been observed.
+    pub fn offset(&self) -> Option<i64> {
+        self.samples.iter().map(|(_, o)| *o).max()
+    }
+
+    /// An instant on the master's clock, as this node's own clock reads it.
+    pub fn to_local(&self, master: WallNanos) -> Option<WallNanos> {
+        let o = self.offset()?;
+        (master as i64).checked_sub(o).map(|v| v.max(0) as u64)
+    }
+
+    /// What the master's clock reads now.
+    pub fn now(&self, own_now: WallNanos) -> Option<WallNanos> {
+        let o = self.offset()?;
+        (own_now as i64).checked_add(o).map(|v| v.max(0) as u64)
+    }
+}
+
 /// Whether two nodes are using the same clock at all `[GDE-ECHO-365]`.
 ///
 /// Nothing in echo works across a wall-clock disagreement: every instant on
@@ -1143,6 +1219,50 @@ mod tests {
         let late = AirPosition { passage_id: 3, position_ms: 250,
                                  at: 10 * SEC + 255_000_000 };
         assert_eq!(local_at_sample(&late, &m) - m.heard_at as i64, 5_000_000);
+    }
+
+    fn mclock() -> MasterClock {
+        MasterClock::new(Duration::from_secs(60), Duration::from_secs(1))
+    }
+
+    /// The whole point: a node days out schedules correctly anyway.
+    #[test]
+    fn a_follower_two_days_behind_still_computes_the_right_interval() {
+        let mut c = mclock();
+        // A real epoch, because two days must fit underneath it.
+        const NOW: u64 = 1_789_000_000 * SEC;
+        let two_days = 2 * 86_400 * SEC;
+        let own = NOW - two_days;
+        c.observe(NOW, own);
+        assert_eq!(c.offset(), Some(two_days as i64));
+        // A master instant one second out lands one second out locally, which
+        // is the only thing scheduling actually needs.
+        assert_eq!(c.to_local(NOW + SEC).unwrap() - own, SEC);
+        assert_eq!(c.now(own), Some(NOW));
+    }
+
+    /// Transport delay only ever makes a reading look EARLY, so the largest
+    /// difference is the least contaminated one.
+    #[test]
+    fn the_offset_takes_the_least_delayed_reading() {
+        let mut c = mclock();
+        // Same true offset of zero, seen through 5, 40 and 12 ms of transport.
+        c.observe(10 * SEC, 10 * SEC + 5_000_000);
+        c.observe(11 * SEC, 11 * SEC + 40_000_000);
+        c.observe(12 * SEC, 12 * SEC + 12_000_000);
+        assert_eq!(c.offset(), Some(-5_000_000), "the 5 ms reading, not the average");
+    }
+
+    /// A step is reported once, and the window starts again from it.
+    #[test]
+    fn a_step_is_reported_and_clears_what_came_before() {
+        let mut c = mclock();
+        assert!(!c.observe(10 * SEC, 10 * SEC), "the first reading is not a step");
+        assert!(!c.observe(11 * SEC, 11 * SEC), "nor is an agreeing one");
+        // NTP steps this node forward by an hour.
+        assert!(c.observe(12 * SEC, 12 * SEC + 3600 * SEC), "that is a step");
+        assert_eq!(c.offset(), Some(-3600 * SEC as i64), "and only the new reading survives");
+        assert!(!c.observe(13 * SEC, 13 * SEC + 3600 * SEC), "settled again");
     }
 
     /// `[GDE-ECHO-365]`: a node two days behind is not following anything.

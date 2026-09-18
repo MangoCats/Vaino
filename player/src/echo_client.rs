@@ -158,6 +158,8 @@ struct FollowState {
     /// An offset too large for a transition to absorb, waiting for a
     /// scheduled start to place the first sample afresh `[GDE-ECHO-340]`.
     want_rejoin: bool,
+    /// The followed node's clock, as this one estimates it `[GDE-ECHO-366]`.
+    clock: crate::echo::MasterClock,
 }
 
 impl FollowState {
@@ -170,6 +172,8 @@ impl FollowState {
                 RATE_WINDOW, RATE_MIN_SPAN, RATE_MIN_SAMPLES),
             queue: Vec::new(),
             want_rejoin: false,
+            clock: crate::echo::MasterClock::new(
+                CLOCK_WINDOW, Duration::from_secs(1)),
         }
     }
 }
@@ -181,6 +185,13 @@ impl FollowState {
 /// RTC before NTP has stepped it `[GDE-ECHO-365]`. Thirty seconds is far past
 /// any transport delay and far short of the fault.
 const MAX_CLOCK_SKEW: Duration = Duration::from_secs(30);
+
+/// How long a run of clock readings the offset is taken from.
+///
+/// Long enough that one quiet moment on the network supplies an
+/// uncontaminated sample `[MasterClock]`, short enough to follow a master
+/// whose own clock is being disciplined underneath it.
+const CLOCK_WINDOW: Duration = Duration::from_secs(60);
 
 /// The passage this node will play next of its own accord.
 ///
@@ -298,25 +309,29 @@ async fn act(
     // The offset the listener has set, this instant. Assigned rather than
     // passed, because `submit_at` and the trim both read it off the follower.
     f.timing = live_timing(handle, cfg.timing);
-    // Nothing below works across a wall-clock disagreement `[GDE-ECHO-365]`.
-    // Every instant on the wire is absolute, so a node two days behind
-    // computes a submission time two days out and waits for it -- connected,
-    // queue adopted, silently doing nothing, which is what a power cycle
-    // produced on `lempiplay3` before this existed. Say so and wait for the
-    // clock rather than acting on arithmetic that cannot hold.
+    // Everything below works in the MASTER's frame of time `[GDE-ECHO-366]`.
+    // This node's own wall clock is used only to measure intervals against,
+    // never compared with the wire, so a node booted days behind -- which is
+    // every node here after a power cut, none having an RTC -- schedules
+    // exactly as a disciplined one would. A step on either side is a
+    // discontinuity like any other and clears the rate window.
     if let Some(m) = st.anchor.as_ref() {
-        if !crate::echo::clocks_agree(m.heard_at, now_nanos(), MAX_CLOCK_SKEW) {
-            let skew = (now_nanos() as i64 - m.heard_at as i64) / 1_000_000_000;
-            set_status(handle, &format!(
-                "This node's clock is {skew} s from that one's; waiting for it to be set."));
-            note(&mut fs.note, format!(
-                "echo-follow: clocks differ by {skew} s; not acting until they agree"));
-            // The fit cannot survive a step either `[RateEstimate::clear]`.
+        if fs.clock.observe(m.heard_at, now_nanos()) {
+            note(&mut fs.note, "echo-follow: a clock stepped; re-measuring".to_string());
             fs.rate.clear();
             handle.send(Command::SetEchoRate(0.0));
-            return;
+        }
+        // Still worth saying, but as a diagnosis rather than a refusal: this
+        // node now follows correctly with a wrong clock, and a listener
+        // should still be told the clock is wrong `[GDE-ECHO-365]`.
+        if !crate::echo::clocks_agree(m.heard_at, now_nanos(), MAX_CLOCK_SKEW) {
+            let skew = (now_nanos() as i64 - m.heard_at as i64) / 1_000_000_000;
+            note(&mut fs.note, format!(
+                "echo-follow: this node's clock is {skew} s from that one's; following anyway, on its clock"));
         }
     }
+    // Without a reading there is no shared frame and nothing can be scheduled.
+    let Some(now_master) = fs.clock.now(now_nanos()) else { return };
 
     // Catching up to what the master is ALREADY playing, which the schedule
     // cannot do: a schedule describes a passage about to start, and the moment
@@ -338,8 +353,10 @@ async fn act(
                     at: a.heard_at,
                 };
                 let lead = f.timing.offset() + MID_JOIN_MARGIN;
-                if let Some(j) = crate::echo::join_mid_passage(&air, f.timing, now_nanos(), lead) {
-                    start(j.passage_id, j.start_sample, j.submit_at, cfg, handle, &mut fs.note,
+                if let Some(j) = crate::echo::join_mid_passage(&air, f.timing, now_master, lead) {
+                    // Back into this node's own clock before anyone waits on it.
+                    let at = fs.clock.to_local(j.submit_at).unwrap_or(j.submit_at);
+                    start(j.passage_id, j.start_sample, at, cfg, handle, &mut fs.note,
                           "joining part-way into").await;
                 }
             }
@@ -359,11 +376,19 @@ async fn act(
                 position_ms: mine.sample.saturating_mul(1000) / mine.rate.max(1) as u64,
                 at: mine.heard_at,
             };
+            // `local.at` is on THIS node's clock and `m.heard_at` on the
+            // master's, so one is carried into the other's frame before they
+            // are subtracted -- otherwise the offset between the clocks reads
+            // as an alignment error `[GDE-ECHO-366]`.
+            let local = crate::echo::AirPosition {
+                at: fs.clock.now(local.at).unwrap_or(local.at),
+                ..local
+            };
             let residual = crate::echo::local_at_sample(&local, m) - m.heard_at as i64;
             // Every reading feeds the fit, not just the ones that trigger a
             // correction: the slope is what the rate trim runs on, and it
             // needs the whole series `[GDE-ECHO-340]`.
-            fs.rate.push(now_nanos(), residual);
+            fs.rate.push(now_master, residual);
             if let Some(ppm) = fs.rate.ppm() {
                 handle.send(Command::SetEchoRate(ppm));
             }
@@ -405,7 +430,7 @@ async fn act(
         }
     }
 
-    match f.on_state(st, now_nanos()) {
+    match f.on_state(st, now_master) {
         Follow::Idle => {}
         Follow::Hold(why) => {
             set_status(handle, &format!(
@@ -438,6 +463,7 @@ async fn act(
             }
             fs.want_rejoin = false;
             fs.rate.clear();
+            let at = fs.clock.to_local(at).unwrap_or(at);
             start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;
         }
     }
