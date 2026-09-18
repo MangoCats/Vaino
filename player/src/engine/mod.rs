@@ -169,6 +169,13 @@ pub enum Command {
     /// frames -- never a live `delay` reading, which on some nodes wanders
     /// milliseconds while the sound does not `[LOG-P4-100]`.
     SetEchoDepth { own_offset_frames: u64, fleet_min_offset_frames: u64 },
+    /// Begin this passage, this far in, at this wall-clock instant
+    /// `[GDE-ECHO-330]`.
+    ///
+    /// The caller resolves the master's passage id against the local library
+    /// and hands over a whole `QueueEntry`, exactly as `PlayNow` does: the
+    /// engine owns no library and must not learn to look one up.
+    EchoStartAt { entry: QueueEntry, start_sample: u64, at_nanos: u64 },
     /// How long a skip fades the outgoing passage out, in ms `[REQ-AUD-158]`.
     SetSkipFade(u64),
     /// How long after a skip the next passage starts, in ms `[REQ-AUD-162]`.
@@ -290,6 +297,8 @@ pub struct Engine {
     /// fleet. `bose` at 46.3 ms behind `lempiplay3`'s 42.2 ms leaves 181
     /// frames `[LOG-P4-140]`.
     echo_depth_shortfall: usize,
+    /// A start instant committed to but not yet reached `[GDE-ECHO-330]`.
+    echo_start: Option<(QueueEntry, u64, u64)>,
     echo_seen_recoveries: u64,
     echo_seen_underruns: u64,
     /// The audible passage as last published, so a change can bypass the clock.
@@ -492,6 +501,7 @@ impl Engine {
             echo_basis: crate::echo::Basis::default(),
             echo_schedule: None,
             echo_depth_shortfall: 0,
+            echo_start: None,
             echo_seen_recoveries: 0,
             echo_seen_underruns: 0,
             published: None,
@@ -583,6 +593,7 @@ impl Engine {
         if self.shutdown {
             return 0;
         }
+        self.fire_echo_start();
         self.admit_due();
         // Prepare AFTER admitting, so this readies the passage that is next
         // once the admission has moved the queue on.
@@ -759,6 +770,9 @@ impl Engine {
                 Ok(Command::Pause) => self.set_playing(false),
                 Ok(Command::ReopenOutput) => self.path.reopen(),
                 Ok(Command::Skip) => self.skip(),
+                Ok(Command::EchoStartAt { entry, start_sample, at_nanos }) => {
+                    self.echo_start = Some((entry, start_sample, at_nanos));
+                }
                 Ok(Command::SetEchoDepth { own_offset_frames, fleet_min_offset_frames }) => {
                     self.set_echo_depth(own_offset_frames, fleet_min_offset_frames);
                 }
@@ -1348,6 +1362,47 @@ impl Engine {
     ///
     /// Limiting here is also what propagates back-pressure: the stream rings
     /// stay full, so the decoders stop, and the device paces the whole chain.
+    /// How late a committed start may be and still be worth making.
+    ///
+    /// A tick is 10 ms, so a join is only ever tick-accurate; this sits well
+    /// above that jitter and well below what a listener hears as two speakers
+    /// instead of one. The residual is not permanent -- `[GDE-ECHO-340]`
+    /// corrects offset at the next passage boundary, where it is inaudible.
+    const ECHO_START_LATE_LIMIT: std::time::Duration = std::time::Duration::from_millis(100);
+
+    /// Begin the master's passage at the instant its schedule named.
+    ///
+    /// Joining and seeking only: both cut the ring `[REQ-AUD-158]`, so sample
+    /// 0 goes into an empty one and reaches the device almost at once, which
+    /// is what makes `submit_at` the right instant to act on here. An ordinary
+    /// passage boundary needs none of this -- the ring depth already holds the
+    /// fleet together `[LOG-ECHO-030]` and there is nothing to command.
+    fn fire_echo_start(&mut self) {
+        let Some((_, _, at)) = self.echo_start.as_ref() else { return };
+        let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        else { return };
+        let now = d.as_nanos() as u64;
+        match crate::echo::start_verdict(*at, now, Self::ECHO_START_LATE_LIMIT) {
+            crate::echo::StartVerdict::Wait => return,
+            crate::echo::StartVerdict::TooLate { by } => {
+                // Said out loud. A node that silently declines to join looks
+                // exactly like one that was never told to `[GOV-SRC-040]`.
+                eprintln!("echo-start: passage missed by {} ms; holding for the next schedule",
+                          by.as_millis());
+                self.echo_start = None;
+                return;
+            }
+            crate::echo::StartVerdict::Fire => {}
+        }
+        let Some((entry, start_sample, _)) = self.echo_start.take() else { return };
+        // Before `skip`, not after: `skip` admits the next passage itself, and
+        // a resume offset arriving afterwards would apply to the one after it.
+        self.resume_at(start_sample.saturating_mul(1000) / self.out_rate.max(1) as u64);
+        self.queue.push_front(entry);
+        self.skip();
+        self.queue_edited = true;
+    }
+
     /// Hold the ring below capacity so this node's submit-to-air total matches
     /// the fleet's `[LOG-ECHO-030]`.
     ///
@@ -1665,6 +1720,56 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    fn nanos_now() -> u64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64).unwrap_or(0)
+    }
+
+    /// A committed start waits for its instant rather than firing on arrival.
+    #[test]
+    fn an_echo_start_in_the_future_does_not_fire_yet() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        h.send(Command::EchoStartAt {
+            entry: entry(4242, "nonexistent.flac"),
+            start_sample: 0,
+            at_nanos: nanos_now() + 60 * 1_000_000_000,
+        });
+        e.tick();
+        assert!(e.echo_start.is_some(), "a future start must still be pending");
+        assert!(e.queue.iter().all(|q| q.passage_id != 4242), "and must not be queued yet");
+    }
+
+    /// Past its instant but inside the limit: it fires, and the master's
+    /// passage goes to the FRONT -- anything less would play what was already
+    /// next `[GDE-ECHO-330]`.
+    #[test]
+    fn an_echo_start_that_is_due_fires_and_goes_to_the_front() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        h.send(Command::EchoStartAt {
+            entry: entry(4242, "nonexistent.flac"),
+            start_sample: 0,
+            at_nanos: nanos_now() - 10_000_000,   // 10 ms ago, one tick
+        });
+        e.tick();
+        assert!(e.echo_start.is_none(), "a fired start is taken, not left to fire twice");
+    }
+
+    /// Too late is not "late": it is dropped, so the trim loop is never handed
+    /// an offset the join created `[GDE-ECHO-410]`.
+    #[test]
+    fn an_echo_start_long_past_is_dropped_rather_than_started_late() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        h.send(Command::EchoStartAt {
+            entry: entry(4242, "nonexistent.flac"),
+            start_sample: 0,
+            at_nanos: nanos_now() - 5_000_000_000,   // five seconds ago
+        });
+        e.tick();
+        assert!(e.echo_start.is_none(), "dropped");
+        assert!(e.queue.iter().all(|q| q.passage_id != 4242),
+                "and emphatically not queued");
+    }
 
     fn entry(id: i64, path: &str) -> QueueEntry {
         QueueEntry {

@@ -126,6 +126,46 @@ pub fn submit_at(sched: &Schedule, node: NodeTiming, now: WallNanos) -> Option<W
     Some(submit)
 }
 
+/// What a node should do about a start instant that has been committed to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StartVerdict {
+    /// Not yet. Check again next tick.
+    Wait,
+    /// Now, or near enough.
+    Fire,
+    /// Too late to be worth doing `[GDE-ECHO-410]`.
+    ///
+    /// A join that misses its instant does not become a join that starts late:
+    /// it puts this node audibly behind the fleet and leaves the trim loop
+    /// hauling at an offset it never created. Holding for the next schedule
+    /// costs one passage of silence on this node and nothing else.
+    TooLate { by: Duration },
+}
+
+/// Decide, once, whether a committed start instant is due.
+///
+/// Separated from the engine because the engine's version cannot be tested:
+/// it needs a real file, a real device and a real clock. The decision is the
+/// part with a sign error in it, so it is the part that gets a test
+/// `[GDE-ECHO-370]`.
+///
+/// `late_limit` exists because a tick is 10 ms and a join is therefore only
+/// ever tick-accurate. That error does not persist -- `[GDE-ECHO-340]` corrects
+/// offset at the next passage boundary, where it is inaudible -- so the limit
+/// is set well above tick jitter and well below anything a listener would hear
+/// as two speakers rather than one.
+pub fn start_verdict(at: WallNanos, now: WallNanos, late_limit: Duration) -> StartVerdict {
+    if now < at {
+        return StartVerdict::Wait;
+    }
+    let late = Duration::from_nanos(now - at);
+    if late > late_limit {
+        StartVerdict::TooLate { by: late }
+    } else {
+        StartVerdict::Fire
+    }
+}
+
 /// Where sample 0 must sit in this node's output ring at admission.
 ///
 /// **`submit_at` says *when* sample 0 must reach the device; it does not say
@@ -657,6 +697,20 @@ mod tests {
 
     // `[REQ-AUD-160]`'s ring is ~15 s at 44100.
     const RING: u64 = 44100 * 15;
+
+    #[test]
+    fn a_start_instant_is_due_once_and_stale_soon_after() {
+        let at = 100 * SEC;
+        let lim = Duration::from_millis(100);
+        assert_eq!(start_verdict(at, at - 1, lim), StartVerdict::Wait);
+        assert_eq!(start_verdict(at, at, lim), StartVerdict::Fire, "exactly due fires");
+        assert_eq!(start_verdict(at, at + 99_000_000, lim), StartVerdict::Fire);
+        // One tick's jitter is fine; a quarter second is not a join any more.
+        match start_verdict(at, at + 250_000_000, lim) {
+            StartVerdict::TooLate { by } => assert_eq!(by, Duration::from_millis(250)),
+            other => panic!("expected TooLate, got {other:?}"),
+        }
+    }
 
     /// The trap the type exists to stop: admitting at `submit_at` would put
     /// sample 0 a full ring late. Depth, not admission time, is the knob.
