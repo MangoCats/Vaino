@@ -1130,7 +1130,18 @@ impl Engine {
         // Skip cuts the ring to the fade, so the incoming passage is audible
         // within a second rather than a ring's depth. Handing the display over
         // now keeps the button honest [REQ-AUD-164].
-        self.shown = self.live.first().map(|l| (l.entry.clone(), 0));
+        //
+        // At the passage's ORIGIN, not at zero. A skip that carries a resume
+        // position -- a restart, a seek, an echo node joining part-way
+        // `[GDE-ECHO-330]` -- opens the passage part-way in, and calling that
+        // position zero understates it by the whole offset for as long as the
+        // passage plays. Found on `lempiplay3` 2026-09-18: a mid-passage join
+        // a second in published an anchor a second behind where the node
+        // actually was, which read as a 1028 ms residual and sent the
+        // correction chasing an error that did not exist. It misreports the
+        // display and any resume point taken during that passage too, so this
+        // was never only an echo fault.
+        self.shown = self.live.first().map(|l| (l.entry.clone(), l.origin_ms));
 
         self.cut_ring_to_incoming(fade_samples, lead_samples);
     }
@@ -1552,7 +1563,15 @@ impl Engine {
         let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         else { return };
         let now = d.as_nanos() as u64;
-        match crate::echo::start_verdict(*at, now, Self::ECHO_START_LATE_LIMIT) {
+        // Fired EARLY by the skip's own lead, because this start goes through
+        // `skip` and a skipped-to passage is not audible until the lead has
+        // passed `[REQ-AUD-162]`. Without this every commanded start lands
+        // exactly `skip_lead_ms` late -- 500 ms on this fleet, which is most of
+        // the 1028 ms residual seen on `lempiplay3` the first time two nodes
+        // ran `[GDE-ECHO-330]`. The caller asked for a time the audio should
+        // SOUND; what the engine controls is when it starts arranging it.
+        let at = at.saturating_sub(self.skip_lead_ms * 1_000_000);
+        match crate::echo::start_verdict(at, now, Self::ECHO_START_LATE_LIMIT) {
             crate::echo::StartVerdict::Wait => return,
             crate::echo::StartVerdict::TooLate { by } => {
                 // Said out loud. A node that silently declines to join looks
@@ -2214,6 +2233,38 @@ mod tests {
     /// default features already bring a RIFF reader and a PCM codec, so silence
     /// can simply be written on the spot. Silence decodes to frames like
     /// anything else, and frames are what the clock counts.
+    /// A skip that opens a passage part-way in reports THAT position, not
+    /// zero.
+    ///
+    /// The anchor, the display and any resume point written during the passage
+    /// all read this figure `[REQ-AUD-164]`. Found in the field: an echo node
+    /// joining a second into a passage `[GDE-ECHO-330]` published an anchor a
+    /// second behind where it actually was, which the correction then read as
+    /// a residual and tried to chase.
+    #[test]
+    fn a_skip_into_a_resume_shows_the_origin_not_zero() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(30_000);
+        let mut ent = entry(77, wav.to_str().unwrap());
+        ent.end_ms = 30_000;
+        e.enqueue(ent.clone());
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |e| e.shown.is_some()), "it should be playing");
+
+        // Now join the same passage ten seconds in, the way a mid-passage
+        // join does: a resume position, then a skip onto it.
+        e.resume_at(10_000);
+        h.send(Command::PlayNow(ent));
+        // Drained, not ticked. `advance_shown` runs later in a tick and
+        // recomputes this from the ring, so ticking first would hide whatever
+        // `skip` put here -- which is the thing under test.
+        e.drain_commands();
+        let (_, shown) = e.shown.as_ref().expect("still playing");
+        assert!(*shown >= 9_000, "shown {shown} ms, but the passage opened 10 s in");
+        let _ = std::fs::remove_file(&wav);
+    }
+
     fn wav_of(ms: u64) -> std::path::PathBuf {
         const RATE: u32 = 44_100;
         const CH: u16 = 2;

@@ -155,6 +155,9 @@ struct FollowState {
     /// The announced queue last adopted, so an unchanged one costs no
     /// database work. The snapshot arrives twice a second.
     queue: Vec<i64>,
+    /// An offset too large for a transition to absorb, waiting for a
+    /// scheduled start to place the first sample afresh `[GDE-ECHO-340]`.
+    want_rejoin: bool,
 }
 
 impl FollowState {
@@ -166,6 +169,7 @@ impl FollowState {
             rate: crate::echo::RateEstimate::new(
                 RATE_WINDOW, RATE_MIN_SPAN, RATE_MIN_SAMPLES),
             queue: Vec::new(),
+            want_rejoin: false,
         }
     }
 }
@@ -359,6 +363,10 @@ async fn act(
                 // hear and not be able to explain `[GOV-SRC-040]`.
                 crate::echo::OffsetFix::Rejoin => {
                     fs.corrected = Some(m.passage_id);
+                    // The escape hatch for the suppression below: without this
+                    // a node too far out would flow into every transition,
+                    // never take a scheduled start, and stay out indefinitely.
+                    fs.want_rejoin = true;
                     // A rejoin places the first sample afresh, which steps the
                     // residual just as a nudge does.
                     fs.rate.clear();
@@ -395,11 +403,13 @@ async fn act(
             // boundary -- heard as a stutter at the start of each track. The
             // offset it would have corrected is what the overlap is for
             // `[GDE-ECHO-340]`.
-            if next_up(handle) == Some(passage_id) && start_sample == 0 {
+            if next_up(handle) == Some(passage_id) && start_sample == 0 && !fs.want_rejoin {
                 note(&mut fs.note, format!(
                     "echo-follow: passage {passage_id} is already next here; flowing into it"));
                 return;
             }
+            fs.want_rejoin = false;
+            fs.rate.clear();
             start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;
         }
     }

@@ -115,6 +115,27 @@ passage**. It then flows into each transition instead of skipping into it, and
 the alignment a start would have imposed is left to the overlap
 `[GDE-ECHO-340]` -- which is inaudible where the skip was not.
 
+**`[GDE-ECHO-337]` A commanded start lands late by the skip's own lead, and
+must be fired early by it.** `EchoStartAt` goes through `skip`, and a
+skipped-to passage is not audible until `skip_lead_ms` has passed
+`[REQ-AUD-162]` -- 500 ms on this fleet. The caller asks for a time the audio
+should *sound*; what the engine controls is when it begins arranging it, and
+nothing was converting between the two. Every commanded start therefore landed
+exactly one lead late.
+
+*This is a partial explanation, not a complete one.* The first two-node run
+showed a **+1028 ms** residual after a mid-passage join, and the lead accounts
+for 500 of it. The remainder is not yet understood and is recorded here
+unexplained rather than rounded off.
+
+A related fault was found by testing rather than by listening: `skip` recorded
+the incoming passage's audible position as **zero** even when it had been
+opened part-way in, so a node joining ten seconds into a passage published an
+anchor ten seconds behind itself. `advance_shown` corrects it within a tick, so
+the window is brief and it is *not* established as the cause of the 1028 ms --
+but it misreports the display and any resume point taken in that window, and it
+was never only an echo fault.
+
 **`[GDE-ECHO-335]` A queue edit outside the ring's window has no synchrony
 consequence at all.** Reordering, inserting or removing anything that is neither
 playing now nor already scheduled within the ring's depth arrives in time to be
