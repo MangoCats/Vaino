@@ -79,9 +79,21 @@ synchrony *from a stated point onward*: the master announces a target of the
 form *passage P, offset 3000 ms, at wall time T*, picks the soonest `T` it can
 itself meet, and fills toward it; every follower does the same against the same
 target. Nothing coordinates the journey, only the destination. This is why the
-schedule must carry a **start sample** rather than implying sample 0 — a seek is
+schedule carries a **start sample** rather than implying sample 0 — a seek is
 the same message with a non-zero offset and a nearer `T`, not a new message
 type.
+
+*Built 2026-09-18.* `Schedule.start_sample` rides the wire, the master fills it
+from the resume offset it was already about to use, and a follower reports it.
+Two consequences were not obvious until it was written. The follower's
+act-once key had to move from `passage_id` to the **whole schedule**, because a
+seek re-announces the passage already playing and a key on the id alone
+discards exactly the message a seek exists to deliver — which is also the
+natural reading of `[GDE-ECHO-320]`, where every message is absolute and any
+difference is a new instruction. And the master must take its resume offset
+*before* building the schedule: announcing sample 0 for a passage that begins
+three minutes in tells every follower to play the wrong audio at the right
+time.
 
 **`[GDE-ECHO-335]` A queue edit outside the ring's window has no synchrony
 consequence at all.** Reordering, inserting or removing anything that is neither

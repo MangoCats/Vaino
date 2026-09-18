@@ -1165,26 +1165,31 @@ impl Engine {
         // makes an arbitrary presentation offset compensable.
         // A passage boundary reached cleanly is the only way back in.
         self.echo_basis.establish();
+        // Taken before the schedule is built, not after. A resume starts the
+        // passage part-way in, and a schedule announcing sample 0 for a
+        // passage that begins at 3 minutes tells every follower to play the
+        // wrong audio at the right time `[GDE-ECHO-325]`.
+        let origin = self.pending_resume.take();
         if let Some(r) = self.path.ring.as_ref() {
             if r.clock.timestamps() == crate::output::Timestamps::Hardware {
                 if let Ok(d) = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                 {
+                    let rate = r.sample_rate();
                     let s = crate::echo::schedule_for_admission(
                         entry.passage_id,
+                        origin.unwrap_or(0).saturating_mul(rate as u64) / 1000,
                         self.out_buffered_frames() as u64,
                         r.clock.delay_frames(),
-                        r.sample_rate(),
+                        rate,
                         d.as_nanos() as u64,
                     );
-                    eprintln!("echo-schedule: passage={} sound_at={} rate={}",
-                              s.passage_id, s.sound_at, s.rate);
+                    eprintln!("echo-schedule: passage={} start_sample={} sound_at={} rate={}",
+                              s.passage_id, s.start_sample, s.sound_at, s.rate);
                     self.echo_schedule = Some(s);
                 }
             }
         }
-        let origin = self.pending_resume.take();
-
         // The prepared passage is the queue head already opened at its start,
         // so it serves unless a resume offset overrides where to begin.
         if origin.is_none() {

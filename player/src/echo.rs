@@ -57,7 +57,24 @@ impl NodeTiming {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Schedule {
     pub passage_id: i64,
-    /// When sample 0 reaches the **air**, not the device.
+    /// The sample within the passage that reaches the air at `sound_at`.
+    ///
+    /// Zero for an ordinary passage-to-passage transition, which every node
+    /// sees coming and holds sync straight through `[GDE-ECHO-325]`. Non-zero
+    /// is a **seek**: the master announces *this passage, this far in, at this
+    /// instant* and each node fills toward that target independently. Carrying
+    /// the sample here rather than inventing a second message is what keeps a
+    /// seek from being a special case -- it is the same schedule with a
+    /// different offset and a nearer `sound_at`.
+    ///
+    /// Defaulted on the wire, and this is the one place where absent really
+    /// does mean zero `[GOV-SRC-040]`: a master too old to publish the field
+    /// is a master that could only ever announce passage starts, so every
+    /// schedule it ever sent began at sample 0. Reading one as such is not a
+    /// guess, it is what the sender meant.
+    #[serde(default)]
+    pub start_sample: u64,
+    /// When `start_sample` reaches the **air**, not the device.
     pub sound_at: WallNanos,
     pub rate: u32,
 }
@@ -247,13 +264,14 @@ impl AirPosition {
 /// the announcement goes out long before anybody could hear it.
 pub fn schedule_for_admission(
     passage_id: i64,
+    start_sample: u64,
     ring_frames: u64,
     device_delay_frames: u64,
     rate: u32,
     now: WallNanos,
 ) -> Schedule {
     let ahead_ns = (ring_frames + device_delay_frames) * 1_000_000_000 / rate.max(1) as u64;
-    Schedule { passage_id, sound_at: now + ahead_ns, rate }
+    Schedule { passage_id, start_sample, sound_at: now + ahead_ns, rate }
 }
 
 /// What a master publishes for echo nodes, on the snapshot's own cadence.
@@ -380,7 +398,7 @@ pub enum Follow {
     /// Nothing new to act on -- no schedule, or one already acted on.
     Idle,
     /// Begin this passage by submitting sample 0 at this instant.
-    StartAt { passage_id: i64, at: WallNanos },
+    StartAt { passage_id: i64, start_sample: u64, at: WallNanos },
     /// The schedule cannot be honoured: submission was already due.
     ///
     /// Distinct from `Idle` because it is not nothing happening. A node with a
@@ -410,7 +428,15 @@ pub struct Follower {
     pub basis: Basis,
     pub deadband: Duration,
     pub min_trim_interval: Duration,
-    acted: Option<i64>,
+    /// The last schedule acted on, whole.
+    ///
+    /// Keyed on the entire message rather than its `passage_id`, because a
+    /// seek re-announces the passage already playing `[GDE-ECHO-325]` -- and a
+    /// dedup on the id alone would discard exactly the message the seek exists
+    /// to deliver. Comparing the whole thing is also the natural reading of
+    /// `[GDE-ECHO-320]`: every message is absolute, so two identical ones are
+    /// the same instruction and any difference is a new one.
+    acted: Option<Schedule>,
     last_trim: Option<WallNanos>,
 }
 
@@ -430,12 +456,13 @@ impl Follower {
             return Follow::Hold(why);
         }
         let Some(sched) = st.schedule else { return Follow::Idle };
-        if self.acted == Some(sched.passage_id) {
+        if self.acted == Some(sched) {
             return Follow::Idle;
         }
-        self.acted = Some(sched.passage_id);
+        self.acted = Some(sched);
         match submit_at(&sched, self.timing, now) {
-            Some(at) => Follow::StartAt { passage_id: sched.passage_id, at },
+            Some(at) => Follow::StartAt {
+                passage_id: sched.passage_id, start_sample: sched.start_sample, at },
             None => Follow::Missed { passage_id: sched.passage_id },
         }
     }
@@ -580,7 +607,7 @@ mod tests {
     fn the_node_with_the_larger_offset_submits_earlier() {
         // The whole point of `[GDE-ECHO-410]`. A backward-only design would
         // have had vainopi submitting after bose and never catching up.
-        let sched = Schedule { passage_id: 7, sound_at: 100 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 7, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
         let now = 80 * SEC;
         let b = submit_at(&sched, BOSE, now).unwrap();
         let v = submit_at(&sched, VAINOPI, now).unwrap();
@@ -593,7 +620,7 @@ mod tests {
     #[test]
     fn the_master_applies_the_same_arithmetic_to_itself() {
         // Symmetry: no node is the reference `[GDE-ECHO-410]`.
-        let sched = Schedule { passage_id: 1, sound_at: 50 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 1, start_sample: 0, sound_at: 50 * SEC, rate: 44100 };
         let submit = submit_at(&sched, BOSE, 0).unwrap();
         assert_eq!(submit, 50 * SEC - BOSE.offset().as_nanos() as u64);
     }
@@ -602,7 +629,7 @@ mod tests {
     fn a_schedule_already_past_is_refused_not_rounded_forward() {
         // 100 ms of lead against a 355 ms offset: submission was due 255 ms
         // ago. Returning a past instant would read like an instruction.
-        let sched = Schedule { passage_id: 2, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
+        let sched = Schedule { passage_id: 2, start_sample: 0, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
         assert!(submit_at(&sched, VAINOPI, 10 * SEC).is_none());
         // The same schedule is comfortably reachable by the low-offset node.
         assert!(submit_at(&sched, BOSE, 10 * SEC).is_some());
@@ -612,7 +639,7 @@ mod tests {
     fn fifteen_seconds_of_lead_clears_every_measured_offset() {
         // `[GDE-ECHO-310]`'s claim, checked rather than asserted.
         let now = 1000 * SEC;
-        let sched = Schedule { passage_id: 3, sound_at: now + 15 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 3, start_sample: 0, sound_at: now + 15 * SEC, rate: 44100 };
         for node in [BOSE, VAINOPI] {
             assert!(submit_at(&sched, node, now).is_some());
         }
@@ -637,7 +664,7 @@ mod tests {
     fn placement_is_a_depth_not_an_admission_time() {
         let now = 100 * SEC;
         // A master with `bose`'s pipeline: 15.0 s of ring plus 46 ms of device.
-        let s = schedule_for_admission(7, RING, BOSE.presentation_offset_frames, 44100, now);
+        let s = schedule_for_admission(7, 0, RING, BOSE.presentation_offset_frames, 44100, now);
         // The follower is the same node shape, so it runs a full ring.
         assert_eq!(placement(&s, BOSE, RING, now), Placement::Depth(RING));
         // And `submit_at` is a *device* instant, one device delay before the
@@ -650,7 +677,7 @@ mod tests {
     #[test]
     fn a_slower_device_runs_a_shallower_ring() {
         let now = 100 * SEC;
-        let s = schedule_for_admission(7, RING, BOSE.presentation_offset_frames, 44100, now);
+        let s = schedule_for_admission(7, 0, RING, BOSE.presentation_offset_frames, 44100, now);
         // vainopi's 355 ms of A2DP comes out of its ring, exactly.
         let want = RING + BOSE.presentation_offset_frames - VAINOPI.presentation_offset_frames;
         assert_eq!(placement(&s, VAINOPI, RING, now), Placement::Depth(want));
@@ -665,7 +692,7 @@ mod tests {
     #[test]
     fn a_total_announced_off_a_full_ring_can_be_unreachable() {
         let now = 100 * SEC;
-        let s = schedule_for_admission(7, RING, VAINOPI.presentation_offset_frames, 44100, now);
+        let s = schedule_for_admission(7, 0, RING, VAINOPI.presentation_offset_frames, 44100, now);
         match placement(&s, BOSE, RING, now) {
             Placement::TooShallow { short_by_frames } => {
                 assert_eq!(short_by_frames,
@@ -688,7 +715,7 @@ mod tests {
         let vainopi_depth = RING + BOSE.presentation_offset_frames
             - VAINOPI.presentation_offset_frames;
         let s = schedule_for_admission(
-            7, vainopi_depth, VAINOPI.presentation_offset_frames, 44100, now);
+            7, 0, vainopi_depth, VAINOPI.presentation_offset_frames, 44100, now);
         assert_eq!(placement(&s, BOSE, RING, now), Placement::Depth(RING),
             "the smallest-delay node runs the fullest ring, whoever announced");
         assert_eq!(placement(&s, VAINOPI, RING, now), Placement::Depth(vainopi_depth));
@@ -700,7 +727,7 @@ mod tests {
     #[test]
     fn lateness_spends_depth_and_there_is_plenty() {
         let emitted = 100 * SEC;
-        let s = schedule_for_admission(7, RING, BOSE.presentation_offset_frames, 44100, emitted);
+        let s = schedule_for_admission(7, 0, RING, BOSE.presentation_offset_frames, 44100, emitted);
         // Five seconds late: still fine, just a shallower ring.
         assert_eq!(placement(&s, BOSE, RING, emitted + 5 * SEC), Placement::Depth(RING - 44100 * 5));
         // Past the sound itself: named, not clamped.
@@ -735,7 +762,7 @@ mod tests {
     #[test]
     fn an_admission_is_announced_about_a_ring_ahead_of_being_heard() {
         let now = 500 * SEC;
-        let s = schedule_for_admission(5, RING, BOSE.presentation_offset_frames, 44100, now);
+        let s = schedule_for_admission(5, 0, RING, BOSE.presentation_offset_frames, 44100, now);
         let lead_ms = (s.sound_at - now) / 1_000_000;
         assert!((15_000..=15_100).contains(&lead_ms), "lead was {lead_ms} ms");
         // And that lead is what makes every node's offset compensable.
@@ -756,7 +783,7 @@ mod tests {
     #[test]
     fn two_nodes_agreeing_on_the_air_have_no_residual() {
         // The property echo is trying to hold: different offsets, same sound.
-        let sched = Schedule { passage_id: 8, sound_at: 900 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 8, start_sample: 0, sound_at: 900 * SEC, rate: 44100 };
         let now = 880 * SEC;
         let b = submit_at(&sched, BOSE, now).unwrap() + BOSE.offset().as_nanos() as u64;
         let v = submit_at(&sched, VAINOPI, now).unwrap() + VAINOPI.offset().as_nanos() as u64;
@@ -772,11 +799,47 @@ mod tests {
         EchoState { anchor, schedule: sched, voided_by: None }
     }
 
+    /// The case the dedup key was changed for `[GDE-ECHO-325]`. A seek
+    /// re-announces the passage already playing, so a follower keyed on
+    /// `passage_id` alone would call it Idle and never move -- swallowing
+    /// precisely the message the seek exists to deliver.
+    #[test]
+    fn a_seek_re_announces_the_playing_passage_and_is_acted_on() {
+        let mut f = follower(BOSE);
+        let playing = Schedule { passage_id: 4, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
+        assert!(matches!(f.on_state(&state_with(Some(playing), None), 80 * SEC),
+                         Follow::StartAt { passage_id: 4, start_sample: 0, .. }));
+        assert_eq!(f.on_state(&state_with(Some(playing), None), 80 * SEC), Follow::Idle);
+
+        // Same passage, three minutes in, sounding much sooner.
+        let seek = Schedule { passage_id: 4, start_sample: 180 * 44100,
+                              sound_at: 81 * SEC, rate: 44100 };
+        match f.on_state(&state_with(Some(seek), None), 80 * SEC) {
+            Follow::StartAt { passage_id: 4, start_sample, .. } => {
+                assert_eq!(start_sample, 180 * 44100, "the offset must survive the wire");
+            }
+            other => panic!("a seek was not acted on: {other:?}"),
+        }
+        // And is itself idempotent afterwards.
+        assert_eq!(f.on_state(&state_with(Some(seek), None), 80 * SEC), Follow::Idle);
+    }
+
+    /// Two seeks to the same point at different times are different
+    /// instructions, and the second must not be mistaken for a repeat.
+    #[test]
+    fn the_same_offset_announced_again_later_is_a_new_instruction() {
+        let mut f = follower(BOSE);
+        let a = Schedule { passage_id: 9, start_sample: 44100, sound_at: 90 * SEC, rate: 44100 };
+        let b = Schedule { passage_id: 9, start_sample: 44100, sound_at: 95 * SEC, rate: 44100 };
+        assert!(matches!(f.on_state(&state_with(Some(a), None), 80 * SEC), Follow::StartAt { .. }));
+        assert!(matches!(f.on_state(&state_with(Some(b), None), 80 * SEC), Follow::StartAt { .. }));
+    }
+
     #[test]
     fn a_repeated_schedule_is_acted_on_once() {
         // `[GDE-ECHO-320]` repeats every message rather than sequencing them,
         // so the follower has to be the thing that makes it idempotent.
-        let sched = Schedule { passage_id: 4, sound_at: 100 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 4, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
         let st = state_with(Some(sched), None);
         let mut f = follower(BOSE);
         assert!(matches!(f.on_state(&st, 80 * SEC), Follow::StartAt { passage_id: 4, .. }));
@@ -788,7 +851,7 @@ mod tests {
     #[test]
     fn a_high_offset_node_can_miss_what_a_low_offset_node_makes() {
         // 100 ms of lead: bose can still submit, vainopi needed to 255 ms ago.
-        let sched = Schedule { passage_id: 5, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
+        let sched = Schedule { passage_id: 5, start_sample: 0, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
         let st = state_with(Some(sched), None);
         assert!(matches!(follower(BOSE).on_state(&st, 10 * SEC),
                          Follow::StartAt { .. }));
@@ -803,7 +866,7 @@ mod tests {
         // boundary -- going independent here would desynchronise on purpose.
         let st = EchoState {
             anchor: None,
-            schedule: Some(Schedule { passage_id: 6, sound_at: 100 * SEC, rate: 44100 }),
+            schedule: Some(Schedule { passage_id: 6, start_sample: 0, sound_at: 100 * SEC, rate: 44100 }),
             voided_by: Some(Voided::Underrun),
         };
         let mut f = follower(BOSE);

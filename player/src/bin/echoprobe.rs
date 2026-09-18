@@ -131,8 +131,17 @@ fn report(f: &mut Follower, st: &EchoState, seen: u64, last: &mut String,
             *last_sched = Some(sched.passage_id);
             let lead_ms = (sched.sound_at as i64 - now as i64) as f64 / 1e6;
             let offset_ms = f.timing.offset().as_millis() as f64;
+            // A non-zero start sample is a seek `[GDE-ECHO-325]`, not a
+            // passage boundary, and the two are worth telling apart at a
+            // glance: one holds sync straight through, the other buys it back.
+            let from = if sched.start_sample == 0 {
+                "from the start".to_string()
+            } else {
+                format!("SEEK to {:.1}s in",
+                        sched.start_sample as f64 / sched.rate.max(1) as f64)
+            };
             println!(
-                "[{seen:>6}] SCHEDULE passage {} -- sound in {lead_ms:.0} ms; this node needs {offset_ms:.0} ms for the device, leaving {:.0} ms for its own ring",
+                "[{seen:>6}] SCHEDULE passage {} {from} -- sound in {lead_ms:.0} ms; this node needs {offset_ms:.0} ms for the device, leaving {:.0} ms for its own ring",
                 sched.passage_id, lead_ms - offset_ms
             );
         }
@@ -140,9 +149,9 @@ fn report(f: &mut Follower, st: &EchoState, seen: u64, last: &mut String,
 
     let line = match (&follow, st.anchor) {
         (Follow::Hold(why), _) => format!("HOLD -- master reports {why:?}"),
-        (Follow::StartAt { passage_id, at }, _) => {
+        (Follow::StartAt { passage_id, start_sample, at }, _) => {
             let lead = (*at as i64 - now as i64) as f64 / 1e9;
-            format!("START passage {passage_id} in {lead:.3}s")
+            format!("START passage {passage_id} at sample {start_sample} in {lead:.3}s")
         }
         (Follow::Missed { passage_id }, _) => {
             format!("MISSED passage {passage_id} -- submission was already due")
