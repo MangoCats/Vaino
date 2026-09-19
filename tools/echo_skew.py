@@ -52,16 +52,18 @@ out in the other direction. A clock error does not stay a clock error; it
 becomes a playback error.
 
 `[GDE-ECHO-160]` calls `WallNanos` "the chrony-disciplined wall clock", and
-the whole design rests on that. It is worth confirming per node rather than
-assuming: measured 2026-09-18, `bose` ran chrony against a LAN reference at
-55 us, and `lp3-wifi` ran systemd-timesyncd against a public pool server over
-the internet -- 20 ms standing offset, 22 ms jitter, a poll interval up to 34
-minutes, and free crystal drift between polls. Their clocks differed by about
-100 ms, which was most of the residual the follower was busy correcting.
+the whole design rests on that. Confirm it per node rather than assuming --
+`--clocks` does exactly that, and it is cheap. Measured 2026-09-18, `bose`
+ran chrony against a LAN reference at 55 us while `lp3-wifi` ran
+systemd-timesyncd against a public pool server over the internet: 20 ms
+standing offset, 22 ms jitter, a poll interval up to 34 minutes, and free
+crystal drift between polls. The skew this tool measured between them was
+688 ms. Putting `lp3-wifi` on chrony against the same LAN reference took it
+to a median of 12 ms without touching a line of player code.
 
-`clocks_agree` will not catch this: its tolerance is thirty seconds, sized for
-a node booted without an RTC `[GDE-ECHO-365]`, not for the tens of
-milliseconds that matter to a listener.
+`clocks_agree` will not catch a fault like that: its tolerance is thirty
+seconds, sized for a node booted without an RTC `[GDE-ECHO-365]`, not for the
+tens of milliseconds that matter to a listener.
 
 **The only instrument that can separate the two is a microphone.** Record both
 speakers on one device and cross-correlate; that answers "what does a person
@@ -75,6 +77,7 @@ import argparse
 import asyncio
 import json
 import statistics
+import subprocess
 import sys
 import time
 
@@ -82,6 +85,75 @@ try:
     import websockets
 except ImportError:  # pragma: no cover - environment, not logic
     sys.exit("needs `pip install websockets`")
+
+
+def clock_offset(host: str, user: str) -> tuple[str, float] | None:
+    """What this node's own chrony says its clock error is, in ms.
+
+    **Not a round trip.** An ssh-timed comparison has to correct for the path,
+    and on a wifi node with 600 ms of RTT the asymmetry swamps the thing being
+    measured -- an earlier attempt from a Windows box reported 90-105 ms of
+    inter-node error, consistently, and consistency there was stable
+    asymmetry rather than accuracy. The reference machine's own clock moved
+    52 ms between two sessions while the node it was measuring sat at 55 us.
+
+    Every node is disciplined to one LAN server `[GDE-ECHO-300]`, so each
+    node's offset is measured against the *same* reference and the difference
+    between two of them is the inter-node error, common-mode cancelled, with
+    no network timing in the path. It is still a daemon's self-report -- a
+    claim, not a measurement, exactly as `[GDE-ECHO-300]` says -- but it is a
+    claim from the thing actually steering the clock, at microsecond
+    resolution, and the skew figures beside it are the independent check.
+    """
+    bare = host.split(":")[0]
+    try:
+        out = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+             f"{user}@{bare}", "chronyc tracking"],
+            capture_output=True, text=True, timeout=25).stdout
+    except Exception:  # noqa: BLE001 -- an unreachable node is a fact, not a crash
+        return None
+    ref = off = None
+    for line in out.splitlines():
+        if line.startswith("Reference ID"):
+            ref = line.split(":", 1)[1].strip()
+        elif line.startswith("System time"):
+            body = line.split(":", 1)[1].strip()
+            try:
+                secs = float(body.split()[0])
+            except (ValueError, IndexError):
+                continue
+            off = -secs * 1000.0 if "slow" in body else secs * 1000.0
+    return (ref or "unknown", off) if off is not None else None
+
+
+def _ms(v: float) -> str:
+    """Microseconds below a millisecond, milliseconds above.
+
+    A chrony-disciplined node sits in the tens of microseconds and a badly
+    disciplined one in the tens of milliseconds; one fixed format cannot show
+    both without either losing the good case to rounding or drowning the bad
+    one in zeroes.
+    """
+    return f"{v * 1000:+.1f} us" if abs(v) < 1.0 else f"{v:+.3f} ms"
+
+
+def report_clocks(a: str, b: str, user: str) -> None:
+    """Print both nodes' clock discipline, and the gap between them."""
+    ca, cb = clock_offset(a, user), clock_offset(b, user)
+    for host, c in ((a, ca), (b, cb)):
+        if c is None:
+            print(f"  {host}: no chrony answer -- is it disciplined at all? "
+                  f"[GDE-ECHO-300]")
+        else:
+            print(f"  {host}: chrony ref {c[0]}, own error {_ms(c[1])}")
+    if ca and cb:
+        if ca[0] != cb[0]:
+            print(f"  ** different references ({ca[0]} vs {cb[0]}) -- their errors "
+                  f"do NOT cancel [GDE-ECHO-300]")
+        print(f"  clock gap between them: {_ms(cb[1] - ca[1])} "
+              f"(subtract from the skew below to get audio error)")
+    print()
 
 
 def url_for(host: str) -> str:
@@ -205,7 +277,12 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=120.0)
     ap.add_argument("--every", type=float, default=2.0)
     ap.add_argument("--quiet", action="store_true", help="the distribution only")
+    ap.add_argument("--clocks", action="store_true",
+                    help="ask each node's chrony what its own clock error is first")
+    ap.add_argument("--ssh-user", default="pi", help="for --clocks (default: pi)")
     args = ap.parse_args()
+    if args.clocks:
+        report_clocks(args.first, args.second, args.ssh_user)
     return asyncio.run(run(Node(args.first), Node(args.second),
                            args.seconds, args.every, args.quiet))
 

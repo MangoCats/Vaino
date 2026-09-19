@@ -96,9 +96,17 @@ time and leaves the crystal to drift in between — at the ~14 ppm this fleet
 shows `[LOG-P4-130]`, a 34-minute gap is about 28 ms of free drift on top of
 the standing offset.
 
-Compared directly against one reference, four runs, **`lp3-wifi`'s clock read
-90–105 ms ahead of `bose`'s**. Against a residual the loop was correcting of
-179 ms, most of it was the clock.
+*First attempt at quantifying the gap, and why it is not quoted here.* An
+ssh round trip from a Windows box, midpoint-corrected, read 90–105 ms across
+four runs — and that consistency was stable path asymmetry, not accuracy. The
+same method later read 186 ms on a node chrony said was within 113 us, and
+the reference machine's own clock moved 52 ms between two sessions while
+`bose` sat at 55 us. **Retracted.** The right measurement needs no network
+timing at all: every node is disciplined to one LAN server, so each node's
+own `chronyc tracking` offset is against the *same* reference and the
+difference between two of them is the inter-node error, common-mode
+cancelled. `tools/echo_skew.py --clocks` reports exactly that, beside the
+skew, so a reading is never ambiguous about which of the two it is.
 
 **And that is not a harmless measurement error.** The follower reads the same
 disagreement, believes it is a position error, and moves *real audio* to
@@ -118,16 +126,17 @@ merely being in the right century.
 
 In order of how much of a listener's experience it returns:
 
-1. **Give `lp3-wifi` chrony, against the same LAN reference `bose` uses.**
-   The design already assumes it; the node simply never got it. Note that
-   `lp3-wifi` has an overlay root, so a package install has to go through
-   `sudo overlayroot-chroot` or it evaporates at the next reboot
-   `[IMPL-BOS-185]`.
-2. **Check the assumption rather than making it.** A node could publish its
-   own clock discipline — chrony's RMS offset, or simply whether chrony is
-   the daemon — and a follower could say so in its status line instead of
-   silently correcting against a clock nobody has checked. The pattern is
-   `[GDE-ECHO-378]`'s: the loop declines to mention what it is standing on.
+1. **Done 2026-09-18: `lp3-wifi` is on chrony**, against the same
+   `smartboardpc.lan` the other three use, same `vaino-fleet.sources`, same
+   md5. It took the measured skew from **688 ms to a median of 12 ms** with
+   no change to player code — which is the whole finding in one number. The
+   install went through `sudo overlayroot-chroot` as `[IMPL-BOS-185]`
+   requires; see §5 for what that turned out to involve.
+2. **Done: the preflight now says so at every boot** `[PI-PRE-052]`. It
+   names the disciplining daemon and its reference, warns specifically that
+   `systemd-timesyncd` is the wrong tool with the reason, and warns again if
+   nothing is disciplining the clock at all. This is the check
+   `[GDE-ECHO-300]` asked for in its own second sentence and never got.
 3. **Let the offset and rate loops coexist.** Clearing the rate window on
    every offset correction means the slope is never learned on exactly the
    nodes that need it most.
@@ -139,3 +148,46 @@ microphone.** Everything here — this tool, the follower's residual, the
 anchors both rest on — is downstream of two clocks agreeing. Record both
 speakers on one device and cross-correlate, and the question "what does a
 person hear" stops depending on what either node believes the time is.
+
+---
+
+## 5. Installing a package on an overlay root, as it actually goes
+
+**`[GDE-ARC-039]` `[IMPL-BOS-180]`'s one-liner is right and is not
+sufficient.** `sudo overlayroot-chroot apt-get install -y <pkg>` is the
+correct tool — the unlock hatch is what took `bose` off the network
+`[IMPL-BOS-175]`, doing this same chrony install — but three things happened
+on the way that the worked example does not mention, all of which would read
+as success.
+
+**The wrapper swallows the inner exit status.** The first attempt failed with
+`Temporary failure resolving 'deb.debian.org'` and `overlayroot-chroot`
+returned **0**. A caller checking `$?`, or a script wrapping that one-liner,
+is told the package is installed. This is the same fault as
+`[GDE-ARC-035]` and `[GDE-ECHO-386]`, one layer further out: write the inner
+status down inside the chroot (`... ; echo EXIT=$? >> /tmp/log`) and read it
+from `/media/root-ro/tmp/` afterwards, because the wrapper will not carry it.
+
+**DNS does not work inside the chroot.** The durable `/etc/resolv.conf` has
+no nameserver — the working one is written by DHCP into the *overlay* layer
+at boot, which the chroot cannot see. Lend it one for the install and put the
+original back; leaving the durable copy empty is correct, since DHCP rewrites
+the live one every boot.
+
+**"Write twice" applies to the package, not only to config.** After a clean
+chroot install the durable layer had `chronyd`, `/etc/chrony/chrony.conf` and
+the service symlinks — and the live system had none of it, because overlayfs
+does not surface lower-layer changes made underneath a mounted overlay. Worse,
+a live `apt-get install` then does **nothing**: the dpkg *state* does come
+through from the lower layer, so dpkg believes the package is configured and
+unpacks no conffiles. chrony started and died on
+`Could not open /etc/chrony/chrony.conf`. The fix is to copy the conffiles
+from `/media/root-ro/etc/...` into the live tree by hand, then start the
+service. Verify the durable copy for the reboot and the live one for now —
+both, separately, which is `[GDE-DEP-070]` said twice.
+
+A last detail worth not rediscovering: the chroot leaves `/media/root-ro`
+mounted read-write and a `remount,ro` returns `EBUSY`, because the live
+overlay holds that filesystem as its own lowerdir. `install-player.sh`
+already knows this and says so rather than implying otherwise; it returns to
+read-only at the next reboot.

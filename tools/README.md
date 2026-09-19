@@ -100,6 +100,6 @@ The Gaia/Stage B pipeline — reproducing AcousticBrainz's own extraction chain 
 | script | what |
 | :--- | :--- |
 | `check_docs.py` | Documentation governance checks `[GOV-DOC-010..040]`. |
-| `echo_skew.py` | How far apart two echo nodes really are, sampled continuously from each node's own anchor `[GDE-ARC-037]`. Replaces `echo_skew.sh` for anything longer than a spot check; read its caveat about clocks first `[GDE-ARC-038]`. |
+| `echo_skew.py` | How far apart two echo nodes really are, sampled continuously from each node's own anchor `[GDE-ARC-037]`. Replaces `echo_skew.sh` for anything longer than a spot check. `--clocks` asks each node's own chrony what its clock error is, so a reading is never ambiguous about clock-versus-audio `[GDE-ARC-038]`. |
 | `load_occasions.py` | Load MuLibPlay's four seasonal curves as data `[SPEC-DIR-134]`. |
 | `secret.py` | Where credentials come from, in one place. |

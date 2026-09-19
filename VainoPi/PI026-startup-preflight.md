@@ -76,6 +76,26 @@ over-reports a harmless file.
 
 ## 4. What it reports, and how it decides what to report
 
+**`[PI-PRE-052]` The clock, and the one place `[PI-PRE-050]` does not
+apply.** Added 2026-09-18. `[GDE-ECHO-300]` asked for this in its own second
+sentence — "extend the startup preflight with a check that it is running and
+converged" — and it was never written, so nothing noticed that `lempiplay3`
+had been left on `systemd-timesyncd` when the other three nodes moved to
+chrony. A listener found it eight days later, hearing the follower wander;
+the measured skew was 688 ms and went to a median of 12 ms on chrony alone
+`[GDE-ARC-038]`.
+
+It names the disciplining daemon and its reference, and warns with the reason
+when that daemon is `systemd-timesyncd` — an SNTP client that corrects the
+*time* without disciplining the *frequency*, which is the half echo needs —
+or when nothing is disciplining the clock at all.
+
+Reported **unconditionally**, which is the exception to asking the machine:
+following is a setting a listener can turn on at any moment
+`[SPEC-ECHO-010]`, so every node is a potential follower and there is nothing
+to ask. Still never a gate `[PI-PRE-020]` — a bad clock costs alignment, not
+playback.
+
 **`[PI-PRE-050]` It asks the machine, not a list.** Which tools matter differs
 per appliance, and hard-coding that means two lists to keep in step. The
 audio-path tools are reported only when `vaino-wait-sink` is installed, since

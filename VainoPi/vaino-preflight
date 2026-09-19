@@ -124,4 +124,54 @@ if [ -x "$WAIT_SINK" ]; then
     }
 fi
 
+# ------------------------------------------------------------------ the clock
+#
+# **`[PI-PRE-052]` The check `[GDE-ECHO-300]` asked for and nobody wrote.**
+# That rule says "chrony on every node, verified at boot" and names
+# `systemd-timesyncd` as the wrong tool for a specific reason: it is an SNTP
+# client that corrects the *time* without disciplining the *frequency*, so a
+# node left on it satisfies the wall-clock requirement and silently fails the
+# frequency one. Three nodes moved to chrony on 2026-09-11. The fourth,
+# `lempiplay3`, did not, and nothing anywhere noticed for eight days -- until
+# a listener heard it drifting and the follower turned out to be correcting
+# real audio to chase a clock that was wandering `[GDE-ARC-038]`.
+#
+# Reported unconditionally, not gated on this being an echo node: following is
+# a *setting* a listener can turn on at any moment `[SPEC-ECHO-010]`, so every
+# node is a potential follower and every node needs the clock for it. That is
+# the one place `[PI-PRE-050]`'s "ask the machine" rule does not apply --
+# there is nothing to ask, because the answer is always yes.
+#
+# Still never a gate `[PI-PRE-020]`: a bad clock costs alignment, not
+# playback, and an appliance that refuses to play music because NTP is
+# unhappy would be the fault this script exists to prevent.
+if have chronyc && systemctl is-active chrony >/dev/null 2>&1; then
+    # chrony's own estimate, which `[GDE-ECHO-300]` is right to call a claim
+    # rather than a measurement -- `tools/echo_skew.py` is the measurement.
+    # Printed anyway, because "locked to which server" is the fact a remote
+    # diagnosis starts from, the same way the player's commit is.
+    _ref="$(chronyc tracking 2>/dev/null | sed -n 's/^Reference ID *: *//p')"
+    _off="$(chronyc tracking 2>/dev/null | sed -n 's/^System time *: *//p')"
+    say "clock disciplined by chrony, reference ${_ref:-unknown}, ${_off:-offset unknown}"
+    case "$_ref" in
+        ""|*"7F7F0101"*)
+            warn "  chrony is running but has NOT synchronised to any server"
+            warn "  yet (reference is its own unsynchronised clock). Echo"
+            warn "  alignment is meaningless until it does [GDE-ECHO-300]." ;;
+    esac
+elif systemctl is-active systemd-timesyncd >/dev/null 2>&1; then
+    warn "clock disciplined by systemd-timesyncd, which is the WRONG TOOL for"
+    warn "  this fleet [GDE-ECHO-300]. It corrects the time and not the"
+    warn "  frequency, so this node's clock wanders between polls that can be"
+    warn "  34 minutes apart. If it ever follows another node, or is followed,"
+    warn "  the correction loop will move real audio to chase that wander"
+    warn "  [GDE-ARC-038]. Install chrony and give it the fleet's own"
+    warn "  /etc/chrony/sources.d/vaino-fleet.sources."
+else
+    warn "clock disciplined by NOTHING this script can see: neither chrony nor"
+    warn "  systemd-timesyncd is active. Every echo instant is absolute"
+    warn "  [GDE-ECHO-320], so an undisciplined clock is not a degraded"
+    warn "  alignment, it is no alignment at all [GDE-ECHO-365]."
+fi
+
 exit 0

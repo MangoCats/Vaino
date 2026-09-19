@@ -48,6 +48,22 @@ that it is running and converged. What must be recorded is not chrony's own
 estimate of its accuracy but the observed offset between nodes over a week —
 `[GOV-SRC-020]` again: a daemon's self-report is a claim, not a measurement.
 
+*The half of this that was not done cost eight days, 2026-09-18.* The rule was
+right, the reasoning below it was right, and **the verification it asks for in
+its own second sentence was never written** — so nothing noticed that
+`lempiplay3` had been left on `systemd-timesyncd` when the other three moved.
+It was found by a listener hearing the follower wander, not by any check here.
+Measured: 688 ms of skew against `bose`, of which the clock was most; on
+chrony against the same LAN reference, a median of **12 ms**, with no change
+to a line of player code `[GDE-ARC-038]`. The preflight check now exists
+`[PI-PRE-052]`, and `tools/echo_skew.py --clocks` is the week-long
+between-node measurement this paragraph asked for.
+
+**A standard that only one participant can see is not one.** Three nodes
+moving and a fourth not was invisible precisely because "chrony on every
+node" lived in a plan and in three machines' filesystems, and in nothing that
+runs. That is the same lesson `CLAUDE.md` opens with about `cargo fmt`.
+
 **`systemd-timesyncd` is the default, and it is the wrong tool here** — for a
 specific reason rather than a general one: it is an SNTP client that corrects
 the *time* without disciplining the *frequency*, which is precisely the half
