@@ -375,14 +375,19 @@ pub enum Placement {
     Late { by: Duration },
 }
 
-/// **Status: the durable fix, deliberately not taken yet** `[GDE-ECHO-342]`,
-/// `[GDE-ECHO-377]`. Deriving a commanded start's placement from the target
-/// air time at the moment the ring is cut -- after the work, not before -- is
-/// what would retire `echo_prep_ms` and its self-calibrating guess entirely.
-/// It was not taken because `cut_ring_to_incoming` is the real-time path
-/// every ordinary user skip also uses, and a measured constant reaches most
-/// of the benefit without touching it. Nothing calls this; that is a standing
-/// decision with a reason, not an oversight.
+/// **Status: taken, 2026-09-19** `[GDE-ARC-058]`. Called by `Engine::skip`
+/// through `join_lead_frames`, from the moment the ring is cut -- after the
+/// preparation, which is the whole point `[GDE-ECHO-342]`, `[GDE-ECHO-377]`.
+///
+/// The standing decision not to take it held for a good reason and was
+/// retired by a measurement rather than by a change of taste:
+/// `cut_ring_to_incoming` is the real-time path every ordinary user skip
+/// also uses, and a measured constant was reckoned to reach most of the
+/// benefit. On this fleet it did not -- `echo_prep_ms` was assuming 400 ms
+/// against a real 33-37, converging by quarters over joins that happen a few
+/// times a day, and resetting to the cold guess at every restart. The
+/// ordinary skip path is untouched: with no commanded start pending, the
+/// lead is the same constant it always was.
 pub fn placement(
     sched: &Schedule,
     node: NodeTiming,

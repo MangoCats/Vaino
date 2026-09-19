@@ -108,6 +108,18 @@ hundred milliseconds rather than nearly nothing. It also showed its edge here:
 three joins in three seconds drove `echo_prep_ms` 295 → 162 → 195 → 158 → 124,
 so the compensation was being thrashed by the storm it was meant to absorb.
 
+> **`[GDE-ARC-058]` Taken 2026-09-19, and the constant it replaced was wrong
+> by an order of magnitude.** `Engine::skip` now asks `placement()` for the
+> depth at the moment of the cut, so the preparation is *measured* rather
+> than predicted. What the prediction was actually doing, from this fleet's
+> own log: `preparing took 37 ms (was assuming 400)`. It converged by
+> quarters — ten joins to reach the truth — over a node that made three joins
+> in seven hours, and **reset to the 400 ms cold guess at every restart**, so
+> it never arrived. `echo_prep_ms` survives as a *budget*, deciding only how
+> early to fire so there is time to reach the cut; being generous there now
+> costs nothing, where being wrong used to cost the join its placement. The
+> ordinary skip and seek path keeps the constant lead it always had.
+
 **`[GDE-ARC-045]` The rate loop cannot run, because the loop that runs most
 often clears it.** Zero `echo-rate:` lines in three hours, and zero in the
 seventy minutes since the clock was fixed. `RateEstimate` needs fifteen

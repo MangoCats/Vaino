@@ -393,6 +393,14 @@ impl OutputRing {
         (kept, placed)
     }
 
+    /// The ring's total size in samples.
+    ///
+    /// Exposed so a commanded start can ask whether the depth it needs will
+    /// fit before it asks for it `[GDE-ARC-058]`.
+    pub fn capacity(&self) -> usize {
+        self.state.lock().map_or(0, |s| s.ring.capacity())
+    }
+
     pub fn buffered(&self) -> usize {
         self.state.lock().map(|s| s.ring.len()).unwrap_or(0)
     }

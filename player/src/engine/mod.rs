@@ -514,6 +514,14 @@ pub struct Engine {
     /// Spent by the mixer a block at a time. While it is outstanding the
     /// live streams are not mixed at all, so their decoded audio waits in
     /// their own rings and the passage lands whole, only later.
+    /// The instant a commanded start's sample 0 must **sound**, held from
+    /// `fire_echo_start` until the ring is cut `[GDE-ARC-058]`.
+    ///
+    /// Carried rather than converted to a depth at the point it is learned,
+    /// because the depth is only correct if it is computed after the
+    /// preparation -- which is the entire difference between this and the
+    /// `echo_prep_ms` guess it replaces `[GDE-ECHO-342]`.
+    echo_join_at: Option<u64>,
     pub(crate) echo_gap_frames: u64,
     /// An offset correction waiting for the next admission, ms earlier
     /// `[GDE-ECHO-340]`. Zero is no correction, which is also the resting
@@ -749,6 +757,7 @@ impl Engine {
             echo_prep_ms: Self::ECHO_PREP_GUESS_MS,
             echo_last_trim: None,
             echo_trim_refused: false,
+            echo_join_at: None,
             echo_gap_frames: 0,
             echo_next_shift_ms: 0,
             echo_start: None,
@@ -1271,13 +1280,18 @@ impl Engine {
         // The ring is cut `[REQ-AUD-158]`, so frames already counted were
         // never heard and no anchor may be compared across this.
         self.echo_basis.void(crate::echo::Voided::Skip);
+        // **Taken before the early return, not after** `[GDE-ARC-058]`. A
+        // target left sitting here would be picked up by whatever skipped
+        // next -- an ordinary listener's skip, minutes later -- and placed
+        // against an instant that had long passed. Consumed on every path
+        // through this function, including the one that does nothing.
+        let join_at = self.echo_join_at.take();
         if self.live.is_empty() {
             return;
         }
         let ch = self.out_channels.max(1);
         let rate = self.out_rate as u64;
         let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
-        let lead_samples = (self.skip_lead_ms * rate / 1000) as usize * ch;
 
         // Everything sounding is already mixed into the ring and will be faded
         // there, together. Nothing upstream is worth keeping -- including a
@@ -1303,7 +1317,27 @@ impl Engine {
         // was never only an echo fault.
         self.shown = self.live.first().map(|l| (l.entry.clone(), l.origin_ms));
 
-        self.cut_ring_to_incoming(fade_samples, lead_samples);
+        // **After the preparation, not before** `[GDE-ARC-058]`,
+        // `[GDE-ECHO-342]`. `admit_due` above is where a commanded start
+        // opens its file and seeks into it, so only from here is the distance
+        // to the target instant a measurement rather than a guess. This is
+        // the whole of what `echo_prep_ms` was estimating, and the estimate
+        // no longer has to be right -- only generous enough that
+        // `fire_echo_start` left time to get here.
+        let lead_ms = match join_at {
+            Some(sound_at) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as u64);
+                let ms = self.join_lead_frames(sound_at, now) * 1000 / rate.max(1);
+                eprintln!("echo-start: sample 0 goes {ms} ms into the ring, measured at the cut (the constant lead would have been {} ms)",
+                          self.skip_lead_ms);
+                ms
+            }
+            None => self.skip_lead_ms,
+        };
+        let lead_samples = (lead_ms * rate / 1000) as usize * ch;
+        self.cut_ring_to_incoming(fade_samples, lead_ms);
         self.republish_after_cut(lead_samples);
     }
 
@@ -1314,7 +1348,14 @@ impl Engine {
     /// listener and the change they asked for. Lifted out of `skip` when `seek`
     /// turned out to need exactly it: both replace what is in the ring with a
     /// different point in the music, and differ only in which point.
-    fn cut_ring_to_incoming(&mut self, fade_samples: usize, lead_samples: usize) {
+    fn cut_ring_to_incoming(&mut self, fade_samples: usize, lead_ms: u64) {
+        // One lead, converted once `[GDE-ARC-033]`. This used to take samples
+        // for sizing the overlay and then hand `self.skip_lead_ms` to
+        // `begin_skip_transition` for the placement -- two models of one
+        // quantity, which held only while both were the same constant. A
+        // commanded start makes them differ `[GDE-ARC-058]`.
+        let ch = self.out_channels.max(1);
+        let lead_samples = (lead_ms * self.out_rate as u64 / 1000) as usize * ch;
         // Whatever a previously-departed passage still had draining through
         // this ring is about to be wiped along with everything else in it --
         // take its estimate as final now, rather than let a skip or a seek
@@ -1366,7 +1407,7 @@ impl Engine {
         if let Some(o) = &self.path.ring {
             o.begin_skip_transition(
                 self.skip_fade_ms,
-                self.skip_lead_ms,
+                lead_ms,
                 Curve::Exponential,
                 &overlay,
             );
@@ -1412,7 +1453,7 @@ impl Engine {
         // depth later `[REQ-AUD-164]`.
         self.shown = self.live.first().map(|l| (l.entry.clone(), at));
         self.heard_from = None;
-        self.cut_ring_to_incoming(fade_samples, lead_samples);
+        self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms);
         self.republish_after_cut(lead_samples);
     }
 
@@ -1873,7 +1914,20 @@ impl Engine {
             }
             crate::echo::StartVerdict::Fire => {}
         }
-        let Some((entry, start_sample, _)) = self.echo_start.take() else { return };
+        let Some((entry, start_sample, submit_at)) = self.echo_start.take() else { return };
+        // **Hand the cut the target, not a lead** `[GDE-ARC-058]`. `submit_at`
+        // is a device instant, one presentation offset before the sound
+        // `[GDE-ECHO-410]`; `placement` wants the sound. Converting here and
+        // deciding the depth there is what lets the depth absorb however long
+        // the preparation below actually takes, instead of `echo_prep_ms`
+        // having to predict it.
+        let measured = self.path.ring.as_ref().and_then(|r| {
+            (r.clock.timestamps() == crate::output::Timestamps::Hardware)
+                .then(|| r.clock.delay_frames())
+        });
+        let (offset_frames, _) = self.echo_offset_frames(measured);
+        let offset_ns = offset_frames.saturating_mul(1_000_000_000) / self.out_rate.max(1) as u64;
+        self.echo_join_at = Some(submit_at.saturating_add(offset_ns));
         // Before `skip`, not after: `skip` admits the next passage itself, and
         // a resume offset arriving afterwards would apply to the one after it.
         let began = std::time::Instant::now();
@@ -1884,6 +1938,14 @@ impl Engine {
         // What that actually cost, folded in for next time. Weighted towards
         // history so a single slow seek moves the estimate rather than
         // replacing it.
+        //
+        // **It is a budget now, not a correction** `[GDE-ARC-058]`. The depth
+        // computed at the cut already absorbs however long the work above
+        // took, so this figure no longer has to be *right* -- only large
+        // enough that `fire_echo_start` fires with time in hand to reach the
+        // cut. Being wrong by 363 ms, as this fleet was (33-37 ms of real
+        // preparation against an assumed 400), cost the join that much of its
+        // placement before; now it costs nothing but a little extra lead.
         let took = (began.elapsed().as_millis() as u64).min(Self::ECHO_PREP_MAX_MS);
         let was = self.echo_prep_ms;
         self.echo_prep_ms = (was * 3 + took) / 4;
@@ -1903,6 +1965,58 @@ impl Engine {
         let trim_frames = self.echo_delay_trim_ms.saturating_mul(rate) / 1000;
         let want = measured.unwrap_or(0) as i64 + trim_frames;
         if want < 0 { (0, true) } else { (want as u64, false) }
+    }
+
+    /// How many frames belong ahead of sample 0 for a commanded start to
+    /// sound at `sound_at` `[GDE-ARC-058]`.
+    ///
+    /// **The durable fix `[GDE-ECHO-342]` named and did not take.** The ring
+    /// cut used to lay the incoming passage a constant `skip_lead_ms` in, and
+    /// `fire_echo_start` fired early by that plus `echo_prep_ms` to make up
+    /// for it -- two predictions about a duration that had not happened yet,
+    /// the second of which this fleet measured at 33-37 ms while assuming
+    /// 400. Asking `placement()` at the moment of the cut replaces both with
+    /// an answer: preparation has already happened by then, so however long
+    /// it took is in `now` rather than in an estimate.
+    ///
+    /// The two failure verdicts are reported and then acted on, because a
+    /// join has to do *something*:
+    ///
+    /// - `Late` -- the instant is gone, so sample 0 goes in at the head and
+    ///   sounds as soon as the device will take it. A depth would only make
+    ///   it later still.
+    /// - `TooShallow` -- the target is further out than this ring can hold.
+    ///   Clamped to the ring, which plays early `[Placement]`, and said out
+    ///   loud so it is not read as drift.
+    fn join_lead_frames(&self, sound_at: u64, now: u64) -> u64 {
+        let measured = self.path.ring.as_ref().and_then(|r| {
+            (r.clock.timestamps() == crate::output::Timestamps::Hardware)
+                .then(|| r.clock.delay_frames())
+        });
+        let (offset_frames, _) = self.echo_offset_frames(measured);
+        let timing = crate::echo::NodeTiming {
+            presentation_offset_frames: offset_frames,
+            rate: self.out_rate,
+        };
+        let capacity_frames = self.path.ring.as_ref()
+            .map_or(0, |r| r.capacity() as u64 / self.out_channels.max(1) as u64);
+        let sched = crate::echo::Schedule {
+            passage_id: 0, start_sample: 0, sound_at, rate: self.out_rate,
+        };
+        match crate::echo::placement(&sched, timing, capacity_frames, now) {
+            crate::echo::Placement::Depth(f) => f,
+            crate::echo::Placement::TooShallow { short_by_frames } => {
+                eprintln!("echo-start: the target is {} ms deeper than this ring holds; \
+placing at the ring's own depth, which sounds early",
+                          short_by_frames * 1000 / self.out_rate.max(1) as u64);
+                capacity_frames
+            }
+            crate::echo::Placement::Late { by } => {
+                eprintln!("echo-start: the target passed {} ms ago; sounding at once",
+                          by.as_millis());
+                0
+            }
+        }
     }
 
     /// Below this there is nothing worth correcting `[GDE-ECHO-350]`.
@@ -3199,6 +3313,93 @@ than one mix block");
         assert_eq!(trimmed, plain + e.out_channels,
                    "the duplicated frame never reached the ring: {trimmed} against {plain}");
         let _ = std::fs::remove_file(&wav);
+    }
+
+    /// **A commanded start takes its depth from the target instant, not from
+    /// a constant** `[GDE-ECHO-342]`, `[GDE-ARC-058]`.
+    ///
+    /// `cut_ring_to_incoming` lays the incoming passage `skip_lead_ms` into
+    /// the ring — 500 ms on this fleet, a fixed number — and `fire_echo_start`
+    /// fired early by that plus `echo_prep_ms` to compensate. Both halves are
+    /// guesses about a duration that has not happened yet, and the second was
+    /// measured on this fleet at 33–37 ms while being assumed to be 400.
+    ///
+    /// `placement()` answers the question directly instead: given the instant
+    /// the audio must sound and this node's own device delay, how many frames
+    /// belong ahead of sample 0. Computed **at the cut, after the
+    /// preparation**, it absorbs however long that preparation actually took
+    /// rather than predicting it.
+    ///
+    /// Here the target is 1.2 s out and the device holds 46 ms, so 1154 ms of
+    /// audio belongs in front of sample 0 — regardless of what `skip_lead_ms`
+    /// says.
+    #[test]
+    fn a_commanded_start_takes_its_depth_from_the_target_instant() {
+        let ring = crate::output::OutputRing::new(4_000_000, crate::output::Volume::new(1.0));
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::with_ring(ring), 1);
+        e.out_rate = 44_100;
+        e.out_channels = 2;
+        e.skip_lead_ms = 500;
+        // 46 ms of device delay, as `bose` reports `[LOG-CPAL-060]`.
+        e.echo_delay_trim_ms = 46;
+
+        let now = 1_000_000_000_000u64;
+        // Written the way `placement` computes it rather than in round
+        // milliseconds: the distance is rounded to the **nearest** frame, not
+        // truncated, because truncating loses in one direction and makes
+        // every node a frame or two early `[GOV-SRC-040]`. A millisecond
+        // expectation here would be off by one and would be "fixed" by
+        // loosening the assertion, which is how a systematic sign survives.
+        let delay_frames = 46 * 44_100 / 1000;
+        let ahead = |ms: u64| (ms * 1_000_000 * 44_100 + 500_000_000) / 1_000_000_000;
+
+        let lead = e.join_lead_frames(now + 1_200_000_000, now);
+        assert_eq!(lead, ahead(1_200) - delay_frames,
+                   "the depth is the target less this node's own delay");
+
+        // A nearer target is a shallower ring, which is the whole point: the
+        // same constant cannot be right for both.
+        let near = e.join_lead_frames(now + 300_000_000, now);
+        assert_eq!(near, ahead(300) - delay_frames);
+        assert_ne!(near, lead);
+
+        // An instant already gone cannot be waited for. Sounding at once is
+        // the only answer left, and it is reported rather than dressed up as
+        // a depth `[GOV-SRC-040]`.
+        assert_eq!(e.join_lead_frames(now - 1_000_000, now), 0,
+                   "a missed start sounds now, not after a constant lead");
+    }
+
+    /// **A join target is consumed even when the skip does nothing**
+    /// `[GDE-ARC-058]`.
+    ///
+    /// `skip` returns early with nothing sounding, and the target used to be
+    /// taken after that return. A commanded start arriving with an empty
+    /// `live` would then leave the instant sitting in the engine until the
+    /// *next* skip -- quite possibly a listener pressing the button minutes
+    /// later -- which would place its audio against a time long past and
+    /// sound at once with a `Late` line to explain it.
+    ///
+    /// The ordinary path must also be untouched by all of this, because
+    /// `cut_ring_to_incoming` is the real-time path every user skip and seek
+    /// takes `[GDE-ECHO-342]`: with no target pending, the lead is the
+    /// constant it always was.
+    #[test]
+    fn a_stale_join_target_cannot_be_inherited_by_an_ordinary_skip() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        e.out_channels = 2;
+
+        // Nothing sounding: the skip bails, and must still clear the target.
+        assert!(e.live.is_empty(), "fixture: nothing live");
+        e.echo_join_at = Some(1_000_000_000_000);
+        e.skip();
+        assert_eq!(e.echo_join_at, None,
+                   "a target survived a skip that did nothing and will be used by the next one");
+
+        // And with none pending the engine has nothing echo-specific to say.
+        e.skip();
+        assert_eq!(e.echo_join_at, None);
     }
 
     /// A duplicate needs room in the **output** as well as in the block.
