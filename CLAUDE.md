@@ -71,7 +71,7 @@ reboot. Five days of player deploys went that way
 
 ## 5. Say what you assume about a target before acting on it
 
-`[GDE-DEP-060]`. A script that silently assumes a machine's shape produces a
+This is `[GDE-DEP-060]`. A script that silently assumes a machine's shape produces a
 log indistinguishable from one that assumed correctly. State it — *"pi@bose
 has an overlay root; will persist through /media/root-ro"* — so a wrong guess
 becomes a visible line rather than a silent success.

@@ -85,10 +85,18 @@ fn is_self(host: &str) -> bool {
 }
 
 /// What the delay and follow controls need to render honestly.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct EchoNode {
     /// The hand-set trim, ms `[SPEC-DLY-010]`.
     pub trim_ms: i64,
+    /// How far either way that trim may go `[SPEC-DLY-010]`.
+    ///
+    /// **Sent rather than assumed**, for the reason `[REQ-AUD-156]` gives for
+    /// the fader's own floor: a control that keeps its own copy of an engine
+    /// limit is a second model of one quantity, and the two drift without
+    /// anything noticing `[GDE-ARC-033]`. This number was enforced here, again
+    /// in the store on load, and hardcoded a third time in the skin's HTML.
+    pub trim_limit_ms: i64,
     /// The device's own reported delay in frames, and whether that reading
     /// rests on real hardware timestamps `[GDE-ECHO-290]`.
     ///
@@ -126,6 +134,31 @@ pub struct EchoNode {
     /// -- and the log said the passage was missed, which reads like the
     /// master's fault. Two models of one quantity, now one.
     pub start_lead_ms: u64,
+}
+
+/// Derived in every field but one.
+///
+/// `trim_limit_ms` is a **constant, not a state**, so a default-constructed
+/// node carries the real limit rather than a zero that reads as "no limit".
+/// Written out rather than derived for that single field: a snapshot built by
+/// any path -- the engine's `publish`, a test fixture, a future caller --
+/// then tells the control the same number the engine will enforce, which is
+/// the whole point of sending it `[GDE-ARC-033]`.
+impl Default for EchoNode {
+    fn default() -> Self {
+        Self {
+            trim_ms: 0,
+            trim_limit_ms: crate::db::ECHO_TRIM_LIMIT_MS,
+            measured_frames: None,
+            offset_frames: 0,
+            clamped: false,
+            rate: 0,
+            follow_host: String::new(),
+            join_now: false,
+            follow_status: String::new(),
+            start_lead_ms: 0,
+        }
+    }
 }
 
 /// What the UI and the persistence layer read. Cheap to clone.
@@ -2281,6 +2314,7 @@ impl Engine {
             let (offset_frames, clamped) = self.echo_offset_frames(measured);
             s.echo_node = EchoNode {
                 trim_ms: self.echo_delay_trim_ms,
+                trim_limit_ms: crate::db::ECHO_TRIM_LIMIT_MS,
                 measured_frames: measured,
                 offset_frames,
                 clamped,

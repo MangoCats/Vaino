@@ -60,6 +60,22 @@ run_suite() {
     return "$status"
 }
 
+# The same discipline for a step that is not a test suite: its own status,
+# and its output shown rather than piped into the status.
+run_step() {
+    label=$1
+    shift
+    out=$(mktemp)
+    if "$@" >"$out" 2>&1; then status=0; else status=$?; fi
+    tail -4 "$out"
+    if [ "$status" -ne 0 ]; then
+        echo "  ^ $label exited $status; full output kept at $out"
+    else
+        rm -f "$out"
+    fi
+    return "$status"
+}
+
 echo "== A: Linux x86_64 =="
 docker build -q -t vaino-linux -f "$ROOT/build/Dockerfile.linux" "$ROOT" >/dev/null || fail=$((fail+1))
 run_suite "A" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w vaino-linux \
@@ -103,8 +119,13 @@ echo "== Bounded decode (optional: set VAINO_LONG_FILE) =="
 mem_note=""
 if [ -n "${VAINO_LONG_FILE:-}" ]; then
     if [ -f "$VAINO_LONG_FILE" ]; then
-        ( cd "$ROOT/player" && env -u CC cargo run --release --quiet --bin memcheck -- \
-              "$VAINO_LONG_FILE" 2>&1 | tail -4 ) || fail=$((fail+1))
+        # `run_step`, not a pipe: `... | tail -4` reports tail's status, and
+        # tail succeeds at printing nothing. That is the third disguise
+        # CLAUDE.md §6 lists by name, and it was still here after the same
+        # fault was fixed in the three stages above `[GDE-ARC-035]`.
+        run_step "bounded decode" sh -c \
+            "cd '$ROOT/player' && env -u CC cargo run --release --quiet --bin memcheck -- \"\$1\"" \
+            memcheck "$VAINO_LONG_FILE" || fail=$((fail+1))
     else
         echo "  VAINO_LONG_FILE is set but does not exist: $VAINO_LONG_FILE"
         fail=$((fail+1))

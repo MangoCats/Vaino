@@ -63,10 +63,22 @@ CODE_PATH = re.compile(r"\b(?:%s)(?:/[\w.\-]+)+" % "|".join(PATH_PREFIXES))
 
 def cited_paths(text):
     """Repository-looking paths inside backtick spans, trailing '.' stripped
-    (a path ending a sentence, e.g. "...in `db.rs`.", is not part of it)."""
+    (a path ending a sentence, e.g. "...in `db.rs`.", is not part of it).
+
+    A path under a `target/` directory is skipped: that is cargo's build
+    output, absent from the tree by design, and a how-to that tells someone to
+    run `player/target/release/vaino` is citing it correctly `[GDE-ARC-034]`.
+    Surfaced when this checker began reading `HOWTO.md` at all -- the prefix
+    list above was written narrow to avoid false positives, and could not
+    anticipate a case it was never shown.
+    """
     out = []
     for span in CODESPAN_INNER.findall(text):
-        out.extend(m.group(0).rstrip(".") for m in CODE_PATH.finditer(span))
+        for m in CODE_PATH.finditer(span):
+            path = m.group(0).rstrip(".")
+            if "/target/" in path:
+                continue
+            out.append(path)
     return out
 
 # Prefixes owned by inherited material. Vaino must not mint new tags with these.
@@ -204,10 +216,34 @@ def vaino_docs():
     # no image, no overlay -- but the rule that earned this list is about
     # per-machine material having one home, not about what kind of machine it
     # describes.
-    out = (glob.glob("docs/*.md") + glob.glob("docs/spec/*.md")
-           + glob.glob("VainoPi/*.md") + glob.glob("BosePi/*.md")
-           + glob.glob("SmartPC/*.md") + glob.glob("sendspin/*.md"))
-    out = [p for p in out if INHERITED_DIR not in p]
+    # **Found by walking, not by listing** `[GDE-ARC-034]`. The list this
+    # replaces named one glob per folder, and the comment above records it
+    # being extended three times -- each time after a folder had already been
+    # invisible for a while. A list mirroring the filesystem fails the way
+    # every such list fails: silently, in the direction of checking less.
+    #
+    # Measured 2026-09-18, the list was missing eleven files carrying 56 tags
+    # and 37 links between them -- `tools/README.md` (27 tags), `README.md`
+    # (29 links), the fixture READMEs, and `CLAUDE.md` itself, which is where
+    # the rule to run this checker is written down. One of them cited
+    # `[SPEC-AUD-040]` as a live specification two and a half weeks after the
+    # document defining it was deleted, which is precisely what this checker
+    # exists to catch.
+    #
+    # So the default is now "checked", and anything excluded has to say why.
+    # Dot-directories by convention (`.git`, `.venv`, `.pytest_cache`, and
+    # whatever the next tool invents) plus the named build outputs. A
+    # generated `README.md` inside a cache is not a document, and skipping
+    # the class rather than each instance is what keeps this from becoming
+    # the same hand-maintained list one layer down.
+    skip = {"node_modules", "target", "__pycache__"}
+    out = []
+    for root, dirs, files in os.walk("."):
+        dirs[:] = [d for d in dirs if d not in skip and not d.startswith(".")]
+        for name in files:
+            if name.endswith(".md"):
+                out.append(os.path.relpath(os.path.join(root, name)).replace("\\", "/"))
+    out = [p for p in out if INHERITED_DIR.replace("\\", "/") not in p]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
         out.append(reg)

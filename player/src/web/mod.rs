@@ -1126,6 +1126,156 @@ mod tests {
         out
     }
 
+    /// Every path in a `.route(...)` call, with named constants resolved.
+    ///
+    /// Two of the 84 routes are registered by constant rather than literal --
+    /// `REVIEW_QUEUE_ROUTE`, `SEGMENT_QUEUE_ROUTE` -- which is the *better*
+    /// pattern and the reason this has to resolve them: a scanner that reads
+    /// only literals reports those two as unserved, which is exactly the false
+    /// alarm they caused when this check was first written by hand.
+    fn declared_routes(src: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for (_, after) in src.match_indices(".route(").map(|(i, m)| (i, &src[i + m.len()..])) {
+            let after = after.trim_start();
+            if let Some(rest) = after.strip_prefix('"') {
+                if let Some(end) = rest.find('"') {
+                    out.push(rest[..end].to_string());
+                }
+                continue;
+            }
+            // A named constant: take the identifier and look up its value.
+            let name: String =
+                after.chars().take_while(|c| c.is_ascii_uppercase() || *c == '_').collect();
+            if name.is_empty() {
+                continue;
+            }
+            let needle = format!("const {name}: &str = \"");
+            if let Some(at) = src.find(&needle) {
+                let rest = &src[at + needle.len()..];
+                if let Some(end) = rest.find('"') {
+                    out.push(rest[..end].to_string());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Every literal path handed to `fetch(...)` in a page's JavaScript.
+    ///
+    /// Literals only: a target assembled from a variable is invisible here,
+    /// and saying so is better than implying a completeness this cannot have.
+    /// The count assertion in the test is what stops the scan silently
+    /// reading nothing `[GDE-ECHO-547]`.
+    fn fetch_targets(js: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for (i, m) in js.match_indices("fetch(") {
+            let rest = js[i + m.len()..].trim_start();
+            let Some(delim) = rest.chars().next().filter(|c| "'\"`".contains(*c)) else {
+                continue;
+            };
+            let body = &rest[delim.len_utf8()..];
+            let Some(end) = body.find(delim) else { continue };
+            let url = &body[..end];
+            if url.starts_with('/') {
+                out.push(url.split('?').next().unwrap_or(url).to_string());
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Does this route serve that URL? Axum's matching, narrowly.
+    ///
+    /// A `:param` segment takes exactly one non-empty segment, and a `${...}`
+    /// interpolation in the JS stands for whatever the page will put there.
+    fn route_matches(route: &str, url: &str) -> bool {
+        let (r, u): (Vec<_>, Vec<_>) = (route.split('/').collect(), url.split('/').collect());
+        r.len() == u.len()
+            && r.iter().zip(&u).all(|(rs, us)| {
+                if rs.starts_with(':') {
+                    !us.is_empty()
+                } else if us.contains("${") {
+                    true
+                } else {
+                    rs == us
+                }
+            })
+    }
+
+    /// **Every path the pages fetch must be a path the router serves.**
+    ///
+    /// This is the check eight tests are *named* for and none performs.
+    /// `the_wifi_controls_reach_the_routes_the_router_serves` and its seven
+    /// siblings assert only `skin.js.contains(route)` against a hand-typed
+    /// list -- so a path renamed in `router()` leaves every one of them
+    /// passing, because the JS still contains the old string it was asked
+    /// about. A test written from one side cannot see the other side decline
+    /// `[GDE-ECHO-378]`; those tests still earn their place for the element
+    /// ids and wiring they check, but the router half is here.
+    ///
+    /// Derived from both sides rather than restated beside them, which is the
+    /// same correction `the_snapshot_sends_every_field_the_skin_reads` made
+    /// for the snapshot `[GDE-ARC-031]`.
+    #[test]
+    fn every_path_the_pages_fetch_is_a_route_the_router_serves() {
+        let routes = declared_routes(include_str!("mod.rs"));
+        assert!(routes.len() > 60, "the route scan found only {} routes", routes.len());
+
+        let mut sources: Vec<(&str, &str)> = vec![
+            ("core.js", CORE),
+            ("browse.js", BROWSE_JS),
+            ("passage.js", PASSAGE_JS),
+            ("guide.js", include_str!("guide.js")),
+        ];
+        #[cfg(feature = "sampo-support")]
+        sources.extend([("review.js", REVIEW_JS), ("edit.js", EDIT_JS), ("fade.js", FADE_JS)]);
+        for s in SKINS {
+            sources.push((s.name, s.js));
+        }
+
+        let mut checked = 0;
+        let mut unserved = Vec::new();
+        for (name, js) in sources {
+            for url in fetch_targets(js) {
+                checked += 1;
+                if !routes.iter().any(|r| route_matches(r, &url)) {
+                    unserved.push(format!("{name} fetches {url}, which no route serves"));
+                }
+            }
+        }
+        assert!(unserved.is_empty(), "{}", unserved.join("\n"));
+        // A scan that read nothing would otherwise pass by finding no fault.
+        assert!(checked > 30, "only {checked} fetch targets found; the scan is not reading");
+    }
+
+    /// **A bound the engine enforces is a bound the control must be told.**
+    ///
+    /// `ECHO_TRIM_LIMIT_MS` was enforced in the engine's command handler, again
+    /// in the store on load, and hardcoded a third time as `min="-2000"
+    /// max="2000"` in the skin's HTML -- two models of one quantity in two
+    /// languages `[GDE-ECHO-375]`, with nothing tying them together. Every
+    /// neighbouring control already does this properly: `SkipShape` ships
+    /// `lead_min_ms`/`lead_max_ms` and the fader ships `fader_min_db`, "sent so
+    /// the control can shape itself around the engine's floor instead of
+    /// keeping its own copy of the number" `[REQ-AUD-156]`. The delay trim was
+    /// the one that kept its own copy `[GDE-ARC-033]`.
+    #[test]
+    fn the_delay_trim_control_is_told_the_limit_the_engine_enforces() {
+        const SKIN: &str = include_str!("skins/vaino/skin.js");
+        let json = serde_json::to_string(&Snapshot::from(&state())).unwrap();
+        assert!(json.contains("\"trim_limit_ms\""), "the snapshot never sends the limit");
+        assert!(SKIN.contains("trim_limit_ms"),
+                "the skin never reads the limit and must still be keeping its own copy");
+        // And the number itself is the engine's, not a second opinion.
+        let node = crate::engine::EchoNode { ..Default::default() };
+        let _ = node;
+        assert_eq!(Snapshot::from(&state()).echo_node.trim_limit_ms,
+                   crate::db::ECHO_TRIM_LIMIT_MS);
+    }
+
     /// **Every field the skin reads must be a field the snapshot sends.**
     ///
     /// The list above is written from the server's side, which is exactly why

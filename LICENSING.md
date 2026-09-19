@@ -42,7 +42,7 @@ so, so the terms travel with the file rather than depending on where it sits.
 
 ## Status
 
-`[SPEC-SA-010]` describes Sampo as a separate project with its own repository.
+Note that `[SPEC-SA-010]` describes Sampo as a separate project with its own repository.
 Relicensing in place is a deliberate interim: the boundary that matters
 technically — separate programs, shared file only — already holds, and
 splitting the repository can happen later without changing anyone's terms.

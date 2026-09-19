@@ -263,6 +263,11 @@
   // provenance is said in words beside the value [GOV-SRC-040].
   function renderEchoNode(n) {
     if (!n) return;
+    // The engine's own limit, not a copy of it kept here [GDE-ARC-033].
+    if (n.trim_limit_ms) {
+      echoTrim.min = -n.trim_limit_ms;
+      echoTrim.max = n.trim_limit_ms;
+    }
     if (document.activeElement !== echoTrim) echoTrim.value = n.trim_ms;
     if (document.activeElement !== echoFollow) echoFollow.value = n.follow_host || '';
     if (document.activeElement !== echoJoin) echoJoin.value = n.join_now ? '1' : '0';

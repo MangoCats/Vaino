@@ -2,7 +2,7 @@
 
 Everything here is Sampo: the library-building side of Vaino, Python, AGPL-3.0-or-later — see [GUIDE002 §2](../docs/GUIDE002-rearchitecture-plan.md#2-architectural-decisions) (`[GDE-ARC-010]`) for why it's a separate entity from `player/`. 92 files in one flat directory with no subpackages; this index exists so "where is the code that does X" has an answer without moving anything, per `[GDE-CHT-040]`'s scope discipline — restructuring into subpackages was considered and set aside precisely because the flat layout is what every doc's CLI example, every path Sampo's own job runner builds, and every `test_*.py`'s import already assume.
 
-Each script is run directly — `python tools/whatever.py --help` for its own arguments — and most carry a runnable example in their own module docstring. `test_X.py` beside `X.py` is that module's own tests, run the same way (`python tools/test_X.py`); a handful of `test_console_*.py` files test slices of `console.py` instead of a same-named module.
+Each script is run directly — `python tools/<script>.py --help` for its own arguments — and most carry a runnable example in their own module docstring. `test_<name>.py` beside `<name>.py` is that module's own tests, run the same way (`python` on it, from `tools/`); a handful of `test_console_*.py` files test slices of `console.py` instead of a same-named module.
 
 ---
 

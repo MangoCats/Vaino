@@ -70,6 +70,6 @@ Taken from `01`, 2026-08-20, 4 tracks with full 71-characteristic flavor:
 | JSON, compact | 11.0 KB | 91 MB |
 | **gzip(compact)** | **1.27 KB** | **10.4 MB** |
 
-`[SPEC-DF-093]`'s "~1–2 KB per track" is right only for the **compressed** form;
+Note that `[SPEC-DF-093]`'s "~1–2 KB per track" is right only for the **compressed** form;
 readable JSON is roughly nine times that. The decision it was defending survives
 unharmed — see [SPEC014](../../docs/spec/SPEC014-payload-schema.md) §5.

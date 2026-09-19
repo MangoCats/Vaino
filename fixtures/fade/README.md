@@ -1,12 +1,21 @@
 # Fade curve fixtures
 
 One shared table of `(t, expected gain)` pairs per curve `fade.rs`'s `Curve`
-implements and `[SPEC-AUD-040]` specifies — `exponential.json`, `linear.json`,
+implements — `exponential.json`, `linear.json`,
 `cosine.json`. Two independent implementations read them — Rust's `Fade`
 (real playback) and the waveform editor's `fade.js` (the preview a person
 drags against, `[SPEC021 §4]`, `[SPEC-SUI-226]`) — so "how loud, here" is one
 number per curve, computed twice and checked to agree, rather than three
 formulas (one per curve) that can drift apart silently.
+
+**`fade.rs` is the specification here**, not a document. This file used to
+say the curves were what `[SPEC-AUD-040]` specifies; that tag is a
+struck-through dead entry in GOV001's own registry, from
+`SPEC001-audio-engine.md`, deleted 2026-08-30 — as
+[SPEC021](../../docs/spec/SPEC021-waveform-boundary-editor.md) already says
+in as many words. The claim outlived the document it named by two and a half
+weeks, in the one file the governance checker could not read
+`[GDE-ARC-034]`.
 
 Hand-computed from the closed forms in `fade.rs`'s own doc comments,
 `gain_out(t) = gain_in(1 - t)` for every curve:
