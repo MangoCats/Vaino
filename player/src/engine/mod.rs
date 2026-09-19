@@ -2096,8 +2096,21 @@ impl Engine {
         // so there is no second governor to disagree with it.
         let filled = match self.due_trim() {
             Some(drop_frame) => {
-                let after = crate::mixer::apply_trim(&mut self.scratch, filled,
-                                                     ch, drop_frame);
+                // **A duplicate needs room in the output too, not only in the
+                // block** `[GDE-ECHO-373]`. `scratch` carries the extra frame
+                // so `apply_trim` can write it; the ring is a separate
+                // question, and the mixer runs whenever ONE block is free, so
+                // a ring with exactly one block free is the ordinary steady
+                // state rather than a corner. Hand it a block plus a frame and
+                // it takes the block: a frame dropped where the trim meant to
+                // add one, which is the correction backwards at twice the
+                // size. `room` is a lower bound on what is free -- the
+                // callback only ever drains -- so this is sufficient.
+                let after = if drop_frame || room >= filled + ch {
+                    crate::mixer::apply_trim(&mut self.scratch, filled, ch, drop_frame)
+                } else {
+                    filled
+                };
                 if after == filled {
                     // **Refused, and it says so** `[GDE-ECHO-378]`. A block
                     // too small to drop from, or one this pass has no room to
@@ -2938,6 +2951,64 @@ mod tests {
         let trimmed = e.mix_and_submit();
         assert_eq!(trimmed, plain + e.out_channels,
                    "the duplicated frame never reached the ring: {trimmed} against {plain}");
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// A duplicate needs room in the **output** as well as in the block.
+    ///
+    /// The headroom fix `[GDE-ECHO-373]` puts the extra frame in `scratch`,
+    /// where `apply_trim` can reach it. It does not put it in the ring. The
+    /// mixer runs whenever one block is free, so a ring with *exactly* one
+    /// block free is the ordinary steady state under back-pressure, not a
+    /// corner -- and handing it a block plus a frame means it accepts the
+    /// block and the frame is gone. That is a frame DROPPED where the trim
+    /// meant to add one: the correction backwards, at twice the size, which
+    /// is the shape of every fault in `[GDE-ECHO-351]`.
+    #[test]
+    fn a_duplicate_is_refused_rather_than_losing_the_frame_it_meant_to_add() {
+        const CAP: usize = 40_000;
+        let ring = crate::output::OutputRing::new(CAP, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let wav = wav_of(30_000);
+        let mut a = entry(1, wav.to_str().unwrap());
+        a.end_ms = 30_000;
+        e.enqueue(a);
+        h.send(Command::Play);
+        e.drain_commands();
+        let block = e.min_submit();
+        let mut ready = false;
+        for _ in 0..5_000 {
+            e.tick();
+            if e.live.first().is_some_and(|l| l.stream.ring.len() >= 4 * block) {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "the decoder should have run ahead of the mixer");
+
+        // Exactly one block free: what back-pressure leaves behind on a ring
+        // the mixer tops up the instant it has room.
+        {
+            let mut st = ring.state.lock().unwrap();
+            st.ring.clear();
+            assert_eq!(st.ring.write(&vec![0.0f32; CAP - block]), CAP - block);
+        }
+        e.out_room = 0;
+        assert_eq!(ring.free(), block, "the fixture must leave exactly one block");
+
+        h.send(Command::SetEchoRate(-13.92));
+        e.drain_commands();
+        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+        assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
+
+        let before = ring.state.lock().unwrap().ring.len();
+        let submitted = e.mix_and_submit();
+        let after = ring.state.lock().unwrap().ring.len();
+        assert_eq!(after - before, submitted,
+                   "the ring took {} of the {submitted} samples it was handed",
+                   after - before);
+        assert_eq!(submitted, block,
+                   "with no room for the extra frame the trim must be refused, not half-applied");
         let _ = std::fs::remove_file(&wav);
     }
 
