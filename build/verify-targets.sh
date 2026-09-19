@@ -25,11 +25,46 @@ DROOT=$(cd "$ROOT" && pwd -W 2>/dev/null) || DROOT=$ROOT
 [ -n "$DROOT" ] || DROOT=$ROOT
 fail=0
 
+# Run a test suite and report **the suite's** status, never a filter's.
+#
+# Every stage below used to read, in effect:
+#
+#     docker run ... cargo test ... | grep -E "^test result: ok\.|FAILED" || fail=...
+#
+# and the pattern matches the FAILED line, so `grep` exited 0 on a red suite
+# and the `||` never fired. Measured 2026-09-18: three failing stages printed
+# their own failures in full, and this script then said ALL TARGETS PASS and
+# exited 0. Two tests broken on 2026-09-06 sat twelve days behind it. That is
+# the house rule -- "do not pipe a command through grep/tail and then read
+# `$?`; that is the filter's status, not the command's" -- broken by the
+# script written to enforce the discipline.
+#
+# So the status comes from the command and the grep only chooses what is
+# shown. **An empty result is a failure too**: a run that printed no
+# `test result:` line at all did not run, and a gate that cannot tell that
+# from a pass is the same fault wearing a different hat.
+run_suite() {
+    label=$1
+    shift
+    out=$(mktemp)
+    if "$@" >"$out" 2>&1; then status=0; else status=$?; fi
+    grep -E "^test result:|FAILED|^SKIPPED " "$out" || {
+        echo "  no 'test result' line at all -- the suite did not run"
+        status=1
+    }
+    if [ "$status" -ne 0 ]; then
+        echo "  ^ $label exited $status; full output kept at $out"
+    else
+        rm -f "$out"
+    fi
+    return "$status"
+}
+
 echo "== A: Linux x86_64 =="
 docker build -q -t vaino-linux -f "$ROOT/build/Dockerfile.linux" "$ROOT" >/dev/null || fail=$((fail+1))
-MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w vaino-linux \
+run_suite "A" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w vaino-linux \
     cargo test --release --manifest-path player/Cargo.toml --target-dir /tmp/t \
-    2>&1 | grep -E "^test result: ok\.|FAILED" || fail=$((fail+1))
+    || fail=$((fail+1))
 
 echo "== B: Linux aarch64 (cross-compiled, run under emulation) =="
 docker build -q -t vaino-aarch64 -f "$ROOT/build/Dockerfile.aarch64" "$ROOT" >/dev/null || fail=$((fail+1))
@@ -40,20 +75,25 @@ BIN=$(ls -t "$ROOT"/player/target/aarch64-unknown-linux-gnu/release/deps/vaino_p
       | grep -v '\.d$' | head -1)
 if [ -n "$BIN" ]; then
     REL=${BIN#"$ROOT"/}
-    MSYS_NO_PATHCONV=1 docker run --rm --platform linux/arm64 -v "$DROOT":/w -w /w \
-        debian:bookworm-slim sh -c \
-        "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq libasound2 >/dev/null 2>&1; ./$REL" \
-        2>&1 | grep -E "^test result: ok\.|FAILED" || fail=$((fail+1))
+    # `VAINO_EMULATED` tells the suite it is somewhere wall-clock measurements
+    # do not mean what they say, so a test of a *timing* property says so and
+    # stops rather than asserting one it cannot observe. Nothing else reads
+    # it, and a native run never sets it.
+    run_suite "B" env MSYS_NO_PATHCONV=1 docker run --rm --platform linux/arm64 \
+        -v "$DROOT":/w -w /w debian:bookworm-slim sh -c \
+        "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends libasound2 ffmpeg >/dev/null 2>&1; VAINO_EMULATED=1 ./$REL --show-output" \
+        || fail=$((fail+1))
 else
     echo "  aarch64 test binary not found"; fail=$((fail+1))
 fi
 
 echo "== C: host (Windows or Linux) =="
-# `env -u CC`: a globally-set CC (e.g. CC=C:\mingw64in\gcc.exe) makes the cc
-# crate compile bundled SQLite with MinGW while rustc links with MSVC, which
-# fails on ___chkstk_ms. Unset, the cc crate finds MSVC itself and it builds.
-# Cleared here so the result does not depend on the developer's environment.
-( cd "$ROOT/player" && env -u CC cargo test --release 2>&1     | grep -E "^test result: ok\.|FAILED" | head -1 ) || fail=$((fail+1))
+# `env -u CC`: a globally-set CC makes the cc crate compile bundled SQLite
+# with MinGW while rustc links with MSVC, which fails on ___chkstk_ms. Unset,
+# the cc crate finds MSVC itself and it builds. Cleared here so the result
+# does not depend on the developer's environment.
+run_suite "C" sh -c "cd '$ROOT/player' && env -u CC cargo test --release" \
+    || fail=$((fail+1))
 
 # The bounded-decode gate. It needs a long file from a real library, which no
 # build machine has by default, so it is opt-in via VAINO_LONG_FILE -- and a run

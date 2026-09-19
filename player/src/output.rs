@@ -1195,6 +1195,25 @@ mod tests {
     /// a bounded moment rather than giving up on the first refusal.
     #[test]
     fn a_brief_hold_costs_no_glitch() {
+        // **A wall-clock property, so it refuses to be measured where wall
+        // clocks do not mean what they say.** `LOCK_WAIT` is real time and so
+        // is the 100 us hold below; under qemu the guest's hundred
+        // microseconds of busy-wait is far longer than that in real time, so
+        // the callback gives up and this fails for a reason about the
+        // emulator rather than about the code. It did, on every
+        // `build/verify-targets.sh` stage B run.
+        //
+        // Skipped loudly rather than quietly, and rather than left to fail:
+        // a guard that cannot run must say so `[GDE-DEP-060]`, and a red line
+        // that is always red teaches a reader to ignore red lines. The marker
+        // is grepped by `verify-targets.sh` and reported beside its other
+        // "NOT checked" notes, so the skip appears in the summary instead of
+        // vanishing into captured output.
+        if std::env::var_os("VAINO_EMULATED").is_some() {
+            println!("SKIPPED a_brief_hold_costs_no_glitch -- LOCK_WAIT is a wall-clock \
+property and this is running under emulation");
+            return;
+        }
         let st = Arc::new(Mutex::new(OutputState::new(64)));
         st.lock().unwrap().ring.write(&[0.5; 16]);
         let c = Counts::default();

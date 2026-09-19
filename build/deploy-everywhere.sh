@@ -54,7 +54,21 @@
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-APPLIANCES="pi@vainopi pi@bose"
+# `pi@lp3-wifi` added 2026-09-18, and its absence is the exact fault this
+# script exists to prevent `[SPEC-SUI-227]`. It is an appliance by every test
+# that matters -- aarch64, an overlay root like bose, running `vaino.service`
+# -- and it is the fleet's *follower*, so it is the one node where the echo
+# correction path actually runs. It sat four commits behind while the two
+# named here were kept current, and it was reachable the whole time under a
+# name nobody had written down: `lempiplay3` answers ping but its ssh host key
+# is under `lp3-wifi`, which only `tools/echo_skew.sh`'s usage line knew.
+#
+# It also runs `fbui.service` from a separate `/usr/local/bin/fbui` binary
+# `[SPEC-FBUI-015]`, which `install-player.sh` does NOT replace. That binary
+# reads the snapshot over the same WebSocket and tolerates fields it does not
+# know, so it survives a `vaino` newer than itself -- but it does drift, and
+# nothing here updates it.
+APPLIANCES="pi@vainopi pi@bose pi@lp3-wifi"
 # `host:path` -- a source host needs its checkout named, since unlike an
 # appliance's `/usr/local/bin/vaino` there is no conventional location.
 #

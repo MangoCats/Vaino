@@ -130,3 +130,55 @@ each declining silently one call below something whose tests pass.** The guard
 that catches all three is not a better test of either side. It is an assertion
 that reads *the other side* — what admission will really spend, what the build
 really compiles, what the skin really asks for.
+
+---
+
+## 4. And the gate that was supposed to catch all of it
+
+**`[GDE-ECHO-386]` `build/verify-targets.sh` printed three failing suites and
+then said `ALL TARGETS PASS`.** Found by running it, on 2026-09-18, to prove
+the fixes above before shipping them.
+
+Each stage read, in effect:
+
+```sh
+docker run ... cargo test ... | grep -E "^test result: ok\.|FAILED" || fail=$((fail+1))
+```
+
+The pattern contains `FAILED` so the failure is *shown* — and that match is
+what makes `grep` exit 0, so the `||` never fires. `$?` is the filter's
+status, not the command's. It is the first habit CLAUDE.md §6 names, in the
+script written to enforce the discipline, and it had made the gate
+decorative: stage A ran 519/521 and stage B 518/521, both red, both reported
+as a pass, and the script exited 0.
+
+The status now comes from the command and the grep only chooses what is
+shown. **An empty result counts as failure too** — a run that printed no
+`test result:` line did not run, and a gate that cannot tell that from a pass
+is the same fault in a different hat `[GDE-ECHO-547]`.
+
+**`[GDE-ECHO-387]` What it was hiding was not subtle.** Two of the three
+failures were `ffmpeg not available: No such file or directory`:
+`relink::hash_encoded` shells out to ffmpeg, two bundle-import tests hash a
+real file through it, and neither Docker image had it installed. Those tests
+have failed on every containerised target since **2026-09-06** — twelve days,
+behind a green gate. ffmpeg is added to `Dockerfile.linux` and to stage B's
+runtime image rather than skipped around: it is a real dependency of the path
+under test, so an image without it is testing something else.
+
+The third was honest and wanted the opposite treatment.
+`output::tests::a_brief_hold_costs_no_glitch` asserts that a 100 µs lock hold
+is waited out inside `LOCK_WAIT` — a **wall-clock** property, which under qemu
+is not a property of the code at all. It now skips loudly on `VAINO_EMULATED`,
+which stage B sets, because a red line that is always red teaches a reader to
+ignore red lines.
+
+**`[GDE-ECHO-388]` And the follower was not on the deploy list.**
+`deploy-everywhere.sh` named `pi@vainopi` and `pi@bose`. `lp3-wifi` — aarch64,
+overlay root, running `vaino.service`, and *the node that actually follows* —
+was not there, so it sat four commits behind while the two that were got kept
+current. It was reachable the whole time under a name nothing but
+`tools/echo_skew.sh`'s usage line recorded: `lempiplay3` answers ping, its ssh
+host key is under `lp3-wifi`. That is `[SPEC-SUI-227]`'s own failure mode, and
+the one node where the echo correction path runs at all was the node it
+happened to.
