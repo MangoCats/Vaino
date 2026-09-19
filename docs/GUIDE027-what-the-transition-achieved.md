@@ -32,22 +32,20 @@ request. Nothing in it was observed. `0 ms left to the frame trim` is not a
 finding that the correction landed; it is arithmetic restating that 552 + 13
 = 565.
 
-Measured against `tools/echo_skew.py` over the same transitions on
-`lp3-wifi`, 2026-09-19:
+**Which end was wrong could not be established from inside the engine**,
+because the engine held no measurement of the achieved figure to compare
+against — the classic shape of `[GDE-ARC-043]`, and the specific failure
+CLAUDE.md §6 exists to prevent: verify the thing, not a proxy for it.
 
-| asked | skew step actually measured | delivered |
-| ---: | ---: | ---: |
-| 565 ms | 269 ms | 48 % |
-| 295 ms | 18 ms | 6 % |
-| 270 ms | 135 ms | 50 % |
-| 133 ms | 84 ms | 63 % |
-| 56 ms | 13 ms | 23 % |
-
-The log claimed 100 % on every row. **Which end was wrong could not be
-established from inside the engine**, because the engine held no measurement
-of the achieved figure to compare against — the classic shape of
-`[GDE-ARC-043]`, and the specific failure CLAUDE.md §6 exists to prevent:
-verify the thing, not a proxy for it.
+*An earlier revision of this section carried a table here showing deliveries
+of 6 % to 63 % against the ask, and used it to argue that admission was being
+badly truncated. **That table was wrong and is withdrawn.*** It was built by
+pairing correction lines from the follower's journal — which displays
+`+01:00` — against `echo_skew.py` samples stamped in EDT, across the ~15 s
+ring between admission and sound. The pairing was off, and the conclusion
+drawn from it did not survive the instrumentation written to test it, which
+is the right order for that to happen in but not a reason to have published
+the figure.
 
 ## 2. What was added
 
@@ -77,21 +75,46 @@ Three consequences, all of them the point:
   late. Bounded by one mix block, 46 ms, and previously rounded away by the
   claim rather than by any rounding.
 
-## 3. What this does not yet answer
+## 3. What it measured, and the gap that is left
 
-**The mechanism is confirmed; its size in the field is not.** A shortfall
-bounded by one mix block cannot by itself explain a 6 % delivery on a 295 ms
-request — that needs the correction to have arrived with only tens of
-milliseconds of the outgoing passage left. Plausible, because
-`correct_offset` fires when the *master's* passage id changes, which is not
-aligned with this node's own transition; but plausible is not measured.
+Deployed and read back the same day. **Admission is not being truncated:**
 
-The instrumentation is the experiment rather than the fix. What the deployed
-`achieved` figures show — whether they track `delivered`, or fall short, and
-by how much against `remaining` — decides whether the next change is to
-**issue corrections earlier relative to this node's own boundary**, or to
-accept the truncation and let the repaid debt close it.
+```
+asked 547 ms, achieved 534 (498 ms of the outgoing passage left, overlap 5)
+asked 239 ms, achieved 232 (225 ms left, overlap 2)
+asked 108 ms, achieved 100 ( 84 ms left, overlap 0)
+```
 
-Recording the open question here rather than guessing at it, because the
-previous two changes in this series were each built on a reading that turned
-out to measure something else.
+Shortfalls of 7–13 ms, every one inside a single mix block, and the outgoing
+passage had hundreds of milliseconds left in each case. The transition does
+what it is asked to about 97 % of the time it is asked for it, and
+`[GDE-ARC-057]`'s truncation is real but small.
+
+**A gap remains and it is not this one.** Pairing those same three
+corrections against the skew steps measured across the same transitions, in
+one run and one clock:
+
+| asked | achieved (engine) | skew step (instrument) |
+| ---: | ---: | ---: |
+| 547 ms | 534 ms | 303 ms |
+| 239 ms | 232 ms | 129 ms |
+| 108 ms | 100 ms | 81 ms |
+
+So the engine moves the passage's start by very nearly the full amount, and
+the measured alignment improves by roughly 55–80 % of that. The direction is
+right every time and the loop converges cleanly — **+2128 → +540 → +239 →
++110 → +29 → +1 → −6 → 0 ms** across the eight transitions after a restart,
+settling at `p50 −2 ms, |p90| 29` — but a correction that moves the start
+534 ms should reduce the skew by 534, not 303.
+
+**No mechanism is proposed here.** Two candidate explanations in this series
+have already failed under measurement — a truncating admission, and bursty
+mixing overshooting the threshold — and a third guess is worth less than the
+next reading. What would settle it is comparing the passage's *air* start
+time against the master's published `sound_at` for the same passage directly,
+rather than inferring the step from per-passage skew medians.
+
+It is also worth stating plainly that this gap costs the listener very
+little: the endgame trim closes what the boundary leaves, and after six hours
+of unattended running the pair measured **p50 1 ms, p90 24 ms** with zero
+boundary corrections and zero ring cuts `[GDE-ARC-047]`.

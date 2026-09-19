@@ -2098,11 +2098,17 @@ impl Engine {
     ///
     /// That made `echo-offset: ... = 565 ms, 0 ms left to the frame trim`
     /// unfalsifiable: it is a restatement of the request, not an observation.
-    /// Measured on `lp3-wifi` 2026-09-19, the skew steps after corrections of
-    /// 565, 295, 270, 133 and 56 ms were 269, 18, 135, 84 and 13 ms -- between
-    /// 6 % and 56 % of the ask, with the log claiming 100 % every time. Which
-    /// end was wrong could not be told from inside the engine, because nothing
-    /// in it measured the achieved figure `[GDE-ARC-043]`.
+    /// Which end was wrong could not be told from inside the engine, because
+    /// nothing in it measured the achieved figure `[GDE-ARC-043]`.
+    ///
+    /// **What it then measured was that admission is nearly honest**, which
+    /// is not what this was written expecting: deployed on `lp3-wifi`
+    /// 2026-09-19, asks of 547, 239 and 108 ms achieved 534, 232 and 100,
+    /// with hundreds of milliseconds of the outgoing passage still in hand.
+    /// The truncation is real and is one mix block at worst. A larger gap
+    /// between the moved start and the measured alignment survives it and is
+    /// unexplained -- `[GDE-ARC-057]` in GUIDE027 §3 holds the open question
+    /// rather than a third guess at it.
     ///
     /// `remaining_ms` is the outgoing passage's own remaining play time when
     /// admission fired. Without a nudge that instant is `overlap_ms`, so the
