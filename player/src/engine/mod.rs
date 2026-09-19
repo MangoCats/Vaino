@@ -1453,6 +1453,14 @@ impl Engine {
             // debt beside it.
             let left = self.echo_next_shift_ms - delivered;
             self.echo_debt_frames = left.saturating_mul(self.out_rate.max(1) as i64) / 1000;
+            // The trim clock runs for a debt as well as for a rate, exactly as
+            // `EchoShedOffset` starts it: `due_trim` answers `None` while
+            // `echo_last_trim` is `None`, and a follower that has not yet
+            // produced a rate fit has sent only `SetEchoRate(0.0)`, which
+            // clears it. A debt with no clock is a number nobody pays.
+            if self.echo_debt_frames != 0 && self.echo_last_trim.is_none() {
+                self.echo_last_trim = Some(std::time::Instant::now());
+            }
             // Say which happened rather than claiming a shift that was dropped
             // `[GDE-ECHO-351]`.
             if superseded {
@@ -2860,6 +2868,17 @@ mod tests {
         assert!(e.echo_debt_frames < 0,
                 "a correction the transition cannot take must reach the frame trim");
         assert_eq!(e.echo_debt_frames, -120 * e.out_rate as i64 / 1000);
+        // **And the trim clock has to start, or the debt is a number nobody
+        // pays.** `due_trim` answers `None` while `echo_last_trim` is `None`,
+        // and a follower that has not yet produced a rate fit has sent only
+        // `SetEchoRate(0.0)`, which clears it. Handing that node a debt and
+        // no clock is `[GDE-ECHO-378]` once more, in the fix for it.
+        assert!(e.echo_last_trim.is_some(),
+                "a debt was recorded with no clock running to pay it off");
+        assert!(e.due_trim().is_none(), "and not due in the same instant it was set");
+        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        assert_eq!(e.due_trim(), Some(false),
+                   "an early node repays by repeating frames");
         let _ = std::fs::remove_file(&wav);
     }
 
