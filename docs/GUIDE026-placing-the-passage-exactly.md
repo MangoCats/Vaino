@@ -155,7 +155,41 @@ So "straight away" now means *the next transition takes all of it, exactly*,
 and what still acts sooner than a transition is the mid-join, which is decided
 elsewhere and carries its own cost `[GDE-ECHO-342]`.
 
-## 6. What did not change, and why
+## 6. One band, one controller
+
+**`[GDE-ARC-055]` Placement acts above the endgame band and the frame trim
+acts below it. Two actuators sharing one band is a design fault, not a tuning
+problem.**
+
+Found by running the deployed build, not by reading it, and it was live on
+three appliances for about half an hour. The placement in §4 fires on every
+pass — twice a second — and `EchoCorrectNextStart` **clears the outstanding
+debt** along with setting the new plan, because a new boundary plan supersedes
+the remainder of the old one `[GDE-ARC-041]`. Inside the endgame band,
+`correct_offset` has already handed the error to the frame trim with
+`EchoShedOffset` and returned. Placing on the same pass wiped that debt before
+one 23 µs splice could be paid against it, then did it again half a second
+later, indefinitely. **The band a follower spends almost all its time in would
+never have converged.**
+
+The fix needs no new constant: the partition already exists at
+`OFFSET_ENDGAME` `[GDE-ECHO-349]`, and the placement simply respects it. What
+it cost was the assumption that a correction issued continuously is harmless
+because each one supersedes the last — true of the *plan*, false of the debt
+travelling with it.
+
+**The test that should have caught it passed first.** Its fixture set
+`current`, `position_ms` and `queue` on the shared state, then ticked the
+engine to establish a debt — and a tick **republishes the engine's own
+snapshot over that shared state**. The engine had no passage and an empty
+queue, so `own_next_starts_in_ms` returned `None`, the flow branch was never
+reached, and the assertion held for a reason entirely unrelated to what it
+claimed. A green test whose fixture has been erased is indistinguishable from
+a green test, which is `[GDE-ARC-043]`'s shape in a new place: the reading was
+right and it was measuring something else. Establish engine-side state first,
+shared-state fixtures after the last tick.
+
+## 7. What did not change, and why
 
 **`OFFSET_REJOIN_BEYOND` is still 1.5 s, and its arithmetic is now a different
 argument for the same number.** It used to be justified from below by the join
@@ -181,7 +215,7 @@ position taken from the device's frame counter.
 
 ---
 
-## 7. What to take from it
+## 8. What to take from it
 
 **`[GDE-ARC-053]` A constraint inherited from a framing outlives the framing,
 and reads afterwards as a law of the system.** Neither the 500 ms cap nor the

@@ -668,14 +668,24 @@ async fn act(
                 // pass repeats twice a second, so what actually lands is the
                 // final estimate before admission -- which is the look-ahead
                 // this design is named for, arrived at by simply not stopping.
-                if let Some(err) = flow_error_ms(handle, f.timing, at, now_master) {
-                    if err != 0 {
-                        note(&mut fs.note, format!(
-                            "echo-place: passage {passage_id} would sound {} ms {}; \
+                // **Above the endgame band only** `[GDE-ARC-055]`. This pass
+                // runs twice a second and `EchoCorrectNextStart` clears the
+                // outstanding debt with it `[GDE-ARC-041]`, so placing inside
+                // the band `correct_offset` has already handed to the frame
+                // trim wipes that debt before a single splice is paid against
+                // it -- and again half a second later, indefinitely. The
+                // partition is the existing one and there is no new constant:
+                // above `OFFSET_ENDGAME` the boundary acts, below it the trim
+                // does `[GDE-ECHO-349]`. Two actuators in one band is a design
+                // fault rather than a tuning problem.
+                let err = flow_error_ms(handle, f.timing, at, now_master)
+                    .filter(|e| e.unsigned_abs() > OFFSET_ENDGAME.as_millis() as u64);
+                if let Some(err) = err {
+                    note(&mut fs.note, format!(
+                        "echo-place: passage {passage_id} would sound {} ms {}; \
 placing it at the announced instant",
-                            err.abs(), if err > 0 { "late" } else { "early" }));
-                        handle.send(Command::EchoCorrectNextStart(err));
-                    }
+                        err.abs(), if err > 0 { "late" } else { "early" }));
+                    handle.send(Command::EchoCorrectNextStart(err));
                 }
                 note(&mut fs.note, format!(
                     "echo-follow: passage {passage_id} is already next here; flowing into it"));
@@ -1204,6 +1214,71 @@ mod tests {
         assert!((got - -400).abs() <= 2,
                 "shift {got} ms, expected -400: the announced instant was \
 compared and then discarded");
+    }
+
+    /// **The endgame band has one controller, and placement is not it**
+    /// `[GDE-ARC-055]`.
+    ///
+    /// Caught by running the deployed build rather than by reading it. The
+    /// placement above fires on every pass -- twice a second -- and
+    /// `EchoCorrectNextStart` also **clears the outstanding debt**, because a
+    /// new boundary plan supersedes the remainder of the old one
+    /// `[GDE-ARC-041]`. Inside the endgame band `correct_offset` has already
+    /// handed the error to the frame trim with `EchoShedOffset` and returned;
+    /// placing on the same pass then wiped that debt before a single 23 us
+    /// splice could be paid against it, and did so again half a second later,
+    /// for ever. The band a node spends almost all its time in would never
+    /// have converged.
+    ///
+    /// The partition already existed and is simply respected: above
+    /// `OFFSET_ENDGAME` the boundary acts, below it the trim does
+    /// `[GDE-ECHO-349]`. Two actuators sharing one band is not a tuning
+    /// problem, it is a design fault.
+    #[tokio::test]
+    async fn a_placement_does_not_wipe_the_endgame_trim() {
+        let (mut e, raw) = Engine::new(crate::path::PathHandle::silent(), 1);
+        let h = Arc::new(raw);
+        let now = now_nanos();
+        let anchor = crate::echo::DriftAnchor {
+            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+        };
+        // The trim is already working off a debt, exactly as the endgame
+        // branch of `correct_offset` leaves it. Established FIRST, because a
+        // tick republishes the engine's own snapshot over the shared state and
+        // would wipe the fixture below -- which is how this test first passed
+        // while the fault it names was live on three appliances.
+        h.send(Command::EchoShedOffset(30));
+        e.tick();
+        let owed = e.echo_debt_frames;
+        assert_ne!(owed, 0, "fixture: the trim should have something to pay");
+        {
+            let mut s = h.state.lock().unwrap();
+            s.echo_node.offset_frames = 15_676;
+            s.echo_node.rate = 44_100;
+            s.echo.anchor = None;
+            s.current = Some(shaped(3, 300_000, 0, 5_000));
+            s.position_ms = 292_000;
+            s.queue = vec![shaped(7, 300_000, 5_000, 0)];
+        }
+
+        // Flowing would land 30 ms early -- inside the endgame band, so the
+        // boundary must keep its hands off it.
+        let st = EchoState {
+            anchor: Some(anchor),
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 7, start_sample: 0,
+                sound_at: now + 3_030_000_000, rate: 44_100,
+            }),
+            voided_by: None,
+        };
+        let mut fs = FollowState::new();
+        one_pass(&h, &st, &mut fs).await;
+        e.tick();
+
+        assert_eq!(e.echo_next_shift_ms, 0,
+                   "an endgame error must not be placed at the boundary as well");
+        assert_eq!(e.echo_debt_frames, owed,
+                   "the placement cleared a debt the frame trim was paying off");
     }
 
     /// And the case the test exists to separate must still be separated: a
