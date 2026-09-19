@@ -1496,12 +1496,23 @@ impl Engine {
         // pair `[GDE-ECHO-372]`.
         let (overlap, ceiling) = self.next_transition_overlap();
         let shift = self.echo_split();
+        // **What the outgoing passage really had left when admission fired**
+        // `[GDE-ARC-057]`. `should_admit_nudged` can only fire at or after the
+        // instant it wants, so this -- not the request -- is what the
+        // transition achieved. Captured here because `advance()` below removes
+        // the pair it was measured from.
+        //
+        // Defaults to `overlap`, which makes the achieved shift zero: the
+        // honest answer when there is no outgoing passage to take it from.
+        let mut remaining = overlap;
         let due = match (self.queue.peek(), self.live.last()) {
             (Some(next), Some(l)) => {
                 // Only the admission half can act here; the origin and the
                 // gap are spent below, once the passage is actually taken
                 // `[GDE-ARC-051]`.
-                should_admit_nudged(&l.entry, self.played_ms(l), next, shift.admit_ms)
+                let played = self.played_ms(l);
+                remaining = l.entry.duration_ms().saturating_sub(played);
+                should_admit_nudged(&l.entry, played, next, shift.admit_ms)
             }
             (Some(_), None) => true,
             _ => false,
@@ -1548,7 +1559,16 @@ impl Engine {
             // it knew the boundary would not take. Accumulation across
             // passages is bounded by `EchoCorrectNextStart` clearing the debt
             // as each new plan arrives.
-            let left = self.echo_next_shift_ms - delivered;
+            //
+            // **Measured, not assumed** `[GDE-ARC-057]`. `delivered` is what
+            // the request implies; `achieved` is what the outgoing passage's
+            // real remaining time says actually happened. Only the second can
+            // disagree with the request, and only the second sends a genuine
+            // shortfall to the trim. They differ exactly when a correction
+            // arrives with less of the outgoing passage left than it asked to
+            // spend, which the engine previously could not see at all.
+            let achieved = Self::achieved_shift_ms(spent, remaining, overlap);
+            let left = self.echo_next_shift_ms - achieved;
             let owed = left.saturating_mul(self.out_rate.max(1) as i64) / 1000;
             self.echo_debt_frames = self.echo_debt_frames.saturating_add(owed);
             // The trim clock runs for a debt as well as for a rate, exactly as
@@ -1564,11 +1584,12 @@ impl Engine {
             if superseded {
                 eprintln!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo_next_shift_ms.abs());
             } else {
-                eprintln!("echo-offset: passage {} asked for {} ms {}; placed by {} ms of overlap + {} ms origin + {} ms silence = {} ms, {} ms left to the frame trim",
+                eprintln!("echo-offset: passage {} asked for {} ms {}; placed by {} ms of overlap + {} ms origin + {} ms silence; wanted {} ms, achieved {} ms ({} ms of the outgoing passage left, overlap {}), {} ms left to the frame trim",
                           entry.passage_id, self.echo_next_shift_ms.abs(),
                           if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
                           spent.admit_ms, spent.origin_ms, spent.gap_ms,
-                          delivered.abs(), left.abs());
+                          delivered.abs(), achieved.abs(),
+                          remaining, overlap, left.abs());
             }
             self.echo_next_shift_ms = 0;
         }
@@ -2061,6 +2082,33 @@ impl Engine {
     fn delivered_shift_ms(s: Shift, overlap_ms: u64, ceiling_ms: u64) -> i64 {
         let spent = crate::queue::spend_overlap_ms(overlap_ms, ceiling_ms, s.admit_ms) as i64;
         (spent - overlap_ms as i64) + s.origin_ms as i64 - s.gap_ms as i64
+    }
+
+    /// What the transition **actually** achieved, from the outgoing passage's
+    /// real remaining time at the instant admission fired `[GDE-ARC-057]`.
+    ///
+    /// `delivered_shift_ms` above answers a different question than it looks
+    /// like it answers. It reads the same clamp the actuator reads, so it is
+    /// the right tool for *testing the decision* -- but it is computed from
+    /// the request, and `should_admit_nudged` fires on `remaining <= overlap +
+    /// nudge`, which can only be reached at or **after** the instant it wants.
+    /// A correction issued when less than `overlap + nudge` of the outgoing
+    /// passage is left is truncated to whatever was left, and the arithmetic
+    /// above reports the full figure regardless.
+    ///
+    /// That made `echo-offset: ... = 565 ms, 0 ms left to the frame trim`
+    /// unfalsifiable: it is a restatement of the request, not an observation.
+    /// Measured on `lp3-wifi` 2026-09-19, the skew steps after corrections of
+    /// 565, 295, 270, 133 and 56 ms were 269, 18, 135, 84 and 13 ms -- between
+    /// 6 % and 56 % of the ask, with the log claiming 100 % every time. Which
+    /// end was wrong could not be told from inside the engine, because nothing
+    /// in it measured the achieved figure `[GDE-ARC-043]`.
+    ///
+    /// `remaining_ms` is the outgoing passage's own remaining play time when
+    /// admission fired. Without a nudge that instant is `overlap_ms`, so the
+    /// shift the admission really bought is the difference.
+    fn achieved_shift_ms(s: Shift, remaining_ms: u64, overlap_ms: u64) -> i64 {
+        (remaining_ms as i64 - overlap_ms as i64) + s.origin_ms as i64 - s.gap_ms as i64
     }
 
     /// One mix chunk, in milliseconds -- the resolution of admission timing.
@@ -2567,6 +2615,40 @@ mod depth_tests {
         assert_eq!(e.echo_split().admit_ms, 0);
     }
 
+    /// **A shift the outgoing passage was too short to give is reported as
+    /// what happened, not as what was asked** `[GDE-ARC-057]`.
+    ///
+    /// `should_admit_nudged` fires on `remaining <= overlap + nudge`, so a
+    /// correction that arrives with less than that left is truncated to
+    /// whatever was left. `delivered_shift_ms` cannot see this -- it is
+    /// computed from the request -- so the log said `= 565 ms, 0 ms left to
+    /// the frame trim` for corrections that measurably moved the node 269 ms.
+    /// A claim that restates its own input is not a measurement
+    /// `[GDE-ARC-043]`.
+    ///
+    /// Here 400 ms is asked for with only 120 ms of the outgoing passage
+    /// left against a 20 ms overlap, so the transition can buy 100 ms and the
+    /// other 300 must reach the actuator that can still deliver it.
+    #[test]
+    fn a_shift_the_transition_was_too_late_for_is_owed_not_claimed() {
+        let s = super::Shift { admit_ms: 368, origin_ms: 32, gap_ms: 0 };
+        // What the request implies, which is the whole of it.
+        assert_eq!(Engine::delivered_shift_ms(s, 20, 300_000), 400);
+        // What actually happened, with the passage nearly over.
+        assert_eq!(Engine::achieved_shift_ms(s, 120, 20), 132,
+                   "100 ms of admission was all that was left, plus the origin");
+        // And when the transition is reached in good time the two agree, or
+        // the new figure would be a second model of the same quantity
+        // `[GDE-ARC-033]`.
+        assert_eq!(Engine::achieved_shift_ms(s, 20 + 368, 20), 400,
+                   "admission on time must still report the full shift");
+        // The later direction is silence and owes nothing to admission, so
+        // the outgoing passage's remaining time cannot truncate it.
+        let later = super::Shift { admit_ms: 0, origin_ms: 0, gap_ms: 250 };
+        assert_eq!(Engine::achieved_shift_ms(later, 20, 20), -250,
+                   "silence is spent at mix time and is not the boundary's to clip");
+    }
+
     /// **A transition places the passage exactly, and spends whatever that
     /// takes** `[GDE-ARC-051]`.
     ///
@@ -2975,7 +3057,18 @@ mod tests {
         let opened = e.live.iter().find(|l| l.entry.passage_id == 2).unwrap().origin_ms;
         assert_eq!(opened, 28, "opened at {opened} ms, so the correction never reached it");
         assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
-        assert_eq!(e.echo_debt_frames, 0, "it was placed in full, so nothing is owed");
+        // **Owed only what admission was actually late by** `[GDE-ARC-057]`.
+        // This asserted zero while the engine computed delivery from the
+        // request; measuring it instead shows a couple of milliseconds, which
+        // is admission firing on `remaining <= overlap + nudge` and therefore
+        // always at or after the instant it wanted. The bound is one mix
+        // block, because that is how far the played position can move between
+        // two checks -- and the residue goes to the trim rather than being
+        // rounded away, which is the whole point of measuring it.
+        let owed = e.echo_debt_frames;
+        assert!(owed >= 0 && owed < Engine::MIX_FRAMES as i64,
+                "owed {owed} frames; a clean transition cannot be late by more \
+than one mix block");
         let _ = std::fs::remove_file(&wav);
     }
 
