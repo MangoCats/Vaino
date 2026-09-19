@@ -541,10 +541,35 @@ async fn act(
             // the right passage at the wrong moment, and only placing the
             // first sample afresh fixes that `[GDE-ECHO-344]`.
             let near = !fs.want_rejoin;
-            let committed = fs.mid_joined.is_some_and(|(id, when)| {
-                id == a.passage_id && when.elapsed() < COMMITMENT_HOLDS
-            });
-            let already = (coming_here(handle, a.passage_id) && near) || committed;
+            // **Any commitment, not one to this passage** `[GDE-ARC-042]`.
+            // After a commanded start this node's ring is cut, its queue has
+            // advanced and its basis is voided; no join decision taken from
+            // that state can be trusted, whichever passage it is about. Keyed
+            // on the passage id, a commitment to the passage being started
+            // left a join into the one just *left* entirely unsuppressed,
+            // which is half of how three ring cuts happened in three seconds.
+            let committed =
+                fs.mid_joined.is_some_and(|(_, when)| when.elapsed() < COMMITMENT_HOLDS);
+            // **The master is inside its own transition, and the schedule
+            // path owns it** `[GDE-ARC-042]`. Its anchor is what it can hear
+            // and lags admission by a ring; its schedule is what it just
+            // admitted and leads by the same ring `[LOG-ECHO-020]`. So for
+            // some fifteen seconds after every boundary the master truthfully
+            // reports two different passages, and `coming_here` -- which only
+            // ever asks about the anchor -- answers no to both in turn: the
+            // follower has just skipped, so the old passage is in neither
+            // `current` nor its queue.
+            //
+            // Nothing needs joining in that window. The schedule for the new
+            // passage is already in hand and `Follower::on_state` acts on it;
+            // a mid-join can only cut the ring a second time and re-impose
+            // the join bias `[GDE-ECHO-342]`. Measured on `lp3-wifi`
+            // 2026-09-19: a converged 14 ms became 802 ms, and the boundary
+            // path then needed ten minutes to take it back.
+            let mid_transition = st.schedule
+                .is_some_and(|s| s.passage_id != a.passage_id);
+            let already =
+                (coming_here(handle, a.passage_id) && near) || committed || mid_transition;
             if !already {
                 fs.mid_joined = Some((a.passage_id, std::time::Instant::now()));
                 let air = crate::echo::AirPosition {
@@ -1104,6 +1129,124 @@ mod tests {
         one_pass(&h, &st, &mut fs).await;
         assert_eq!(fs.mid_joined.map(|(id, _)| id), Some(7),
                    "the master skipped and this node flowed calmly on");
+    }
+
+    /// **The master's anchor and its schedule name different passages for a
+    /// whole ring around every boundary, and a join must not fire in that
+    /// window** `[GDE-ARC-042]`.
+    ///
+    /// The anchor is what the master can *hear* and lags its admission by the
+    /// ring -- some fifteen seconds `[LOG-ECHO-020]`. The schedule is what it
+    /// just admitted and leads by the same ring. So for fifteen seconds after
+    /// every transition the master truthfully reports two different passages,
+    /// and `coming_here` -- which asks only about the anchor -- says no to
+    /// both in turn: the follower has just skipped, so the *old* passage is in
+    /// neither `current` nor its queue, and `mid_joined` is keyed on one
+    /// passage id so a commitment to the new one cannot suppress a join into
+    /// the old one.
+    ///
+    /// Observed on `lp3-wifi` 2026-09-19: a scheduled start for 13796, then a
+    /// join into 5164 -- the passage it had just left -- then a join into
+    /// 13796, three ring cuts in three seconds. Each re-imposes the join bias
+    /// `[GDE-ECHO-342]`, and the node went from a converged 14 ms to 802 ms
+    /// out, then spent ten minutes crawling back at the boundary rate. That
+    /// sawtooth is the whole of what a listener hears.
+    #[tokio::test]
+    async fn no_join_while_the_master_is_inside_its_own_transition() {
+        let h = node();
+        let now = now_nanos();
+        if let Ok(mut s) = h.state.lock() {
+            s.echo_node.join_now = true;
+            s.echo_node.rate = 44_100;
+            // A second of presentation offset, so the schedule below is
+            // `Missed` and commits to nothing. Only the mid-join can leave a
+            // mark here, which is what this test is about -- the schedule
+            // path acting on a transition is correct and is not the fault.
+            s.echo_node.offset_frames = 44_100;
+        }
+        let st = EchoState {
+            // Still audibly on the old passage...
+            anchor: Some(crate::echo::DriftAnchor {
+                passage_id: 5164, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            }),
+            // ...while having already admitted the new one.
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 13796, start_sample: 0,
+                sound_at: now + 100_000_000, rate: 44_100,
+            }),
+            voided_by: None,
+        };
+        let mut fs = FollowState::new();
+        one_pass(&h, &st, &mut fs).await;
+        assert!(fs.mid_joined.is_none(),
+                "joined into {:?} while the master was mid-transition; each such \
+join cuts the ring and re-imposes the join bias",
+                fs.mid_joined.map(|(id, _)| id));
+    }
+
+    /// And the ordinary case still joins, which is the half a suppression
+    /// this broad has to be held to `[GDE-ECHO-547]`.
+    ///
+    /// The master is mid-passage: its anchor and its schedule name the same
+    /// passage, this node is on neither, and the listener asked to get in
+    /// step straight away. That must still cut in.
+    #[tokio::test]
+    async fn a_node_on_the_wrong_passage_still_joins_at_once() {
+        let h = node();
+        let now = now_nanos();
+        if let Ok(mut s) = h.state.lock() {
+            s.echo_node.join_now = true;
+            s.echo_node.rate = 44_100;
+            s.echo_node.offset_frames = 44_100;
+        }
+        let st = EchoState {
+            anchor: Some(crate::echo::DriftAnchor {
+                passage_id: 5164, sample: 44_100 * 30, heard_at: now,
+                rate: 44_100, ppm: None,
+            }),
+            // The master's last admission was this same passage: it is not in
+            // a transition, it is simply playing.
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 5164, start_sample: 0,
+                sound_at: now + 100_000_000, rate: 44_100,
+            }),
+            voided_by: None,
+        };
+        let mut fs = FollowState::new();
+        one_pass(&h, &st, &mut fs).await;
+        assert_eq!(fs.mid_joined.map(|(id, _)| id), Some(5164),
+                   "a node on the wrong passage must still join at once");
+    }
+
+    /// And once this node has committed to a start, nothing joins anywhere
+    /// until that has had time to land `[GDE-ARC-042]`.
+    ///
+    /// The commitment used to be keyed on the passage it was for, so a start
+    /// committed to 13796 left a join into 5164 entirely unsuppressed. After
+    /// a commanded start this node's own state is in flux -- the ring is cut,
+    /// the queue has advanced, its basis is voided -- and no join decision
+    /// taken from it can be trusted.
+    #[tokio::test]
+    async fn a_commanded_start_suppresses_a_join_to_any_passage() {
+        let h = node();
+        let now = now_nanos();
+        if let Ok(mut s) = h.state.lock() {
+            s.echo_node.join_now = true;
+            s.echo_node.rate = 44_100;
+        }
+        let st = EchoState {
+            anchor: Some(crate::echo::DriftAnchor {
+                passage_id: 5164, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            }),
+            schedule: None,
+            voided_by: None,
+        };
+        let mut fs = FollowState::new();
+        // A start committed one second ago, for a different passage.
+        fs.mid_joined = Some((13796, std::time::Instant::now()));
+        one_pass(&h, &st, &mut fs).await;
+        assert_eq!(fs.mid_joined.map(|(id, _)| id), Some(13796),
+                   "the commitment was replaced by a join to another passage");
     }
 
     /// A node `ms` out of step with the master, on the same passage, with a
