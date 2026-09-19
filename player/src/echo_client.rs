@@ -668,25 +668,29 @@ async fn act(
                 // pass repeats twice a second, so what actually lands is the
                 // final estimate before admission -- which is the look-ahead
                 // this design is named for, arrived at by simply not stopping.
-                // **Above the endgame band only** `[GDE-ARC-055]`. This pass
-                // runs twice a second and `EchoCorrectNextStart` clears the
-                // outstanding debt with it `[GDE-ARC-041]`, so placing inside
-                // the band `correct_offset` has already handed to the frame
-                // trim wipes that debt before a single splice is paid against
-                // it -- and again half a second later, indefinitely. The
-                // partition is the existing one and there is no new constant:
-                // above `OFFSET_ENDGAME` the boundary acts, below it the trim
-                // does `[GDE-ECHO-349]`. Two actuators in one band is a design
-                // fault rather than a tuning problem.
-                let err = flow_error_ms(handle, f.timing, at, now_master)
-                    .filter(|e| e.unsigned_abs() > OFFSET_ENDGAME.as_millis() as u64);
-                if let Some(err) = err {
-                    note(&mut fs.note, format!(
-                        "echo-place: passage {passage_id} would sound {} ms {}; \
-placing it at the announced instant",
-                        err.abs(), if err > 0 { "late" } else { "early" }));
-                    handle.send(Command::EchoCorrectNextStart(err));
-                }
+                // **A placement was sent from here and it has been taken out
+                // again** `[GDE-ARC-056]`. The error is real and well
+                // measured; there is nowhere to put it. `EchoCorrectNextStart`
+                // is spent at the next **admission**, and by the time the
+                // master's schedule for this passage arrives, this node has
+                // already admitted it -- so the correction landed on the
+                // passage *after* the one it was computed for.
+                //
+                // Measured on `lp3-wifi` 2026-09-19, and the chain is plain in
+                // one log: 404 ms computed for passage 11572, applied to 5766;
+                // 431 ms computed for 11056, applied to 2030. The node had
+                // converged to +10 ms and that last misapplied 431 ms put it
+                // 264 ms out -- a new injector of exactly the kind
+                // `[GDE-ARC-043]` says outruns every remover in the system.
+                //
+                // Not a guard, because there is no window to guard: both nodes
+                // run a ~15 s ring, the master publishes at its admission and
+                // this node admits at the same instant, so the look-ahead is
+                // **negative**. A correction aimed at an already-admitted
+                // passage needs an actuator that acts after admission, which
+                // the silence budget could be `[GDE-ARC-052]` -- it is spent
+                // at mix time, a whole ring later. That is a design step, not
+                // a condition to add here.
                 note(&mut fs.note, format!(
                     "echo-follow: passage {passage_id} is already next here; flowing into it"));
                 return;
@@ -1153,27 +1157,36 @@ mod tests {
                 "a boundary this node was already flowing into was cut and re-placed");
     }
 
-    /// **Flowing is not the same as flowing into the right instant**
-    /// `[GDE-ARC-054]`.
+    /// **The flow path must not issue a boundary correction at all**
+    /// `[GDE-ARC-056]`.
     ///
-    /// The test above pins that a boundary both nodes are heading to is not
-    /// cut and re-placed. That was the whole of it: having decided to flow,
-    /// the follower threw away the comparison it had just made and left the
-    /// alignment to the residual loop, which steers on the anchor and so
-    /// carries the output ring's own depth jitter -- about 25 ms, and the
-    /// floor under every other number in the system `[GDE-ARC-047]`.
+    /// It did, for one afternoon, and this test asserted the opposite of what
+    /// it asserts now. The reasoning was sound as far as it went: the two
+    /// quantities compared here are both *schedule* quantities -- when this
+    /// node's next passage will begin to sound, and when the master said its
+    /// own would -- so their difference is the placement error without the
+    /// anchor's ~25 ms of ring jitter `[GDE-ARC-047]`. Better measured than
+    /// anything the residual loop has.
     ///
-    /// But the two quantities compared here are both *schedule* quantities:
-    /// when this node's next passage will begin to sound, and when the master
-    /// said its own would. Neither passes through an anchor. Their difference
-    /// is the placement error directly, it is available in the lead-up to
-    /// every transition, and spending it at the boundary is exact
-    /// `[GDE-ARC-051]`.
+    /// **It is the wrong target, not the wrong number.**
+    /// `EchoCorrectNextStart` is spent at the next *admission*, and the
+    /// master publishes its schedule for a passage at its own admission --
+    /// which, with both nodes on a ~15 s ring, is about when this node has
+    /// already admitted the same passage. The correction therefore landed on
+    /// the passage *after* the one it was computed for.
     ///
-    /// Here the node would begin to sound 400 ms before the announced instant,
-    /// so it must be told to start its next passage 400 ms **later**.
+    /// Measured on `lp3-wifi` 2026-09-19, visible as a chain in one log: 404
+    /// ms computed for passage 11572 and applied to 5766; 431 ms computed for
+    /// 11056 and applied to 2030. The node had converged to **+10 ms**; that
+    /// last misapplied correction put it **264 ms** out.
+    ///
+    /// So the assertion is that a node deciding to flow leaves the boundary
+    /// alone. Restoring the placement needs an actuator spent *after*
+    /// admission -- the silence budget is one `[GDE-ARC-052]` -- not a
+    /// condition on this branch, because the look-ahead window here is
+    /// negative rather than merely small.
     #[tokio::test]
-    async fn flowing_into_a_boundary_still_places_it_at_the_announced_instant() {
+    async fn flowing_into_a_boundary_does_not_correct_the_following_one() {
         let (mut e, raw) = Engine::new(crate::path::PathHandle::silent(), 1);
         let h = Arc::new(raw);
         let now = now_nanos();
@@ -1205,15 +1218,10 @@ mod tests {
         e.tick();
 
         assert!(fs.mid_joined.is_none(),
-                "400 ms is a placement, not a reason to cut the ring");
-        // Within a millisecond, not exactly: `now` is stamped when the fixture
-        // is built and the pass reads the clock again a moment later, so the
-        // last digit is this test's own elapsed time. Pinning it would pin the
-        // machine rather than the mechanism.
-        let got = e.echo_next_shift_ms;
-        assert!((got - -400).abs() <= 2,
-                "shift {got} ms, expected -400: the announced instant was \
-compared and then discarded");
+                "400 ms is not a reason to cut the ring");
+        assert_eq!(e.echo_next_shift_ms, 0,
+                   "the flow path corrected a boundary it cannot aim at; this \
+lands on the passage after the one it was measured for");
     }
 
     /// **The endgame band has one controller, and placement is not it**
@@ -1234,6 +1242,12 @@ compared and then discarded");
     /// `OFFSET_ENDGAME` the boundary acts, below it the trim does
     /// `[GDE-ECHO-349]`. Two actuators sharing one band is not a tuning
     /// problem, it is a design fault.
+    ///
+    /// *The placement itself was withdrawn hours later `[GDE-ARC-056]`, so
+    /// this now guards a path nothing takes.* It is kept deliberately: the
+    /// placement will come back once it has an actuator it can aim at, and
+    /// this is the trap it fell into the first time. The band belongs to the
+    /// trim whatever else changes.
     #[tokio::test]
     async fn a_placement_does_not_wipe_the_endgame_trim() {
         let (mut e, raw) = Engine::new(crate::path::PathHandle::silent(), 1);

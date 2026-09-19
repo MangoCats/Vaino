@@ -32,12 +32,16 @@ anything physical:
   nothing to spend and the "earlier" direction paid out of the passage's head.
 
 Read instead as *the moment this node chooses when its next passage begins*,
-neither limit survives. The follower already knows the master's published
-`sound_at` for the next passage `[GDE-ECHO-410]`, and it knows its own
-admission is about a ring ahead of the air `[LOG-ECHO-020]`, so in the
-lead-up to every transition it can compute the instant its own sample 0 should
-sound and simply start then. There is no smaller or larger version of that
-question: the passage begins at the right time or it does not.
+neither limit survives. The passage begins at the right time or it does not;
+there is no smaller or larger version of that question, so there is nothing
+for a cap to be cautious about.
+
+*What the follower may use as the target is a separate question, and a harder
+one than it looked.* The master publishes a `sound_at` for each passage
+`[GDE-ECHO-410]`, and steering on that rather than on the anchor would be
+strictly better — but §5 is why the follower cannot yet aim a boundary
+correction at it. Everything in this section is about the actuator; the
+correction still comes from the measured residual.
 
 So the cap is gone and the transition is asked for the entire residual. **886
 ms is now one transition rather than two**, five seconds is one rather than
@@ -121,22 +125,60 @@ instant the master published `[GDE-ECHO-410]`. Neither passes through an
 anchor. Their difference *is* the placement error, at better precision than
 anything the loop could measure, and it was being reduced to one bit.
 
-So the comparison is kept. `flow_error_ms` returns the signed error, the
-boolean is a thin wrapper on it, and a node that decides to flow tells the
-engine the same instant it just checked against. Two properties follow without
-needing any new machinery:
+So the comparison is kept. `flow_error_ms` returns the signed error and the
+boolean is a thin wrapper on it. **Acting on it from there was then tried, and
+withdrawn the same day** — see §5.
 
-- **It is sent after the residual correction**, so where both have an answer
-  the schedule-derived one lands last and wins. Ranking two sources by
-  measurement rather than treating them as equivalent is `[GOV-SRC-040]`, and
-  the engine's "last shift is the plan" rule does the rest.
-- **It is the look-ahead, arrived at by not stopping.** The pass runs twice a
-  second and the transition is minutes away when it first fires, so the
-  estimate that actually lands at admission is the final one before it — which
-  is what "looking ahead in the lead-up to the transition" asks for, with no
-  window to tune and no lead time to get wrong.
+---
 
-## 5. What this removed
+## 5. The look-ahead window is negative
+
+**`[GDE-ARC-056]` The master publishes its schedule for a passage at its own
+admission, by which time a follower on a similar ring has already admitted the
+same passage. There is no lead time to look ahead in — the window is negative,
+not merely small.**
+
+The mechanism `[GDE-ARC-054]` describes was built, deployed, and measured. It
+is the right number aimed at the wrong target, and the measurement is
+unambiguous.
+
+`EchoCorrectNextStart` is spent at the next **admission**. Both nodes run a
+~15 s output ring; the master publishes its forward schedule when it admits,
+and the follower admits the same passage about a second earlier. So the
+correction computed for passage P was always applied to the passage *after* P.
+On `lp3-wifi`, 2026-09-19, the chain is legible in a single log:
+
+```
+06:27:23  placed 11572 by  73 ms   echo-place: 11572 would sound 404 ms late
+06:30:29  placed 5766  by 404 ms   <- the 404 computed for 11572
+06:40:52  placed 11056 by  65 ms   echo-place: 11056 would sound 431 ms late
+06:47:07  placed 2030  by 431 ms   <- the 431 computed for 11056
+```
+
+It converged anyway, because a systematic error is similar from one passage to
+the next, so a correction one boundary late still points the right way — which
+is why the run showed clean geometric convergence, **+481 → +255 → +133 → +82
+→ +44 → +10 ms** across eight transitions, roughly halving rather than
+resolving in one. A one-boundary-late loop halves; an aimed one finishes.
+
+And it did real harm at the end. The node reached **+10 ms** on passage 11056
+— at the anchor floor, which is as good as this system gets — and the
+misapplied 431 ms then put it **−264 ms** out on 2030. That is a fresh
+injector of exactly the kind `[GDE-ARC-043]` describes, built by the work
+meant to remove one.
+
+**Withdrawn rather than guarded.** A condition on the branch would be a
+condition that is essentially never true, which is dead code wearing a
+safety label. What the design needs is an actuator that can be aimed *after*
+admission, and one already exists: the silence budget of `[GDE-ARC-052]` is
+spent at **mix** time, a whole ring after admission. A follower that admitted
+each passage with a small standing silence budget could revise that budget in
+either direction — shorter to sound earlier, longer to sound later — right up
+until the mixer reaches the passage's first sample. That is the ~15 s of
+genuine look-ahead the boundary correction never had, and it is the next step
+rather than a condition here.
+
+## 6. What this removed
 
 **The client no longer sheds a remainder to the trim.** With the cap gone the
 shift the client asks for **is** the residual it measured, so the remainder it
@@ -155,7 +197,7 @@ So "straight away" now means *the next transition takes all of it, exactly*,
 and what still acts sooner than a transition is the mid-join, which is decided
 elsewhere and carries its own cost `[GDE-ECHO-342]`.
 
-## 6. One band, one controller
+## 7. One band, one controller
 
 **`[GDE-ARC-055]` Placement acts above the endgame band and the frame trim
 acts below it. Two actuators sharing one band is a design fault, not a tuning
@@ -189,7 +231,7 @@ a green test, which is `[GDE-ARC-043]`'s shape in a new place: the reading was
 right and it was measuring something else. Establish engine-side state first,
 shared-state fixtures after the last tick.
 
-## 7. What did not change, and why
+## 8. What did not change, and why
 
 **`OFFSET_REJOIN_BEYOND` is still 1.5 s, and its arithmetic is now a different
 argument for the same number.** It used to be justified from below by the join
@@ -215,7 +257,7 @@ position taken from the device's frame counter.
 
 ---
 
-## 8. What to take from it
+## 9. What to take from it
 
 **`[GDE-ARC-053]` A constraint inherited from a framing outlives the framing,
 and reads afterwards as a law of the system.** Neither the 500 ms cap nor the
