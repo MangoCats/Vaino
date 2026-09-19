@@ -140,8 +140,21 @@ In order of how much of a listener's experience it returns:
 3. **Let the offset and rate loops coexist.** Clearing the rate window on
    every offset correction means the slope is never learned on exactly the
    nodes that need it most.
-4. **Say what "join immediately" will and will not do**, in the panel. It is
-   the right behaviour under the wrong name.
+4. **Done: the setting now means both halves, and says so**
+   `[GDE-ARC-041]`. "Join immediately" governed only the first moment; after
+   it, a residual between the endgame band and the rejoin threshold was
+   corrected *solely* at a passage boundary, so nothing acted for the four to
+   six minutes in between. With the setting on, whatever the boundary will
+   not take now goes to the frame trim at once — mid-passage, monotonic and
+   inaudible. The control is relabelled "Get in step: straight away, and stay
+   there", because the old label was the right behaviour under the wrong
+   name and a listener read it, correctly, as a promise about alignment.
+
+   **It still cannot mean "instantly", and the panel does not say so.** The
+   inaudible actuator is capped at `ECHO_DEBT_PPM`; instant alignment costs
+   an audible cut, which is exactly what the join half already spends. A
+   control that promised more than physics allows would be this document's
+   own subject matter one more time.
 
 **The only instrument that can settle any of this against a listener is a
 microphone.** Everything here — this tool, the follower's residual, the

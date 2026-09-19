@@ -117,7 +117,14 @@ pub struct EchoNode {
     pub rate: u32,
     /// The node being followed, bare host; empty is independent.
     pub follow_host: String,
-    /// Whether entering follower mode joins at once `[SPEC-ECHO-030]`.
+    /// Whether entering follower mode joins at once **and then keeps this
+    /// node aligned continuously** `[SPEC-ECHO-030]`, `[GDE-ARC-041]`.
+    ///
+    /// Named for the join because that is all it used to govern. It now
+    /// governs both halves, which is what a listener reads it as: with it
+    /// on, a residual the passage boundary will not take is shed by the
+    /// frame trim mid-passage rather than waiting minutes for the master's
+    /// next track. Off, alignment is corrected only at a boundary.
     pub join_now: bool,
     /// What following is actually doing, in the follower's own words
     /// `[SPEC-ECHO-020]`. Empty while independent.
@@ -1031,6 +1038,16 @@ impl Engine {
                 }
                 Ok(Command::EchoCorrectNextStart(ms)) => {
                     self.echo_next_shift_ms = ms;
+                    // **A new correction is a new plan, and it supersedes the
+                    // outstanding debt** `[GDE-ARC-041]`. The follower
+                    // measures once per master passage and sends the pair --
+                    // this shift for the boundary, then whatever the boundary
+                    // will not take for the trim. Without clearing here, the
+                    // remainder `admit_due` adds when a boundary under-delivers
+                    // would accumulate across passages into a debt nobody
+                    // measured. The follower's own `EchoShedOffset` follows
+                    // this command and sets the new base.
+                    self.echo_debt_frames = 0;
                 }
                 Ok(Command::SetEchoJoinNow(now)) => {
                     self.echo_join_now = now;
@@ -1481,11 +1498,15 @@ impl Engine {
             // exists, and this library's is about five milliseconds; the rest
             // goes to the frame trim, which is the one actuator that works in
             // both directions and is inaudible at 23 us a time
-            // `[GDE-ECHO-349]`. Set rather than added: it is the outstanding
-            // position error as of the most recent measurement, not a second
-            // debt beside it.
+            // `[GDE-ECHO-349]`. **Added, not set** `[GDE-ARC-041]`: this is a
+            // delta only the engine knows -- what admission could not spend --
+            // and the follower may already have set a base here for the part
+            // it knew the boundary would not take. Accumulation across
+            // passages is bounded by `EchoCorrectNextStart` clearing the debt
+            // as each new plan arrives.
             let left = self.echo_next_shift_ms - delivered;
-            self.echo_debt_frames = left.saturating_mul(self.out_rate.max(1) as i64) / 1000;
+            let owed = left.saturating_mul(self.out_rate.max(1) as i64) / 1000;
+            self.echo_debt_frames = self.echo_debt_frames.saturating_add(owed);
             // The trim clock runs for a debt as well as for a rate, exactly as
             // `EchoShedOffset` starts it: `due_trim` answers `None` while
             // `echo_last_trim` is `None`, and a follower that has not yet

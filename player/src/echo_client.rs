@@ -737,6 +737,33 @@ fn correct_offset(
                         filtered as f64 / 1e6, ms.abs(),
                         if ms > 0 { "earlier" } else { "later" }));
                     handle.send(Command::EchoCorrectNextStart(ms));
+                    // **"Straight away" has to mean the alignment, not only
+                    // the join** `[SPEC-ECHO-030]`, `[GDE-ARC-041]`. The bite
+                    // above is capped at `OFFSET_MAX_BITE` and lands only when
+                    // the master reaches its next passage -- four to six
+                    // minutes on this library. For a residual above the
+                    // endgame band that left nothing acting in between, so a
+                    // listener who asked to be in step straight away heard the
+                    // node sit hundreds of milliseconds out for minutes.
+                    //
+                    // The frame trim works mid-passage and is inaudible at
+                    // 23 us a splice `[GDE-ECHO-349]`, so the part the
+                    // boundary will not take is handed to it now. Sent AFTER
+                    // the shift, because the engine treats a new shift as a
+                    // new plan and clears the old debt with it.
+                    //
+                    // Only when the listener asked for it. The other setting
+                    // means what it always did: correct at the boundary,
+                    // disturb nothing in between.
+                    if join_intent(handle).0 {
+                        let left = filtered / 1_000_000 - ms;
+                        if left != 0 {
+                            note(&mut fs.note, format!(
+                                "echo-offset: and shedding the other {} ms by trimming, \
+now rather than at the boundary", left.abs()));
+                            handle.send(Command::EchoShedOffset(left));
+                        }
+                    }
                 }
                 // Too far for one transition to absorb. Saying so beats a
                 // silent hold -- this is the case a listener would otherwise
@@ -1077,6 +1104,76 @@ mod tests {
         one_pass(&h, &st, &mut fs).await;
         assert_eq!(fs.mid_joined.map(|(id, _)| id), Some(7),
                    "the master skipped and this node flowed calmly on");
+    }
+
+    /// A node `ms` out of step with the master, on the same passage, with a
+    /// full enough filter to act on.
+    fn out_by(h: &Arc<EngineHandle>, fs: &mut FollowState, ms: i64, align_now: bool)
+        -> EchoState
+    {
+        let now = now_nanos();
+        let anchor = crate::echo::DriftAnchor {
+            passage_id: 7, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+        };
+        if let Ok(mut s) = h.state.lock() {
+            s.echo_node.rate = 44_100;
+            s.echo_node.join_now = align_now;
+            // This node reached the same sample `ms` later: it is behind.
+            s.echo.anchor = Some(crate::echo::DriftAnchor {
+                heard_at: now.saturating_add((ms * 1_000_000) as u64),
+                ..anchor
+            });
+        }
+        for i in 0..RESIDUAL_MIN_SAMPLES as u64 {
+            fs.filtered.push(now - (RESIDUAL_MIN_SAMPLES as u64 - i) * 500_000_000,
+                             ms * 1_000_000);
+        }
+        EchoState { anchor: Some(anchor), schedule: None, voided_by: None }
+    }
+
+    /// **"Straight away" has to mean the alignment too, not just the join**
+    /// `[SPEC-ECHO-030]`, `[GDE-ARC-041]`.
+    ///
+    /// A boundary shift takes at most `OFFSET_MAX_BITE` and only lands when
+    /// the master reaches its next passage, which is four to six minutes. For
+    /// a residual between the endgame band and the rejoin threshold that left
+    /// *nothing at all* acting in between: a listener who asked to be in step
+    /// straight away heard the node sit 600 ms out for minutes, which is what
+    /// they reported. The frame trim can work mid-passage and is inaudible, so
+    /// whatever the boundary will not take is handed to it now.
+    #[test]
+    fn asking_to_align_straight_away_does_not_wait_for_the_next_track() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        let handle = Arc::new(h);
+        let mut fs = FollowState::new();
+        let st = out_by(&handle, &mut fs, 600, true);
+
+        correct_offset(&st, &handle, &mut fs, now_nanos());
+        e.tick();
+
+        // The boundary still takes its biggest bite when it comes...
+        assert_eq!(e.echo_debt_frames.signum(), 1,
+                   "a node that is behind owes a positive debt");
+        // ...and the 100 ms it cannot take is already being shed, rather than
+        // waiting minutes for a passage boundary that may be far off.
+        assert_eq!(e.echo_debt_frames, 100 * 44_100 / 1000,
+                   "the remainder the boundary will not take must reach the trim now");
+    }
+
+    /// And the other setting still means what it always did: correct at the
+    /// boundary, disturb nothing in between.
+    #[test]
+    fn asking_to_wait_for_the_next_track_still_waits() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        let handle = Arc::new(h);
+        let mut fs = FollowState::new();
+        let st = out_by(&handle, &mut fs, 600, false);
+
+        correct_offset(&st, &handle, &mut fs, now_nanos());
+        e.tick();
+
+        assert_eq!(e.echo_debt_frames, 0,
+                   "waiting for the next track must not start trimming mid-passage");
     }
 
     /// `[GDE-ECHO-375]`: the mid-join budget and the engine's own measured

@@ -94,14 +94,21 @@
          <code>bose</code>. Leave empty to play this node's own programme.</p>
     </div>
     <div class="setting">
-      <label for="echojoin">Start following</label>
+      <label for="echojoin">Get in step</label>
       <span><select id="echojoin">
-        <option value="1">straight away</option>
-        <option value="0">when that player starts its next track</option>
+        <option value="1">straight away, and stay there</option>
+        <option value="0">at that player's next track</option>
       </select></span>
-      <p>Straight away cuts whatever is playing here, the way a skip does, and
-         lets you hear at once whether it worked. Waiting is inaudible, but the
-         other player's next track may be minutes off.</p>
+      <p><b>Straight away</b> cuts whatever is playing here, the way a skip
+         does, so you hear at once whether it worked — and from then on any
+         drift is corrected continuously, by dropping or repeating single
+         frames, which is inaudible. <b>At the next track</b> disturbs nothing
+         now, but that track may be minutes off and alignment is then only
+         corrected at each track change, half a second at a time.</p>
+      <p>Either way, being exactly in step needs both players' clocks
+         disciplined by chrony against the same server. A node on
+         <code>systemd-timesyncd</code> will be corrected towards its own
+         clock error instead.</p>
     </div>
     <div class="setting">
       <label for="skipfade">Skip fade</label>

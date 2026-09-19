@@ -53,6 +53,28 @@ waiting for the followed node's next passage offered beside it. Built
 the judgement that someone who has just typed a node's name wants to hear
 whether it worked.*
 
+*Extended 2026-09-18 `[GDE-ARC-041]`: the setting governs the **alignment**
+as well as the join, and is labelled for both.* It used to govern only the
+first moment. After that, a residual between the endgame band and the rejoin
+threshold was corrected **solely** at a passage boundary, at most
+`OFFSET_MAX_BITE` at a time — so on this library's four-to-six-minute
+passages a listener who had asked to be in step straight away heard the node
+sit hundreds of milliseconds out for minutes, with nothing acting in between.
+Reported by one, and it was the honest reading of the control.
+
+With it on, whatever the boundary will not take is now handed to the frame
+trim immediately: mid-passage, monotonic, and inaudible at 23 us a splice
+`[GDE-ECHO-349]`. With it off, the behaviour is unchanged — corrected at the
+boundary, nothing disturbed in between — which is the reason to offer the
+choice at all.
+
+**"Straight away" still cannot mean "instantly", and the panel must not
+imply it.** The inaudible actuator is capped at `ECHO_DEBT_PPM`, so
+mid-passage convergence is gradual by construction; instant alignment costs
+an audible cut, which is exactly what the *join* half already spends and why
+that half is described as cutting "the way a skip does". The label says
+"straight away, and stay there" rather than "instantly" for that reason.
+
 Joining at once means joining **part-way through** what the other node is
 already playing, which is the capability `[GDE-ECHO-330]` deferred and
 `[GDE-ECHO-510]` made necessary. The schedule cannot serve it: a schedule
@@ -69,10 +91,13 @@ one-second lead is 14 microseconds. And every join, either kind, is already
 limited by the tick and by the time the engine takes to open the file, which
 lands directly on the air time.
 
-So an immediate join is right to within tens of milliseconds and stays there,
-because `[GDE-ECHO-340]`'s correction at passage boundaries is not built. It is
-audibly following; it is not yet audibly *one speaker*. Waiting for the next
-passage is the more accurate of the two and is one selection away.
+So an immediate join is right to within tens of milliseconds. *Corrected
+2026-09-18: this used to end "and stays there, because `[GDE-ECHO-340]`'s
+correction at passage boundaries is not built" — that correction was built
+the same day and this sentence outlived it.* The join's own error is now
+taken off at the following boundaries, and with "straight away" selected the
+part a boundary cannot take is shed continuously in between. Waiting for the
+next passage remains the more accurate way in, and is one selection away.
 
 The immediate path is attempted **once per master passage**. A node whose
 library lacks that passage must not retry twice a second forever, and when the

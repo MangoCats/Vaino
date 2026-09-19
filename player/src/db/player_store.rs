@@ -527,7 +527,14 @@ pub struct Settings {
     /// rather than a URL: every node serves the same socket at the same path,
     /// so the rest is composed and cannot be got wrong.
     pub echo_follow_host: String,
-    /// Whether entering follower mode joins at once `[SPEC-ECHO-030]`.
+    /// Whether entering follower mode joins at once **and then keeps this
+    /// node aligned continuously** `[SPEC-ECHO-030]`, `[GDE-ARC-041]`.
+    ///
+    /// Named for the join because that is all it used to govern. It now
+    /// governs both halves, which is what a listener reads it as: with it
+    /// on, a residual the passage boundary will not take is shed by the
+    /// frame trim mid-passage rather than waiting minutes for the master's
+    /// next track. Off, alignment is corrected only at a boundary.
     ///
     /// **True by default.** Someone who has just typed a node's name wants to
     /// hear whether it worked, and the alternative can be minutes away. The
