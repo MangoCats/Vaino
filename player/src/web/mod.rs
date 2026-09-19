@@ -209,6 +209,16 @@ pub struct Snapshot {
     /// dropped snapshot costs nothing and a stale one is discarded by its own
     /// timestamps.
     pub echo: crate::echo::EchoState,
+    /// This node's own place in the fleet, as the settings panel shows it
+    /// `[SPEC-DLY-050]`, `[SPEC-ECHO-020]`.
+    ///
+    /// Distinct from `echo` above: that is what a *follower* reads off this
+    /// node, this is what *this* node's own listener sees — the measured
+    /// delay, the trim they set, the host being followed and what following
+    /// is doing. The engine rebuilt it on every publish and nothing carried
+    /// it here, so `renderEchoNode` bailed on `undefined` twice a second and
+    /// the whole panel stayed blank `[GDE-ECHO-379]`.
+    pub echo_node: crate::engine::EchoNode,
     /// What is coming, in play order.
     pub queue: Vec<QueueItem>,
     /// Master level in dB relative to full scale, `-72.0` to `0.0`
@@ -316,6 +326,7 @@ impl From<&PlayerState> for Snapshot {
             duration_ms: s.current.as_ref().map(|e| e.duration_ms()).unwrap_or(0),
             queue_len: s.queue_len,
             echo: s.echo.clone(),
+            echo_node: s.echo_node.clone(),
             queue: s
                 .queue
                 .iter()
@@ -1081,6 +1092,76 @@ mod tests {
         for field in ["passage_id", "title", "artist", "mbid", "artist_mbid", "duration_ms", "editable"] {
             assert!(json.contains(&format!("\"{field}\"")), "queue item lost {field}");
         }
+    }
+
+    /// Every `s.<field>` the skin reads off a snapshot.
+    ///
+    /// `s` must be the whole identifier rather than the tail of one, or
+    /// `errors.push` reads as a snapshot field called `push`.
+    fn skin_reads(js: &str) -> Vec<String> {
+        let b = js.as_bytes();
+        let mut out: Vec<String> = Vec::new();
+        let mut i = 0;
+        while let Some(k) = js[i..].find("s.") {
+            let at = i + k;
+            i = at + 2;
+            if at > 0 {
+                let p = b[at - 1];
+                if p.is_ascii_alphanumeric() || p == b'_' || p == b'$' || p == b'.' {
+                    continue;
+                }
+            }
+            let rest = &js[at + 2..];
+            let n = rest
+                .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+                .unwrap_or(rest.len());
+            if n == 0 || !rest.starts_with(|c: char| c.is_ascii_lowercase()) {
+                continue;
+            }
+            let name = rest[..n].to_string();
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    /// **Every field the skin reads must be a field the snapshot sends.**
+    ///
+    /// The list above is written from the server's side, which is exactly why
+    /// it could not catch a field the skin reads and the snapshot never had.
+    /// `echo_node` was built by the engine on every publish, carefully
+    /// commented, `Serialize` — and absent from the wire, so
+    /// `renderEchoNode` took its `if (!n) return;` on every update and the
+    /// delay and follow panel `[SPEC-DLY-050]`, `[SPEC-ECHO-020]` showed
+    /// nothing at all, on every node, for as long as it has existed. A
+    /// listener could type a host into *Follow this node* and never be told
+    /// anything back `[GDE-ECHO-379]`.
+    ///
+    /// That is `[GDE-ECHO-378]`'s shape a third time: a decision computed and
+    /// declined one call below, silently. So this is derived from the skin
+    /// rather than restated beside it, and the next such field fails here
+    /// instead of rendering blank.
+    #[test]
+    fn the_snapshot_sends_every_field_the_skin_reads() {
+        const SKIN: &str = include_str!("skins/vaino/skin.js");
+        let json = serde_json::to_string(&Snapshot::from(&state())).unwrap();
+        // Read by the Bluetooth helper against a field no snapshot has ever
+        // carried, so `currentSink()` can never match the playing device.
+        // Named here rather than quietly skipped: a known gap with a name
+        // beats an absence nothing mentions `[GOV-SRC-040]`. It is not an
+        // echo fault and is not fixed with them.
+        const NOT_SENT: [&str; 1] = ["sink"];
+        let missing: Vec<String> = skin_reads(SKIN)
+            .into_iter()
+            .filter(|f| !NOT_SENT.contains(&f.as_str()))
+            .filter(|f| !json.contains(&format!("\"{f}\"")))
+            .collect();
+        assert!(missing.is_empty(),
+                "the skin reads snapshot fields the snapshot does not send: {missing:?}");
+        // And the guard itself has to be reading something, or it passes by
+        // finding nothing `[GDE-ECHO-547]`.
+        assert!(skin_reads(SKIN).len() > 20, "the skin scan found almost nothing");
     }
 
     /// The editor page and its own JS, present only behind the feature that
