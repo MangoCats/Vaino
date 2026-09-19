@@ -77,15 +77,53 @@ fn wanted_url(handle: &EngineHandle) -> Option<String> {
     (!host.is_empty()).then(|| format!("ws://{host}/ws"))
 }
 
-/// How far ahead of itself a mid-passage join aims `[SPEC-ECHO-030]`.
+/// The least a mid-passage join ever aims ahead of itself `[SPEC-ECHO-030]`.
 ///
-/// It has to cover a 10 ms tick, the engine opening and first-decoding the
-/// file -- tens of milliseconds on a Pi -- and whatever the snapshot took to
-/// arrive. A second is comfortably more than all of that and comfortably
-/// inside `[GDE-ECHO-325]`'s five-second allowance for a resync. Aiming too
-/// close simply fails the join and waits for the next snapshot, which is why
-/// this errs long.
+/// A floor, not the budget: what the budget actually has to cover is whatever
+/// this node's own engine needs before a commanded start can sound, and only
+/// the engine knows that `[GDE-ECHO-375]`. This is what a node that has not
+/// published a figure yet gets -- enough for a 10 ms tick, a snapshot's
+/// cadence, and the engine's own 100 ms late limit.
 const MID_JOIN_MARGIN: Duration = Duration::from_secs(1);
+
+/// On top of whatever the engine says it needs.
+///
+/// The engine's figure covers the work; this covers everything around it --
+/// up to half a second to learn of the join at the snapshot's cadence, a
+/// 10 ms tick, and `ECHO_START_LATE_LIMIT`. Erring long costs a follower
+/// nothing but waiting; erring short costs the whole join.
+const MID_JOIN_SLACK: Duration = Duration::from_secs(1);
+
+/// And no further out than this, however wild the engine's estimate gets.
+///
+/// `[GDE-ECHO-325]` allows five seconds for a resync; a join aimed past that
+/// is not a join any more. Deliberately **above** the engine's own worst case
+/// -- `SKIP_LEAD_MAX_MS` plus `ECHO_PREP_MAX_MS`, 4 s -- so the clamp can
+/// only ever catch a figure that is already nonsense, never trim the budget
+/// back below what the engine really needs. That is the trap this whole
+/// finding is: a ceiling chosen without reference to the thing it bounds.
+const MID_JOIN_MARGIN_MAX: Duration = Duration::from_secs(5);
+
+/// How far ahead of itself a mid-passage join must aim, on this node.
+///
+/// **Read from the engine, not assumed** `[GDE-ECHO-375]`. The offset term
+/// cancels inside `join_mid_passage`, so this margin *is* the entire budget a
+/// join has -- and the engine fires a commanded start early by `skip_lead_ms`
+/// plus the preparation it has measured on itself, which begins at 400 ms and
+/// is explicitly permitted to reach 2000 `[GDE-ECHO-342]`. Against a fixed
+/// one-second budget, a node that once paid for a slow seek had every later
+/// join declined as `TooLate` for ever after, because the estimate is only
+/// revised by a join that actually fires. Two models of one quantity; this is
+/// the one that reads the other.
+fn mid_join_margin(handle: &EngineHandle) -> Duration {
+    let needs = handle
+        .state
+        .lock()
+        .ok()
+        .map(|s| Duration::from_millis(s.echo_node.start_lead_ms))
+        .unwrap_or_default();
+    (needs + MID_JOIN_SLACK).clamp(MID_JOIN_MARGIN, MID_JOIN_MARGIN_MAX)
+}
 
 /// How far out this node may be before the offset correction acts.
 ///
@@ -299,6 +337,59 @@ fn coming_here(handle: &EngineHandle, passage_id: i64) -> bool {
         || s.queue.iter().any(|e| e.passage_id == passage_id)
 }
 
+/// Would flowing into this node's own next transition land near the announced
+/// one `[GDE-ECHO-353]`?
+///
+/// **Both sides are air times, and both are this node's own** `[GDE-ECHO-376]`.
+/// The comparison first written put this node's passage *ending* against the
+/// master's *submit* instant, which differ by the transition's overlap plus
+/// this node's presentation offset. It passed because both terms are small
+/// against a five-second tolerance -- and a passage with the three-to-five
+/// second lead-out the library calls the rare-but-wanted case makes it fail at
+/// every boundary, reinstating the ring cut and the join bias `[GDE-ECHO-343]`
+/// at each one and starving a rate fit that needs fifteen unbroken minutes.
+///
+/// So: when does this node's *next* passage begin to sound, and when did the
+/// master say its own would? `at` is a submit instant, one presentation offset
+/// before the sound it was computed from `[GDE-ECHO-410]`, and this node's own
+/// transition begins one overlap before its current passage runs out
+/// `[overlap_ms]`.
+fn flowing_would_do(
+    handle: &EngineHandle,
+    timing: NodeTiming,
+    at: u64,
+    now_master: u64,
+) -> bool {
+    let sound_at = at.saturating_add(timing.offset().as_nanos() as u64);
+    match (own_next_starts_in_ms(handle), sound_at.checked_sub(now_master)) {
+        (Some(mine), Some(theirs)) => {
+            mine.abs_diff(theirs / 1_000_000) <= FLOW_TOLERANCE.as_millis() as u64
+        }
+        // Without both figures, believe what the master said rather than a
+        // guess about this node's own future `[GOV-SRC-040]`.
+        _ => false,
+    }
+}
+
+/// How long until this node's **next** passage begins to sound, in ms.
+///
+/// Its current passage's remaining time, less the overlap the transition into
+/// the next one will spend: the incoming passage starts sounding that much
+/// before the outgoing one runs out, which for most of this library is five
+/// milliseconds and for a real crossfade is seconds `[crate::queue]`.
+///
+/// `None` on the same terms as `own_transition_in_ms` -- nothing playing, or
+/// a passage with no length to measure against.
+fn own_next_starts_in_ms(handle: &EngineHandle) -> Option<u64> {
+    let remaining = own_transition_in_ms(handle)?;
+    let overlap = handle.state.lock().ok().and_then(|s| {
+        let cur = s.current.as_ref()?;
+        let next = s.queue.first()?;
+        Some(crate::queue::overlap_ms(cur, next))
+    })?;
+    Some(remaining.saturating_sub(overlap))
+}
+
 /// Join at once, and what this node is playing, as the panel has them.
 fn join_intent(handle: &EngineHandle) -> (bool, Option<i64>) {
     match handle.state.lock() {
@@ -461,7 +552,7 @@ async fn act(
                     position_ms: a.sample.saturating_mul(1000) / a.rate.max(1) as u64,
                     at: a.heard_at,
                 };
-                let lead = f.timing.offset() + MID_JOIN_MARGIN;
+                let lead = f.timing.offset() + mid_join_margin(handle);
                 fs.want_rejoin = false;
                 if let Some(j) = crate::echo::join_mid_passage(&air, f.timing, now_master, lead) {
                     // Back into this node's own clock before anyone waits on it.
@@ -473,12 +564,95 @@ async fn act(
         }
     }
 
-    // `[GDE-ECHO-340]`'s offset correction. Measured now, applied at the next
-    // admission -- which is sound only because an offset is a position and does
-    // not grow while nobody is looking, unlike the rate error trimming handles.
-    //
-    // Once per master passage: the correction is for the passage after this
-    // one, and sending it twice a second would simply overwrite itself.
+    // Measured and acted on, then **fall through to the schedule whatever
+    // happened** `[GDE-ECHO-374]`. A function rather than a block because it
+    // used to be a block, and two of its arms returned out of `act` itself.
+    correct_offset(st, handle, fs, now_master);
+
+    match f.on_state(st, now_master) {
+        Follow::Idle => {}
+        Follow::Hold(why) => {
+            set_status(handle, &format!(
+                "The node being followed cannot place itself in time ({why:?}); holding."));
+            note(&mut fs.note, format!("echo-follow: holding -- master reports {why:?}"));
+        }
+        Follow::Missed { passage_id } => {
+            // Not a failure of the master's: a node with a large presentation
+            // offset misses schedules a short-offset node makes comfortably
+            // `[GDE-ECHO-410]`. Saying which node and which passage is what
+            // makes that diagnosable instead of mysterious.
+            set_status(handle, &format!(
+                "Schedules are arriving too late for this speaker's {} ms delay; waiting for the next passage.", f.timing.offset().as_millis()));
+            note(&mut fs.note, format!(
+                "echo-follow: passage {passage_id} was already due for this node's \
+{} ms offset; waiting for the next",
+                f.timing.offset().as_millis()));
+        }
+        Follow::StartAt { passage_id, start_sample, at } => {
+            // Already heading there, and heading there *at about the right
+            // time*. Let it flow: a scheduled start goes through `skip`, which
+            // cuts the ring `[REQ-AUD-158]`, and a follower that skips into
+            // every passage loses its buffer at every boundary -- heard as a
+            // stutter at the start of each track `[GDE-ECHO-336]`.
+            //
+            // **Being next is not enough on its own.** When the master skips,
+            // its next passage is the one this node also has queued -- and
+            // this node will not reach it for minutes. Suppressing on
+            // queue membership alone is why a skip on the master left the
+            // follower playing calmly on `[GDE-ECHO-353]`. The test is
+            // whether flowing would land anywhere near the announced time.
+            if next_up(handle) == Some(passage_id) && start_sample == 0
+                && !fs.want_rejoin && flowing_would_do(handle, f.timing, at, now_master)
+            {
+                note(&mut fs.note, format!(
+                    "echo-follow: passage {passage_id} is already next here; flowing into it"));
+                return;
+            }
+            fs.want_rejoin = false;
+            fs.rate.clear();
+            fs.filtered.clear();
+            // **Committed.** A start is queued for a future instant, so the
+            // passage is in neither `current` nor the queue until it fires --
+            // which means `coming_here` says no and the mid-passage join
+            // races it `[GDE-ECHO-354]`. Observed on a skip: the follower
+            // took the master's corrected schedule at sample 0, then a second
+            // later joined the same passage part-way in and threw it away.
+            // Recording the commitment here is what makes the two paths see
+            // each other.
+            fs.mid_joined = Some((passage_id, std::time::Instant::now()));
+            let at = fs.clock.to_local(at).unwrap_or(at);
+            start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;
+        }
+    }
+}
+
+/// Measure this node's residual against the master's anchor and act on it.
+///
+/// `[GDE-ECHO-340]`'s offset correction. Measured now, applied at the next
+/// admission -- which is sound only because an offset is a position and does
+/// not grow while nobody is looking, unlike the rate error trimming handles.
+///
+/// Once per master passage: the correction is for the passage after this one,
+/// and sending it twice a second would simply overwrite itself.
+///
+/// **Its own function, and that is the fix for `[GDE-ECHO-374]`.** Two of the
+/// arms below return, and while this was a block inside `act` those returns
+/// left `act` -- so a pass that was still filling the median, or that had just
+/// handed an endgame offset to the trim, never read the master's forward
+/// schedule. Ordinary passage boundaries survive that, because the two nodes
+/// then name different passages and none of this runs. A **seek** does not: it
+/// re-announces the passage both nodes are already on `[GDE-ECHO-325]`, which
+/// is precisely the condition that reaches here, and the filter is cleared by
+/// every start, shift and rejoin and needs thirty seconds to answer again. A
+/// seek landing in that window was dropped silently, and the next snapshot's
+/// schedule is identical, so `Follower::on_state`'s dedup would not re-offer
+/// it.
+fn correct_offset(
+    st: &EchoState,
+    handle: &Arc<EngineHandle>,
+    fs: &mut FollowState,
+    now_master: u64,
+) {
     if let (Some(m), Some(mine)) = (st.anchor.as_ref(), own_anchor(handle)) {
         if m.passage_id == mine.passage_id && fs.corrected != Some(m.passage_id) {
             let local = crate::echo::AirPosition {
@@ -581,71 +755,6 @@ async fn act(
                         "echo-offset: {:+.0} ms out, which is not an offset any more; waiting for a scheduled start", filtered as f64 / 1e6));
                 }
             }
-        }
-    }
-
-    match f.on_state(st, now_master) {
-        Follow::Idle => {}
-        Follow::Hold(why) => {
-            set_status(handle, &format!(
-                "The node being followed cannot place itself in time ({why:?}); holding."));
-            note(&mut fs.note, format!("echo-follow: holding -- master reports {why:?}"));
-        }
-        Follow::Missed { passage_id } => {
-            // Not a failure of the master's: a node with a large presentation
-            // offset misses schedules a short-offset node makes comfortably
-            // `[GDE-ECHO-410]`. Saying which node and which passage is what
-            // makes that diagnosable instead of mysterious.
-            set_status(handle, &format!(
-                "Schedules are arriving too late for this speaker's {} ms delay; waiting for the next passage.", f.timing.offset().as_millis()));
-            note(&mut fs.note, format!(
-                "echo-follow: passage {passage_id} was already due for this node's \
-{} ms offset; waiting for the next",
-                f.timing.offset().as_millis()));
-        }
-        Follow::StartAt { passage_id, start_sample, at } => {
-            // Already heading there, and heading there *at about the right
-            // time*. Let it flow: a scheduled start goes through `skip`, which
-            // cuts the ring `[REQ-AUD-158]`, and a follower that skips into
-            // every passage loses its buffer at every boundary -- heard as a
-            // stutter at the start of each track `[GDE-ECHO-336]`.
-            //
-            // **Being next is not enough on its own.** When the master skips,
-            // its next passage is the one this node also has queued -- and
-            // this node will not reach it for minutes. Suppressing on
-            // queue membership alone is why a skip on the master left the
-            // follower playing calmly on `[GDE-ECHO-353]`. The test is
-            // whether flowing would land anywhere near the announced time.
-            let flowing_would_do = match (own_transition_in_ms(handle), at.checked_sub(now_master)) {
-                (Some(mine), Some(theirs)) => {
-                    let theirs = theirs / 1_000_000;
-                    mine.abs_diff(theirs) <= FLOW_TOLERANCE.as_millis() as u64
-                }
-                // Without both figures, believe what the master said rather
-                // than a guess about this node's own future `[GOV-SRC-040]`.
-                _ => false,
-            };
-            if next_up(handle) == Some(passage_id) && start_sample == 0
-                && !fs.want_rejoin && flowing_would_do
-            {
-                note(&mut fs.note, format!(
-                    "echo-follow: passage {passage_id} is already next here; flowing into it"));
-                return;
-            }
-            fs.want_rejoin = false;
-            fs.rate.clear();
-            fs.filtered.clear();
-            // **Committed.** A start is queued for a future instant, so the
-            // passage is in neither `current` nor the queue until it fires --
-            // which means `coming_here` says no and the mid-passage join
-            // races it `[GDE-ECHO-354]`. Observed on a skip: the follower
-            // took the master's corrected schedule at sample 0, then a second
-            // later joined the same passage part-way in and threw it away.
-            // Recording the commitment here is what makes the two paths see
-            // each other.
-            fs.mid_joined = Some((passage_id, std::time::Instant::now()));
-            let at = fs.clock.to_local(at).unwrap_or(at);
-            start(passage_id, start_sample, at, cfg, handle, &mut fs.note, "starting").await;
         }
     }
 }
@@ -753,5 +862,293 @@ fn note(last: &mut String, line: String) {
     if line != *last {
         eprintln!("{line}");
         *last = line;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{Command, Engine};
+
+    fn node() -> Arc<EngineHandle> {
+        let (_e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        // The engine is dropped; the handle and its shared state are what the
+        // follower actually reads, and they outlive it.
+        Arc::new(h)
+    }
+
+    fn entry(id: i64) -> crate::queue::QueueEntry {
+        crate::queue::QueueEntry {
+            qid: 0,
+            passage_id: id,
+            path: PathBuf::from("nonexistent.flac"),
+            start_ms: 0,
+            end_ms: 5_000,
+            file_ms: 0,
+            lead_in_ms: 0,
+            lead_out_ms: 0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            fade_in_curve: crate::fade::Curve::Exponential,
+            fade_out_curve: crate::fade::Curve::Exponential,
+            gain_db: 0.0,
+            mbid: None,
+            naming: Default::default(),
+            selected_by: None,
+        }
+    }
+
+    /// One snapshot's worth of `act`, on a node with no library behind it.
+    ///
+    /// Every verdict reached here is one that needs no database: the schedule
+    /// below is deliberately unreachable for this node's offset, so `act`
+    /// takes the `Missed` arm, which is decided entirely in `[crate::echo]`
+    /// and reported through the status line.
+    async fn one_pass(h: &Arc<EngineHandle>, st: &EchoState, fs: &mut FollowState) {
+        let cfg = Following {
+            timing: NodeTiming { presentation_offset_frames: 0, rate: 44_100 },
+            db: PathBuf::from("no.db"),
+            library: PathBuf::from("nowhere"),
+        };
+        let mut f = Follower::new(cfg.timing, Duration::from_micros(500),
+                                  Duration::from_secs(1));
+        act(&mut f, st, &cfg, h, fs).await;
+    }
+
+    /// A node, a master anchor and a schedule it cannot possibly meet.
+    fn unreachable_schedule(h: &Arc<EngineHandle>, now: u64) -> EchoState {
+        let anchor = crate::echo::DriftAnchor {
+            passage_id: 7, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+        };
+        if let Ok(mut s) = h.state.lock() {
+            // A second of presentation offset, so a schedule sounding in
+            // 100 ms needed submitting 900 ms ago `[GDE-ECHO-410]`.
+            s.echo_node.offset_frames = 44_100;
+            s.echo_node.rate = 44_100;
+            // On the master's own passage, which is what a seek looks like
+            // and what puts `act` into the residual block at all.
+            s.echo.anchor = Some(anchor);
+        }
+        EchoState {
+            anchor: Some(anchor),
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 7, start_sample: 0,
+                sound_at: now + 100_000_000, rate: 44_100,
+            }),
+            voided_by: None,
+        }
+    }
+
+    fn status_of(h: &Arc<EngineHandle>) -> String {
+        h.state.lock().map(|s| s.echo_node.follow_status.clone()).unwrap_or_default()
+    }
+
+    /// `[GDE-ECHO-374]`: while the filter is measuring, the follower was not
+    /// following.
+    ///
+    /// The residual block returned early when the median was not yet
+    /// available, and that return sat *above* the schedule handling -- so for
+    /// that pass the master's forward schedule was not read at all. Ordinary
+    /// boundaries survive it, because the two nodes then name different
+    /// passages and the block is skipped entirely. A **seek** does not: it
+    /// re-announces the passage both nodes are already on `[GDE-ECHO-325]`,
+    /// which is exactly the condition that reaches the early return, and the
+    /// next snapshot's schedule is identical so the dedup will not re-offer
+    /// it. The filter is cleared by every start, shift and rejoin and needs
+    /// thirty seconds to answer again, so the window is wide.
+    #[tokio::test]
+    async fn a_schedule_is_read_even_while_the_residual_filter_is_measuring() {
+        let h = node();
+        let st = unreachable_schedule(&h, now_nanos());
+        let mut fs = FollowState::new();
+        one_pass(&h, &st, &mut fs).await;
+        assert!(status_of(&h).contains("arriving too late"),
+                "the schedule was never read; the node reported {:?} instead",
+                status_of(&h));
+    }
+
+    /// The same early return, one branch further down: handing an endgame
+    /// offset to the frame trim also returned before the schedule
+    /// `[GDE-ECHO-374]`.
+    #[tokio::test]
+    async fn a_schedule_is_read_on_the_pass_that_sheds_an_endgame_offset() {
+        let h = node();
+        let now = now_nanos();
+        let st = unreachable_schedule(&h, now);
+        let mut fs = FollowState::new();
+        // A full window sitting 20 ms out: inside the endgame band, above the
+        // deadband, so this pass hands the trim a debt.
+        for i in 0..RESIDUAL_MIN_SAMPLES as u64 {
+            fs.filtered.push(now - (RESIDUAL_MIN_SAMPLES as u64 - i) * 500_000_000,
+                             20_000_000);
+        }
+        one_pass(&h, &st, &mut fs).await;
+        assert!(status_of(&h).contains("arriving too late"),
+                "the schedule was never read; the node reported {:?} instead",
+                status_of(&h));
+    }
+
+    fn shaped(id: i64, dur_ms: u64, lead_in: u64, lead_out: u64) -> crate::queue::QueueEntry {
+        let mut e = entry(id);
+        e.end_ms = dur_ms;
+        e.lead_in_ms = lead_in;
+        e.lead_out_ms = lead_out;
+        e
+    }
+
+    /// `[GDE-ECHO-376]`: "would flowing do?" compared this node's passage
+    /// **ending** against another node's **submission**.
+    ///
+    /// Those differ by the transition's own overlap plus this node's
+    /// presentation offset. It passed only because both terms are small
+    /// against the five-second tolerance -- and a passage with the three-to-
+    /// five-second lead-out the library calls the rare-but-wanted case makes
+    /// the comparison fail at *every* boundary. That reinstates
+    /// `[GDE-ECHO-343]`: a ring cut and the join bias at every transition,
+    /// and it starves the rate fit besides, since a commanded start clears a
+    /// window that needs fifteen unbroken minutes to produce anything.
+    ///
+    /// Here the two nodes agree exactly: this node's next passage begins to
+    /// sound in three seconds, and that is the instant the master announced.
+    #[tokio::test]
+    async fn a_long_crossfade_is_still_recognised_as_the_same_transition() {
+        let h = node();
+        let now = now_nanos();
+        let anchor = crate::echo::DriftAnchor {
+            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+        };
+        {
+            let mut s = h.state.lock().unwrap();
+            // vainopi's 355 ms `[LOG-CPAL-060]`.
+            s.echo_node.offset_frames = 15_676;
+            s.echo_node.rate = 44_100;
+            // No anchor of its own, so the residual block is not in the way.
+            s.echo.anchor = None;
+            // Five minutes long, 292 s played: its own transition is eight
+            // seconds off. A five-second lead-out met by a five-second
+            // lead-in, so the incoming passage begins to sound three seconds
+            // from now.
+            s.current = Some(shaped(3, 300_000, 0, 5_000));
+            s.position_ms = 292_000;
+            s.queue = vec![shaped(7, 300_000, 5_000, 0)];
+        }
+        let st = EchoState {
+            anchor: Some(anchor),
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 7, start_sample: 0,
+                sound_at: now + 3_000_000_000, rate: 44_100,
+            }),
+            voided_by: None,
+        };
+        let mut fs = FollowState::new();
+        one_pass(&h, &st, &mut fs).await;
+        assert!(fs.mid_joined.is_none(),
+                "a boundary this node was already flowing into was cut and re-placed");
+    }
+
+    /// And the case the test exists to separate must still be separated: a
+    /// skip on the master moves its transition by minutes, and that is not a
+    /// boundary this node is about to reach `[GDE-ECHO-353]`.
+    #[tokio::test]
+    async fn a_skip_on_the_master_is_still_not_mistaken_for_flowing() {
+        let h = node();
+        let now = now_nanos();
+        let anchor = crate::echo::DriftAnchor {
+            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+        };
+        {
+            let mut s = h.state.lock().unwrap();
+            s.echo_node.offset_frames = 15_676;
+            s.echo_node.rate = 44_100;
+            s.echo.anchor = None;
+            s.current = Some(shaped(3, 300_000, 0, 5_000));
+            s.position_ms = 10_000;   // four and a half minutes still to run
+            s.queue = vec![shaped(7, 300_000, 5_000, 0)];
+        }
+        let st = EchoState {
+            anchor: Some(anchor),
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 7, start_sample: 0,
+                sound_at: now + 3_000_000_000, rate: 44_100,
+            }),
+            voided_by: None,
+        };
+        let mut fs = FollowState::new();
+        one_pass(&h, &st, &mut fs).await;
+        assert_eq!(fs.mid_joined.map(|(id, _)| id), Some(7),
+                   "the master skipped and this node flowed calmly on");
+    }
+
+    /// `[GDE-ECHO-375]`: the mid-join budget and the engine's own measured
+    /// preparation are two models of one quantity, and they disagreed by a
+    /// factor of two.
+    ///
+    /// The offset term cancels inside `join_mid_passage`, so the margin **is**
+    /// the whole budget. The engine then fires early by `skip_lead_ms` plus a
+    /// measured preparation that starts at 400 ms and is explicitly permitted
+    /// to reach 2000 `[GDE-ECHO-342]`, so above about 600 ms of measured
+    /// preparation every mid-join landed `TooLate` and was dropped -- which
+    /// disables the one mechanism that aligns a node initially
+    /// `[GDE-ECHO-344]`, and does it quietly.
+    #[test]
+    fn a_mid_join_aims_past_the_preparation_this_node_actually_needs() {
+        let h = node();
+        for lead_ms in [900_u64, 2_000, 2_500] {
+            if let Ok(mut s) = h.state.lock() {
+                s.echo_node.start_lead_ms = lead_ms;
+            }
+            let margin = mid_join_margin(&h).as_millis() as u64;
+            assert!(margin > lead_ms,
+                    "a join aimed {margin} ms out is declined by an engine that needs {lead_ms}");
+        }
+    }
+
+    /// And the budget stays inside `[GDE-ECHO-325]`'s five-second allowance
+    /// for a resync however wild the engine's estimate gets: a join aimed
+    /// further out than that is no longer a join.
+    #[test]
+    fn the_mid_join_budget_stays_inside_the_resync_allowance() {
+        let h = node();
+        if let Ok(mut s) = h.state.lock() {
+            s.echo_node.start_lead_ms = 60_000;
+        }
+        assert!(mid_join_margin(&h) <= MID_JOIN_MARGIN_MAX);
+        // And a node that has published nothing yet still gets a usable one.
+        let fresh = node();
+        assert!(mid_join_margin(&fresh) >= MID_JOIN_MARGIN);
+        // The ceiling must sit above the largest lead the engine can ever
+        // ask for, or it becomes the same fault at a different number.
+        let worst = Duration::from_millis(crate::SKIP_LEAD_MAX_MS)
+            + Duration::from_millis(Engine::ECHO_PREP_MAX_MS);
+        assert!(MID_JOIN_MARGIN_MAX > worst,
+                "a {MID_JOIN_MARGIN_MAX:?} ceiling cannot cover a {worst:?} lead");
+    }
+
+    /// The other half of the same quantity: what the node publishes has to be
+    /// what it actually fires early by, or the follower is aiming at a figure
+    /// nothing honours `[GDE-ECHO-375]`.
+    #[test]
+    fn the_lead_a_node_publishes_is_the_lead_it_fires_early_by() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        // One slow seek into a long capture `[PI-CHR-075]`.
+        e.echo_prep_ms = 1_500;
+        e.tick();
+        let published = h.snapshot().echo_node.start_lead_ms;
+        assert_eq!(published, e.echo_start_lead_ms());
+        assert_eq!(published, 2_000, "half a second of skip lead plus 1500 measured");
+
+        // A start commanded exactly that far ahead must be reachable. Only a
+        // join that actually FIRES re-measures its own cost, so the estimate
+        // moving is the proof it was not dropped.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64).unwrap_or(0);
+        h.send(Command::EchoStartAt {
+            entry: entry(4242),
+            start_sample: 0,
+            at_nanos: now + published * 1_000_000,
+        });
+        e.tick();
+        assert_ne!(e.echo_prep_ms, 1_500,
+                   "the join was declined rather than fired");
     }
 }

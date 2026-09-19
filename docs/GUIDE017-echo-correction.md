@@ -45,11 +45,17 @@ negative position to open at.* The knob that actually serves is **where the
 incoming passage sits inside the overlap**. Every transition has one, and
 starting the passage earlier overlaps a few milliseconds more and catches up,
 while starting it later overlaps a few less and waits. Nothing is skipped and
-nothing is repeated, so it is inaudible in both directions and symmetric by
-construction — there is no negative position, but there is always a slightly
-smaller overlap. It is a signed nudge to `should_admit`'s threshold, clamped so
-it can neither ask for audio that does not exist nor narrow through zero into a
-gap, which would be a worse fault than the offset it was correcting.
+nothing is repeated, so it is inaudible in both directions. It is a signed
+nudge to `should_admit`'s threshold, clamped so it can neither ask for audio
+that does not exist nor narrow through zero into a gap, which would be a worse
+fault than the offset it was correcting.
+
+**Corrected 2026-09-18 `[GDE-ECHO-372]`.** This paragraph claimed the knob was
+"symmetric by construction — there is always a slightly smaller overlap."
+*There is not:* `min(lead_out(A), lead_in(B))` against a **5 ms** lead-in
+median is the whole range of the "later" direction, so the clamp is where that
+correction ends rather than a rail around it. What the transition cannot
+absorb now goes to the frame trim `[GDE-ECHO-349]`.
 
 **`[GDE-ECHO-345]` The anchor's precision, not the ear's, sets how well this can
 work.** The residual is measured from a `DriftAnchor`, whose position comes from
@@ -75,8 +81,18 @@ a block is too small to drop from or has no room for a duplicate, because a
 trim skipped now simply happens a few milliseconds later and the schedule is a
 rate, not a queue of debts.
 
-**`[GDE-ECHO-355]` The trim runs on a fitted slope, never on the latest
-residual.** A single reading carries the anchor's ring jitter `[LOG-P4-010]`,
+*Corrected 2026-09-18 `[GDE-ECHO-373]`.* **A refusal has to be one the caller
+can see.** The mixer handed `apply_trim` a block exactly as long as its own
+buffer — `2048 * channels` against a threshold of 4096, the same number on a
+stereo device — so every *duplicate* was refused for want of one frame and a
+node running early could not be trimmed back at all. The block is now sized in
+frames with a frame of headroom, and the caller reads what `apply_trim`
+returned: a refused trim credits no debt, keeps its turn, and says so once.
+
+**`[GDE-ECHO-356]` The trim runs on a fitted slope, never on the latest
+residual.** *Renumbered from 355 on 2026-09-18: it was defined here and in
+[GUIDE020](GUIDE020-control-propagation.md), every citation meant GUIDE020's,
+and this one had none — so this was the edit nothing had to follow.* A single reading carries the anchor's ring jitter `[LOG-P4-010]`,
 so a position servo at the 500 us deadband the `Follower` was built with would
 fire most seconds in whichever direction the noise last pointed. `RateEstimate`
 fits a line across an hour instead, and the interval that slope calls for *is*
@@ -168,6 +184,12 @@ coarse one and pulls the overshoot forward on the fine, since there is no
 negative position to open at -- the asymmetry `[GDE-ECHO-340]` first ran into,
 now put to work rather than worked around.
 
+**And the fine knob may only spend what the coarse one can pay for**
+`[GDE-ECHO-372]` — the condition this was written without. On a 5 ms pair
+`(-138, +38)` delayed the transition by 5 ms and pulled the content forward by
+38, so a node asked to wait 100 ms arrived 33 ms sooner. The backstep is now
+capped at whole chunks the overlap can afford.
+
 **`[GDE-ECHO-349]` Below the mix quantum only the frame trim will do, and it
 was already there.** A frame is 23 us and the trim already drops or duplicates
 one, inaudibly, on the mixer thread -- it was simply wired to *rate* alone.
@@ -180,6 +202,13 @@ larger than the error, and the trim pays the remainder off one frame at a time.
 The two share an actuator, so they are summed into a single interval rather
 than run as two timers that would double the splice rate and argue about
 direction.
+
+*Extended 2026-09-18 `[GDE-ECHO-372]`.* The handover is no longer only
+downwards: whatever a transition **could not absorb** — on 5 ms pairs, the
+whole of any "later" correction — becomes a position debt at the same
+admission, *set* from the latest measurement rather than added, so repeating
+the measurement cannot compound it. Slow, and monotonic and inaudible, which
+the boundary knob in that direction was not.
 
 The budget is **100 ppm** -- one part in ten thousand, inaudible as pitch by a
 wide margin, about 4.4 frames a second so each splice is well clear of the
@@ -203,7 +232,9 @@ that steps the residual clears the window, exactly as it clears the rate fit.
 
 Three faults in this loop are recorded separately, because the pattern in them
 outlasts the particulars: [GUIDE019](GUIDE019-correction-faults.md)
-`[GDE-ECHO-351]`.
+`[GDE-ECHO-351]`. A later read of the built code found the same pattern in
+three more places, including a correction that increases the error it was
+given: [GUIDE021](GUIDE021-echo-review.md) `[GDE-ECHO-372]`.
 
 **`[GDE-ECHO-342]` The join bias, measured rather than assumed.** *Deferred
 through several rounds and fixed 2026-09-18, when it became the whole of what

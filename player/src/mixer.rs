@@ -275,6 +275,15 @@ mod tests {
 
     /// Both refusals `[GDE-ECHO-340]`: a trim skipped now happens on the next
     /// pass, so refusing costs nothing and forcing would corrupt the block.
+    ///
+    /// **The first case below used to be the production one, and nobody
+    /// connected the two numbers** `[GDE-ECHO-373]`. `filled` equal to
+    /// `buf.len()` is what the engine handed in on every stereo pass, so this
+    /// test asserted -- correctly, and uselessly -- that the duplicate half of
+    /// the endgame never fired. The engine now sizes its scratch one frame
+    /// longer than the block it mixes (`Engine::MIX_FRAMES`), so the refusal
+    /// stays a real guard against a caller that gets it wrong rather than a
+    /// description of the caller that exists.
     #[test]
     fn a_trim_refuses_rather_than_corrupting_a_block() {
         let mut buf = [1.0, -1.0, 2.0, -2.0];

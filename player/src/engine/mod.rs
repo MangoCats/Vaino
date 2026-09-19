@@ -114,6 +114,18 @@ pub struct EchoNode {
     /// What following is actually doing, in the follower's own words
     /// `[SPEC-ECHO-020]`. Empty while independent.
     pub follow_status: String,
+    /// How long before a commanded start should sound this node has to begin
+    /// arranging it `[GDE-ECHO-375]`.
+    ///
+    /// `skip_lead_ms` plus the preparation this node has actually **measured**
+    /// on itself `[GDE-ECHO-342]`. Published because the follower has to aim
+    /// its mid-passage join past it, and it was previously guessing with a
+    /// constant: a one-second budget against an engine that fires early by
+    /// 500 ms plus a measured figure permitted to reach two seconds, so a node
+    /// that paid for one slow seek had every later join declined as `TooLate`
+    /// -- and the log said the passage was missed, which reads like the
+    /// master's fault. Two models of one quantity, now one.
+    pub start_lead_ms: u64,
 }
 
 /// What the UI and the persistence layer read. Cheap to clone.
@@ -427,6 +439,9 @@ pub struct Engine {
     /// When a frame was last trimmed. Monotonic, because a wall clock can
     /// step `[GDE-ECHO-365]` and this is an interval.
     echo_last_trim: Option<std::time::Instant>,
+    /// Whether the last trim the mixer tried was refused, so a refusal is
+    /// reported once rather than twenty times a second `[GDE-ECHO-378]`.
+    echo_trim_refused: bool,
     /// An offset correction waiting for the next admission, ms earlier
     /// `[GDE-ECHO-340]`. Zero is no correction, which is also the resting
     /// state of a node that is already level.
@@ -589,12 +604,30 @@ fn unix_now() -> i64 {
 mod persist;
 
 impl Engine {
-    /// Least worth mixing in one pass, in samples `[GDE-FBD-090]`.
+    /// Least worth mixing in one pass, in **frames** `[GDE-FBD-090]`.
     ///
-    /// ~46 ms at 44.1 kHz stereo, against a ring holding ~14 s. Sized to be
-    /// large enough that the pass earns its lock acquisition and small enough
-    /// that it is a rounding error against the buffer it feeds.
-    const MIN_SUBMIT: usize = 4096;
+    /// ~46 ms at 44.1 kHz, against a ring holding ~14 s. Sized to be large
+    /// enough that the pass earns its lock acquisition and small enough that
+    /// it is a rounding error against the buffer it feeds.
+    ///
+    /// **In frames, not samples, and that is the fix for `[GDE-ECHO-373]`.**
+    /// It used to be 4096 samples while `scratch` was `2048 * channels` --
+    /// the same number on a stereo device, so every pass handed `apply_trim`
+    /// a block exactly as long as its own buffer and every duplicate was
+    /// refused for want of one frame. Both readers of this figure are about
+    /// *time* -- how much audio is worth one lock acquisition, and the
+    /// quantum admission timing can shift by `[GDE-ECHO-347]` -- and a figure
+    /// in samples means a different length of audio on every channel count.
+    /// In frames it is 46 ms whatever the device is, and `scratch` is sized
+    /// from it rather than beside it.
+    const MIX_FRAMES: usize = 2048;
+
+    /// The mix block in samples, for the channel count this engine is running
+    /// at. Always strictly shorter than `scratch`, by the one frame
+    /// `apply_trim` needs to put a duplicate in `[GDE-ECHO-373]`.
+    fn min_submit(&self) -> usize {
+        Self::MIX_FRAMES * self.out_channels.max(1)
+    }
 
     /// How often the shared snapshot is rewritten.
     ///
@@ -642,6 +675,7 @@ impl Engine {
             echo_debt_frames: 0,
             echo_prep_ms: Self::ECHO_PREP_GUESS_MS,
             echo_last_trim: None,
+            echo_trim_refused: false,
             echo_next_shift_ms: 0,
             echo_start: None,
             echo_seen_recoveries: 0,
@@ -651,7 +685,9 @@ impl Engine {
             last_lock_failures: 0,
             out_rate,
             out_channels,
-            scratch: vec![0.0; 2048 * out_channels],
+            // One frame longer than the block that is ever mixed into it, so
+            // a duplicate always has somewhere to go `[GDE-ECHO-373]`.
+            scratch: vec![0.0; (Self::MIX_FRAMES + 1) * out_channels.max(1)],
             state: Arc::clone(&state),
             rx,
             playing: false,
@@ -1369,12 +1405,18 @@ impl Engine {
     ///
     /// Position-driven via the shared rule, never buffer-driven `[XFD-BEH-C1-020]`.
     fn admit_due(&mut self) {
+        // **Split once, from the pair that is actually about to hand over.**
+        // The overlap the coarse knob spends belongs to *this* transition, and
+        // everything below either reads the queue head or removes it -- so
+        // re-deriving the split after `advance()` would be asking a different
+        // pair `[GDE-ECHO-372]`.
+        let (overlap, ceiling) = self.next_transition_overlap();
+        let (coarse, fine) = self.echo_split();
         let due = match (self.queue.peek(), self.live.last()) {
             (Some(next), Some(l)) => {
                 // The offset correction rides here `[GDE-ECHO-340]`, but only
                 // its coarse half `[GDE-ECHO-347]`.
-                should_admit_nudged(
-                    &l.entry, self.played_ms(l), next, self.echo_split().0)
+                should_admit_nudged(&l.entry, self.played_ms(l), next, coarse)
             }
             (Some(_), None) => true,
             _ => false,
@@ -1388,25 +1430,38 @@ impl Engine {
         let Some(entry) = self.queue.advance() else { return };
         // Spent. A correction left in place would be applied again at every
         // boundary, turning a one-off nudge into a standing rate error.
-        // **Split once, before it is spent.** An earlier version consumed
-        // `echo_next_shift_ms` here and re-derived the split further down,
-        // where it was already zero -- so the fine half was silently dropped
-        // and every late correction did nothing at all, while this very line
-        // logged the value it was about to discard. A log computed at a
-        // different point from the action is not evidence of the action
-        // `[GDE-ECHO-347]`.
-        let (_, fine) = self.echo_split();
+        // An earlier version consumed `echo_next_shift_ms` here and re-derived
+        // the split further down, where it was already zero -- so the fine
+        // half was silently dropped and every late correction did nothing at
+        // all, while this very line logged the value it was about to discard.
+        // A log computed at a different point from the action is not evidence
+        // of the action `[GDE-ECHO-347]`.
         if self.echo_next_shift_ms != 0 {
-            // A commanded start brings its own position and outranks this; say
-            // which happened rather than claiming a shift that was dropped
+            // A commanded start brings its own position and outranks this, and
+            // takes the fine knob with it.
+            let superseded = self.pending_resume.is_some();
+            let delivered = Self::delivered_shift_ms(
+                coarse, if superseded { 0 } else { fine }, overlap, ceiling);
+            // **What the transition could not absorb is not lost and not
+            // pretended away** `[GDE-ECHO-372]`, `[GDE-ECHO-378]`. A node
+            // asked to move *later* can only give back an overlap that
+            // exists, and this library's is about five milliseconds; the rest
+            // goes to the frame trim, which is the one actuator that works in
+            // both directions and is inaudible at 23 us a time
+            // `[GDE-ECHO-349]`. Set rather than added: it is the outstanding
+            // position error as of the most recent measurement, not a second
+            // debt beside it.
+            let left = self.echo_next_shift_ms - delivered;
+            self.echo_debt_frames = left.saturating_mul(self.out_rate.max(1) as i64) / 1000;
+            // Say which happened rather than claiming a shift that was dropped
             // `[GDE-ECHO-351]`.
-            if self.pending_resume.is_some() {
+            if superseded {
                 eprintln!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo_next_shift_ms.abs());
             } else {
-                eprintln!("echo-offset: passage {} shifted {} ms {} ({} ms into the passage)",
+                eprintln!("echo-offset: passage {} asked for {} ms {}; the transition took {} ms of it ({} ms into the passage, {} ms of overlap to spend), {} ms left to the frame trim",
                           entry.passage_id, self.echo_next_shift_ms.abs(),
                           if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
-                          fine);
+                          delivered.abs(), fine, overlap, left.abs());
             }
             self.echo_next_shift_ms = 0;
         }
@@ -1618,7 +1673,11 @@ impl Engine {
     /// Ceiling on the measured figure, so one pathological join -- a cold
     /// cache, a long seek into a capture -- cannot leave every later join
     /// firing seconds early `[PI-CHR-075]`.
-    const ECHO_PREP_MAX_MS: u64 = 2_000;
+    ///
+    /// `pub(crate)` because the follower has to aim its mid-join budget past
+    /// it, and a budget derived from a different number is `[GDE-ECHO-375]`
+    /// all over again.
+    pub(crate) const ECHO_PREP_MAX_MS: u64 = 2_000;
 
     /// Begin the master's passage at the instant its schedule named.
     ///
@@ -1627,6 +1686,17 @@ impl Engine {
     /// is what makes `submit_at` the right instant to act on here. An ordinary
     /// passage boundary needs none of this -- the ring depth already holds the
     /// fleet together `[LOG-ECHO-030]` and there is nothing to command.
+    /// How long before a commanded start should **sound** this node has to
+    /// begin arranging it `[GDE-ECHO-375]`.
+    ///
+    /// The single figure `fire_echo_start` subtracts and `EchoNode` publishes.
+    /// One function rather than two arithmetics, because a follower aiming at
+    /// a budget smaller than this has every join declined and the declining is
+    /// invisible from the other end.
+    pub(crate) fn echo_start_lead_ms(&self) -> u64 {
+        self.skip_lead_ms + self.echo_prep_ms
+    }
+
     fn fire_echo_start(&mut self) {
         let Some((_, _, at)) = self.echo_start.as_ref() else { return };
         let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
@@ -1643,7 +1713,7 @@ impl Engine {
         // caller named an instant the audio should sound, and everything
         // between here and there has to be subtracted, not just the part that
         // happens to be a constant `[GDE-ECHO-342]`.
-        let at = at.saturating_sub((self.skip_lead_ms + self.echo_prep_ms) * 1_000_000);
+        let at = at.saturating_sub(self.echo_start_lead_ms() * 1_000_000);
         match crate::echo::start_verdict(
             at, now, Self::ECHO_START_LATE_LIMIT, Self::ECHO_START_FAR_LIMIT) {
             crate::echo::StartVerdict::Wait => return,
@@ -1655,10 +1725,21 @@ impl Engine {
                 return;
             }
             crate::echo::StartVerdict::TooLate { by } => {
+                // **And the estimate backs off** `[GDE-ECHO-375]`. Firing
+                // early by more than a start's whole lead is itself the way a
+                // start becomes too late, and `echo_prep_ms` is revised only
+                // by a join that fires -- so an estimate large enough to
+                // prevent every join could never be corrected by one. Decayed
+                // towards the cold guess rather than reset to it, on the same
+                // reasoning as the measurement itself: one refusal should move
+                // the figure, not replace it.
+                let was = self.echo_prep_ms;
+                self.echo_prep_ms =
+                    ((was * 3 + Self::ECHO_PREP_GUESS_MS) / 4).max(Self::ECHO_PREP_GUESS_MS);
                 // Said out loud. A node that silently declines to join looks
                 // exactly like one that was never told to `[GOV-SRC-040]`.
-                eprintln!("echo-start: passage missed by {} ms; holding for the next schedule",
-                          by.as_millis());
+                eprintln!("echo-start: passage missed by {} ms; holding for the next schedule (assuming {was} ms of preparation, now {})",
+                          by.as_millis(), self.echo_prep_ms);
                 self.echo_start = None;
                 return;
             }
@@ -1794,7 +1875,7 @@ impl Engine {
     /// amount.
     ///
     /// **Admission timing cannot do this alone.** The mixer only runs with at
-    /// least `MIN_SUBMIT` of room, so an incoming passage's first sample lands
+    /// least one mix block of room, so an incoming passage's first sample lands
     /// on a mix-chunk boundary and the achievable shift is quantised to 46 ms
     /// at 44.1 kHz. Measured on the fleet 2026-09-18: the loop converged in two
     /// transitions and then dithered at exactly +/-1 chunk for half an hour,
@@ -1809,26 +1890,75 @@ impl Engine {
     /// to sound LATER, admission goes back a whole chunk and the overshoot is
     /// pulled forward again by the origin.
     fn echo_split(&self) -> (i64, u64) {
-        let d = self.echo_next_shift_ms;
-        if d == 0 {
+        let (overlap, ceiling) = self.next_transition_overlap();
+        self.split_shift(self.echo_next_shift_ms, overlap, ceiling)
+    }
+
+    /// The overlap the transition now in prospect has to spend, and the most
+    /// any nudge could ever ask of it.
+    ///
+    /// `(0, 0)` when there is no transition in prospect -- nothing sounding,
+    /// or nothing queued -- which is the honest answer rather than a
+    /// convenient one: there is no overlap to nudge.
+    fn next_transition_overlap(&self) -> (u64, u64) {
+        match (self.live.last(), self.queue.peek()) {
+            (Some(l), Some(next)) => (
+                crate::queue::overlap_ms(&l.entry, next),
+                l.entry.duration_ms().min(next.duration_ms()),
+            ),
+            _ => (0, 0),
+        }
+    }
+
+    /// The split itself, against the overlap admission actually has.
+    ///
+    /// **The fine knob may only spend what the coarse knob can pay for**
+    /// `[GDE-ECHO-372]`. It moves the node one way only -- earlier -- so
+    /// handing it an overshoot from a coarse step that was then clamped away
+    /// is a correction with the wrong sign, which is worse than none. So the
+    /// backstep is capped at whole chunks the transition's own overlap can
+    /// afford, and whatever is left over is not spent here at all: the caller
+    /// hands it to the frame trim, the one actuator that works in both
+    /// directions `[GDE-ECHO-349]`.
+    fn split_shift(&self, shift_ms: i64, overlap_ms: u64, ceiling_ms: u64) -> (i64, u64) {
+        if shift_ms == 0 {
             return (0, 0);
         }
-        if d > 0 {
+        if shift_ms > 0 {
             // Late: skip that much of the next passage and be level at once.
-            return (0, d as u64);
+            // Not quantised, and it asks the transition for nothing.
+            return (0, shift_ms as u64);
         }
-        // Early: no negative position exists, so go back whole chunks and
-        // spend the remainder forwards.
+        // Early, which is the hard direction: there is no negative position to
+        // open at, so only admission can delay -- and admission can only give
+        // back an overlap that exists.
         let chunk = self.echo_chunk_ms().max(1);
-        let want = d.unsigned_abs();
-        let back = want.div_ceil(chunk) * chunk;
-        (-(back as i64), back - want)
+        let want = shift_ms.unsigned_abs();
+        // Whole chunks: the mixer runs only with a block of room, so an
+        // incoming passage's first sample lands on a block boundary and a
+        // part-chunk step moves the transition not at all `[GDE-ECHO-347]`.
+        let asked = want.div_ceil(chunk) * chunk;
+        let afford = (overlap_ms.min(ceiling_ms) / chunk) * chunk;
+        let back = asked.min(afford);
+        (-(back as i64), back.saturating_sub(want))
+    }
+
+    /// What a `(coarse, fine)` pair actually moves the air by. Positive is
+    /// earlier, in the same sign as the request.
+    ///
+    /// **The assertion this subsystem did not have** `[GDE-ECHO-378]`. It
+    /// reads the same clamp the actuator reads `[spend_overlap_ms]`, so a
+    /// test can follow a correction from the decision all the way to what
+    /// admission will really do with it -- which is the one boundary where
+    /// every fault in `[GDE-ECHO-351]` and `[GDE-ECHO-372]` lived.
+    fn delivered_shift_ms(coarse: i64, fine: u64, overlap_ms: u64, ceiling_ms: u64) -> i64 {
+        let spent = crate::queue::spend_overlap_ms(overlap_ms, ceiling_ms, coarse) as i64;
+        (spent - overlap_ms as i64) + fine as i64
     }
 
     /// One mix chunk, in milliseconds -- the resolution of admission timing.
     fn echo_chunk_ms(&self) -> u64 {
-        let frames = (Self::MIN_SUBMIT / self.out_channels.max(1)) as u64;
-        frames * 1000 / self.out_rate.max(1) as u64
+        Self::MIX_FRAMES as u64 * 1000 / self.out_rate.max(1) as u64
     }
 
     /// How hard a position debt may be paid off, in ppm `[GDE-ECHO-349]`.
@@ -1922,7 +2052,9 @@ impl Engine {
                 // forever: `out_room` stays above the threshold, the effective
                 // room stays below it, the early return fires every pass and
                 // nothing ever submits to update the cache.
-                if Self::submit_room_frames(self.out_room, self.echo_depth_shortfall) < Self::MIN_SUBMIT {
+                if Self::submit_room_frames(self.out_room, self.echo_depth_shortfall)
+                    < self.min_submit()
+                {
                     self.out_room = o.free();
                 }
                 Self::submit_room_frames(self.out_room, self.echo_depth_shortfall)
@@ -1930,14 +2062,18 @@ impl Engine {
             None => self.scratch.len(),
         };
         // Whole frames only; a partial frame would offset every later sample.
-        let want = room.min(self.scratch.len()) / self.out_channels * self.out_channels;
+        // Capped at the block rather than at `scratch`, which is a frame
+        // longer on purpose: that frame is where a duplicate goes, and mixing
+        // into it would leave `apply_trim` nowhere to put one `[GDE-ECHO-373]`.
+        let ch = self.out_channels.max(1);
+        let want = room.min(self.min_submit()) / ch * ch;
         // Don't wake the whole chain to move a handful of samples. The ring
         // holds ~14 s, so there is nothing to gain by topping it up the instant
         // a few samples drain, and a great deal to lose: mixing whatever had
         // appeared since the last pass meant hundreds of passes a second, each
         // taking the output lock, on a machine with four slow cores. The
         // decoders already pace themselves this way `[DECODE_TOPUP_FRAMES]`.
-        if want == 0 || (want < Self::MIN_SUBMIT && self.path.ring.is_some()) {
+        if want == 0 || (want < self.min_submit() && self.path.ring.is_some()) {
             return 0;
         }
 
@@ -1952,15 +2088,35 @@ impl Engine {
         // so there is no second governor to disagree with it.
         let filled = match self.due_trim() {
             Some(drop_frame) => {
-                self.echo_last_trim = Some(std::time::Instant::now());
-                // One frame of the debt, whichever job the trim was doing --
-                // the actuator delivered one frame and the position moved by
-                // one frame, so the debt is one frame smaller.
-                if self.echo_debt_frames != 0 {
-                    self.echo_debt_frames -= self.echo_debt_frames.signum();
+                let after = crate::mixer::apply_trim(&mut self.scratch, filled,
+                                                     ch, drop_frame);
+                if after == filled {
+                    // **Refused, and it says so** `[GDE-ECHO-378]`. A block
+                    // too small to drop from, or one this pass has no room to
+                    // duplicate into: nothing moved, so nothing is spent and
+                    // nothing is credited, and the trim keeps its turn. An
+                    // actuator that declines silently is the whole shape of
+                    // `[GDE-ECHO-351]`, so this is said once per episode
+                    // rather than at the mixer's own cadence.
+                    if !self.echo_trim_refused {
+                        self.echo_trim_refused = true;
+                        eprintln!("echo-trim: a {} was refused on a {filled}-sample block; nothing credited, retrying",
+                                  if drop_frame { "drop" } else { "duplicate" });
+                    }
+                } else {
+                    self.echo_trim_refused = false;
+                    // The clock restarts only when a frame actually moved: a
+                    // trim skipped now must happen a few milliseconds later,
+                    // not be counted as already done.
+                    self.echo_last_trim = Some(std::time::Instant::now());
+                    // One frame of the debt, whichever job the trim was doing
+                    // -- credited by the frame that moved rather than by the
+                    // intention to move one `[GDE-ECHO-373]`.
+                    if self.echo_debt_frames != 0 {
+                        self.echo_debt_frames -= self.echo_debt_frames.signum();
+                    }
                 }
-                crate::mixer::apply_trim(&mut self.scratch, filled,
-                                         self.out_channels.max(1), drop_frame)
+                after
             }
             None => filled,
         };
@@ -2113,6 +2269,7 @@ impl Engine {
                 // Written by the follower task, which is the only thing that
                 // knows; left as it found it here.
                 follow_status: s.echo_node.follow_status.clone(),
+                start_lead_ms: self.echo_start_lead_ms(),
             };
             s.playing = self.playing;
             s.current = self.shown.as_ref().map(|(e, _)| e.clone());
@@ -2225,34 +2382,97 @@ mod depth_tests {
     /// `[GDE-ECHO-347]`: the two knobs together must shift by exactly what
     /// was asked, in both directions, without the 46 ms quantum the coarse
     /// one alone is stuck with.
+    ///
+    /// **Against a stated overlap, which is the whole correction to this
+    /// test** `[GDE-ECHO-372]`. It used to call `echo_split()` on an engine
+    /// with nothing sounding and nothing queued and assert only that the two
+    /// halves summed to the request -- true, and silent about whether
+    /// admission could deliver the coarse half at all. A pair with seconds of
+    /// overlap can; the library's typical 5 ms pair cannot, and the test below
+    /// says which case it is describing.
     #[test]
     fn an_offset_correction_splits_into_a_coarse_and_a_fine_part() {
         let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
         e.out_rate = 44_100;
         e.out_channels = 2;
         let chunk = e.echo_chunk_ms() as i64;
-        assert_eq!(chunk, 46, "one mix chunk at 44.1 kHz stereo");
+        assert_eq!(chunk, 46, "one mix chunk at 44.1 kHz");
+        // A crossfade with real overlap -- the rare-but-wanted case, a slow
+        // fade-out met by a long lead-in.
+        const ROOMY: u64 = 3_000;
+        const CEILING: u64 = 240_000;
 
         // Nothing asked, nothing done.
-        assert_eq!(e.echo_split(), (0, 0));
+        assert_eq!(e.split_shift(0, ROOMY, CEILING), (0, 0));
 
         // Late: all of it on the fine knob, so no quantum applies at all.
         // 43 ms is the figure the fleet dithered on for half an hour.
-        e.echo_next_shift_ms = 43;
-        assert_eq!(e.echo_split(), (0, 43));
+        assert_eq!(e.split_shift(43, ROOMY, CEILING), (0, 43));
 
         // Early: back one whole chunk, then pull the overshoot forward. The
         // sum is what was asked, to the millisecond.
-        e.echo_next_shift_ms = -43;
-        let (coarse, fine) = e.echo_split();
+        let (coarse, fine) = e.split_shift(-43, ROOMY, CEILING);
         assert_eq!((coarse, fine), (-46, 3));
         assert_eq!(coarse + fine as i64, -43, "the two together are the request");
 
         // And across a chunk boundary, still exact.
-        e.echo_next_shift_ms = -100;
-        let (coarse, fine) = e.echo_split();
+        let (coarse, fine) = e.split_shift(-100, ROOMY, CEILING);
         assert_eq!(coarse + fine as i64, -100);
         assert_eq!(coarse % chunk, 0, "the coarse part is whole chunks");
+
+        // With nothing sounding there is no transition and no overlap, so the
+        // early direction has nothing to spend and says so rather than
+        // inventing a step.
+        e.echo_next_shift_ms = -100;
+        assert_eq!(e.echo_split(), (0, 0));
+    }
+
+    /// `[GDE-ECHO-372]`: a correction must never move the node the way it was
+    /// **not** asked.
+    ///
+    /// The coarse knob spends `min(lead_out(A), lead_in(B))`, and this library
+    /// is deliberately built of 5 ms lead-ins -- the ramps hide pops, they do
+    /// not cross-fade. So `echo_split(-100)`'s `(-138, +38)` reached
+    /// admission as `(5 - 138).clamp(0, ..)` = 0, delaying the transition by
+    /// five milliseconds rather than 138, while the fine half was applied
+    /// unconditionally: a node asked to move 100 ms later moved about 33 ms
+    /// earlier, and the next measurement found a larger error than the last.
+    ///
+    /// The split's own test asserted that coarse and fine sum to the request
+    /// -- they do -- and the only test that followed a correction into the
+    /// audio used `+120`, the direction where coarse is zero and the clamp is
+    /// never reached.
+    #[test]
+    fn a_correction_never_moves_the_node_the_way_it_was_not_asked() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        e.out_channels = 2;
+        // The measured library: lead-in median 5 ms, lead-out median 946
+        // `[crate::queue]`, against four-minute passages.
+        const OVERLAP: u64 = 5;
+        const CEILING: u64 = 240_000;
+        for asked in [-1_i64, -5, -43, -46, -100, -138, -500] {
+            let (coarse, fine) = e.split_shift(asked, OVERLAP, CEILING);
+            let got = Engine::delivered_shift_ms(coarse, fine, OVERLAP, CEILING);
+            assert!(got <= 0,
+                    "asked to start {} ms later, and the transition moved {got} ms EARLIER",
+                    -asked);
+            assert!(got >= asked, "asked for {asked} ms and overshot to {got}");
+        }
+        // And where there IS overlap to spend, the pair still lands exactly on
+        // the request -- the quantum is absorbed by the fine knob, which is
+        // what `[GDE-ECHO-347]` built the split for.
+        const ROOMY: u64 = 3_000;
+        for asked in [-43_i64, -46, -100, -500] {
+            let (coarse, fine) = e.split_shift(asked, ROOMY, CEILING);
+            assert_eq!(Engine::delivered_shift_ms(coarse, fine, ROOMY, CEILING), asked,
+                       "a transition with room must absorb the whole request");
+            assert_eq!(coarse % e.echo_chunk_ms() as i64, 0,
+                       "the coarse part is whole mix chunks or it moves nothing");
+        }
+        // The late direction needs no overlap at all: opening the passage
+        // further in is not quantised and costs the transition nothing.
+        assert_eq!(e.split_shift(120, 0, CEILING), (0, 120));
     }
 
     /// A wild estimate is clamped, not obeyed: at 5000 ppm the trim would run
@@ -2383,6 +2603,36 @@ mod tests {
         });
         e.tick();
         assert!(e.echo_start.is_none(), "a fired start is taken, not left to fire twice");
+    }
+
+    /// `[GDE-ECHO-375]`'s second half: an estimate that prevents every join
+    /// can never be corrected by one, so it has to back itself off.
+    ///
+    /// `echo_prep_ms` is revised only inside the path a join takes when it
+    /// **fires**. A node that paid once for a slow seek into a long capture
+    /// `[PI-CHR-075]` therefore fired earlier and earlier of its own accord,
+    /// and once the figure carried it past the late limit every subsequent
+    /// join was dropped -- with nothing left that could ever lower it again.
+    /// A self-calibrating constant needs both directions or it is a ratchet.
+    #[test]
+    fn a_preparation_estimate_no_join_can_survive_backs_itself_off() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.echo_prep_ms = Engine::ECHO_PREP_MAX_MS;
+        h.send(Command::EchoStartAt {
+            entry: entry(4242, "nonexistent.flac"),
+            start_sample: 0,
+            // Half a second out, which this node now believes it needs 2.5 s
+            // to arrange: dropped as late.
+            at_nanos: nanos_now() + 500_000_000,
+        });
+        e.tick();
+        assert!(e.echo_start.is_none(), "dropped");
+        assert!(e.echo_prep_ms < Engine::ECHO_PREP_MAX_MS,
+                "still {} ms, so the next join is declined exactly as this one was",
+                e.echo_prep_ms);
+        // Never below the cold guess, which is the best figure available
+        // without a measurement.
+        assert!(e.echo_prep_ms >= Engine::ECHO_PREP_GUESS_MS);
     }
 
     /// Too late is not "late": it is dropped, so the trim loop is never handed
@@ -2570,6 +2820,141 @@ mod tests {
         assert_eq!(opened, 120, "opened at {opened} ms, so the correction never reached it");
         assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
         let _ = std::fs::remove_file(&wav);
+    }
+
+    /// The other direction of the test above, which is the one that was never
+    /// written `[GDE-ECHO-372]`.
+    ///
+    /// `+120` is the direction where the coarse knob is zero and its clamp is
+    /// never reached. `-120` is the direction where the clamp destroys the
+    /// coarse step and the fine half then moves the node the wrong way: these
+    /// passages have no overlap at all, so the transition cannot be delayed by
+    /// a millisecond, and opening the next passage 18 ms in would make a node
+    /// asked to wait 120 ms arrive 18 ms sooner instead.
+    #[test]
+    fn an_early_correction_does_not_open_the_next_passage_further_in() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let wav = wav_of(30_000);
+        let mut a = entry(1, wav.to_str().unwrap());
+        a.end_ms = 30_000;
+        let mut b = entry(2, wav.to_str().unwrap());
+        b.end_ms = 30_000;
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |e| e.shown.is_some()), "it should be playing");
+
+        // 120 ms early: start the next passage 120 ms LATER.
+        h.send(Command::EchoCorrectNextStart(-120));
+        e.drain_commands();
+
+        assert!(tick_until(&mut e, |e| e.live.iter().any(|l| l.entry.passage_id == 2)),
+                "the second passage should be admitted");
+        let opened = e.live.iter().find(|l| l.entry.passage_id == 2).unwrap().origin_ms;
+        assert_eq!(opened, 0,
+                   "opened {opened} ms in, which sounds EARLIER -- the opposite of what was asked");
+        assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
+        // Nothing was delivered, so the whole request went to the actuator
+        // that can deliver it `[GDE-ECHO-349]`.
+        assert!(e.echo_debt_frames < 0,
+                "a correction the transition cannot take must reach the frame trim");
+        assert_eq!(e.echo_debt_frames, -120 * e.out_rate as i64 / 1000);
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// `[GDE-ECHO-373]`: the endgame must reach the audio in **both**
+    /// directions, at the block size the engine actually submits.
+    ///
+    /// `scratch` was `2048 * channels` and the submission threshold 4096,
+    /// which on a stereo device are the same number -- so `mix_and_submit`
+    /// handed `apply_trim` a block exactly as long as its own buffer and every
+    /// duplicate was refused for want of one frame. The mixer's own test
+    /// asserted that refusal with `filled` equal to the buffer length, which
+    /// **is** the production case; nobody connected the two numbers. A node
+    /// running early could not be trimmed back at all, and the rate trim was
+    /// one-directional with it.
+    #[test]
+    fn a_duplicated_frame_reaches_the_ring_at_the_block_the_engine_submits() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let wav = wav_of(30_000);
+        let mut a = entry(1, wav.to_str().unwrap());
+        a.end_ms = 30_000;
+        e.enqueue(a);
+        h.send(Command::Play);
+        e.drain_commands();
+        // Warmed up with the output ring left to fill, which is exactly what
+        // back-pressure does in life: the mixer waits for room while the
+        // decoder runs ahead, so a pass is limited by the block size rather
+        // than by what the decoder happened to have produced.
+        let drain = |ring: &crate::output::OutputRing| {
+            let mut st = ring.state.lock().unwrap();
+            let len = st.ring.len();
+            let mut sink = vec![0.0f32; len];
+            st.ring.read(&mut sink);
+        };
+        let block = e.min_submit();
+        let mut ready = false;
+        for _ in 0..5_000 {
+            e.tick();
+            if e.live.first().is_some_and(|l| l.stream.ring.len() >= 4 * block) {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "the decoder should have run ahead of the mixer");
+
+        drain(&ring);
+        let plain = e.mix_and_submit();
+        assert_eq!(plain, block, "a plain pass submits exactly one block");
+
+        // Now this node is running EARLY, which is repaired by repeating a
+        // frame -- the half of the actuator that never fired.
+        h.send(Command::SetEchoRate(-13.92));
+        e.drain_commands();
+        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+        assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
+        drain(&ring);
+        let trimmed = e.mix_and_submit();
+        assert_eq!(trimmed, plain + e.out_channels,
+                   "the duplicated frame never reached the ring: {trimmed} against {plain}");
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// The invariant the two numbers have to keep, stated where a future
+    /// change to either will trip over it `[GDE-ECHO-373]`.
+    #[test]
+    fn the_mix_block_always_leaves_room_for_a_duplicated_frame() {
+        let (e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        assert!(e.scratch.len() >= e.min_submit() + e.out_channels,
+                "a block of {} in a buffer of {} has nowhere to put a duplicate",
+                e.min_submit(), e.scratch.len());
+    }
+
+    /// `[GDE-ECHO-373]`'s second half: the debt was credited by the intention
+    /// to move a frame rather than by the frame that moved, so a negative
+    /// offset counted itself down to zero over eight minutes while the log
+    /// said frames were being trimmed and no sample anywhere had changed.
+    #[test]
+    fn a_refused_trim_credits_no_debt_and_keeps_its_turn() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.out_rate = 44_100;
+        // 10 ms early: a position debt to be repaid by repeating frames.
+        h.send(Command::EchoShedOffset(-10));
+        e.drain_commands();
+        let owed = e.echo_debt_frames;
+        assert!(owed < 0, "a node ahead owes a negative debt");
+        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+        assert_eq!(e.due_trim(), Some(false));
+
+        // Nothing is playing, so the mixer produces no frames at all and there
+        // is nothing to duplicate.
+        e.mix_and_submit();
+        assert_eq!(e.echo_debt_frames, owed,
+                   "a frame that never moved cannot pay a frame of debt");
+        assert!(e.due_trim().is_some(),
+                "a refused trim must still be due, not wait out another interval");
     }
 
     /// A skip that opens a passage part-way in reports THAT position, not

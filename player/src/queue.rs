@@ -257,10 +257,32 @@ pub fn should_admit_nudged(
     next: &QueueEntry,
     nudge_ms: i64,
 ) -> bool {
-    let overlap = overlap_ms(current, next);
-    let ceiling = current.duration_ms().min(next.duration_ms());
-    let want = (overlap as i64).saturating_add(nudge_ms).clamp(0, ceiling as i64) as u64;
+    let want = spend_overlap_ms(
+        overlap_ms(current, next),
+        current.duration_ms().min(next.duration_ms()),
+        nudge_ms,
+    );
     current.duration_ms().saturating_sub(played_ms) <= want
+}
+
+/// The overlap a nudge will **actually** spend, as against the one it asked
+/// for.
+///
+/// Separated out so a correction can be tested against what admission will do
+/// with it rather than against what it requested `[GDE-ECHO-372]`. For most of
+/// this library those are very different numbers: the lead-in median is 5 ms,
+/// so a typical pair has about five milliseconds of overlap to give back and a
+/// request to admit 138 ms later is clamped to admitting 5 ms later. Nothing
+/// downstream could see that, which is how an offset correction came to
+/// increase the error it was given.
+///
+/// The clamp itself is unchanged and is not the fault: widening past the
+/// shorter passage would ask for audio that does not exist, and there is no
+/// negative overlap to narrow into -- a transition admitted "later" than the
+/// outgoing passage's own end simply happens at that end, because the ring is
+/// filled contiguously and nothing here inserts silence.
+pub fn spend_overlap_ms(overlap_ms: u64, ceiling_ms: u64, nudge_ms: i64) -> u64 {
+    (overlap_ms as i64).saturating_add(nudge_ms).clamp(0, ceiling_ms as i64) as u64
 }
 
 /// The upcoming passages, in order.

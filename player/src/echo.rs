@@ -320,6 +320,14 @@ pub enum Placement {
     Late { by: Duration },
 }
 
+/// **Status: the durable fix, deliberately not taken yet** `[GDE-ECHO-342]`,
+/// `[GDE-ECHO-377]`. Deriving a commanded start's placement from the target
+/// air time at the moment the ring is cut -- after the work, not before -- is
+/// what would retire `echo_prep_ms` and its self-calibrating guess entirely.
+/// It was not taken because `cut_ring_to_incoming` is the real-time path
+/// every ordinary user skip also uses, and a measured constant reaches most
+/// of the benefit without touching it. Nothing calls this; that is a standing
+/// decision with a reason, not an oversight.
 pub fn placement(
     sched: &Schedule,
     node: NodeTiming,
@@ -348,15 +356,6 @@ pub fn placement(
     Placement::Depth(depth)
 }
 
-/// How far this node is from the master, in nanoseconds, for the same sample.
-///
-/// Positive means **this node is late** -- its audio reached the air after the
-/// master's did, so it must speed up or start earlier. The sign is stated here
-/// because it is the one a test catches and listening does not.
-pub fn residual_ns(anchor: &DriftAnchor, local_heard_at: WallNanos) -> i64 {
-    local_heard_at as i64 - anchor.heard_at as i64
-}
-
 /// When this node reached the master's anchored sample.
 ///
 /// **The two anchors are never about the same sample.** The master's crossed a
@@ -368,6 +367,15 @@ pub fn residual_ns(anchor: &DriftAnchor, local_heard_at: WallNanos) -> i64 {
 /// So the local reading is carried along its own playback to the sample the
 /// master named, and only then compared. Positions advance at one millisecond
 /// per millisecond, so this is a subtraction rather than a model.
+///
+/// **The only residual arithmetic in this module, deliberately.** There used
+/// to be a `residual_ns` beside it that subtracted the two *timestamps* --
+/// the defect `[GDE-ECHO-345]` records as measuring the network rather than
+/// the alignment -- kept alive by nothing but its own test, under a name that
+/// sounded like the right one to reach for. It is gone `[GDE-ECHO-377]`.
+/// Subtract `anchor.heard_at` from what this returns and the sign convention
+/// is the usual one: **positive means this node is late**, its audio reached
+/// the air after the master's, so it must speed up or start earlier.
 pub fn local_at_sample(local: &AirPosition, anchor: &DriftAnchor) -> i64 {
     let anchor_ms = anchor.sample.saturating_mul(1000) / anchor.rate.max(1) as u64;
     local.at as i64 + (anchor_ms as i64 - local.position_ms as i64) * 1_000_000
@@ -891,6 +899,23 @@ impl Follower {
     /// anchor, a voided basis on either side, or the two describing *different
     /// passages*, which is the case a naive implementation would silently
     /// treat as an enormous error and trim hard against `[GOV-SRC-040]`.
+    ///
+    /// **Status: reachable, and not the live path** `[GDE-ECHO-377]`. The
+    /// running follower does not trim from here -- it fits a slope across an
+    /// hour `[GDE-ECHO-356]` and commands ppm, because one anchor reading
+    /// carries tens of milliseconds of ring jitter `[LOG-P4-010]` and a
+    /// position servo on it hunts. `echoprobe` is the only caller, and it
+    /// passes `local: None`, so in the tree as it stands nothing reaches the
+    /// arithmetic below outside this module's own tests -- `basis`,
+    /// `deadband`, `min_trim_interval` and `last_trim` with it.
+    ///
+    /// It is kept rather than deleted because it is the decision an observer
+    /// needs the moment one has an air position to offer. **Anything adopting
+    /// it must add the clock translation first**: this subtracts two
+    /// instants that are on two different nodes' wall clocks, where the live
+    /// path carries the local reading into the master's frame before
+    /// comparing `[GDE-ECHO-366]`. On a pair whose clocks agree that costs
+    /// nothing; on a node booted without an RTC it measures the clocks.
     pub fn trim_for(
         &mut self,
         st: &EchoState,
@@ -963,6 +988,14 @@ pub struct QueuePlan {
 /// With no announcement at all this keeps what is there and reports the
 /// shortfall, which is the going-independent path `[GDE-ECHO-500]` -- and it
 /// is the same code, not a mode.
+///
+/// **Status: specified, tested, and not yet wired** `[GDE-ECHO-377]`. The
+/// follower as built adopts the master's queue wholesale in
+/// `echo_client::adopt_queue` and never tops it up locally, so the hysteresis
+/// half of `[GDE-ECHO-500]` -- the blend that keeps a node out of contact
+/// from running dry -- exists here and nowhere else. Deferred, not abandoned:
+/// wiring it needs the local Director in the follower's loop, which is a
+/// larger change than anything the correction work wanted.
 pub fn reconcile_queue(local: &[(i64, Origin)], announced: &[i64], depth: usize) -> QueuePlan {
     if announced.is_empty() {
         let kept: Vec<_> = local.to_vec();
@@ -1047,6 +1080,15 @@ pub fn join_mid_passage(
     })
 }
 
+/// **Status: superseded in place, kept for the decision it records**
+/// `[GDE-ECHO-377]`. The live follower asks a different and better question --
+/// `coming_here`, "is it playing this *or coming to it*" `[GDE-ECHO-343]` --
+/// because `current` is the audible passage and lags admission by a ring, so
+/// the `Some(id) if id == m.passage_id` test here sees a mismatch at every
+/// ordinary transition. What survives is the `PlayOut` rule: a node that is
+/// playing something else is never cut short. Nothing calls this outside its
+/// own tests; a caller wanting the rejoin decision should ask `coming_here`
+/// and reach for `join_mid_passage` from there.
 pub fn rejoin_action(sounding: Option<i64>, master: Option<&AirPosition>) -> Option<Rejoin> {
     let m = master?;
     match sounding {
@@ -1115,14 +1157,21 @@ mod tests {
         }
     }
 
+    /// The sign a test catches and listening does not, on the arithmetic the
+    /// loop actually runs `[GDE-ECHO-377]`.
     #[test]
     fn residual_sign_says_late_is_positive() {
+        // The master heard its own sample 44100 -- one second in -- at t=5 s.
         let a = DriftAnchor {
             passage_id: 4, sample: 44100, heard_at: 5 * SEC, rate: 44100, ppm: None,
         };
-        assert!(residual_ns(&a, 5 * SEC + 1_000_000) > 0, "later than master is positive");
-        assert!(residual_ns(&a, 5 * SEC - 1_000_000) < 0, "earlier than master is negative");
-        assert_eq!(residual_ns(&a, 5 * SEC), 0);
+        let at_the_same_place = |at: WallNanos| AirPosition {
+            passage_id: 4, position_ms: 1_000, at,
+        };
+        let residual = |at| local_at_sample(&at_the_same_place(at), &a) - a.heard_at as i64;
+        assert!(residual(5 * SEC + 1_000_000) > 0, "later than master is positive");
+        assert!(residual(5 * SEC - 1_000_000) < 0, "earlier than master is negative");
+        assert_eq!(residual(5 * SEC), 0);
     }
 
     // `[REQ-AUD-160]`'s ring is ~15 s at 44100.
@@ -1371,8 +1420,10 @@ mod tests {
         let local = AirPosition { passage_id: 3, position_ms: 250, at: 10 * SEC + 250_000_000 };
         assert_eq!(local_at_sample(&local, &m) - m.heard_at as i64, 0,
                    "a quarter second of transport is not a quarter second of error");
-        // The naive subtraction would have called that 250 ms late.
-        assert_eq!(residual_ns(&m, local.at), 250_000_000);
+        // The naive subtraction -- two timestamps, written out here rather
+        // than kept as a function somebody could reach for `[GDE-ECHO-377]` --
+        // would have called that 250 ms late.
+        assert_eq!(local.at as i64 - m.heard_at as i64, 250_000_000);
 
         // Genuinely 5 ms late: same position, reached 5 ms later.
         let late = AirPosition { passage_id: 3, position_ms: 250,
@@ -1589,7 +1640,9 @@ mod tests {
         let anchor = a.anchor(44100, Some(-2.09));
         assert_eq!(anchor.sample, 441_000);           // 10 s at 44100
         assert_eq!(anchor.heard_at, 12 * SEC);
-        assert_eq!(residual_ns(&anchor, 12 * SEC), 0);
+        // And a node reading the same position at the same moment is exactly
+        // level with it.
+        assert_eq!(local_at_sample(&a, &anchor) - anchor.heard_at as i64, 0);
     }
 
     #[test]
