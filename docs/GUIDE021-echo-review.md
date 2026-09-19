@@ -273,6 +273,9 @@ none, so GUIDE017's became `[GDE-ECHO-356]` and nothing had to follow it.
 see what is not compiled, are in
 [GUIDE022](GUIDE022-the-follower-nothing-builds.md) `[GDE-ECHO-379]`: two
 small corrections to the findings above, and the fact that the whole of
-`echo_client.rs` sits behind a cargo feature nothing in the tree turns on — so
-§2's and §3's faults were never once built by a test run, and a node deployed
-by the standard script offers the follow control and cannot follow.
+`echo_client.rs` sat behind a cargo feature nothing in the tree turned on — so
+§2's and §3's faults were never once *built* by a test run, and one appliance
+carried a follower while another did not because the difference was an
+environment variable. The feature is now default. A third instance of the
+same shape turned up while shipping, on the wire this time
+`[GDE-ECHO-385]`.

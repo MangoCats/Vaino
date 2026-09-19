@@ -51,21 +51,25 @@ untested: **uncompiled**. A rename would not have caught them, clippy would not
 have caught them, and no test could have caught them, which is a fair part of
 why they survived to be found by reading.
 
-Left as it is, deliberately, and this is the one thing in either document that
-is a decision rather than a defect. Turning a feature on changes what ships, on
-appliances that are awkward to reach `[GDE-DEP-070]`, and that is a call to
-take on purpose rather than in passing. The fixes are written and tested under
-`--features echo-client`; until something enables it, they are tested and not
-shipped.
+**`echo-client` is now in `default`, decided 2026-09-18 by what the fleet
+turned out to be.** The deployed binaries settled it rather than the argument
+did. `pi@bose` carries five `echo-follow:` strings and none of the
+`#[cfg(not(...))]` refusal, so it *was* built with the feature — by hand,
+through `VAINO_FEATURES`, by a route nothing here describes. `pi@vainopi` has
+neither. Two nodes of one fleet, differing in whether a control works, because
+the correct build depended on an environment variable a person has to
+remember.
 
-Three ways out, cheapest first. **Add `echo-client` to `default`** — the
-Cargo.toml comment already argues its own dependencies cost the build graph
-nothing, since `tokio-tungstenite` and `futures-util` are both in it already
-via axum's `ws` feature, so the gate buys no bytes and no compile time.
-**Enable it in the build scripts only**, which ships it without committing the
-crate's default. **Or hide the control when the feature is off**, which keeps
-the gate honest but leaves a fleet whose nodes differ in what their panels
-offer — the shape `[SPEC-ECHO-010]` rejected for the follow host itself.
+That makes the third way out — hiding the control when the feature is off —
+the wrong one: it would make the divergence a feature. And it makes the second
+— setting `VAINO_FEATURES` at deploy time — the mechanism that caused this,
+chosen again. It also means a deploy that did *not* set it would have silently
+removed the follower from `bose`, which is the fault running in reverse.
+
+So: `default = ["echo-client"]`. The dependencies were always free —
+`tokio-tungstenite` and `futures-util` are in the graph via axum's own `ws`
+feature — and the cost is about 400 kB of appliance binary, against a control
+that is offered on every node and worked on one.
 
 ---
 
@@ -108,3 +112,21 @@ The cheap general guard is the same one `[GDE-ECHO-378]` asks for, applied to
 the build rather than to an actuator: **a feature that gates behaviour a
 running interface still offers must be named somewhere a build reads**, or the
 gate is not a gate, it is a silence.
+
+**`[GDE-ECHO-385]` A third instance turned up while shipping the first two,
+and it is the same sentence again.** `web::Snapshot` carried `echo` and not
+`echo_node`, while `skin.js` reads `s.echo_node` — so `renderEchoNode` took
+its `if (!n) return;` twice a second and the delay, calibration and follow
+panel showed nothing on every node that has ever run. Neither guard could see
+it: the Rust test lists snapshot fields by hand from the server's side, and
+`build/verify-skins.js` renders against fixture snapshots written by hand too,
+so both agreed with each other and neither with the skin. The new test derives
+the list from the skin — every `s.<field>` in `skin.js` must be a field the
+snapshot serialises — which found `echo_node` and one more, `sink`, read by
+the Bluetooth helper and carried by no snapshot ever.
+
+Three faults, three mechanisms, one shape: **an actuator, a build and a wire
+each declining silently one call below something whose tests pass.** The guard
+that catches all three is not a better test of either side. It is an assertion
+that reads *the other side* — what admission will really spend, what the build
+really compiles, what the skin really asks for.

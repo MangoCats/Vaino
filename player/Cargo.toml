@@ -14,7 +14,30 @@ license = "MIT"
 # built alongside it, exist for the desktop induct workflow and have no reason
 # to occupy a byte of an appliance image that never runs Sampo `[SPEC-SA-010]`.
 [features]
-default = []
+# `echo-client` is default, and was not until 2026-09-18 `[GDE-ECHO-379]`.
+#
+# Following is a *setting* `[SPEC-ECHO-010]`: every interface offers "Follow
+# this node" unconditionally, stores what is typed there and persists it. With
+# the feature off, `vaino.rs` never spawns the task that reads it, so the
+# control accepts a host and the node stays independent without saying so --
+# the fault the deploy script's own comment about `sampo-support` already
+# names, "a UI that looks like it works and does not, which is worse than a
+# 404".
+#
+# It cost nothing to leave off and cost a fleet to leave off. Nothing in the
+# tree enabled it: not `cargo test`, not `build/verify-targets.sh`, not
+# `build/deploy-appliance.sh`, whose `FEATURES` is empty unless a caller sets
+# `VAINO_FEATURES`. bose was built with it by hand and vainopi was not, which
+# is how two nodes of one fleet came to differ in whether a control worked --
+# and it meant `player/src/echo_client.rs` was not merely untested but
+# **uncompiled** by every test run, which is why three faults in it survived
+# to be found by reading `[GDE-ECHO-384]`.
+#
+# The dependencies are free: `tokio-tungstenite` and `futures-util` are both
+# in the graph already via axum's own `ws` feature, so this names crates that
+# are compiled either way. Measured on the appliance build, it is about 400 kB
+# of binary.
+default = ["echo-client"]
 mpd = []
 # `dep:reqwest` -- an appliance build never resolves, fetches or compiles the
 # HTTP client at all, not just leaves it unused `[SPEC-SUI-190]`,
