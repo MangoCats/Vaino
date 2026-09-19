@@ -666,7 +666,6 @@ pub enum OffsetFix {
 pub fn offset_fix(
     residual: i64,
     deadband: Duration,
-    max_bite: Duration,
     rejoin_beyond: Duration,
 ) -> OffsetFix {
     if residual.unsigned_abs() <= deadband.as_nanos() as u64 {
@@ -675,18 +674,24 @@ pub fn offset_fix(
     if residual.unsigned_abs() > rejoin_beyond.as_nanos() as u64 {
         return OffsetFix::Rejoin;
     }
-    // **Bitten off, never escalated.** An offset larger than one transition can
-    // absorb is corrected by taking the largest bite the transition allows and
-    // coming back for the rest, which reduces the error every time. Escalating
-    // to a rejoin instead re-places the first sample and inherits that
-    // placement's own error, so a node with a systematic join bias corrects
-    // forever and converges never `[GDE-ECHO-341]`.
+    // **The whole of it, at the next transition** `[GDE-ARC-051]`. There was a
+    // `max_bite` here, half a second, and an offset larger than one bite was
+    // taken across several transitions -- four to six minutes apart, so 886 ms
+    // was ten minutes of walking in. The cap was reasoned about the *overlap*:
+    // half a second of a crossfade made longer or shorter is not something a
+    // listener can point at. True, and no longer the constraint, because the
+    // overlap is not the only thing the boundary can spend `[GDE-ARC-052]`.
+    //
+    // **Bitten off, never escalated** `[GDE-ECHO-341]` survives and is now
+    // trivially satisfied: one correction takes the error to zero rather than
+    // reducing it. Escalating to a rejoin re-places the first sample and
+    // inherits that placement's own error, so a node with a systematic join
+    // bias corrects forever and converges never.
     //
     // Late is positive, and a late node starts the next passage EARLIER -- the
     // sign survives unchanged, which is worth saying because it reads either
     // way at a glance.
-    let bite = max_bite.as_nanos() as i64;
-    OffsetFix::ShiftStart(residual.clamp(-bite, bite) / 1_000_000)
+    OffsetFix::ShiftStart(residual / 1_000_000)
 }
 
 /// Where a passage actually is **in the air**, and when that was true.
@@ -1591,22 +1596,48 @@ mod tests {
     /// The loop must shrink the error it is given, whatever it is given
     /// `[GDE-ECHO-341]`. A node with a systematic join bias converges only if
     /// every correction reduces the offset; escalating never does.
+    ///
+    /// It used to take two transitions -- ten minutes on this library -- to
+    /// walk 886 ms in at half a second a bite. `[GDE-ARC-051]` removed the
+    /// bite, so the same offset is one transition and the loop is where it
+    /// was always trying to get to: **one correction, then hold.**
     #[test]
-    fn a_large_offset_walks_in_rather_than_escalating() {
+    fn a_large_offset_is_taken_in_one_transition() {
         let dead = Duration::from_millis(40);
-        let bite = Duration::from_millis(500);
         let far = Duration::from_secs(5);
-        // The 886 ms actually observed, corrected across transitions.
+        // The 886 ms actually observed.
         let mut r: i64 = 886_000_000;
         let mut steps = 0;
-        while let OffsetFix::ShiftStart(ms) = offset_fix(r, dead, bite, far) {
+        while let OffsetFix::ShiftStart(ms) = offset_fix(r, dead, far) {
             assert!(ms > 0, "a late node always starts earlier");
             r -= ms * 1_000_000;
             steps += 1;
             assert!(steps < 10, "it must converge, not circle");
         }
-        assert_eq!(offset_fix(r, dead, bite, far), OffsetFix::Hold);
-        assert_eq!(steps, 2, "886 ms is two transitions at half a second a bite");
+        assert_eq!(offset_fix(r, dead, far), OffsetFix::Hold);
+        assert_eq!(steps, 1, "the transition places the whole of it");
+        assert_eq!(r, 0, "and places it exactly");
+    }
+
+    /// `[GDE-ARC-051]`: **no cap.** Whatever the residual is, the transition
+    /// is asked for the whole of it.
+    ///
+    /// The cap was sized against a crossfade -- half a second of one made
+    /// longer or shorter is not something a listener can point at. That
+    /// reasoning was about the *overlap*, and the overlap is no longer the
+    /// only actuator at the boundary: an earlier start spends whole mix
+    /// blocks of admission and cuts the remainder from the head, a later one
+    /// is silence, and neither has a natural ceiling at 500 ms
+    /// `[GDE-ARC-052]`. What the cap bought was a slow loop.
+    #[test]
+    fn the_whole_offset_is_asked_of_one_transition() {
+        let dead = Duration::from_millis(8);
+        let far = Duration::from_secs(30);
+        assert_eq!(offset_fix(886_000_000, dead, far), OffsetFix::ShiftStart(886));
+        assert_eq!(offset_fix(-886_000_000, dead, far), OffsetFix::ShiftStart(-886),
+                   "and symmetric, now that the later direction has an actuator");
+        assert_eq!(offset_fix(12_000_000_000, dead, far), OffsetFix::ShiftStart(12_000),
+                   "twelve seconds is still one transition's work");
     }
 
     /// `[GDE-ECHO-340]`: a transition absorbs an offset either way, and far is
@@ -1614,20 +1645,18 @@ mod tests {
     #[test]
     fn an_offset_is_hidden_when_it_can_be_and_rejoined_when_it_cannot() {
         let dead = Duration::from_millis(5);
-        let hide = Duration::from_millis(50);
         let far = Duration::from_secs(5);
-        assert_eq!(offset_fix(4_000_000, dead, hide, far), OffsetFix::Hold);
-        assert_eq!(offset_fix(-4_000_000, dead, hide, far), OffsetFix::Hold);
+        assert_eq!(offset_fix(4_000_000, dead, far), OffsetFix::Hold);
+        assert_eq!(offset_fix(-4_000_000, dead, far), OffsetFix::Hold);
         // Late: start the next passage earlier, overlapping a little more.
-        assert_eq!(offset_fix(20_000_000, dead, hide, far), OffsetFix::ShiftStart(20));
+        assert_eq!(offset_fix(20_000_000, dead, far), OffsetFix::ShiftStart(20));
         // Early: start it later, overlapping a little less. Symmetric.
-        assert_eq!(offset_fix(-20_000_000, dead, hide, far), OffsetFix::ShiftStart(-20));
-        // Larger than one transition can absorb: take the biggest bite and come
-        // back for the rest `[GDE-ECHO-341]` rather than escalating.
-        assert_eq!(offset_fix(400_000_000, dead, hide, far), OffsetFix::ShiftStart(50));
-        assert_eq!(offset_fix(-400_000_000, dead, hide, far), OffsetFix::ShiftStart(-50));
+        assert_eq!(offset_fix(-20_000_000, dead, far), OffsetFix::ShiftStart(-20));
+        // Formerly three transitions' worth, now one.
+        assert_eq!(offset_fix(400_000_000, dead, far), OffsetFix::ShiftStart(400));
+        assert_eq!(offset_fix(-400_000_000, dead, far), OffsetFix::ShiftStart(-400));
         // Only an absurd one is a rejoin.
-        assert_eq!(offset_fix(9_000_000_000, dead, hide, far), OffsetFix::Rejoin);
+        assert_eq!(offset_fix(9_000_000_000, dead, far), OffsetFix::Rejoin);
     }
 
     /// The master moves while this node prepares, so a mid-passage join aims

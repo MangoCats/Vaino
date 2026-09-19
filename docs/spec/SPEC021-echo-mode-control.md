@@ -62,18 +62,27 @@ passages a listener who had asked to be in step straight away heard the node
 sit hundreds of milliseconds out for minutes, with nothing acting in between.
 Reported by one, and it was the honest reading of the control.
 
-With it on, whatever the boundary will not take is now handed to the frame
-trim immediately: mid-passage, monotonic, and inaudible at 23 us a splice
-`[GDE-ECHO-349]`. With it off, the behaviour is unchanged — corrected at the
-boundary, nothing disturbed in between — which is the reason to offer the
-choice at all.
+*Revised 2026-09-19 `[GDE-ARC-051]`.* The fix above was to hand whatever the
+boundary would not take to the frame trim immediately. That is gone, and the
+reason is worth recording rather than quietly dropping: the cap it worked
+around has been removed, so the boundary now takes **the whole** residual and
+there is no remainder to hand anywhere. Nor was the trim ever the faster path
+— at `ECHO_DEBT_PPM` the 100 ms it was typically given took seventeen minutes,
+against the four to six of the boundary it was meant to beat.
+
+So both settings now correct in full at the next transition, and the choice is
+about the **join**: straight away cuts the ring to get there now, waiting does
+not. See [GUIDE026](../GUIDE026-placing-the-passage-exactly.md).
 
 **"Straight away" still cannot mean "instantly", and the panel must not
-imply it.** The inaudible actuator is capped at `ECHO_DEBT_PPM`, so
-mid-passage convergence is gradual by construction; instant alignment costs
-an audible cut, which is exactly what the *join* half already spends and why
-that half is described as cutting "the way a skip does". The label says
-"straight away, and stay there" rather than "instantly" for that reason.
+imply it.** The reason moved with `[GDE-ARC-051]` and the conclusion did not.
+It used to be the actuator: mid-passage convergence was capped at
+`ECHO_DEBT_PPM` and gradual by construction. It is now the *cadence* — an
+exact placement is exact, but it happens when the passage changes, which is
+minutes away. Either way, alignment sooner than that costs an audible cut,
+which is exactly what the *join* half spends and why that half is described as
+cutting "the way a skip does". The label says "straight away, and stay there"
+rather than "instantly" for that reason.
 
 Joining at once means joining **part-way through** what the other node is
 already playing, which is the capability `[GDE-ECHO-330]` deferred and

@@ -167,15 +167,14 @@ const COMMITMENT_HOLDS: Duration = Duration::from_secs(6);
 const RESIDUAL_WINDOW: Duration = Duration::from_secs(120);
 const RESIDUAL_MIN_SAMPLES: usize = 60;
 
-/// The most a single transition may be asked to absorb.
-///
-/// Half a second of a crossfade made longer or shorter is not something a
-/// listener can point at, and a larger offset is simply taken in more than one
-/// bite `[GDE-ECHO-341]`.
-const OFFSET_MAX_BITE: Duration = Duration::from_millis(500);
+// There was an `OFFSET_MAX_BITE` here, half a second `[GDE-ECHO-341]`. It is
+// gone `[GDE-ARC-051]`: the transition is asked for the whole residual, so an
+// offset is one correction rather than a walk across several passages. Its
+// reasoning -- half a second of crossfade is imperceptible -- was about the
+// overlap, and the overlap stopped being the only actuator `[GDE-ARC-052]`.
 
-/// Beyond this, nudging is too slow to be the whole answer and the node
-/// places its first sample afresh instead `[GDE-ECHO-344]`.
+/// Beyond this, waiting for the next transition is worse than a biased jump,
+/// and the node places its first sample afresh instead `[GDE-ECHO-344]`.
 ///
 /// **Above the join bias, and deliberately.** A join lands a few hundred
 /// milliseconds to a second late `[GDE-ECHO-342]`; a threshold at or below
@@ -183,9 +182,16 @@ const OFFSET_MAX_BITE: Duration = Duration::from_millis(500);
 /// worst bias seen with room to spare, so a join always lands *inside* the
 /// band and the nudges take it from there.
 ///
-/// It also has to be low enough to matter: at 500 ms a transition and four
-/// minutes a passage, an offset of five seconds takes forty minutes to nudge
-/// away, which is not convergence a listener would recognise as such.
+/// **The arithmetic for the upper side changed, and the number did not.** It
+/// used to be "at 500 ms a transition, five seconds takes forty minutes"; with
+/// the bite gone, any offset the boundary can express is one transition. What
+/// is left is a wait: a correction lands at the master's next passage, four to
+/// six minutes on this library. So the question is whether sitting `x` out for
+/// up to six minutes beats jumping now and landing within the join bias.
+/// Below about twice that bias it does not -- a rejoin from 700 ms to 500 ms
+/// buys nothing and cuts the ring `[GDE-ARC-042]` -- and twice the worst bias
+/// is where 1.5 s already sat. **Fixing `placement()` `[GDE-ARC-044]` is what
+/// would move this number**, because a cheap join is worth reaching for sooner.
 const OFFSET_REJOIN_BEYOND: Duration = Duration::from_millis(1_500);
 
 /// The rate fit's window, and what it takes before it means anything.
@@ -354,21 +360,36 @@ fn coming_here(handle: &EngineHandle, passage_id: i64) -> bool {
 /// before the sound it was computed from `[GDE-ECHO-410]`, and this node's own
 /// transition begins one overlap before its current passage runs out
 /// `[overlap_ms]`.
+/// **How far out this node's own next transition would land**, in
+/// milliseconds, positive when it would sound too **late** -- the same sign as
+/// `EchoCorrectNextStart`, which takes "start this much earlier"
+/// `[GDE-ARC-054]`.
+///
+/// `None` when either figure is missing, which is the only honest answer:
+/// without both there is nothing to compare `[GOV-SRC-040]`.
+fn flow_error_ms(
+    handle: &EngineHandle,
+    timing: NodeTiming,
+    at: u64,
+    now_master: u64,
+) -> Option<i64> {
+    let sound_at = at.saturating_add(timing.offset().as_nanos() as u64);
+    let mine = own_next_starts_in_ms(handle)?;
+    let theirs = sound_at.checked_sub(now_master)? / 1_000_000;
+    Some(mine as i64 - theirs as i64)
+}
+
+/// Whether that error is small enough to call it the same transition.
 fn flowing_would_do(
     handle: &EngineHandle,
     timing: NodeTiming,
     at: u64,
     now_master: u64,
 ) -> bool {
-    let sound_at = at.saturating_add(timing.offset().as_nanos() as u64);
-    match (own_next_starts_in_ms(handle), sound_at.checked_sub(now_master)) {
-        (Some(mine), Some(theirs)) => {
-            mine.abs_diff(theirs / 1_000_000) <= FLOW_TOLERANCE.as_millis() as u64
-        }
-        // Without both figures, believe what the master said rather than a
-        // guess about this node's own future `[GOV-SRC-040]`.
-        _ => false,
-    }
+    // Without both figures, believe what the master said rather than a guess
+    // about this node's own future `[GOV-SRC-040]`.
+    flow_error_ms(handle, timing, at, now_master)
+        .is_some_and(|e| e.unsigned_abs() <= FLOW_TOLERANCE.as_millis() as u64)
 }
 
 /// How long until this node's **next** passage begins to sound, in ms.
@@ -629,6 +650,33 @@ async fn act(
             if next_up(handle) == Some(passage_id) && start_sample == 0
                 && !fs.want_rejoin && flowing_would_do(handle, f.timing, at, now_master)
             {
+                // **Flow, and place the boundary exactly while doing it**
+                // `[GDE-ARC-054]`. The tolerance above separates two cases; it
+                // does not measure either, and the error it just computed is
+                // the placement error outright. Both terms are schedule
+                // quantities -- this node's own transition, and the instant
+                // the master announced -- so neither passes through an anchor
+                // and neither carries the ring's depth jitter `[GDE-ARC-047]`.
+                //
+                // Sent **after** `correct_offset`, deliberately, so that where
+                // both have an answer this one wins: ranked by measurement
+                // `[GOV-SRC-040]`, a schedule read against a schedule beats a
+                // residual read through two output rings. The engine takes the
+                // last shift as the plan and clears the old debt with it.
+                //
+                // The transition is minutes away when this first fires and the
+                // pass repeats twice a second, so what actually lands is the
+                // final estimate before admission -- which is the look-ahead
+                // this design is named for, arrived at by simply not stopping.
+                if let Some(err) = flow_error_ms(handle, f.timing, at, now_master) {
+                    if err != 0 {
+                        note(&mut fs.note, format!(
+                            "echo-place: passage {passage_id} would sound {} ms {}; \
+placing it at the announced instant",
+                            err.abs(), if err > 0 { "late" } else { "early" }));
+                        handle.send(Command::EchoCorrectNextStart(err));
+                    }
+                }
                 note(&mut fs.note, format!(
                     "echo-follow: passage {passage_id} is already next here; flowing into it"));
                 return;
@@ -747,7 +795,7 @@ fn correct_offset(
             }
 
             match crate::echo::offset_fix(
-                filtered, OFFSET_DEADBAND, OFFSET_MAX_BITE, OFFSET_REJOIN_BEYOND) {
+                filtered, OFFSET_DEADBAND, OFFSET_REJOIN_BEYOND) {
                 crate::echo::OffsetFix::Hold => {}
                 crate::echo::OffsetFix::ShiftStart(ms) => {
                     fs.corrected = Some(m.passage_id);
@@ -762,33 +810,30 @@ fn correct_offset(
                         filtered as f64 / 1e6, ms.abs(),
                         if ms > 0 { "earlier" } else { "later" }));
                     handle.send(Command::EchoCorrectNextStart(ms));
-                    // **"Straight away" has to mean the alignment, not only
-                    // the join** `[SPEC-ECHO-030]`, `[GDE-ARC-041]`. The bite
-                    // above is capped at `OFFSET_MAX_BITE` and lands only when
-                    // the master reaches its next passage -- four to six
-                    // minutes on this library. For a residual above the
-                    // endgame band that left nothing acting in between, so a
-                    // listener who asked to be in step straight away heard the
-                    // node sit hundreds of milliseconds out for minutes.
+                    // **There was a second send here and it is gone**
+                    // `[GDE-ARC-051]`. When the bite was capped at 500 ms this
+                    // arm computed what the boundary would not take and handed
+                    // that remainder to the frame trim at once, so that a
+                    // listener who had asked to be in step straight away had
+                    // *something* acting between boundaries `[GDE-ARC-041]`.
+                    // With the cap gone, `ms` **is** `filtered / 1_000_000`,
+                    // the remainder is identically zero, and the branch could
+                    // never fire.
                     //
-                    // The frame trim works mid-passage and is inaudible at
-                    // 23 us a splice `[GDE-ECHO-349]`, so the part the
-                    // boundary will not take is handed to it now. Sent AFTER
-                    // the shift, because the engine treats a new shift as a
-                    // new plan and clears the old debt with it.
+                    // It is worth being clear that nothing was lost with it.
+                    // The trim pays at `ECHO_DEBT_PPM`, 0.1 ms/s: the 100 ms
+                    // it used to be handed took seventeen minutes, which is
+                    // longer than waiting for the boundary it was meant to
+                    // beat. It was never the fast path, and reading it as one
+                    // is `[GDE-ARC-043]` again -- an actuator sized for drift
+                    // being asked to answer a step.
                     //
-                    // Only when the listener asked for it. The other setting
-                    // means what it always did: correct at the boundary,
-                    // disturb nothing in between.
-                    if join_intent(handle).0 {
-                        let left = filtered / 1_000_000 - ms;
-                        if left != 0 {
-                            note(&mut fs.note, format!(
-                                "echo-offset: and shedding the other {} ms by trimming, \
-now rather than at the boundary", left.abs()));
-                            handle.send(Command::EchoShedOffset(left));
-                        }
-                    }
+                    // So "straight away" now means the transition takes the
+                    // whole of it, exactly `[SPEC-ECHO-030]`; what still acts
+                    // sooner than a boundary is the mid-join, and that is
+                    // decided above. A genuine shortfall -- admission clamped
+                    // by a pair of passages too short to spend it -- is known
+                    // only to the engine, which adds it to the debt itself.
                 }
                 // Too far for one transition to absorb. Saying so beats a
                 // silent hold -- this is the case a listener would otherwise
@@ -1098,6 +1143,69 @@ mod tests {
                 "a boundary this node was already flowing into was cut and re-placed");
     }
 
+    /// **Flowing is not the same as flowing into the right instant**
+    /// `[GDE-ARC-054]`.
+    ///
+    /// The test above pins that a boundary both nodes are heading to is not
+    /// cut and re-placed. That was the whole of it: having decided to flow,
+    /// the follower threw away the comparison it had just made and left the
+    /// alignment to the residual loop, which steers on the anchor and so
+    /// carries the output ring's own depth jitter -- about 25 ms, and the
+    /// floor under every other number in the system `[GDE-ARC-047]`.
+    ///
+    /// But the two quantities compared here are both *schedule* quantities:
+    /// when this node's next passage will begin to sound, and when the master
+    /// said its own would. Neither passes through an anchor. Their difference
+    /// is the placement error directly, it is available in the lead-up to
+    /// every transition, and spending it at the boundary is exact
+    /// `[GDE-ARC-051]`.
+    ///
+    /// Here the node would begin to sound 400 ms before the announced instant,
+    /// so it must be told to start its next passage 400 ms **later**.
+    #[tokio::test]
+    async fn flowing_into_a_boundary_still_places_it_at_the_announced_instant() {
+        let (mut e, raw) = Engine::new(crate::path::PathHandle::silent(), 1);
+        let h = Arc::new(raw);
+        let now = now_nanos();
+        let anchor = crate::echo::DriftAnchor {
+            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+        };
+        {
+            let mut s = h.state.lock().unwrap();
+            s.echo_node.offset_frames = 15_676;
+            s.echo_node.rate = 44_100;
+            // No anchor of its own: the residual loop must not be the thing
+            // under test, or the assertion cannot say which path set the knob.
+            s.echo.anchor = None;
+            s.current = Some(shaped(3, 300_000, 0, 5_000));
+            s.position_ms = 292_000;
+            s.queue = vec![shaped(7, 300_000, 5_000, 0)];
+        }
+        // Flowing lands at now+3.0 s; the master announced now+3.4 s.
+        let st = EchoState {
+            anchor: Some(anchor),
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 7, start_sample: 0,
+                sound_at: now + 3_400_000_000, rate: 44_100,
+            }),
+            voided_by: None,
+        };
+        let mut fs = FollowState::new();
+        one_pass(&h, &st, &mut fs).await;
+        e.tick();
+
+        assert!(fs.mid_joined.is_none(),
+                "400 ms is a placement, not a reason to cut the ring");
+        // Within a millisecond, not exactly: `now` is stamped when the fixture
+        // is built and the pass reads the clock again a moment later, so the
+        // last digit is this test's own elapsed time. Pinning it would pin the
+        // machine rather than the mechanism.
+        let got = e.echo_next_shift_ms;
+        assert!((got - -400).abs() <= 2,
+                "shift {got} ms, expected -400: the announced instant was \
+compared and then discarded");
+    }
+
     /// And the case the test exists to separate must still be separated: a
     /// skip on the master moves its transition by minutes, and that is not a
     /// boundary this node is about to reach `[GDE-ECHO-353]`.
@@ -1274,49 +1382,41 @@ join cuts the ring and re-imposes the join bias",
         EchoState { anchor: Some(anchor), schedule: None, voided_by: None }
     }
 
-    /// **"Straight away" has to mean the alignment too, not just the join**
-    /// `[SPEC-ECHO-030]`, `[GDE-ARC-041]`.
+    /// **The whole residual reaches the boundary, whichever setting is on**
+    /// `[GDE-ARC-051]`, `[SPEC-ECHO-030]`.
     ///
-    /// A boundary shift takes at most `OFFSET_MAX_BITE` and only lands when
-    /// the master reaches its next passage, which is four to six minutes. For
-    /// a residual between the endgame band and the rejoin threshold that left
-    /// *nothing at all* acting in between: a listener who asked to be in step
-    /// straight away heard the node sit 600 ms out for minutes, which is what
-    /// they reported. The frame trim can work mid-passage and is inaudible, so
-    /// whatever the boundary will not take is handed to it now.
+    /// This pair used to assert the difference the cap forced: with a 500 ms
+    /// bite, 600 ms out left 100 ms the transition would not take, and
+    /// "straight away" handed that remainder to the frame trim at once while
+    /// "at the next track" did not `[GDE-ARC-041]`. The cap is gone, so there
+    /// is no remainder to divide and the two settings no longer differ *here*
+    /// -- they differ at the mid-join, which is decided before this point.
+    ///
+    /// Asserting the shift the engine is left holding, rather than the absence
+    /// of a second command, is deliberate: the fault this replaces was a
+    /// correction that was logged and then discarded `[GDE-ECHO-347]`, and a
+    /// test that reads the state the engine will act on cannot be fooled that
+    /// way.
     #[test]
-    fn asking_to_align_straight_away_does_not_wait_for_the_next_track() {
-        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
-        let handle = Arc::new(h);
-        let mut fs = FollowState::new();
-        let st = out_by(&handle, &mut fs, 600, true);
+    fn the_whole_offset_reaches_the_boundary_under_either_setting() {
+        for straight_away in [true, false] {
+            let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
+            let handle = Arc::new(h);
+            let mut fs = FollowState::new();
+            let st = out_by(&handle, &mut fs, 600, straight_away);
 
-        correct_offset(&st, &handle, &mut fs, now_nanos());
-        e.tick();
+            correct_offset(&st, &handle, &mut fs, now_nanos());
+            e.tick();
 
-        // The boundary still takes its biggest bite when it comes...
-        assert_eq!(e.echo_debt_frames.signum(), 1,
-                   "a node that is behind owes a positive debt");
-        // ...and the 100 ms it cannot take is already being shed, rather than
-        // waiting minutes for a passage boundary that may be far off.
-        assert_eq!(e.echo_debt_frames, 100 * 44_100 / 1000,
-                   "the remainder the boundary will not take must reach the trim now");
-    }
-
-    /// And the other setting still means what it always did: correct at the
-    /// boundary, disturb nothing in between.
-    #[test]
-    fn asking_to_wait_for_the_next_track_still_waits() {
-        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
-        let handle = Arc::new(h);
-        let mut fs = FollowState::new();
-        let st = out_by(&handle, &mut fs, 600, false);
-
-        correct_offset(&st, &handle, &mut fs, now_nanos());
-        e.tick();
-
-        assert_eq!(e.echo_debt_frames, 0,
-                   "waiting for the next track must not start trimming mid-passage");
+            assert_eq!(e.echo_next_shift_ms, 600,
+                       "straight_away={straight_away}: the boundary must be asked for all of it");
+            // And nothing is trimmed mid-passage in either case. Under the old
+            // cap this was the line that told the two settings apart; it is now
+            // the same claim for both, because 0.1 ms/s was never going to
+            // answer a step anyway `[GDE-ARC-043]`.
+            assert_eq!(e.echo_debt_frames, 0,
+                       "straight_away={straight_away}: nothing is owed to the trim");
+        }
     }
 
     /// `[GDE-ECHO-375]`: the mid-join budget and the engine's own measured

@@ -160,6 +160,16 @@ trim, which can work mid-passage, is capped seventeen times lower. Raising
 `[GDE-ECHO-349]` already says that wants a listening test rather than an
 argument, and there are now two speakers side by side to run it on.
 
+> **Answered 2026-09-19 — and not by tuning either constant.** A thirty-minute
+> run after the §2 fix found the node at −448 ms recovering at **0.09 ms/s**,
+> which is `ECHO_DEBT_PPM` to two significant figures and therefore says the
+> boundary was contributing *nothing*: the "sound later" direction had no
+> actuator there at all. The answer was to give it one and to stop capping the
+> other — see `[GDE-ARC-051]` and `[GDE-ARC-052]` in
+> [GUIDE026](GUIDE026-placing-the-passage-exactly.md). The boundary shift's 1.7 ms/s in the table
+> above is a rate only because the correction was rationed; unrationed it is
+> not a rate at all, it is a placement.
+
 **`[GDE-ARC-047]` Under all of it, the anchor is the floor.**
 `[GDE-ECHO-345]` said this before any of the rest was built: the anchor comes
 from `audible_ms`, so it carries the output ring's own depth jitter, and

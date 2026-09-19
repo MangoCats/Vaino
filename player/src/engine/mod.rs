@@ -84,6 +84,25 @@ fn is_self(host: &str) -> bool {
         .is_some_and(|n| !n.is_empty() && (h == n || h == n.split('.').next().unwrap_or(&n)))
 }
 
+/// What one offset correction spends, and through which actuator
+/// `[GDE-ARC-051]`.
+///
+/// Three fields rather than a pair because the two directions genuinely need
+/// different machinery: a contiguous ring can be overlapped into but cannot
+/// be waited into `[GDE-ARC-052]`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Shift {
+    /// Admission nudge, ms. Positive admits earlier, overlapping more of the
+    /// outgoing passage and keeping all of the incoming one.
+    pub admit_ms: i64,
+    /// How far into the incoming passage to open it, ms. This *discards*
+    /// that much of its start, so it only ever carries the sub-chunk
+    /// remainder admission cannot express.
+    pub origin_ms: u64,
+    /// Silence before the incoming passage, ms. The only way to sound later.
+    pub gap_ms: u64,
+}
+
 /// What the delay and follow controls need to render honestly.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct EchoNode {
@@ -482,6 +501,20 @@ pub struct Engine {
     /// Whether the last trim the mixer tried was refused, so a refusal is
     /// reported once rather than twenty times a second `[GDE-ECHO-378]`.
     echo_trim_refused: bool,
+    /// Frames of silence still owed before the next passage's audio
+    /// `[GDE-ARC-052]`.
+    ///
+    /// **The actuator a follower running ahead never had.** The ring is
+    /// contiguous, so declining to submit does not delay anything — it only
+    /// makes the buffer shallower, and the audio airs at the same instant
+    /// either way `[a_pause_in_writing_leaves_no_gap_in_the_audio]`. Moving
+    /// sound later means putting something in front of it, and silence is
+    /// the only thing that can go there without inventing content.
+    ///
+    /// Spent by the mixer a block at a time. While it is outstanding the
+    /// live streams are not mixed at all, so their decoded audio waits in
+    /// their own rings and the passage lands whole, only later.
+    pub(crate) echo_gap_frames: u64,
     /// An offset correction waiting for the next admission, ms earlier
     /// `[GDE-ECHO-340]`. Zero is no correction, which is also the resting
     /// state of a node that is already level.
@@ -716,6 +749,7 @@ impl Engine {
             echo_prep_ms: Self::ECHO_PREP_GUESS_MS,
             echo_last_trim: None,
             echo_trim_refused: false,
+            echo_gap_frames: 0,
             echo_next_shift_ms: 0,
             echo_start: None,
             echo_seen_recoveries: 0,
@@ -1461,12 +1495,13 @@ impl Engine {
         // re-deriving the split after `advance()` would be asking a different
         // pair `[GDE-ECHO-372]`.
         let (overlap, ceiling) = self.next_transition_overlap();
-        let (coarse, fine) = self.echo_split();
+        let shift = self.echo_split();
         let due = match (self.queue.peek(), self.live.last()) {
             (Some(next), Some(l)) => {
-                // The offset correction rides here `[GDE-ECHO-340]`, but only
-                // its coarse half `[GDE-ECHO-347]`.
-                should_admit_nudged(&l.entry, self.played_ms(l), next, coarse)
+                // Only the admission half can act here; the origin and the
+                // gap are spent below, once the passage is actually taken
+                // `[GDE-ARC-051]`.
+                should_admit_nudged(&l.entry, self.played_ms(l), next, shift.admit_ms)
             }
             (Some(_), None) => true,
             _ => false,
@@ -1490,8 +1525,17 @@ impl Engine {
             // A commanded start brings its own position and outranks this, and
             // takes the fine knob with it.
             let superseded = self.pending_resume.is_some();
-            let delivered = Self::delivered_shift_ms(
-                coarse, if superseded { 0 } else { fine }, overlap, ceiling);
+            let spent = if superseded { Shift { admit_ms: shift.admit_ms, ..Shift::default() } }
+                        else { shift };
+            let delivered = Self::delivered_shift_ms(spent, overlap, ceiling);
+            // **Silence is spent here** `[GDE-ARC-052]`: the mixer emits it
+            // before this passage's first sample, so the passage lands whole
+            // and simply later. Frames, because that is what the mixer
+            // counts in and a millisecond is not a whole number of them.
+            if spent.gap_ms > 0 {
+                self.echo_gap_frames =
+                    spent.gap_ms.saturating_mul(self.out_rate.max(1) as u64) / 1000;
+            }
             // **What the transition could not absorb is not lost and not
             // pretended away** `[GDE-ECHO-372]`, `[GDE-ECHO-378]`. A node
             // asked to move *later* can only give back an overlap that
@@ -1520,10 +1564,11 @@ impl Engine {
             if superseded {
                 eprintln!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo_next_shift_ms.abs());
             } else {
-                eprintln!("echo-offset: passage {} asked for {} ms {}; the transition took {} ms of it ({} ms into the passage, {} ms of overlap to spend), {} ms left to the frame trim",
+                eprintln!("echo-offset: passage {} asked for {} ms {}; placed by {} ms of overlap + {} ms origin + {} ms silence = {} ms, {} ms left to the frame trim",
                           entry.passage_id, self.echo_next_shift_ms.abs(),
                           if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
-                          delivered.abs(), fine, overlap, left.abs());
+                          spent.admit_ms, spent.origin_ms, spent.gap_ms,
+                          delivered.abs(), left.abs());
             }
             self.echo_next_shift_ms = 0;
         }
@@ -1539,7 +1584,7 @@ impl Engine {
         // wrong audio at the right time `[GDE-ECHO-325]`.
         // A listener's own resume point outranks alignment; otherwise the
         // fine half of the offset correction goes here `[GDE-ECHO-347]`.
-        let origin = self.pending_resume.take().or(if fine > 0 { Some(fine) } else { None });
+        let origin = self.pending_resume.take().or(if shift.origin_ms > 0 { Some(shift.origin_ms) } else { None });
         if let Some(r) = self.path.ring.as_ref() {
             if r.clock.timestamps() == crate::output::Timestamps::Hardware {
                 if let Ok(d) = std::time::SystemTime::now()
@@ -1951,7 +1996,7 @@ impl Engine {
     /// position -- which is why it is the *fine* knob and not the only one:
     /// to sound LATER, admission goes back a whole chunk and the overshoot is
     /// pulled forward again by the origin.
-    fn echo_split(&self) -> (i64, u64) {
+    fn echo_split(&self) -> Shift {
         let (overlap, ceiling) = self.next_transition_overlap();
         self.split_shift(self.echo_next_shift_ms, overlap, ceiling)
     }
@@ -1972,50 +2017,50 @@ impl Engine {
         }
     }
 
-    /// The split itself, against the overlap admission actually has.
+    /// The split itself: which actuator spends what.
     ///
-    /// **The fine knob may only spend what the coarse knob can pay for**
-    /// `[GDE-ECHO-372]`. It moves the node one way only -- earlier -- so
-    /// handing it an overshoot from a coarse step that was then clamped away
-    /// is a correction with the wrong sign, which is worse than none. So the
-    /// backstep is capped at whole chunks the transition's own overlap can
-    /// afford, and whatever is left over is not spent here at all: the caller
-    /// hands it to the frame trim, the one actuator that works in both
-    /// directions `[GDE-ECHO-349]`.
-    fn split_shift(&self, shift_ms: i64, overlap_ms: u64, ceiling_ms: u64) -> (i64, u64) {
+    /// **Each direction gets the actuator that fits it** `[GDE-ARC-051]`.
+    /// Coming in *earlier* overlaps more of the outgoing passage, which keeps
+    /// every sample of the incoming one; admission is quantised to the mix
+    /// block, so the origin carries only the sub-chunk remainder and never
+    /// discards more than 46 ms. Coming in *later* is silence, which a
+    /// contiguous ring requires `[GDE-ARC-052]` and which is exact at any
+    /// size and costs no content at all.
+    ///
+    /// **No cap.** A transition is an alignment opportunity and it spends
+    /// whatever exact placement takes. `OFFSET_MAX_BITE` existed to nibble
+    /// at an error this places in one go.
+    fn split_shift(&self, shift_ms: i64, overlap_ms: u64, ceiling_ms: u64) -> Shift {
         if shift_ms == 0 {
-            return (0, 0);
+            return Shift::default();
         }
-        if shift_ms > 0 {
-            // Late: skip that much of the next passage and be level at once.
-            // Not quantised, and it asks the transition for nothing.
-            return (0, shift_ms as u64);
-        }
-        // Early, which is the hard direction: there is no negative position to
-        // open at, so only admission can delay -- and admission can only give
-        // back an overlap that exists.
         let chunk = self.echo_chunk_ms().max(1);
-        let want = shift_ms.unsigned_abs();
-        // Whole chunks: the mixer runs only with a block of room, so an
-        // incoming passage's first sample lands on a block boundary and a
-        // part-chunk step moves the transition not at all `[GDE-ECHO-347]`.
-        let asked = want.div_ceil(chunk) * chunk;
-        let afford = (overlap_ms.min(ceiling_ms) / chunk) * chunk;
-        let back = asked.min(afford);
-        (-(back as i64), back.saturating_sub(want))
+        if shift_ms < 0 {
+            // Later: silence, exactly as much as is owed.
+            return Shift { gap_ms: shift_ms.unsigned_abs(), ..Shift::default() };
+        }
+        // Earlier: overlap in whole blocks, and let the origin take only what
+        // admission cannot express. Clamped to the overlap the pair can
+        // actually sustain, which on a long pair is seconds.
+        let want = shift_ms as u64;
+        let by_admission = (want / chunk * chunk).min(ceiling_ms.saturating_sub(overlap_ms));
+        Shift {
+            admit_ms: by_admission as i64,
+            origin_ms: want - by_admission,
+            gap_ms: 0,
+        }
     }
 
-    /// What a `(coarse, fine)` pair actually moves the air by. Positive is
-    /// earlier, in the same sign as the request.
+    /// What a `Shift` actually moves the air by. Positive is earlier.
     ///
     /// **The assertion this subsystem did not have** `[GDE-ECHO-378]`. It
     /// reads the same clamp the actuator reads `[spend_overlap_ms]`, so a
     /// test can follow a correction from the decision all the way to what
     /// admission will really do with it -- which is the one boundary where
     /// every fault in `[GDE-ECHO-351]` and `[GDE-ECHO-372]` lived.
-    fn delivered_shift_ms(coarse: i64, fine: u64, overlap_ms: u64, ceiling_ms: u64) -> i64 {
-        let spent = crate::queue::spend_overlap_ms(overlap_ms, ceiling_ms, coarse) as i64;
-        (spent - overlap_ms as i64) + fine as i64
+    fn delivered_shift_ms(s: Shift, overlap_ms: u64, ceiling_ms: u64) -> i64 {
+        let spent = crate::queue::spend_overlap_ms(overlap_ms, ceiling_ms, s.admit_ms) as i64;
+        (spent - overlap_ms as i64) + s.origin_ms as i64 - s.gap_ms as i64
     }
 
     /// One mix chunk, in milliseconds -- the resolution of admission timing.
@@ -2137,6 +2182,30 @@ impl Engine {
         // decoders already pace themselves this way `[DECODE_TOPUP_FRAMES]`.
         if want == 0 || (want < self.min_submit() && self.path.ring.is_some()) {
             return 0;
+        }
+
+        // **Silence first, and the streams untouched behind it**
+        // `[GDE-ARC-052]`. A follower running ahead of the master cannot wait
+        // by waiting: the ring is contiguous, so a pause in submission moves
+        // no audio at all. It waits by putting silence in front of the
+        // passage. Nothing is mixed on these passes, so the decoded audio
+        // stays in each stream's own ring and the passage arrives whole.
+        if self.echo_gap_frames > 0 {
+            let frames = (want / ch).min(self.echo_gap_frames as usize);
+            let n = frames * ch;
+            self.scratch[..n].fill(0.0);
+            self.echo_gap_frames -= frames as u64;
+            if self.echo_gap_frames == 0 {
+                eprintln!("echo-gap: silence spent; the passage starts now");
+            }
+            return match &self.path.ring {
+                Some(o) => {
+                    let (taken, free_after) = o.submit(&self.scratch[..n]);
+                    self.out_room = free_after;
+                    taken
+                }
+                None => n,
+            };
         }
 
         let before: Vec<usize> = self.live.iter().map(|l| l.stream.ring.len()).collect();
@@ -2455,100 +2524,95 @@ mod depth_tests {
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
     }
 
-    /// `[GDE-ECHO-347]`: the two knobs together must shift by exactly what
-    /// was asked, in both directions, without the 46 ms quantum the coarse
-    /// one alone is stuck with.
+    /// `[GDE-ECHO-347]`'s quantum, which still governs the admission half.
     ///
-    /// **Against a stated overlap, which is the whole correction to this
-    /// test** `[GDE-ECHO-372]`. It used to call `echo_split()` on an engine
-    /// with nothing sounding and nothing queued and assert only that the two
-    /// halves summed to the request -- true, and silent about whether
-    /// admission could deliver the coarse half at all. A pair with seconds of
-    /// overlap can; the library's typical 5 ms pair cannot, and the test below
-    /// says which case it is describing.
+    /// *Superseded in part 2026-09-19 `[GDE-ARC-051]`.* This used to assert
+    /// that a coarse backstep and a fine origin summed to the request in
+    /// both directions. The "later" direction no longer uses either -- a
+    /// contiguous ring cannot be waited into, so it is silence now
+    /// `[GDE-ARC-052]` -- and the exactness claim for both directions lives
+    /// in `a_transition_places_the_passage_exactly_in_both_directions`. What
+    /// remains here is still true and still load-bearing: admission moves in
+    /// whole mix blocks, so the origin carries the remainder and never
+    /// discards more than one block of the passage.
     #[test]
-    fn an_offset_correction_splits_into_a_coarse_and_a_fine_part() {
+    fn admission_moves_in_whole_blocks_and_the_origin_takes_the_remainder() {
+        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
+        e.out_rate = 44_100;
+        e.out_channels = 2;
+        let chunk = e.echo_chunk_ms();
+        assert_eq!(chunk, 46, "one mix block at 44.1 kHz");
+        const ROOMY: u64 = 3_000;
+        const CEIL: u64 = 240_000;
+
+        assert_eq!(e.split_shift(0, ROOMY, CEIL), super::Shift::default(),
+                   "nothing asked, nothing done");
+
+        // 43 ms is the figure the fleet dithered on for half an hour: less
+        // than a block, so admission cannot express it and the origin takes
+        // all of it.
+        let s = e.split_shift(43, ROOMY, CEIL);
+        assert_eq!((s.admit_ms, s.origin_ms), (0, 43));
+
+        for ask in [46_i64, 100, 448, 2_000] {
+            let s = e.split_shift(ask, ROOMY, CEIL);
+            assert_eq!(s.admit_ms % chunk as i64, 0, "admission is whole blocks");
+            assert!(s.origin_ms < chunk, "the origin never discards a whole block");
+            assert_eq!(Engine::delivered_shift_ms(s, ROOMY, CEIL), ask);
+        }
+
+        // With nothing sounding there is no transition and no overlap, so
+        // the admission half has nothing to spend and says so.
+        e.echo_next_shift_ms = 100;
+        assert_eq!(e.echo_split().admit_ms, 0);
+    }
+
+    /// **A transition places the passage exactly, and spends whatever that
+    /// takes** `[GDE-ARC-051]`.
+    ///
+    /// The old split had one usable knob and a cap. To sound *earlier* it
+    /// opened the passage further in, which discards that much of the start
+    /// — tolerable at the tens of milliseconds `OFFSET_MAX_BITE` allowed,
+    /// and unacceptable uncapped, where it would cut half a second off the
+    /// front of a track. To sound *later* it narrowed admission, which a
+    /// contiguous ring cannot honour at all `[GDE-ARC-052]`.
+    ///
+    /// So each direction now uses the actuator that fits it: overlap more to
+    /// come in earlier, keeping every sample of the passage, with the origin
+    /// carrying only the sub-chunk remainder admission cannot express; and
+    /// silence to come in later, which is exact and costs no content either.
+    #[test]
+    fn a_transition_places_the_passage_exactly_in_both_directions() {
         let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
         e.out_rate = 44_100;
         e.out_channels = 2;
         let chunk = e.echo_chunk_ms() as i64;
-        assert_eq!(chunk, 46, "one mix chunk at 44.1 kHz");
-        // A crossfade with real overlap -- the rare-but-wanted case, a slow
-        // fade-out met by a long lead-in.
-        const ROOMY: u64 = 3_000;
-        const CEILING: u64 = 240_000;
-
-        // Nothing asked, nothing done.
-        assert_eq!(e.split_shift(0, ROOMY, CEILING), (0, 0));
-
-        // Late: all of it on the fine knob, so no quantum applies at all.
-        // 43 ms is the figure the fleet dithered on for half an hour.
-        assert_eq!(e.split_shift(43, ROOMY, CEILING), (0, 43));
-
-        // Early: back one whole chunk, then pull the overshoot forward. The
-        // sum is what was asked, to the millisecond.
-        let (coarse, fine) = e.split_shift(-43, ROOMY, CEILING);
-        assert_eq!((coarse, fine), (-46, 3));
-        assert_eq!(coarse + fine as i64, -43, "the two together are the request");
-
-        // And across a chunk boundary, still exact.
-        let (coarse, fine) = e.split_shift(-100, ROOMY, CEILING);
-        assert_eq!(coarse + fine as i64, -100);
-        assert_eq!(coarse % chunk, 0, "the coarse part is whole chunks");
-
-        // With nothing sounding there is no transition and no overlap, so the
-        // early direction has nothing to spend and says so rather than
-        // inventing a step.
-        e.echo_next_shift_ms = -100;
-        assert_eq!(e.echo_split(), (0, 0));
-    }
-
-    /// `[GDE-ECHO-372]`: a correction must never move the node the way it was
-    /// **not** asked.
-    ///
-    /// The coarse knob spends `min(lead_out(A), lead_in(B))`, and this library
-    /// is deliberately built of 5 ms lead-ins -- the ramps hide pops, they do
-    /// not cross-fade. So `echo_split(-100)`'s `(-138, +38)` reached
-    /// admission as `(5 - 138).clamp(0, ..)` = 0, delaying the transition by
-    /// five milliseconds rather than 138, while the fine half was applied
-    /// unconditionally: a node asked to move 100 ms later moved about 33 ms
-    /// earlier, and the next measurement found a larger error than the last.
-    ///
-    /// The split's own test asserted that coarse and fine sum to the request
-    /// -- they do -- and the only test that followed a correction into the
-    /// audio used `+120`, the direction where coarse is zero and the clamp is
-    /// never reached.
-    #[test]
-    fn a_correction_never_moves_the_node_the_way_it_was_not_asked() {
-        let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
-        e.out_rate = 44_100;
-        e.out_channels = 2;
-        // The measured library: lead-in median 5 ms, lead-out median 946
-        // `[crate::queue]`, against four-minute passages.
+        assert_eq!(chunk, 46);
+        // The library's typical pair: almost no overlap to spend.
         const OVERLAP: u64 = 5;
-        const CEILING: u64 = 240_000;
-        for asked in [-1_i64, -5, -43, -46, -100, -138, -500] {
-            let (coarse, fine) = e.split_shift(asked, OVERLAP, CEILING);
-            let got = Engine::delivered_shift_ms(coarse, fine, OVERLAP, CEILING);
-            assert!(got <= 0,
-                    "asked to start {} ms later, and the transition moved {got} ms EARLIER",
-                    -asked);
-            assert!(got >= asked, "asked for {asked} ms and overshot to {got}");
+        const CEIL: u64 = 240_000;
+
+        // Running behind: come in earlier by overlapping, not by cutting.
+        let s = e.split_shift(448, OVERLAP, CEIL);
+        assert_eq!(s.admit_ms, 414, "nine whole chunks of overlap");
+        assert_eq!(s.origin_ms, 34, "and only the sub-chunk remainder is discarded");
+        assert_eq!(s.gap_ms, 0);
+        assert!(s.origin_ms < chunk as u64, "never more than a chunk of the passage");
+        assert_eq!(Engine::delivered_shift_ms(s, OVERLAP, CEIL), 448, "exact");
+
+        // Running ahead: wait, by putting silence in front of it.
+        let s = e.split_shift(-448, OVERLAP, CEIL);
+        assert_eq!((s.admit_ms, s.origin_ms, s.gap_ms), (0, 0, 448));
+        assert_eq!(Engine::delivered_shift_ms(s, OVERLAP, CEIL), -448,
+                   "exact, and the five milliseconds of overlap are irrelevant to it");
+
+        // **No cap.** Whatever it takes, in one transition.
+        for ask in [-3_000_i64, -1_500, 1_500, 3_000] {
+            let s = e.split_shift(ask, OVERLAP, CEIL);
+            assert_eq!(Engine::delivered_shift_ms(s, OVERLAP, CEIL), ask,
+                       "asked {ask} ms and the transition must place it exactly");
+            assert!(s.origin_ms < chunk as u64, "still never cuts more than a chunk");
         }
-        // And where there IS overlap to spend, the pair still lands exactly on
-        // the request -- the quantum is absorbed by the fine knob, which is
-        // what `[GDE-ECHO-347]` built the split for.
-        const ROOMY: u64 = 3_000;
-        for asked in [-43_i64, -46, -100, -500] {
-            let (coarse, fine) = e.split_shift(asked, ROOMY, CEILING);
-            assert_eq!(Engine::delivered_shift_ms(coarse, fine, ROOMY, CEILING), asked,
-                       "a transition with room must absorb the whole request");
-            assert_eq!(coarse % e.echo_chunk_ms() as i64, 0,
-                       "the coarse part is whole mix chunks or it moves nothing");
-        }
-        // The late direction needs no overlap at all: opening the passage
-        // further in is not quantised and costs the transition nothing.
-        assert_eq!(e.split_shift(120, 0, CEILING), (0, 120));
     }
 
     /// A wild estimate is clamped, not obeyed: at 5000 ppm the trim would run
@@ -2862,15 +2926,26 @@ mod tests {
         let _ = std::fs::remove_file(&wav);
     }
 
-    /// An offset correction must actually reach the audio `[GDE-ECHO-347]`.
+    /// An offset correction must actually reach the audio `[GDE-ECHO-347]`,
+    /// and under `[GDE-ARC-051]` it must reach it at as little cost to the
+    /// passage as the mix quantum allows.
     ///
     /// Written after a regression that logged the correction it was about to
     /// discard: the shift was consumed before the split that used it, so the
     /// fine half was always zero and every late correction did nothing, while
     /// the log said otherwise for four commits. Asserting on the *passage's
     /// origin* rather than on a log line is the difference.
+    ///
+    /// The number changed when exact placement arrived. This same +120 ms used
+    /// to be paid entirely out of the passage's head, because admission was
+    /// only ever offered the overlap the pair already had — about five
+    /// milliseconds in this library — and 120 ms rounds to none of it. It is
+    /// now offered whatever the shorter of the two passages can sustain, so
+    /// two whole 46 ms blocks come out of the overlap and the head loses 28 ms
+    /// rather than 120. What the listener hears is the same 120 ms; what the
+    /// listener keeps is 92 ms more of the track.
     #[test]
-    fn a_late_correction_opens_the_next_passage_further_in() {
+    fn a_late_correction_is_taken_by_admission_before_the_passage_head() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         let wav = wav_of(30_000);
         let mut a = entry(1, wav.to_str().unwrap());
@@ -2883,18 +2958,24 @@ mod tests {
         e.drain_commands();
         assert!(tick_until(&mut e, |e| e.shown.is_some()), "it should be playing");
 
-        // 120 ms late: all of it belongs on the fine knob, because the coarse
-        // one cannot step smaller than a mix chunk.
+        // 120 ms late, so sound 120 ms earlier: two whole mix blocks of it go
+        // to admission and only the 28 ms that will not divide is cut from
+        // the head.
         h.send(Command::EchoCorrectNextStart(120));
         e.drain_commands();
-        assert_eq!(e.echo_split(), (0, 120));
+        let shift = e.echo_split();
+        assert_eq!((shift.admit_ms, shift.origin_ms, shift.gap_ms), (92, 28, 0));
+        let (overlap, ceiling) = e.next_transition_overlap();
+        assert_eq!(Engine::delivered_shift_ms(shift, overlap, ceiling), 120,
+                   "the two halves must add up to what was asked");
 
         // Run to the transition and check where passage 2 actually opened.
         assert!(tick_until(&mut e, |e| e.live.iter().any(|l| l.entry.passage_id == 2)),
                 "the second passage should be admitted");
         let opened = e.live.iter().find(|l| l.entry.passage_id == 2).unwrap().origin_ms;
-        assert_eq!(opened, 120, "opened at {opened} ms, so the correction never reached it");
+        assert_eq!(opened, 28, "opened at {opened} ms, so the correction never reached it");
         assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
+        assert_eq!(e.echo_debt_frames, 0, "it was placed in full, so nothing is owed");
         let _ = std::fs::remove_file(&wav);
     }
 
@@ -2902,13 +2983,20 @@ mod tests {
     /// written `[GDE-ECHO-372]`.
     ///
     /// `+120` is the direction where the coarse knob is zero and its clamp is
-    /// never reached. `-120` is the direction where the clamp destroys the
-    /// coarse step and the fine half then moves the node the wrong way: these
-    /// passages have no overlap at all, so the transition cannot be delayed by
-    /// a millisecond, and opening the next passage 18 ms in would make a node
-    /// asked to wait 120 ms arrive 18 ms sooner instead.
+    /// never reached. `-120` is the direction where the clamp destroyed the
+    /// coarse step and the fine half then moved the node the wrong way: these
+    /// passages have no overlap at all, so the transition could not be delayed
+    /// by a millisecond, and opening the next passage 18 ms in would have made
+    /// a node asked to wait 120 ms arrive 18 ms sooner instead.
+    ///
+    /// The test kept its name for a while after the fix, because the fix was
+    /// only to refuse: the shift went to the frame trim at 0.1 ms/s, so a node
+    /// asked to wait 120 ms waited twenty minutes to do it. `[GDE-ARC-052]`
+    /// gives the boundary an actuator for this direction — silence ahead of
+    /// the first sample, as much as is owed — so "later" is now placed exactly
+    /// and at the same instant as "earlier", and the passage keeps its head.
     #[test]
-    fn an_early_correction_does_not_open_the_next_passage_further_in() {
+    fn an_early_correction_is_placed_as_silence_before_the_passage() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
         let wav = wav_of(30_000);
         let mut a = entry(1, wav.to_str().unwrap());
@@ -2924,29 +3012,34 @@ mod tests {
         // 120 ms early: start the next passage 120 ms LATER.
         h.send(Command::EchoCorrectNextStart(-120));
         e.drain_commands();
+        let shift = e.echo_split();
+        assert_eq!((shift.admit_ms, shift.origin_ms, shift.gap_ms), (0, 0, 120),
+                   "the later direction is silence, not a bite out of the overlap");
+        let (overlap, ceiling) = e.next_transition_overlap();
+        assert_eq!(Engine::delivered_shift_ms(shift, overlap, ceiling), -120,
+                   "and it delivers the whole of what was asked, at the boundary");
 
+        let owed = 120 * e.out_rate as u64 / 1000;
         assert!(tick_until(&mut e, |e| e.live.iter().any(|l| l.entry.passage_id == 2)),
                 "the second passage should be admitted");
         let opened = e.live.iter().find(|l| l.entry.passage_id == 2).unwrap().origin_ms;
         assert_eq!(opened, 0,
                    "opened {opened} ms in, which sounds EARLIER -- the opposite of what was asked");
         assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
-        // Nothing was delivered, so the whole request went to the actuator
-        // that can deliver it `[GDE-ECHO-349]`.
-        assert!(e.echo_debt_frames < 0,
-                "a correction the transition cannot take must reach the frame trim");
-        assert_eq!(e.echo_debt_frames, -120 * e.out_rate as i64 / 1000);
-        // **And the trim clock has to start, or the debt is a number nobody
-        // pays.** `due_trim` answers `None` while `echo_last_trim` is `None`,
-        // and a follower that has not yet produced a rate fit has sent only
-        // `SetEchoRate(0.0)`, which clears it. Handing that node a debt and
-        // no clock is `[GDE-ECHO-378]` once more, in the fix for it.
-        assert!(e.echo_last_trim.is_some(),
-                "a debt was recorded with no clock running to pay it off");
-        assert!(e.due_trim().is_none(), "and not due in the same instant it was set");
-        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
-        assert_eq!(e.due_trim(), Some(false),
-                   "an early node repays by repeating frames");
+        // The silence is armed in frames, because that is what the mixer
+        // counts in `[GDE-ARC-052]`. Some of it may already have been emitted
+        // by the time the admission is visible here, so the claim is that it
+        // was armed at the right size and is being spent -- not that it is
+        // untouched.
+        assert!(e.echo_gap_frames > 0 && e.echo_gap_frames <= owed,
+                "gap of {} frames, expected up to {owed}", e.echo_gap_frames);
+        // And because the boundary took all of it, the slow actuator is left
+        // with nothing to crawl through. That is the whole point of
+        // `[GDE-ARC-052]`: before it, this line read `-120 * rate / 1000` and
+        // the node spent twenty minutes at `ECHO_DEBT_PPM` arriving where the
+        // boundary could have put it at once `[GDE-ARC-046]`.
+        assert_eq!(e.echo_debt_frames, 0,
+                   "the transition placed it exactly; nothing should be owed");
         let _ = std::fs::remove_file(&wav);
     }
 
@@ -3064,6 +3157,71 @@ mod tests {
                    after - before);
         assert_eq!(submitted, block,
                    "with no room for the extra frame the trim must be refused, not half-applied");
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// **Silence is the actuator for a follower running ahead**
+    /// `[GDE-ARC-052]`. Emitted before the incoming passage's audio, and the
+    /// streams are left untouched while it plays out -- their decoded audio
+    /// waits in their own rings rather than being consumed early, so the
+    /// passage lands intact, just later.
+    ///
+    /// This is the half the design never had. `a_pause_in_writing_leaves_no_gap_in_the_audio`
+    /// shows why not submitting cannot serve: the ring is contiguous, so a
+    /// pause only makes the buffer shallower and the audio airs at the same
+    /// instant. Moving sound later means putting something in front of it.
+    #[test]
+    fn a_gap_emits_silence_without_consuming_the_passage_behind_it() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let wav = wav_of(30_000);
+        let mut a = entry(1, wav.to_str().unwrap());
+        a.end_ms = 30_000;
+        e.enqueue(a);
+        h.send(Command::Play);
+        e.drain_commands();
+        let block = e.min_submit();
+        let mut ready = false;
+        for _ in 0..5_000 {
+            e.tick();
+            if e.live.first().is_some_and(|l| l.stream.ring.len() >= 4 * block) {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "the decoder should have run ahead of the mixer");
+        let drain = |ring: &crate::output::OutputRing| {
+            let mut st = ring.state.lock().unwrap();
+            let len = st.ring.len();
+            let mut sink = vec![0.0f32; len];
+            st.ring.read(&mut sink);
+        };
+        drain(&ring);
+
+        // Owe a gap of one block plus a little, so it spans two passes.
+        let ch = e.out_channels.max(1);
+        e.echo_gap_frames = (block / ch) as u64 + 100;
+        let buffered_before = e.live[0].stream.ring.len();
+
+        let n = e.mix_and_submit();
+        assert_eq!(n, block, "a gap pass still submits a full block");
+        assert_eq!(e.live[0].stream.ring.len(), buffered_before,
+                   "the passage must not be consumed while silence is playing");
+        assert_eq!(e.echo_gap_frames, 100, "and the gap is spent by what was emitted");
+
+        // What reached the ring is silence, not audio.
+        {
+            let mut st = ring.state.lock().unwrap();
+            let mut out = vec![9.9f32; block];
+            assert_eq!(st.ring.read(&mut out), block);
+            assert!(out.iter().all(|v| *v == 0.0), "a gap must be actual silence");
+        }
+        // And once it is spent, mixing resumes and the passage is consumed.
+        drain(&ring);
+        e.echo_gap_frames = 0;
+        e.mix_and_submit();
+        assert!(e.live[0].stream.ring.len() < buffered_before,
+                "the passage resumes after the gap");
         let _ = std::fs::remove_file(&wav);
     }
 

@@ -396,6 +396,39 @@ mod tests {
         assert_eq!(all, [1.0; 8], "no stale samples resurface");
     }
 
+    /// **Waiting does not delay the sound, and this is why silence has to be
+    /// an actuator** `[GDE-ARC-052]`.
+    ///
+    /// The ring is contiguous, so audio written later lands immediately after
+    /// audio written earlier however long the producer paused in between. If
+    /// the outgoing passage's last sample is submitted at `T0` sitting `D0`
+    /// deep, it airs at `T0 + D0`; submit the incoming at `T1` and the ring
+    /// has drained by `T1 - T0`, so sample 0 airs at
+    /// `T1 + (D0 - (T1 - T0))` = `T0 + D0` — the same instant, whatever `T1`
+    /// is. Delaying admission only makes the buffer shallower.
+    ///
+    /// So a follower running *ahead* cannot wait by waiting. The only way to
+    /// move audio later in a contiguous ring is to put something in front of
+    /// it, and the only thing that can go there without inventing content is
+    /// silence.
+    #[test]
+    fn a_pause_in_writing_leaves_no_gap_in_the_audio() {
+        let mut r = RingBuffer::new(64);
+        r.write(&[1.0; 20]);            // the outgoing passage
+        let mut drained = [0.0f32; 8];
+        r.read(&mut drained);           // the device plays some of it
+        // The producer now pauses -- writes nothing at all for a while --
+        // and only then submits the incoming passage.
+        r.write(&[2.0; 10]);
+        let mut out = [0.0f32; 22];
+        assert_eq!(r.read(&mut out), 22);
+        // Twelve samples of the outgoing remained, and the incoming follows
+        // them immediately. Nothing separates the two.
+        assert!(out[..12].iter().all(|v| *v == 1.0), "the outgoing's remainder");
+        assert!(out[12..].iter().all(|v| *v == 2.0), "and the incoming, butted \
+straight against it -- the pause bought no delay at all");
+    }
+
     #[test]
     fn ring_wraps_without_loss() {
         let mut r = RingBuffer::new(8);

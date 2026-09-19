@@ -123,13 +123,20 @@ could absorb the loop escalated to a rejoin, the rejoin landed with the same
 systematic bias, and the next measurement found the same offset again. It could
 run for ever without converging, and did.
 
-So a large offset is now corrected by taking the largest bite the transition
-allows and coming back for the rest: 886 ms is two transitions at half a second
-each, monotonically. `Rejoin` is reserved for a residual past the threshold in
-`[GDE-ECHO-344]` -- 1.5 s, lowered from five once it was clear that five
-seconds of nudging is forty minutes -- where the node is probably not playing
-what it thinks it is and placing the first sample afresh is the honest answer
-rather than a smaller correction.
+So a large offset is corrected by the transition rather than by escalating.
+`Rejoin` is reserved for a residual past the threshold in `[GDE-ECHO-344]` --
+1.5 s -- where the node is probably not playing what it thinks it is and
+placing the first sample afresh is the honest answer rather than a smaller
+correction.
+
+*Superseded in part 2026-09-19, in this entry's own direction.* It used to read
+"886 ms is two transitions at half a second each": the correction was capped at
+`OFFSET_MAX_BITE` and walked in across passages four to six minutes apart. The
+cap is gone, the transition is asked for the whole residual, and **886 ms is
+one transition** — so "every correction shrinks the error" is now met by taking
+it to zero. See `[GDE-ARC-051]` in
+[GUIDE026](GUIDE026-placing-the-passage-exactly.md), and `[GDE-ARC-052]` for
+the actuator the "later" direction had been missing entirely.
 
 **`[GDE-ECHO-343]` "Is it playing this?" is the wrong question to ask a
 follower; "is it coming to this?" is the right one.** The mid-passage join was
