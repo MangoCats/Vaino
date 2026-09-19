@@ -210,15 +210,33 @@ pub struct MasterClock {
     samples: std::collections::VecDeque<(WallNanos, i64)>,
     window: Duration,
     step: Duration,
+    /// Consecutive readings that sit a step BELOW the established offset.
+    ///
+    /// A late snapshot and a backward clock step are the same observation
+    /// `[GDE-ARC-049]`; only persistence tells them apart, so a low reading
+    /// is counted rather than acted on.
+    low_run: u8,
+    /// The offset that stood when the current low run opened.
+    low_ref: i64,
 }
+
+/// How many consecutive low readings before one is believed.
+///
+/// Snapshots arrive twice a second, so three is about a second and a half --
+/// quick enough that a genuine step costs the rate window almost nothing,
+/// and long enough that a single late packet, which is what this exists to
+/// ignore, cannot reach it. A delay that persists for three snapshots is a
+/// network fault the estimate should be reset for anyway.
+const STEP_CONFIRMATIONS: u8 = 3;
 
 impl MasterClock {
     pub fn new(window: Duration, step: Duration) -> Self {
-        Self { samples: std::collections::VecDeque::new(), window, step }
+        Self { samples: std::collections::VecDeque::new(), window, step, low_run: 0, low_ref: 0 }
     }
 
     pub fn clear(&mut self) {
         self.samples.clear();
+        self.low_run = 0;
     }
 
     /// Take a reading. **True when either clock has stepped**, which the
@@ -226,10 +244,47 @@ impl MasterClock {
     /// across a step is not a rate `[RateEstimate::clear]`.
     pub fn observe(&mut self, master_heard_at: WallNanos, own_now: WallNanos) -> bool {
         let offset = master_heard_at as i64 - own_now as i64;
-        let stepped = self
-            .offset()
-            .is_some_and(|had| (offset - had).unsigned_abs() > self.step.as_nanos() as u64);
+        // **A reading below the estimate is what a late snapshot looks like,
+        // so one of them is not evidence** `[GDE-ARC-049]`. `heard_at` is
+        // stamped as the master builds the snapshot, so transport delay
+        // subtracts from every reading -- which is exactly why `offset()`
+        // takes the maximum. Comparing a single new reading against that
+        // maximum therefore read any snapshot over a step late as a backward
+        // clock step: four of them in thirty minutes on a wifi node whose
+        // chrony had stepped nothing at all, each one clearing the rate
+        // window and zeroing the trim.
+        //
+        // Above the estimate is different and needs no confirming: no wire
+        // delivers a snapshot early, so that can only be a real step.
+        let limit = self.step.as_nanos() as i64;
+        let stepped = if self.low_run > 0 {
+            // **Judged against the offset that stood when the run opened**,
+            // not against the current estimate. A large step ages every
+            // older sample out of the window on its first reading, so the
+            // estimate becomes the shifted level immediately and comparing
+            // against it would say "settled" and reset the run -- confirming
+            // nothing, ever. Found by the test for an hour-long step.
+            if (offset - self.low_ref).abs() > limit {
+                self.low_run = self.low_run.saturating_add(1);
+                self.low_run >= STEP_CONFIRMATIONS
+            } else {
+                self.low_run = 0;
+                false
+            }
+        } else {
+            match self.offset() {
+                None => false,
+                Some(had) if offset - had > limit => true,
+                Some(had) if offset - had < -limit => {
+                    self.low_ref = had;
+                    self.low_run = 1;
+                    false
+                }
+                Some(_) => false,
+            }
+        };
         if stepped {
+            self.low_run = 0;
             self.samples.clear();
         }
         self.samples.push_back((own_now, offset));
@@ -1464,15 +1519,61 @@ mod tests {
     }
 
     /// A step is reported once, and the window starts again from it.
+    ///
+    /// **It has to be confirmed first** `[GDE-ARC-049]`. A reading below the
+    /// established offset is exactly what a delayed snapshot looks like, so
+    /// one of them is not evidence; a shift that persists is.
     #[test]
     fn a_step_is_reported_and_clears_what_came_before() {
         let mut c = mclock();
         assert!(!c.observe(10 * SEC, 10 * SEC), "the first reading is not a step");
         assert!(!c.observe(11 * SEC, 11 * SEC), "nor is an agreeing one");
-        // NTP steps this node forward by an hour.
-        assert!(c.observe(12 * SEC, 12 * SEC + 3600 * SEC), "that is a step");
-        assert_eq!(c.offset(), Some(-3600 * SEC as i64), "and only the new reading survives");
-        assert!(!c.observe(13 * SEC, 13 * SEC + 3600 * SEC), "settled again");
+        // NTP steps this node forward by an hour. Every reading from here on
+        // carries the shift, which is what tells it apart from a late packet.
+        let late = 3600 * SEC;
+        assert!(!c.observe(12 * SEC, 12 * SEC + late), "one reading is not yet evidence");
+        assert!(!c.observe(13 * SEC, 13 * SEC + late), "nor two");
+        assert!(c.observe(14 * SEC, 14 * SEC + late), "three in a row is a step");
+        assert_eq!(c.offset(), Some(-(late as i64)), "and only the new reading survives");
+        assert!(!c.observe(15 * SEC, 15 * SEC + late), "settled again");
+    }
+
+    /// **One late snapshot is transport, not a clock** `[GDE-ARC-049]`.
+    ///
+    /// `heard_at` is stamped as the master builds the snapshot, so a reading
+    /// delayed on the wire looks exactly like the master's clock jumping
+    /// backwards by the delay. Delay is one-sided -- which is why `offset()`
+    /// takes the maximum -- but the step test compared a single new reading
+    /// against that maximum, so any snapshot over a second late was read as a
+    /// step. Measured on `lp3-wifi` 2026-09-19: four "a clock stepped" lines
+    /// in thirty minutes while chrony's own `Last offset` was 465 us and it
+    /// had stepped nothing. Each false positive cleared the rate window and
+    /// zeroed the trim, which is one of the reasons the rate loop had never
+    /// once run `[GDE-ARC-045]`.
+    #[test]
+    fn one_late_snapshot_is_delay_and_not_a_clock_step() {
+        let mut c = mclock();
+        c.observe(10 * SEC, 10 * SEC);
+        c.observe(11 * SEC, 11 * SEC);
+        // A snapshot that took two seconds to reach this node.
+        assert!(!c.observe(12 * SEC, 12 * SEC + 2 * SEC),
+                "a late snapshot must not read as a clock step");
+        // And it does not disturb the estimate either: the maximum is the
+        // least-delayed reading, and a low outlier is not it.
+        assert_eq!(c.offset(), Some(0), "the estimate survives a late packet");
+        assert!(!c.observe(13 * SEC, 13 * SEC), "nor does recovering from one");
+    }
+
+    /// A reading ABOVE the established offset cannot be delay -- the wire
+    /// cannot deliver a snapshot early -- so that needs no confirming
+    /// `[GDE-ARC-049]`.
+    #[test]
+    fn a_jump_the_wire_cannot_explain_is_a_step_at_once() {
+        let mut c = mclock();
+        c.observe(10 * SEC, 10 * SEC);
+        c.observe(11 * SEC, 11 * SEC);
+        assert!(c.observe(12 * SEC + 3600 * SEC, 12 * SEC),
+                "no transport delay makes a reading arrive an hour early");
     }
 
     /// `[GDE-ECHO-365]`: a node two days behind is not following anything.

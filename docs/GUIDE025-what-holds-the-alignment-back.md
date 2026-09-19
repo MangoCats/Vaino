@@ -119,6 +119,37 @@ re-does that work from scratch at each boundary. The two halves of
 `[GDE-ECHO-340]` were meant to be independent; in practice the faster one
 starves the slower one.
 
+**`[GDE-ARC-049]` A late snapshot and a backward clock step are the same
+observation, and only one of them was being considered.** The second reason
+the rate loop never ran, and the one the storm fix does not touch.
+
+`heard_at` is stamped as the master builds the snapshot, so transport delay
+subtracts from every reading — which is exactly why `MasterClock::offset`
+takes the **maximum** over its window, and the type says so. But
+`observe` compared each single new reading against that maximum and declared
+a step on any difference over one second. Delay is one-sided; the estimate
+knew that and the step test did not. Any snapshot more than a second late
+therefore read as the master's clock jumping backwards, and each one called
+`rate.clear()` and sent `SetEchoRate(0.0)`.
+
+Measured on `lp3-wifi` 2026-09-19: **four "a clock stepped" lines in thirty
+minutes**, while chrony's own `Last offset` on that node was 465 µs and it
+had stepped nothing at all. On wifi with 600 ms of round trip, a delay spike
+over a second is routine rather than exceptional.
+
+**Fixed by confirming.** A reading *above* the estimate needs no confirming —
+no wire delivers a snapshot early, so that can only be real. A reading
+*below* it opens a run, and a step is declared only when three consecutive
+readings hold the shift, which is about a second and a half at the snapshot
+cadence. One late packet resets the run and costs nothing.
+
+One trap on the way, worth recording because the test caught it and reasoning
+had not: a large step ages every older sample out of the window on its *first*
+reading, so the estimate becomes the shifted level immediately. Judging the
+run against the current estimate would then read "settled" and reset it,
+confirming nothing ever. The run is judged against the offset that stood when
+it opened.
+
 **`[GDE-ARC-046]` The loop period is the passage length, and the continuous
 actuator is the throttled one.** A correction is decided once per master
 passage and lands at the next boundary: four to six minutes of loop delay on a
